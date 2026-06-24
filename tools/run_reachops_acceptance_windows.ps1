@@ -127,6 +127,7 @@ function Write-AcceptanceSummary {
         [string]$OperatorPressureJsonPath,
         [string]$InstallerSmokeJsonPath,
         [string]$UiStartupJsonPath,
+        [string]$ActivationStatusJsonPath,
         [string]$LiveValidationJsonPath,
         [string]$ReadinessJsonPath,
         [string]$PreflightJsonPath,
@@ -137,6 +138,7 @@ function Write-AcceptanceSummary {
     $operatorPressure = Read-JsonObject $OperatorPressureJsonPath
     $installer = Read-JsonObject $InstallerSmokeJsonPath
     $uiStartup = Read-JsonObject $UiStartupJsonPath
+    $activationStatus = Read-JsonObject $ActivationStatusJsonPath
     $liveValidation = Read-JsonObject $LiveValidationJsonPath
     $readiness = Read-JsonObject $ReadinessJsonPath
     $preflight = Read-JsonObject $PreflightJsonPath
@@ -256,6 +258,17 @@ function Write-AcceptanceSummary {
             pid = if ($uiStartup) { [int]$uiStartup.pid } else { 0 }
             json_path = if (Test-Path $UiStartupJsonPath) { $UiStartupJsonPath } else { "" }
         }
+        activation_status = [ordered]@{
+            status = if ($activationStatus) { [string]$activationStatus.status } else { "skipped" }
+            ready = if ($activationStatus) { [bool]$activationStatus.ready } else { $false }
+            no_browser_started = if ($activationStatus) { [bool]$activationStatus.no_browser_started } else { $true }
+            no_submit = if ($activationStatus) { [bool]$activationStatus.no_submit } else { $true }
+            activation_status_path = if ($activationStatus) { [string]$activationStatus.activation_status_path } else { "" }
+            activation_status_exists = if ($activationStatus) { [bool]$activationStatus.activation_status_exists } else { $false }
+            current_device_id = if ($activationStatus) { [string]$activationStatus.current_device_id } else { "" }
+            checks = if ($activationStatus) { @($activationStatus.checks) } else { Empty-JsonArray }
+            json_path = if (Test-Path $ActivationStatusJsonPath) { $ActivationStatusJsonPath } else { "" }
+        }
         live_preflight = [ordered]@{
             status = $preflightStatus
             preflight_action_statuses = if ($preflight) { $preflight.preflight_action_statuses } else { @{} }
@@ -333,6 +346,8 @@ $installerSmokeStdout = Join-Path $root "installer_smoke_stdout.json"
 $installerSmokeJson = Join-Path $root "installer_smoke_payload.json"
 $uiStartupStdout = Join-Path $root "ui_startup_stdout.json"
 $uiStartupJson = Join-Path $root "ui_startup_payload.json"
+$activationStatusStdout = Join-Path $root "activation_status_stdout.json"
+$activationStatusJson = Join-Path $root "activation_status_payload.json"
 $liveValidationStdout = Join-Path $root "live_validation_manifest_stdout.json"
 $liveValidationJson = Join-Path $root "live_validation_manifest.json"
 $goalStatusStdout = Join-Path $root "goal_status_stdout.json"
@@ -367,6 +382,16 @@ if (Test-Path $uiStartupSmokeScript) {
 } else {
     Write-Step "Skipping UI startup smoke: script not found"
 }
+
+Write-Step "ReachOps activation status check without browser"
+$activationStatusArgs = @("tools\reachops_activation_status_check.py", "--json")
+if ($ActivationStatusPath) {
+    $activationStatusArgs += @("--activation-status-path", $ActivationStatusPath)
+}
+$activationStatusOutput = & python @activationStatusArgs 2>&1
+$activationStatusOutput | ForEach-Object { Write-Host $_ }
+Write-Utf8NoBom -Path $activationStatusStdout -Content ($activationStatusOutput -join [Environment]::NewLine)
+Convert-StdoutJson -StdoutPath $activationStatusStdout -OutputPath $activationStatusJson | Out-Null
 
 Write-Step "ReachOps live validation manifest without browser"
 $liveValidationArgs = @("tools\reachops_live_validation_manifest.py", "--profile-group", $ProfileGroup, "--profile-limit", "3", "--profile-scan-timeout", "5", "--limit", ([string]$Limit), "--target", $Target, "--json")
@@ -484,7 +509,7 @@ if ($RunLiveSubmit) {
     Write-Step "Skipping controlled live submit: RunLiveSubmit not set"
 }
 
-Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -LiveValidationJsonPath $liveValidationJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
+Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveValidationJsonPath $liveValidationJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
 
 Write-Step "ReachOps goal status report"
 Invoke-PythonCapture -StepName "ReachOps goal status report" -StdoutPath $goalStatusStdout -Arguments @("tools\reachops_goal_status_report.py", "--audit-json", $auditJson, "--acceptance-summary", $acceptanceSummaryJson, "--json")
@@ -510,6 +535,7 @@ Write-Step "ReachOps acceptance artifacts written under $root"
 Write-Host "REACHOPS_ACCEPTANCE_DIR=$root"
 Write-Host "DELIVERY_AUDIT_JSON=$auditJson"
 Write-Host "OPERATOR_PRESSURE_JSON=$operatorPressureJson"
+Write-Host "ACTIVATION_STATUS_JSON=$activationStatusJson"
 Write-Host "LIVE_VALIDATION_MANIFEST_JSON=$liveValidationJson"
 Write-Host "GOAL_STATUS_JSON=$goalStatusJson"
 Write-Host "PACKAGE_CHECK_JSON=$packageCheckJson"

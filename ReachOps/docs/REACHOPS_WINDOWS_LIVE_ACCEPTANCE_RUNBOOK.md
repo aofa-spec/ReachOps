@@ -270,6 +270,7 @@ reports\reachops_acceptance\<timestamp>\acceptance_summary.json
 reports\reachops_acceptance\<timestamp>\goal_status_report.json
 reports\reachops_acceptance\<timestamp>\delivery_audit_payload.json
 reports\reachops_acceptance\<timestamp>\operator_pressure_payload.json
+reports\reachops_acceptance\<timestamp>\activation_status_payload.json
 reports\reachops_acceptance\<timestamp>\live_validation_manifest.json
 reports\reachops_acceptance\<timestamp>\live_readiness_payload.json
 reports\reachops_acceptance\<timestamp>\live_preflight_payload.json

@@ -823,6 +823,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "operator_pressure_payload.json",
                 "installer_smoke_payload.json",
                 "ui_startup_payload.json",
+                "activation_status_payload.json",
                 "live_validation_manifest.json",
                 "live_readiness_payload.json",
                 "live_preflight_payload.json",
@@ -876,6 +877,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "process_running": True,
                     "interactive_task": True,
                     "json_path": str(report_dir / "ui_startup_payload.json"),
+                },
+                "activation_status": {
+                    "status": "ready",
+                    "ready": True,
+                    "no_browser_started": True,
+                    "no_submit": True,
+                    "activation_status_exists": True,
+                    "current_device_id": "device-a",
+                    "json_path": str(report_dir / "activation_status_payload.json"),
                 },
                 "live_validation": {
                     "status": "ready",
@@ -1756,6 +1766,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("tools\\reachops_operator_pressure.py", acceptance_script)
         self.assertIn("tools\\reachops_goal_status_report.py", acceptance_script)
         self.assertIn("tools\\reachops_delivery_package_check.py", acceptance_script)
+        self.assertIn("tools\\reachops_activation_status_check.py", acceptance_script)
         self.assertIn("tools\\reachops_live_preflight.py", acceptance_script)
         self.assertIn("tools\\reachops_live_readiness.py", acceptance_script)
         self.assertIn("tools\\reachops_live_validation_manifest.py", acceptance_script)
@@ -1769,6 +1780,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("goal_status_report.json", acceptance_script)
         self.assertIn("GOAL_STATUS_JSON", acceptance_script)
         self.assertIn("PACKAGE_CHECK_JSON", acceptance_script)
+        self.assertIn("ACTIVATION_STATUS_JSON", acceptance_script)
         self.assertIn("delivery_package_check.json", acceptance_script)
         self.assertIn("ReachOps delivery package check failed for final passed acceptance", acceptance_script)
         self.assertIn("goal_status", acceptance_script)
@@ -1810,6 +1822,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("ui_startup_payload.json", acceptance_script)
         self.assertIn("UI_STARTUP_JSON", acceptance_script)
         self.assertIn("ui_startup", acceptance_script)
+        self.assertIn("activation_status_payload.json", acceptance_script)
+        self.assertIn("activation_status", acceptance_script)
         self.assertIn("UTF8Encoding($false)", acceptance_script)
         self.assertIn("(Get-Location).ProviderPath", acceptance_script)
         self.assertIn("while ($idx -ge 0)", acceptance_script)
@@ -1904,6 +1918,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("goal_status_report.json", live_acceptance_runbook)
         self.assertIn("delivery_audit_payload.json", live_acceptance_runbook)
         self.assertIn("operator_pressure_payload.json", live_acceptance_runbook)
+        self.assertIn("activation_status_payload.json", live_acceptance_runbook)
         self.assertIn("live_readiness_payload.json", live_acceptance_runbook)
         self.assertIn("live_preflight_payload.json", live_acceptance_runbook)
         self.assertIn("live_submit_payload.json", live_acceptance_runbook)
