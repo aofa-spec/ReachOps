@@ -68,6 +68,20 @@ Activation requirements:
 }
 ```
 
+Check the activation file before readiness or preflight:
+
+```powershell
+python tools\reachops_activation_status_check.py `
+  --activation-status-path $ActivationStatusPath `
+  --json
+```
+
+Expected result:
+
+- JSON contains `current_device_id`; use that value when preparing a device-bound activation file.
+- JSON contains `ready = true` before controlled live submit.
+- If blocked, fix `active`, `device_id`, `expires_at`, or the `live_submit/comment_reply/follow_review/dm_review` capabilities before continuing.
+
 ## Milestone 2: Windows Client Validation
 
 Open PowerShell from the repository root:

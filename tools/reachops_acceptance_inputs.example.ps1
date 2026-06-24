@@ -52,6 +52,12 @@ if (-not (Test-Path $ActivationStatusPath)) {
     throw "ActivationStatusPath does not exist: $ActivationStatusPath"
 }
 
+Write-Host "[ReachOpsInputs] Checking activation status. No browser opens and no platform action submits." -ForegroundColor Cyan
+python tools\reachops_activation_status_check.py --activation-status-path $ActivationStatusPath --json
+if ($LASTEXITCODE -ne 0) {
+    throw "Activation status check blocked. Fix activation before readiness/preflight."
+}
+
 Write-Host "[ReachOpsInputs] Running readiness. No browser opens and no platform action submits." -ForegroundColor Cyan
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_readiness_windows.ps1 `
     -ProfileGroup $ProfileGroup `

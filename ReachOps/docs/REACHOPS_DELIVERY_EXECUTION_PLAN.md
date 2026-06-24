@@ -241,6 +241,8 @@ Acceptance criteria:
 Current evidence:
 
 - Local fixture validation proves authorization gate behavior and evidence enforcement.
+- `tools\reachops_activation_status_check.py` exists for no-browser/no-submit activation checks before live readiness or live submit.
+- Windows VM activation check currently reports `status=blocked`, `no_browser_started=true`, `no_submit=true`, and `activation_status_exists=false` because no real activation file has been provided.
 - Real platform validation is still pending.
 
 ## Final Delivery Package

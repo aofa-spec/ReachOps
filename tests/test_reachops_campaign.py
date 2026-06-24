@@ -36,6 +36,7 @@ from ReachOps.collectors.tiktok_comment_collector import TikTokCommentCollector
 from ReachOps.collectors.tiktok_search_collector import TikTokSearchCollector
 from ReachOps.collectors.tiktok_topic_content_collector import TikTokTopicContentCollector
 from tools.reachops_delivery_audit import run_audit as run_reachops_delivery_audit
+from tools.reachops_activation_status_check import check_activation_status as check_reachops_activation_status
 from tools.reachops_goal_status_report import build_goal_status_report
 from tools.reachops_operator_pressure import run_pressure as run_reachops_operator_pressure
 from tools.reachops_visual_collection_preflight import build_operator_diagnosis as visual_preflight_operator_diagnosis
@@ -1242,6 +1243,57 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(checks["live_submit_parameters"]["passed"])
             self.assertIn("--allow-pressure-submit YES is required when --limit > 3", checks["live_submit_parameters"]["evidence"]["errors"])
 
+    def test_reachops_activation_status_check_reports_device_and_capabilities(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            activation_path = Path(tmp) / "reachops_activation_status.json"
+            activation_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = check_reachops_activation_status(activation_path)
+
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["status"], "ready")
+            self.assertTrue(result["no_browser_started"])
+            self.assertTrue(result["no_submit"])
+            self.assertTrue(result["current_device_id"])
+            checks = {item["name"]: item for item in result["checks"]}
+            self.assertTrue(checks["activation_active"]["passed"])
+            self.assertTrue(checks["device_binding_matches"]["passed"])
+            self.assertTrue(checks["authorization_allows_live_actions"]["passed"])
+
+    def test_reachops_activation_status_check_blocks_device_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            activation_path = Path(tmp) / "reachops_activation_status.json"
+            activation_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "device_id": "another-device",
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = check_reachops_activation_status(activation_path)
+
+            self.assertFalse(result["ready"])
+            checks = {item["name"]: item for item in result["checks"]}
+            self.assertFalse(checks["device_binding_matches"]["passed"])
+            decisions = checks["authorization_allows_live_actions"]["evidence"]["decisions"]
+            self.assertTrue(all(item["error_code"] == "LIVE_SUBMIT_DEVICE_MISMATCH" for item in decisions))
+
     def test_reachops_live_validation_manifest_builds_operator_next_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
             status_path = Path(tmp) / "activation.json"
@@ -1808,6 +1860,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("KeepRunning", ui_startup_smoke_script)
         self.assertIn("reachops_live_submit_acceptance.py", sync_script)
         self.assertIn("reachops_live_readiness.py", sync_script)
+        self.assertIn("reachops_activation_status_check.py", sync_script)
         self.assertIn("reachops_goal_status_report.py", sync_script)
         self.assertIn("reachops_operator_pressure.py", sync_script)
         self.assertIn("reachops_action_preflight_existing_batch.py", sync_script)
@@ -1843,7 +1896,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("run_reachops_acceptance_windows.ps1", acceptance_inputs_template)
         self.assertIn("Set `$RunControlledLiveSubmit = `$true", acceptance_inputs_template)
         self.assertIn("placeholder value", acceptance_inputs_template)
+        self.assertIn("reachops_activation_status_check.py", acceptance_inputs_template)
+        self.assertIn("Activation status check blocked", acceptance_inputs_template)
         self.assertIn("tools\\run_reachops_live_preflight_windows.ps1", live_acceptance_runbook)
+        self.assertIn("tools\\reachops_activation_status_check.py", live_acceptance_runbook)
         self.assertIn("-TargetProfileUrl $FollowProfileUrl", live_acceptance_runbook)
         self.assertIn("goal_status_report.json", live_acceptance_runbook)
         self.assertIn("delivery_audit_payload.json", live_acceptance_runbook)
