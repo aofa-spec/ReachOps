@@ -165,6 +165,8 @@ python tools\reachops_delivery_package_check.py --json
 python tools\reachops_delivery_package_check.py --allow-external-pending --json
 ```
 
+中间态 package check 也要求 `live_readiness_payload.json` 和 `live_preflight_payload.json` 存在；缺真实参数时它们应为 blocked/no-submit 报告。
+
 ## 独立边界
 
 - 配置目录、数据目录、授权状态使用 `ReachOps/runtime_paths.py` 管理。

@@ -963,6 +963,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(pending["passed"])
             self.assertEqual(pending["status"], "ready_for_external_validation")
 
+            missing_live_input_reports = json.loads(json.dumps(pending_summary))
+            missing_live_input_reports["live_readiness"] = {"status": "blocked"}
+            missing_live_input_reports["live_preflight"] = {"status": "blocked"}
+            acceptance_summary.write_text(json.dumps(missing_live_input_reports), encoding="utf-8")
+            missing_reports = check_reachops_delivery_package(
+                root=root,
+                acceptance_summary_path=acceptance_summary,
+                allow_external_pending=True,
+            )
+            self.assertFalse(missing_reports["passed"])
+            self.assertIn("live_readiness_json_path_missing", missing_reports["failures"])
+            self.assertIn("live_preflight_json_path_missing", missing_reports["failures"])
+
     def test_reachops_live_preflight_script_runs_without_submit_using_fixture(self):
         with tempfile.TemporaryDirectory() as tmp:
             class Args:

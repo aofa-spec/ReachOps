@@ -126,6 +126,7 @@ Current evidence:
 - Installer smoke returned `status=ok`, `exe_exists=true`, `data_in_install_dir=false`, and `hash_ok=true`.
 - Non-live Windows acceptance wrote `reports\reachops_acceptance\20260624_192009\acceptance_summary.json` with status `ready_for_external_validation`.
 - The same acceptance run includes `live_readiness_payload.json` and `live_preflight_payload.json`, so missing live inputs are represented in the full acceptance package instead of only standalone reports.
+- Delivery package check now requires `live_readiness_payload.json` and `live_preflight_payload.json` for intermediate `ready_for_external_validation` packages as well as final packages.
 - This milestone is complete for non-live Windows client delivery validation.
 
 ## Milestone 3: Real ixBrowser / TikTok Preflight

@@ -133,12 +133,14 @@ def _report_sections(summary: dict[str, Any], final_required: bool) -> list[str]
         "installer_smoke",
         "ui_startup",
         "live_validation",
+        "live_readiness",
+        "live_preflight",
         "goal_status",
     ]
     if final_required:
-        sections.extend(["live_readiness", "live_preflight", "live_submit"])
+        sections.append("live_submit")
     else:
-        for optional in ["live_readiness", "live_preflight", "live_submit"]:
+        for optional in ["live_submit"]:
             section = summary.get(optional) if isinstance(summary.get(optional), dict) else {}
             if section.get("json_path"):
                 sections.append(optional)
