@@ -334,6 +334,8 @@ $liveValidationStdout = Join-Path $root "live_validation_manifest_stdout.json"
 $liveValidationJson = Join-Path $root "live_validation_manifest.json"
 $goalStatusStdout = Join-Path $root "goal_status_stdout.json"
 $goalStatusJson = Join-Path $root "goal_status_report.json"
+$packageCheckStdout = Join-Path $root "delivery_package_check_stdout.json"
+$packageCheckJson = Join-Path $root "delivery_package_check.json"
 $acceptanceSummaryJson = Join-Path $root "acceptance_summary.json"
 
 Write-Step "ReachOps delivery audit"
@@ -458,12 +460,28 @@ Invoke-PythonCapture -StepName "ReachOps goal status report" -StdoutPath $goalSt
 Convert-StdoutJson -StdoutPath $goalStatusStdout -OutputPath $goalStatusJson | Out-Null
 Add-GoalStatusToAcceptanceSummary -SummaryPath $acceptanceSummaryJson -GoalStatusJsonPath $goalStatusJson
 
+Write-Step "ReachOps delivery package check"
+$packageCheckArgs = @("tools\reachops_delivery_package_check.py", "--acceptance-summary", $acceptanceSummaryJson, "--json")
+$currentSummary = Read-JsonObject $acceptanceSummaryJson
+if (-not ($currentSummary -and [string]$currentSummary.status -eq "passed")) {
+    $packageCheckArgs += @("--allow-external-pending")
+}
+$packageCheckOutput = & python @packageCheckArgs 2>&1
+$packageCheckOutput | ForEach-Object { Write-Host $_ }
+Write-Utf8NoBom -Path $packageCheckStdout -Content ($packageCheckOutput -join [Environment]::NewLine)
+Convert-StdoutJson -StdoutPath $packageCheckStdout -OutputPath $packageCheckJson | Out-Null
+$packageCheckPayload = Read-JsonObject $packageCheckJson
+if ($currentSummary -and [string]$currentSummary.status -eq "passed" -and (-not ($packageCheckPayload -and [bool]$packageCheckPayload.passed))) {
+    throw "ReachOps delivery package check failed for final passed acceptance. See $packageCheckJson"
+}
+
 Write-Step "ReachOps acceptance artifacts written under $root"
 Write-Host "REACHOPS_ACCEPTANCE_DIR=$root"
 Write-Host "DELIVERY_AUDIT_JSON=$auditJson"
 Write-Host "OPERATOR_PRESSURE_JSON=$operatorPressureJson"
 Write-Host "LIVE_VALIDATION_MANIFEST_JSON=$liveValidationJson"
 Write-Host "GOAL_STATUS_JSON=$goalStatusJson"
+Write-Host "PACKAGE_CHECK_JSON=$packageCheckJson"
 Write-Host "ACCEPTANCE_SUMMARY_JSON=$acceptanceSummaryJson"
 if (Test-Path $preflightJson) {
     Write-Host "LIVE_PREFLIGHT_JSON=$preflightJson"

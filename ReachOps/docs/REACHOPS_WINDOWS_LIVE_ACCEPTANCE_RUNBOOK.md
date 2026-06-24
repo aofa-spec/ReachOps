@@ -250,6 +250,7 @@ reports\reachops_acceptance\<timestamp>\live_validation_manifest.json
 reports\reachops_acceptance\<timestamp>\live_readiness.json
 reports\reachops_acceptance\<timestamp>\live_preflight.json
 reports\reachops_acceptance\<timestamp>\live_submit.json
+reports\reachops_acceptance\<timestamp>\delivery_package_check.json
 ```
 
 The project is fully delivered only when `acceptance_summary.json` says `passed`, the effective pending external validation count is zero, and `tools\reachops_delivery_package_check.py --json` returns `passed`.
