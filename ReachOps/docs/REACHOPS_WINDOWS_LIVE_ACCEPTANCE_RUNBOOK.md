@@ -152,10 +152,8 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windo
   -ProfileGroup $ProfileGroup `
   -ProfileIds $ProfileIds `
   -CommentVideoUrl $CommentVideoUrl `
-  -FollowProfileUrl $FollowProfileUrl `
-  -DmProfileUrl $DmProfileUrl `
-  -TargetUsername $TargetUsername `
-  -ActivationStatusPath $ActivationStatusPath
+  -TargetProfileUrl $FollowProfileUrl `
+  -TargetUsername $TargetUsername
 ```
 
 Expected result:
@@ -255,13 +253,13 @@ dist\ReachOps\ReachOps.exe
 dist\installer\ReachOps-Setup-0.4.0.exe
 reachops-update-manifest.json
 reports\reachops_acceptance\<timestamp>\acceptance_summary.json
-reports\reachops_acceptance\<timestamp>\goal_status.json
-reports\reachops_acceptance\<timestamp>\delivery_audit.json
-reports\reachops_acceptance\<timestamp>\operator_pressure.json
+reports\reachops_acceptance\<timestamp>\goal_status_report.json
+reports\reachops_acceptance\<timestamp>\delivery_audit_payload.json
+reports\reachops_acceptance\<timestamp>\operator_pressure_payload.json
 reports\reachops_acceptance\<timestamp>\live_validation_manifest.json
-reports\reachops_acceptance\<timestamp>\live_readiness.json
-reports\reachops_acceptance\<timestamp>\live_preflight.json
-reports\reachops_acceptance\<timestamp>\live_submit.json
+reports\reachops_acceptance\<timestamp>\live_readiness_payload.json
+reports\reachops_acceptance\<timestamp>\live_preflight_payload.json
+reports\reachops_acceptance\<timestamp>\live_submit_payload.json
 reports\reachops_acceptance\<timestamp>\delivery_package_check.json
 ```
 
