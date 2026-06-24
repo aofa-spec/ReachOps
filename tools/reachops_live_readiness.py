@@ -139,12 +139,12 @@ def run_readiness(args) -> dict[str, Any]:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Check ReachOps live-submit readiness without opening browser or submitting actions.")
-    parser.add_argument("--profile-ids", required=True)
+    parser.add_argument("--profile-ids", default="")
     parser.add_argument("--group-name", default="")
-    parser.add_argument("--video-url", required=True)
-    parser.add_argument("--follow-profile-url", required=True)
-    parser.add_argument("--dm-profile-url", required=True)
-    parser.add_argument("--target-username", required=True)
+    parser.add_argument("--video-url", default="")
+    parser.add_argument("--follow-profile-url", default="")
+    parser.add_argument("--dm-profile-url", default="")
+    parser.add_argument("--target-username", default="")
     parser.add_argument("--confirm-authorized-targets", default="")
     parser.add_argument("--activation-status-path", default="")
     parser.add_argument("--allow-pressure-submit", default="")

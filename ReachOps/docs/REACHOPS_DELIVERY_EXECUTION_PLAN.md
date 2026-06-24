@@ -179,8 +179,9 @@ Current evidence:
 
 - Readiness and preflight scripts exist.
 - Windows side currently has no `tools\reachops_acceptance_inputs.local.ps1`.
-- `tools\run_reachops_live_readiness_windows.ps1` stops before opening a browser when `ProfileIds` is missing.
-- With candidate profile IDs only, readiness stops before opening a browser because `CommentVideoUrl` is missing.
+- `tools\run_reachops_live_readiness_windows.ps1` now writes a blocked JSON report even when required live inputs are missing.
+- Latest missing-input readiness proof on the Windows VM: `reports\reachops_live_readiness\20260624_191450\live_readiness_payload.json`.
+- That report has `status=blocked`, `no_browser_started=true`, `no_submit=true`, empty `profile_ids`, and missing video/profile/target/activation checks.
 - This milestone still requires real ixBrowser profile IDs and authorized TikTok target evidence.
 
 ## Milestone 4: Controlled Real Execution Acceptance

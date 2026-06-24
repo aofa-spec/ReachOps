@@ -56,20 +56,9 @@ function Convert-StdoutJson {
     throw "No valid JSON payload found in $StdoutPath"
 }
 
-if (-not $ProfileIds) {
-    throw "ProfileIds is required. Example: -ProfileIds '123,456'"
-}
-if (-not $CommentVideoUrl) {
-    throw "CommentVideoUrl is required. Example: -CommentVideoUrl 'https://www.tiktok.com/@creator/video/123'"
-}
-if (-not $TargetProfileUrl) {
-    throw "TargetProfileUrl is required. Example: -TargetProfileUrl 'https://www.tiktok.com/@buyer_one'"
-}
 if (-not $TargetUsername) {
     if ($TargetProfileUrl -match "/@([^/?#]+)") {
         $TargetUsername = $Matches[1]
-    } else {
-        throw "TargetUsername is required when TargetProfileUrl does not contain /@username."
     }
 }
 
@@ -84,15 +73,24 @@ Write-Host "[ReachOpsReadiness] No browser will be opened. No comment/follow/dm 
 
 $argsList = @(
     "tools\reachops_live_readiness.py",
-    "--profile-ids", $ProfileIds,
-    "--group-name", $ProfileGroup,
-    "--video-url", $CommentVideoUrl,
-    "--follow-profile-url", $TargetProfileUrl,
-    "--dm-profile-url", $TargetProfileUrl,
-    "--target-username", $TargetUsername,
     "--limit", "$Limit",
     "--json"
 )
+if ($ProfileIds) {
+    $argsList += @("--profile-ids", $ProfileIds)
+}
+if ($ProfileGroup) {
+    $argsList += @("--group-name", $ProfileGroup)
+}
+if ($CommentVideoUrl) {
+    $argsList += @("--video-url", $CommentVideoUrl)
+}
+if ($TargetProfileUrl) {
+    $argsList += @("--follow-profile-url", $TargetProfileUrl, "--dm-profile-url", $TargetProfileUrl)
+}
+if ($TargetUsername) {
+    $argsList += @("--target-username", $TargetUsername)
+}
 if ($ConfirmAuthorizedTargets) {
     $argsList += @("--confirm-authorized-targets", "YES")
 }

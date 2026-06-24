@@ -1063,6 +1063,33 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(checks["execution_evidence_policy_required"]["passed"])
         self.assertEqual(result["execution_evidence_policy"]["failure_error_code"], "LIVE_SUBMIT_EVIDENCE_MISSING")
 
+    def test_reachops_live_readiness_reports_missing_inputs_without_browser_or_submit(self):
+        class Args:
+            profile_ids = ""
+            group_name = "AUDIT"
+            video_url = ""
+            follow_profile_url = ""
+            dm_profile_url = ""
+            target_username = ""
+            confirm_authorized_targets = ""
+            activation_status_path = "/tmp/reachops-missing-activation-status.json"
+            allow_pressure_submit = ""
+            limit = 3
+
+        result = run_reachops_live_readiness(Args())
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertTrue(result["no_browser_started"])
+        self.assertTrue(result["no_submit"])
+        checks = {item["name"]: item for item in result["checks"]}
+        self.assertFalse(checks["profile_ids_present"]["passed"])
+        self.assertFalse(checks["profile_ids_are_ixbrowser_numeric_ids"]["passed"])
+        self.assertFalse(checks["comment_video_url_valid"]["passed"])
+        self.assertFalse(checks["follow_profile_url_valid"]["passed"])
+        self.assertFalse(checks["dm_profile_url_valid"]["passed"])
+        self.assertFalse(checks["target_username_matches_profiles"]["passed"])
+
     def test_reachops_live_readiness_passes_with_matching_authorized_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
             activation_path = Path(tmp) / "reachops_activation_status.json"
@@ -1698,7 +1725,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("AllowPressureSubmit", live_readiness_windows_script)
         self.assertIn("--allow-pressure-submit", live_readiness_windows_script)
         self.assertIn("--limit\", \"$Limit", live_readiness_windows_script)
-        self.assertIn("ProfileIds is required", live_readiness_windows_script)
+        self.assertIn("ReachOps live readiness blocked", live_readiness_windows_script)
         self.assertNotIn("reachops_live_submit_acceptance.py", live_readiness_windows_script)
         self.assertIn("tools\\reachops_live_validation_manifest.py", live_validation_windows_script)
         self.assertIn("No browser will be opened", live_validation_windows_script)
