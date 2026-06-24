@@ -46,6 +46,7 @@ from tools.reachops_live_preflight import run_preflight as run_reachops_live_pre
 from tools.reachops_live_readiness import run_readiness as run_reachops_live_readiness
 from tools.reachops_live_submit_acceptance import run_acceptance as run_reachops_live_submit_acceptance
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
+from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.write_reachops_update_manifest import build_manifest
 
 
@@ -800,6 +801,167 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(stale_goal["passed"])
         self.assertIn("goal_status_not_passed", stale_goal["failures"])
         self.assertIn("goal_status_has_stale_pending", stale_goal["failures"])
+
+    def test_reachops_delivery_package_check_validates_artifacts_manifest_and_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exe = root / "dist" / "ReachOps" / "ReachOps.exe"
+            installer = root / "dist" / "installer" / "ReachOps-Setup-0.4.0.exe"
+            manifest_path = root / "dist" / "installer" / "reachops-update-manifest.json"
+            report_dir = root / "reports" / "reachops_acceptance" / "20260624_120000"
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            installer.parent.mkdir(parents=True, exist_ok=True)
+            report_dir.mkdir(parents=True, exist_ok=True)
+            exe.write_bytes(b"reachops exe")
+            installer.write_bytes(b"reachops installer")
+            manifest = build_manifest(installer, version="0.4.0", build="mvp-001", channel="mvp")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            for name in [
+                "delivery_audit_payload.json",
+                "operator_pressure_payload.json",
+                "installer_smoke_payload.json",
+                "ui_startup_payload.json",
+                "live_validation_manifest.json",
+                "live_readiness_payload.json",
+                "live_preflight_payload.json",
+                "live_submit_payload.json",
+                "goal_status_report.json",
+            ]:
+                (report_dir / name).write_text("{}", encoding="utf-8")
+
+            png_sha = hashlib.sha256(b"png").hexdigest()
+
+            def sidecar(action_type):
+                return {
+                    "screenshot_sha256": png_sha,
+                    "action_type": action_type,
+                    "profile_id": "profile-a",
+                    "action_id": f"{action_type}-1",
+                    "current_url": "https://www.tiktok.com/@creator/video/123",
+                }
+
+            summary = {
+                "status": "passed",
+                "delivery_audit": {
+                    "status": "ok",
+                    "passed": 26,
+                    "pending_external_validation": 2,
+                    "resolved_external_validation": 2,
+                    "effective_pending_external_validation": 0,
+                    "failed": 0,
+                    "json_path": str(report_dir / "delivery_audit_payload.json"),
+                },
+                "operator_pressure": {
+                    "status": "ok",
+                    "campaign_count": 3,
+                    "content_found": 15,
+                    "comment_users": 27,
+                    "customer_leads": 27,
+                    "outreach_actions": 81,
+                    "execution_success": 9,
+                    "account_switched": 6,
+                    "json_path": str(report_dir / "operator_pressure_payload.json"),
+                },
+                "installer_smoke": {
+                    "status": "ok",
+                    "exe_exists": True,
+                    "data_in_install_dir": False,
+                    "hash_ok": True,
+                    "json_path": str(report_dir / "installer_smoke_payload.json"),
+                },
+                "ui_startup": {
+                    "status": "ok",
+                    "process_running": True,
+                    "interactive_task": True,
+                    "json_path": str(report_dir / "ui_startup_payload.json"),
+                },
+                "live_validation": {
+                    "status": "ready",
+                    "no_browser_started": True,
+                    "no_submit": True,
+                    "json_path": str(report_dir / "live_validation_manifest.json"),
+                },
+                "live_readiness": {
+                    "status": "ready",
+                    "ready": True,
+                    "no_browser_started": True,
+                    "no_submit": True,
+                    "json_path": str(report_dir / "live_readiness_payload.json"),
+                },
+                "live_preflight": {
+                    "status": "completed",
+                    "preflight_action_statuses": {
+                        "comment_reply": [{"status": "success"}],
+                        "follow_review": [{"status": "success"}],
+                        "dm_review": [{"status": "success"}],
+                    },
+                    "missing_preflight_action_types": [],
+                    "json_path": str(report_dir / "live_preflight_payload.json"),
+                },
+                "live_submit": {
+                    "status": "completed",
+                    "executor_mode": "platform_selenium",
+                    "platform_validation": True,
+                    "activation_status_loaded": True,
+                    "activation_status_source": "C:/ReachOps/config/reachops_activation_status.json",
+                    "evidence_by_action_type": {
+                        "comment_reply": ["evidence://comment"],
+                        "follow_review": ["evidence://follow"],
+                        "dm_review": ["evidence://dm"],
+                    },
+                    "evidence_file_details": {
+                        "comment_reply": [{"path": "C:/evidence/comment.png", "size": 3, "sha256": png_sha, "sidecar_path": "C:/evidence/comment.png.json", "sidecar": sidecar("comment_reply")}],
+                        "follow_review": [{"path": "C:/evidence/follow.png", "size": 3, "sha256": png_sha, "sidecar_path": "C:/evidence/follow.png.json", "sidecar": sidecar("follow_review")}],
+                        "dm_review": [{"path": "C:/evidence/dm.png", "size": 3, "sha256": png_sha, "sidecar_path": "C:/evidence/dm.png.json", "sidecar": sidecar("dm_review")}],
+                    },
+                    "missing_evidence_action_types": [],
+                    "missing_local_evidence_file_action_types": [],
+                    "json_path": str(report_dir / "live_submit_payload.json"),
+                },
+                "goal_status": {
+                    "status": "passed",
+                    "summary": {"stages_passed": 5, "stages_pending_external_validation": 0, "stages_failed": 0},
+                    "pending_external_validation": [],
+                    "json_path": str(report_dir / "goal_status_report.json"),
+                },
+            }
+            acceptance_summary = report_dir / "acceptance_summary.json"
+            acceptance_summary.write_text(json.dumps(summary), encoding="utf-8")
+
+            result = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertTrue(result["passed"])
+            self.assertEqual(result["status"], "passed")
+            self.assertFalse(result["failures"])
+            self.assertEqual(result["artifacts"]["manifest"]["actual_sha256"], result["artifacts"]["manifest"]["expected_sha256"])
+
+            broken_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            broken_manifest["installer"]["sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(broken_manifest), encoding="utf-8")
+            broken = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(broken["passed"])
+            self.assertIn("manifest_sha256_mismatch", broken["failures"])
+
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            pending_summary = json.loads(json.dumps(summary))
+            pending_summary["status"] = "ready_for_external_validation"
+            pending_summary["delivery_audit"]["resolved_external_validation"] = 0
+            pending_summary["delivery_audit"]["effective_pending_external_validation"] = 2
+            pending_summary["live_submit"] = {"status": "skipped"}
+            pending_summary["goal_status"] = {
+                "status": "ready_for_external_validation",
+                "summary": {"stages_passed": 4, "stages_pending_external_validation": 1, "stages_failed": 0},
+                "pending_external_validation": ["授权允许时能真实执行", "真实 TikTok 平台提交"],
+                "json_path": str(report_dir / "goal_status_report.json"),
+            }
+            acceptance_summary.write_text(json.dumps(pending_summary), encoding="utf-8")
+            pending = check_reachops_delivery_package(
+                root=root,
+                acceptance_summary_path=acceptance_summary,
+                allow_external_pending=True,
+            )
+            self.assertTrue(pending["passed"])
+            self.assertEqual(pending["status"], "ready_for_external_validation")
 
     def test_reachops_live_preflight_script_runs_without_submit_using_fixture(self):
         with tempfile.TemporaryDirectory() as tmp:

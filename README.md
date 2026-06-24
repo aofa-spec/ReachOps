@@ -68,6 +68,7 @@ python3 tools/reachops_goal_status_report.py --json
 - operator pressure 返回 `status=ok`。
 - delivery audit 返回 `status=ok` 且 `failed=0`。
 - goal status 可到 `ready_for_external_validation`；真实平台提交前不应宣称 `passed`。
+- `tools/reachops_delivery_package_check.py` 需要 Windows 产物和 acceptance reports；本机没有这些产物时返回缺失是预期状态。
 
 ## Windows
 
@@ -126,6 +127,18 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.p
 - `reports\reachops_acceptance\<timestamp>\acceptance_summary.json` 中 `status=passed`。
 - `effective_pending_external_validation=0`。
 - 真实 comment/follow/DM 尝试都有执行记录、错误码或截图证据。
+
+最终交付包检查：
+
+```powershell
+python tools\reachops_delivery_package_check.py --json
+```
+
+中间态检查允许外部真实平台 pending：
+
+```powershell
+python tools\reachops_delivery_package_check.py --allow-external-pending --json
+```
 
 ## 独立边界
 

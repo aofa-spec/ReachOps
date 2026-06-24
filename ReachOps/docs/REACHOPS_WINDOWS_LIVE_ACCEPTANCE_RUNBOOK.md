@@ -187,6 +187,30 @@ Expected final result:
 - Successful live attempts have screenshot evidence and sidecar metadata.
 - Failed live attempts have explicit error codes and evidence where possible.
 
+Run the final package check:
+
+```powershell
+python tools\reachops_delivery_package_check.py --json
+```
+
+Expected result:
+
+- Package check status is `passed`.
+- `ReachOps.exe` exists and is non-empty.
+- Installer exists and is non-empty.
+- Update manifest exists.
+- Manifest installer `sha256` matches the installer file.
+- Acceptance summary verification passes.
+- Required acceptance report JSON files exist.
+
+For an intermediate package before live submit, use:
+
+```powershell
+python tools\reachops_delivery_package_check.py --allow-external-pending --json
+```
+
+That command may return `ready_for_external_validation`. It is not final delivery.
+
 ## Failure Handling
 
 If readiness fails:
@@ -228,4 +252,4 @@ reports\reachops_acceptance\<timestamp>\live_preflight.json
 reports\reachops_acceptance\<timestamp>\live_submit.json
 ```
 
-The project is fully delivered only when `acceptance_summary.json` says `passed` and the effective pending external validation count is zero.
+The project is fully delivered only when `acceptance_summary.json` says `passed`, the effective pending external validation count is zero, and `tools\reachops_delivery_package_check.py --json` returns `passed`.
