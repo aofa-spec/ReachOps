@@ -1,0 +1,7 @@
+# ReachOps standalone Windows client dependencies.
+# Keep this list scoped to acquisition, browser control, packaging, and UI runtime.
+requests>=2.32
+Pillow>=10.4
+selenium>=4.40
+ixbrowser_local_api>=1.2
+pyinstaller>=6.3

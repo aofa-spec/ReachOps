@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+venv/
+build/
+dist/
+reports/
+logs/
+data/
+config/
+*.db
+*.sqlite
+*.log
+*.tmp
+.codex-tmp/
+reachops-update-manifest.json
