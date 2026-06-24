@@ -59,20 +59,9 @@ function Convert-StdoutJson {
     throw "No valid JSON payload found in $StdoutPath"
 }
 
-if (-not $ProfileIds) {
-    throw "ProfileIds is required. Example: -ProfileIds '123,456'"
-}
-if (-not $CommentVideoUrl) {
-    throw "CommentVideoUrl is required. Example: -CommentVideoUrl 'https://www.tiktok.com/@creator/video/123'"
-}
-if (-not $TargetProfileUrl) {
-    throw "TargetProfileUrl is required. Example: -TargetProfileUrl 'https://www.tiktok.com/@buyer_one'"
-}
 if (-not $TargetUsername) {
     if ($TargetProfileUrl -match "/@([^/?#]+)") {
         $TargetUsername = $Matches[1]
-    } else {
-        throw "TargetUsername is required when TargetProfileUrl does not contain /@username."
     }
 }
 
@@ -85,29 +74,43 @@ $payloadPath = Join-Path $root "live_preflight_payload.json"
 Write-Host "[ReachOpsPreflight] Running no-submit live preflight." -ForegroundColor Cyan
 Write-Host "[ReachOpsPreflight] No comment/follow/dm will be submitted." -ForegroundColor Yellow
 
-$output = & python "tools\reachops_live_preflight.py" `
-    --base-dir (Join-Path $root "runtime") `
-    --profile-ids $ProfileIds `
-    --group-name $ProfileGroup `
-    --video-url $CommentVideoUrl `
-    --profile-url $TargetProfileUrl `
-    --target-username $TargetUsername `
-    --workers ([string][Math]::Max(1, $Workers)) `
-    --per-profile-limit ([string][Math]::Max(1, $PerProfileLimit)) `
-    --switch-attempts ([string][Math]::Max(1, $SwitchAttempts)) `
-    --per-profile-hour-limit ([string][Math]::Max(1, $PerProfileHourLimit)) `
-    --per-profile-video-hour-limit ([string][Math]::Max(1, $PerProfileVideoHourLimit)) `
-    --page-timeout ([string][Math]::Max(1, $PageTimeout)) `
-    --element-timeout ([string][Math]::Max(1, $ElementTimeout)) `
-    --json 2>&1
+$argsList = @(
+    "tools\reachops_live_preflight.py",
+    "--base-dir", (Join-Path $root "runtime"),
+    "--workers", ([string][Math]::Max(1, $Workers)),
+    "--per-profile-limit", ([string][Math]::Max(1, $PerProfileLimit)),
+    "--switch-attempts", ([string][Math]::Max(1, $SwitchAttempts)),
+    "--per-profile-hour-limit", ([string][Math]::Max(1, $PerProfileHourLimit)),
+    "--per-profile-video-hour-limit", ([string][Math]::Max(1, $PerProfileVideoHourLimit)),
+    "--page-timeout", ([string][Math]::Max(1, $PageTimeout)),
+    "--element-timeout", ([string][Math]::Max(1, $ElementTimeout)),
+    "--json"
+)
+if ($ProfileIds) {
+    $argsList += @("--profile-ids", $ProfileIds)
+}
+if ($ProfileGroup) {
+    $argsList += @("--group-name", $ProfileGroup)
+}
+if ($CommentVideoUrl) {
+    $argsList += @("--video-url", $CommentVideoUrl)
+}
+if ($TargetProfileUrl) {
+    $argsList += @("--profile-url", $TargetProfileUrl)
+}
+if ($TargetUsername) {
+    $argsList += @("--target-username", $TargetUsername)
+}
+
+$output = & python @argsList 2>&1
 
 $output | ForEach-Object { Write-Host $_ }
-if ($LASTEXITCODE -ne 0) {
-    throw "ReachOps live preflight failed with exit code $LASTEXITCODE"
-}
 
 Write-Utf8NoBom -Path $stdoutPath -Content ($output -join [Environment]::NewLine)
 Convert-StdoutJson -StdoutPath $stdoutPath -OutputPath $payloadPath
 
 Write-Host "REACHOPS_LIVE_PREFLIGHT_DIR=$root"
 Write-Host "LIVE_PREFLIGHT_JSON=$payloadPath"
+if ($LASTEXITCODE -ne 0) {
+    throw "ReachOps live preflight blocked or failed with exit code $LASTEXITCODE. See $payloadPath"
+}

@@ -967,7 +967,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             class Args:
                 base_dir = tmp
-                profile_ids = "profile-a,profile-b"
+                profile_ids = "12345,67890"
                 group_name = "AUDIT"
                 video_url = "https://www.tiktok.com/@creator/video/123"
                 profile_url = "https://www.tiktok.com/@buyer_one"
@@ -1001,6 +1001,36 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["preflight_action_statuses"]["follow_review"])
             self.assertTrue(result["preflight_action_statuses"]["dm_review"])
             self.assertTrue(result["summary"].get("report", {}).get("json_path"))
+
+    def test_reachops_live_preflight_reports_missing_inputs_without_browser_or_submit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            class Args:
+                base_dir = tmp
+                profile_ids = ""
+                group_name = "AUDIT"
+                video_url = ""
+                profile_url = ""
+                target_username = ""
+                workers = 2
+                per_profile_limit = 3
+                switch_attempts = 2
+                per_profile_hour_limit = 20
+                per_profile_video_hour_limit = 5
+                page_timeout = 1
+                element_timeout = 1
+
+            result = run_reachops_live_preflight(Args())
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertFalse(result["ready"])
+            self.assertTrue(result["no_browser_started"])
+            self.assertTrue(result["no_submit"])
+            self.assertTrue(result["preflight_only"])
+            self.assertIn("--profile-ids must include at least one profile id", result["errors"])
+            self.assertIn("--video-url is required", result["errors"])
+            self.assertIn("--profile-url is required", result["errors"])
+            self.assertEqual(result["preflight_action_statuses"]["comment_reply"], [])
+            self.assertEqual(set(result["missing_preflight_action_types"]), {"comment_reply", "follow_review", "dm_review"})
 
     def test_reachops_live_submit_acceptance_blocks_without_explicit_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1738,9 +1768,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("tools\\reachops_live_preflight.py", live_preflight_windows_script)
         self.assertIn("No comment/follow/dm will be submitted", live_preflight_windows_script)
         self.assertIn("LIVE_PREFLIGHT_JSON", live_preflight_windows_script)
-        self.assertIn("ProfileIds is required", live_preflight_windows_script)
-        self.assertIn("CommentVideoUrl is required", live_preflight_windows_script)
-        self.assertIn("TargetProfileUrl is required", live_preflight_windows_script)
+        self.assertIn("ReachOps live preflight blocked or failed", live_preflight_windows_script)
         self.assertNotIn("reachops_live_submit_acceptance.py", live_preflight_windows_script)
         self.assertIn("Start-Process -FilePath $InstallerPath", installer_smoke_script)
         self.assertIn("-Wait -PassThru", installer_smoke_script)

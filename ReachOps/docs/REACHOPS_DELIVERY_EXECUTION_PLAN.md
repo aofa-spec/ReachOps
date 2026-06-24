@@ -182,6 +182,9 @@ Current evidence:
 - `tools\run_reachops_live_readiness_windows.ps1` now writes a blocked JSON report even when required live inputs are missing.
 - Latest missing-input readiness proof on the Windows VM: `reports\reachops_live_readiness\20260624_191450\live_readiness_payload.json`.
 - That report has `status=blocked`, `no_browser_started=true`, `no_submit=true`, empty `profile_ids`, and missing video/profile/target/activation checks.
+- `tools\run_reachops_live_preflight_windows.ps1` now writes a blocked JSON report before any action routing when required live inputs are missing.
+- Latest missing-input preflight proof on the Windows VM: `reports\reachops_live_preflight\20260624_191735\live_preflight_payload.json`.
+- That report has `status=blocked`, `no_browser_started=true`, `no_submit=true`, and empty preflight statuses for comment/follow/DM.
 - This milestone still requires real ixBrowser profile IDs and authorized TikTok target evidence.
 
 ## Milestone 4: Controlled Real Execution Acceptance

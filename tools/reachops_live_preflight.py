@@ -22,6 +22,50 @@ def split_csv(value: str) -> list[str]:
     return [item.strip() for item in str(value or "").replace(";", ",").split(",") if item.strip()]
 
 
+def username_from_profile_url(url: str) -> str:
+    value = str(url or "").strip().rstrip("/")
+    if "/@" not in value:
+        return ""
+    return value.rsplit("/@", 1)[-1].split("/", 1)[0].lstrip("@")
+
+
+def validate_preflight_inputs(args) -> list[str]:
+    errors: list[str] = []
+    profile_ids = split_csv(getattr(args, "profile_ids", ""))
+    if not profile_ids:
+        errors.append("--profile-ids must include at least one profile id")
+    non_numeric_profile_ids = [profile_id for profile_id in profile_ids if not str(profile_id).isdigit()]
+    if non_numeric_profile_ids:
+        errors.append(f"--profile-ids must be ixBrowser numeric profile ids: {', '.join(non_numeric_profile_ids)}")
+    if not str(getattr(args, "video_url", "") or "").strip():
+        errors.append("--video-url is required")
+    if not str(getattr(args, "profile_url", "") or "").strip():
+        errors.append("--profile-url is required")
+    target_username = str(getattr(args, "target_username", "") or "").strip().lstrip("@").lower()
+    profile_username = username_from_profile_url(getattr(args, "profile_url", "")).lower()
+    if not target_username and not profile_username:
+        errors.append("--target-username is required when --profile-url does not contain /@username")
+    if target_username and profile_username and target_username != profile_username:
+        errors.append(f"target username mismatch: profile={profile_username}, username={target_username}")
+    return errors
+
+
+def blocked_preflight_result(args, errors: list[str]) -> dict:
+    profile_ids = split_csv(getattr(args, "profile_ids", ""))
+    return {
+        "status": "blocked",
+        "ready": False,
+        "base_dir": str(getattr(args, "base_dir", "")),
+        "profiles": [{"profile_id": profile_id, "group_name": str(getattr(args, "group_name", "") or "")} for profile_id in profile_ids],
+        "errors": errors,
+        "missing_preflight_action_types": ["comment_reply", "dm_review", "follow_review"],
+        "preflight_action_statuses": {"comment_reply": [], "dm_review": [], "follow_review": []},
+        "no_browser_started": True,
+        "no_submit": True,
+        "preflight_only": True,
+    }
+
+
 def seed_preflight_actions(service: GrowthIntelligenceService, video_url: str, profile_url: str, target_username: str) -> list[str]:
     specs = [
         ("comment_reply", video_url, "Preflight only comment text for @{username}"),
@@ -62,10 +106,14 @@ def build_platform_executor(args):
 
 
 def run_preflight(args, platform_executor=None) -> dict:
+    input_errors = validate_preflight_inputs(args)
+    if input_errors:
+        return blocked_preflight_result(args, input_errors)
+
     base_dir = Path(args.base_dir)
     service = GrowthIntelligenceService(base_dir=str(base_dir))
     workflow = GrowthWorkflowService(service)
-    username = str(args.target_username or "").strip() or str(args.profile_url).rstrip("/").rsplit("/", 1)[-1].lstrip("@")
+    username = str(args.target_username or "").strip() or username_from_profile_url(args.profile_url)
     action_ids = seed_preflight_actions(service, args.video_url, args.profile_url, username)
     profiles = [{"profile_id": profile_id, "group_name": str(args.group_name or "")} for profile_id in split_csv(args.profile_ids)]
     executor = platform_executor or build_platform_executor(args)
@@ -109,6 +157,8 @@ def run_preflight(args, platform_executor=None) -> dict:
     }
     missing_preflight_action_types = sorted(required_types - success_types)
     return {
+        "status": "completed",
+        "ready": True,
         "base_dir": str(base_dir),
         "seeded_action_ids": action_ids,
         "profiles": profiles,
@@ -123,10 +173,10 @@ def run_preflight(args, platform_executor=None) -> dict:
 def parse_args():
     parser = argparse.ArgumentParser(description="ReachOps live account preflight without submitting comment/follow/dm actions.")
     parser.add_argument("--base-dir", default="reports/reachops/live_preflight")
-    parser.add_argument("--profile-ids", required=True, help="Comma/semicolon separated ixBrowser profile ids.")
+    parser.add_argument("--profile-ids", default="", help="Comma/semicolon separated ixBrowser profile ids.")
     parser.add_argument("--group-name", default="")
-    parser.add_argument("--video-url", required=True)
-    parser.add_argument("--profile-url", required=True)
+    parser.add_argument("--video-url", default="")
+    parser.add_argument("--profile-url", default="")
     parser.add_argument("--target-username", default="")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--per-profile-limit", type=int, default=3)
@@ -145,7 +195,7 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
     else:
         print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0
+    return 0 if str(result.get("status") or "") != "blocked" else 2
 
 
 if __name__ == "__main__":

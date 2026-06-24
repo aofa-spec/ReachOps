@@ -115,10 +115,11 @@ powershell -ExecutionPolicy Bypass -File tools\reachops_acceptance_inputs.local.
 
 `tools\reachops_acceptance_inputs.local.ps1` 已被 `.gitignore` 排除，不能提交真实账号、目标或授权路径。
 
-缺少真实参数时，可以先运行 readiness 门控生成 blocked 报告；该检查不会打开浏览器，也不会提交评论、关注或私信：
+缺少真实参数时，可以先运行 readiness / preflight 门控生成 blocked 报告；这些检查不会提交评论、关注或私信：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_readiness_windows.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windows.ps1
 ```
 
 完整 Windows 验收顺序：
