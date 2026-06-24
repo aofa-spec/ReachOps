@@ -112,6 +112,7 @@ for helper in \
   reachops_operator_pressure.py \
   reachops_delivery_audit.py \
   reachops_delivery_package_check.py \
+  reachops_acceptance_inputs.example.ps1 \
   reachops_goal_status_report.py \
   reachops_live_validation_manifest.py \
   reachops_visual_collection_preflight.py \

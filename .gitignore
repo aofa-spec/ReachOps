@@ -15,3 +15,4 @@ config/
 *.tmp
 .codex-tmp/
 reachops-update-manifest.json
+tools/reachops_acceptance_inputs.local.ps1

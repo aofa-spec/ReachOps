@@ -97,6 +97,16 @@ ReachOps/docs/REACHOPS_DELIVERY_EXECUTION_PLAN.md
 ReachOps/docs/REACHOPS_WINDOWS_LIVE_ACCEPTANCE_RUNBOOK.md
 ```
 
+实机参数模板：
+
+```powershell
+Copy-Item tools\reachops_acceptance_inputs.example.ps1 tools\reachops_acceptance_inputs.local.ps1
+notepad tools\reachops_acceptance_inputs.local.ps1
+powershell -ExecutionPolicy Bypass -File tools\reachops_acceptance_inputs.local.ps1
+```
+
+`tools\reachops_acceptance_inputs.local.ps1` 已被 `.gitignore` 排除，不能提交真实账号、目标或授权路径。
+
 完整 Windows 验收顺序：
 
 ```powershell

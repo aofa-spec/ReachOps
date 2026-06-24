@@ -31,6 +31,18 @@ $TargetUsername = "target_user"
 $ActivationStatusPath = "C:\path\to\reachops_activation_status.json"
 ```
 
+Recommended workflow:
+
+```powershell
+Copy-Item tools\reachops_acceptance_inputs.example.ps1 tools\reachops_acceptance_inputs.local.ps1
+notepad tools\reachops_acceptance_inputs.local.ps1
+powershell -ExecutionPolicy Bypass -File tools\reachops_acceptance_inputs.local.ps1
+```
+
+The local file is ignored by git. Keep real profile IDs, authorized targets, and activation paths out of source control.
+
+The template runs readiness and preflight by default. It runs controlled live submit only if `$RunControlledLiveSubmit = $true`.
+
 Profile requirements:
 
 - Use numeric ixBrowser profile IDs.

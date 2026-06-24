@@ -1601,6 +1601,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         ui_start_bat = (root / "tools" / "start_growth_ui_windows.bat").read_text(encoding="utf-8")
         sync_script = (root / "tools" / "sync_reachops_to_windows_vm.sh").read_text(encoding="utf-8")
         reachops_requirements = (root / "ReachOps" / "packaging" / "requirements-reachops.txt").read_text(encoding="utf-8")
+        acceptance_inputs_template = (root / "tools" / "reachops_acceptance_inputs.example.ps1").read_text(encoding="utf-8")
 
         self.assertIn('name="ReachOps"', spec)
         self.assertIn("ReachOpsApp.py", spec)
@@ -1749,6 +1750,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("run_reachops_acceptance_windows.ps1", sync_script)
         self.assertIn("verify_reachops_acceptance_summary.py", sync_script)
         self.assertIn("reachops_delivery_package_check.py", sync_script)
+        self.assertIn("reachops_acceptance_inputs.example.ps1", sync_script)
         self.assertIn("reachops_delivery_audit.py --json", sync_script)
         self.assertIn("reachops_operator_pressure.py --json", sync_script)
         self.assertIn("ai_strategy.py", sync_script)
@@ -1761,6 +1763,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("ixbrowser_local_api>=1.2", reachops_requirements)
         self.assertIn("pyinstaller>=6.3", reachops_requirements)
         self.assertNotIn("opencv-python", reachops_requirements)
+        self.assertIn("$RunControlledLiveSubmit = $false", acceptance_inputs_template)
+        self.assertIn("run_reachops_live_readiness_windows.ps1", acceptance_inputs_template)
+        self.assertIn("run_reachops_live_preflight_windows.ps1", acceptance_inputs_template)
+        self.assertIn("run_reachops_acceptance_windows.ps1", acceptance_inputs_template)
+        self.assertIn("Set `$RunControlledLiveSubmit = `$true", acceptance_inputs_template)
+        self.assertIn("placeholder value", acceptance_inputs_template)
 
     def test_standalone_app_tiktok_url_validation_returns_boolean(self):
         self.assertTrue(GrowthIntelligenceStandaloneApp._is_tiktok_url(object(), "https://www.tiktok.com/@creator"))
