@@ -179,7 +179,10 @@ function Write-AcceptanceSummary {
 
     $preflightStatus = "skipped"
     if ($preflight) {
-        $preflightStatus = "completed"
+        $preflightStatus = [string]$preflight.status
+        if ([string]::IsNullOrWhiteSpace($preflightStatus)) {
+            $preflightStatus = "completed"
+        }
     }
 
     $liveSubmitStatus = "skipped"
@@ -396,34 +399,62 @@ $liveValidationOutput | ForEach-Object { Write-Host $_ }
 Write-Utf8NoBom -Path $liveValidationStdout -Content ($liveValidationOutput -join [Environment]::NewLine)
 Convert-StdoutJson -StdoutPath $liveValidationStdout -OutputPath $liveValidationJson | Out-Null
 
-if ($ProfileIds -and $CommentVideoUrl -and $FollowProfileUrl -and $TargetUsername) {
-    Write-Step "ReachOps live submit readiness check without browser"
-    $readinessArgs = @("tools\reachops_live_readiness.py", "--profile-ids", $ProfileIds, "--group-name", $ProfileGroup, "--video-url", $CommentVideoUrl, "--follow-profile-url", $FollowProfileUrl, "--dm-profile-url", $(if ($DmProfileUrl) { $DmProfileUrl } else { $FollowProfileUrl }), "--target-username", $TargetUsername, "--limit", ([string]$Limit), "--json")
-    if ($AllowPressureSubmit) {
-        $readinessArgs += @("--allow-pressure-submit", $AllowPressureSubmit)
-    }
-    if ($ConfirmAuthorizedTargets) {
-        $readinessArgs += @("--confirm-authorized-targets", "YES")
-    }
-    if ($ActivationStatusPath) {
-        $readinessArgs += @("--activation-status-path", $ActivationStatusPath)
-    }
-    $readinessOutput = & python @readinessArgs 2>&1
-    $readinessOutput | ForEach-Object { Write-Host $_ }
-    Write-Utf8NoBom -Path $readinessStdout -Content ($readinessOutput -join [Environment]::NewLine)
-    Convert-StdoutJson -StdoutPath $readinessStdout -OutputPath $readinessJson | Out-Null
-    $readinessPayload = Read-JsonObject $readinessJson
-
-    if ($readinessPayload -and [bool]$readinessPayload.ready) {
-        Write-Step "ReachOps live preflight without submit"
-        Invoke-PythonCapture -StepName "ReachOps live preflight" -StdoutPath $preflightStdout -Arguments @("tools\reachops_live_preflight.py", "--base-dir", (Join-Path $root "live_preflight"), "--profile-ids", $ProfileIds, "--group-name", $ProfileGroup, "--video-url", $CommentVideoUrl, "--profile-url", $FollowProfileUrl, "--target-username", $TargetUsername, "--workers", "2", "--per-profile-limit", "3", "--switch-attempts", "2", "--page-timeout", "45", "--element-timeout", "25", "--json")
-        Convert-StdoutJson -StdoutPath $preflightStdout -OutputPath $preflightJson | Out-Null
-    } else {
-        Write-Step "Skipping live preflight: live readiness is blocked"
-    }
-} else {
-    Write-Step "Skipping live readiness/preflight: ProfileIds, CommentVideoUrl, FollowProfileUrl, or TargetUsername not provided"
+Write-Step "ReachOps live submit readiness check without browser"
+$readinessArgs = @("tools\reachops_live_readiness.py", "--limit", ([string]$Limit), "--json")
+if ($ProfileIds) {
+    $readinessArgs += @("--profile-ids", $ProfileIds)
 }
+if ($ProfileGroup) {
+    $readinessArgs += @("--group-name", $ProfileGroup)
+}
+if ($CommentVideoUrl) {
+    $readinessArgs += @("--video-url", $CommentVideoUrl)
+}
+if ($FollowProfileUrl) {
+    $readinessArgs += @("--follow-profile-url", $FollowProfileUrl, "--dm-profile-url", $(if ($DmProfileUrl) { $DmProfileUrl } else { $FollowProfileUrl }))
+}
+if ($TargetUsername) {
+    $readinessArgs += @("--target-username", $TargetUsername)
+}
+if ($AllowPressureSubmit) {
+    $readinessArgs += @("--allow-pressure-submit", $AllowPressureSubmit)
+}
+if ($ConfirmAuthorizedTargets) {
+    $readinessArgs += @("--confirm-authorized-targets", "YES")
+}
+if ($ActivationStatusPath) {
+    $readinessArgs += @("--activation-status-path", $ActivationStatusPath)
+}
+$readinessOutput = & python @readinessArgs 2>&1
+$readinessOutput | ForEach-Object { Write-Host $_ }
+Write-Utf8NoBom -Path $readinessStdout -Content ($readinessOutput -join [Environment]::NewLine)
+Convert-StdoutJson -StdoutPath $readinessStdout -OutputPath $readinessJson | Out-Null
+$readinessPayload = Read-JsonObject $readinessJson
+if ($readinessPayload -and (-not [bool]$readinessPayload.ready)) {
+    Write-Step "Live readiness is blocked; still writing no-submit preflight input report"
+}
+
+Write-Step "ReachOps live preflight without submit"
+$preflightArgs = @("tools\reachops_live_preflight.py", "--base-dir", (Join-Path $root "live_preflight"), "--workers", "2", "--per-profile-limit", "3", "--switch-attempts", "2", "--page-timeout", "45", "--element-timeout", "25", "--json")
+if ($ProfileIds) {
+    $preflightArgs += @("--profile-ids", $ProfileIds)
+}
+if ($ProfileGroup) {
+    $preflightArgs += @("--group-name", $ProfileGroup)
+}
+if ($CommentVideoUrl) {
+    $preflightArgs += @("--video-url", $CommentVideoUrl)
+}
+if ($FollowProfileUrl) {
+    $preflightArgs += @("--profile-url", $FollowProfileUrl)
+}
+if ($TargetUsername) {
+    $preflightArgs += @("--target-username", $TargetUsername)
+}
+$preflightOutput = & python @preflightArgs 2>&1
+$preflightOutput | ForEach-Object { Write-Host $_ }
+Write-Utf8NoBom -Path $preflightStdout -Content ($preflightOutput -join [Environment]::NewLine)
+Convert-StdoutJson -StdoutPath $preflightStdout -OutputPath $preflightJson | Out-Null
 
 if ($RunLiveSubmit) {
     if (-not $ConfirmAuthorizedTargets) {
