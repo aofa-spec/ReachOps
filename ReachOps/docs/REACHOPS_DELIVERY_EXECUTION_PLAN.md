@@ -12,7 +12,7 @@ Current status:
 - Stage 2: Outreach plan MVP is implemented locally.
 - Stage 3: Real execution is implemented behind authorization gates, but still needs external platform validation.
 - Stage 4: AI/rules strategy enhancement is implemented locally.
-- Stage 5: Standalone packaging scripts exist, but Windows build and installer artifacts still need real-environment proof.
+- Stage 5: Standalone packaging has been validated in the Windows VM through build, installer, update manifest, installer smoke, and non-live acceptance. Final delivery still depends on real ixBrowser/TikTok external validation.
 
 The project must not be called fully delivered until the Windows acceptance summary reaches `passed` with `effective_pending_external_validation = 0`.
 
@@ -119,9 +119,13 @@ Acceptance criteria:
 
 Current evidence:
 
-- Build, installer, update, and smoke scripts exist.
-- No `dist` build artifact is present in the repository handoff.
-- This milestone still requires Windows execution evidence.
+- Windows VM build completed with `VersionInfoBuild: 1` for build `mvp-001`.
+- `dist\ReachOps\ReachOps.exe` was generated.
+- `dist\installer\ReachOps-Setup-0.4.0.exe` was generated.
+- `dist\installer\reachops-update-manifest.json` was generated and hash-verified.
+- Installer smoke returned `status=ok`, `exe_exists=true`, `data_in_install_dir=false`, and `hash_ok=true`.
+- Non-live Windows acceptance wrote `reports\reachops_acceptance\20260624_190919\acceptance_summary.json` with status `ready_for_external_validation`.
+- This milestone is complete for non-live Windows client delivery validation.
 
 ## Milestone 3: Real ixBrowser / TikTok Preflight
 
@@ -174,7 +178,10 @@ Acceptance criteria:
 Current evidence:
 
 - Readiness and preflight scripts exist.
-- This milestone still requires real ixBrowser and TikTok account evidence.
+- Windows side currently has no `tools\reachops_acceptance_inputs.local.ps1`.
+- `tools\run_reachops_live_readiness_windows.ps1` stops before opening a browser when `ProfileIds` is missing.
+- With candidate profile IDs only, readiness stops before opening a browser because `CommentVideoUrl` is missing.
+- This milestone still requires real ixBrowser profile IDs and authorized TikTok target evidence.
 
 ## Milestone 4: Controlled Real Execution Acceptance
 

@@ -10,7 +10,7 @@ ReachOps 是独立增长获客客户端工程。
 - Stage 2 触达计划 MVP：本地已实现并通过验收。
 - Stage 3 真实执行：授权门、限频、冷却、换号、降级和证据链路已实现；真实 TikTok 平台提交仍需 Windows + ixBrowser + 真实账号外部验收。
 - Stage 4 AI 增强：AI/规则双通道、话术、来源扩展、人工可编辑策略已实现。
-- Stage 5 独立打包：脚本和升级机制已实现；正式 Windows exe、installer、installer smoke 仍需在 Windows 环境生成并验证。
+- Stage 5 独立打包：Windows `ReachOps.exe`、installer、update manifest、installer smoke 和非真实提交 acceptance 已在 Windows VM 验证通过；真实平台提交仍需外部验收。
 
 目标链路：
 
@@ -69,6 +69,14 @@ python3 tools/reachops_goal_status_report.py --json
 - delivery audit 返回 `status=ok` 且 `failed=0`。
 - goal status 可到 `ready_for_external_validation`；真实平台提交前不应宣称 `passed`。
 - `tools/reachops_delivery_package_check.py` 需要 Windows 产物和 acceptance reports；本机没有这些产物时返回缺失是预期状态。
+
+已完成的 Windows 中间态验收：
+
+- Windows build 已生成 `dist\ReachOps\ReachOps.exe`。
+- Inno Setup 已生成 `dist\installer\ReachOps-Setup-0.4.0.exe`。
+- `dist\installer\reachops-update-manifest.json` hash 校验通过。
+- installer smoke 返回 `status=ok`，安装目录未写入运行数据。
+- `reports\reachops_acceptance\20260624_190919\acceptance_summary.json` 当前为 `ready_for_external_validation`，仅剩真实平台外部验收 pending。
 
 ## Windows
 
