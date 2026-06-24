@@ -167,6 +167,7 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windo
   -ProfileIds $ProfileIds `
   -CommentVideoUrl $CommentVideoUrl `
   -TargetProfileUrl $FollowProfileUrl `
+  -DmProfileUrl $DmProfileUrl `
   -TargetUsername $TargetUsername
 ```
 

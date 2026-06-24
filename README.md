@@ -76,7 +76,7 @@ python3 tools/reachops_goal_status_report.py --json
 - Inno Setup 已生成 `dist\installer\ReachOps-Setup-0.4.0.exe`。
 - `dist\installer\reachops-update-manifest.json` hash 校验通过。
 - installer smoke 返回 `status=ok`，安装目录未写入运行数据。
-- `reports\reachops_acceptance\20260624_192009\acceptance_summary.json` 当前为 `ready_for_external_validation`，并包含 blocked/no-submit 的 readiness 与 preflight 报告；仅剩真实平台外部验收 pending。
+- `reports\reachops_acceptance\20260624_193703\acceptance_summary.json` 当前为 `ready_for_external_validation`，并包含 blocked/no-submit 的 activation status、readiness 与 preflight 报告；仅剩真实平台外部验收 pending。
 
 ## Windows
 

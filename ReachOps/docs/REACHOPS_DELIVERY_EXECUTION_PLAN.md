@@ -124,7 +124,7 @@ Current evidence:
 - `dist\installer\ReachOps-Setup-0.4.0.exe` was generated.
 - `dist\installer\reachops-update-manifest.json` was generated and hash-verified.
 - Installer smoke returned `status=ok`, `exe_exists=true`, `data_in_install_dir=false`, and `hash_ok=true`.
-- Non-live Windows acceptance wrote `reports\reachops_acceptance\20260624_192009\acceptance_summary.json` with status `ready_for_external_validation`.
+- Non-live Windows acceptance wrote `reports\reachops_acceptance\20260624_193703\acceptance_summary.json` with status `ready_for_external_validation`.
 - The same acceptance run includes `live_readiness_payload.json` and `live_preflight_payload.json`, so missing live inputs are represented in the full acceptance package instead of only standalone reports.
 - Delivery package check now requires `live_readiness_payload.json` and `live_preflight_payload.json` for intermediate `ready_for_external_validation` packages as well as final packages.
 - This milestone is complete for non-live Windows client delivery validation.
@@ -162,7 +162,7 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_readiness_windo
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windows.ps1 `
   -ProfileIds "123,456" `
   -CommentVideoUrl "https://www.tiktok.com/@creator/video/123" `
-  -FollowProfileUrl "https://www.tiktok.com/@target_user" `
+  -TargetProfileUrl "https://www.tiktok.com/@target_user" `
   -DmProfileUrl "https://www.tiktok.com/@target_user" `
   -TargetUsername "target_user"
 ```
@@ -181,13 +181,14 @@ Current evidence:
 
 - Readiness and preflight scripts exist.
 - Windows side currently has no `tools\reachops_acceptance_inputs.local.ps1`.
+- Windows live validation can scan ixBrowser and selected numeric profile IDs `27273`, `27240`, and `27230` in the latest non-live acceptance run.
 - `tools\run_reachops_live_readiness_windows.ps1` now writes a blocked JSON report even when required live inputs are missing.
 - Latest missing-input readiness proof on the Windows VM: `reports\reachops_live_readiness\20260624_191450\live_readiness_payload.json`.
 - That report has `status=blocked`, `no_browser_started=true`, `no_submit=true`, empty `profile_ids`, and missing video/profile/target/activation checks.
 - `tools\run_reachops_live_preflight_windows.ps1` now writes a blocked JSON report before any action routing when required live inputs are missing.
 - Latest missing-input preflight proof on the Windows VM: `reports\reachops_live_preflight\20260624_191735\live_preflight_payload.json`.
 - That report has `status=blocked`, `no_browser_started=true`, `no_submit=true`, and empty preflight statuses for comment/follow/DM.
-- Full Windows acceptance proof on the Windows VM: `reports\reachops_acceptance\20260624_192009\live_readiness_payload.json` and `reports\reachops_acceptance\20260624_192009\live_preflight_payload.json`.
+- Full Windows acceptance proof on the Windows VM: `reports\reachops_acceptance\20260624_193703\live_readiness_payload.json`, `reports\reachops_acceptance\20260624_193703\live_preflight_payload.json`, and `reports\reachops_acceptance\20260624_193703\activation_status_payload.json`.
 - This milestone still requires real ixBrowser profile IDs and authorized TikTok target evidence.
 
 ## Milestone 4: Controlled Real Execution Acceptance

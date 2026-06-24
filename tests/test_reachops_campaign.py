@@ -995,6 +995,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 group_name = "AUDIT"
                 video_url = "https://www.tiktok.com/@creator/video/123"
                 profile_url = "https://www.tiktok.com/@buyer_one"
+                dm_profile_url = "https://www.tiktok.com/@buyer_one/inbox"
                 target_username = "buyer_one"
                 workers = 2
                 per_profile_limit = 3
@@ -1024,6 +1025,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["preflight_action_statuses"]["comment_reply"])
             self.assertTrue(result["preflight_action_statuses"]["follow_review"])
             self.assertTrue(result["preflight_action_statuses"]["dm_review"])
+            self.assertEqual(result["target_urls"]["follow_review"], "https://www.tiktok.com/@buyer_one")
+            self.assertEqual(result["target_urls"]["dm_review"], "https://www.tiktok.com/@buyer_one/inbox")
             self.assertTrue(result["summary"].get("report", {}).get("json_path"))
 
     def test_reachops_live_preflight_reports_missing_inputs_without_browser_or_submit(self):
@@ -1034,6 +1037,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 group_name = "AUDIT"
                 video_url = ""
                 profile_url = ""
+                dm_profile_url = ""
                 target_username = ""
                 workers = 2
                 per_profile_limit = 3
@@ -1053,6 +1057,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("--profile-ids must include at least one profile id", result["errors"])
             self.assertIn("--video-url is required", result["errors"])
             self.assertIn("--profile-url is required", result["errors"])
+            self.assertIn("--dm-profile-url is required", result["errors"])
             self.assertEqual(result["preflight_action_statuses"]["comment_reply"], [])
             self.assertEqual(set(result["missing_preflight_action_types"]), {"comment_reply", "follow_review", "dm_review"})
 
@@ -1800,6 +1805,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("missing_local_evidence_file_action_types", acceptance_script)
         self.assertIn("preflight_action_statuses", acceptance_script)
         self.assertIn("missing_preflight_action_types", acceptance_script)
+        self.assertIn("--dm-profile-url", acceptance_script)
         self.assertIn("LIVE_READINESS_JSON", acceptance_script)
         self.assertIn("LIVE_VALIDATION_MANIFEST_JSON", acceptance_script)
         self.assertIn("live_validation", acceptance_script)
@@ -1849,6 +1855,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("tools\\reachops_live_preflight.py", live_preflight_windows_script)
         self.assertIn("No comment/follow/dm will be submitted", live_preflight_windows_script)
         self.assertIn("LIVE_PREFLIGHT_JSON", live_preflight_windows_script)
+        self.assertIn("DmProfileUrl", live_preflight_windows_script)
+        self.assertIn("--dm-profile-url", live_preflight_windows_script)
         self.assertIn("ReachOps live preflight blocked or failed", live_preflight_windows_script)
         self.assertNotIn("reachops_live_submit_acceptance.py", live_preflight_windows_script)
         self.assertIn("Start-Process -FilePath $InstallerPath", installer_smoke_script)
@@ -1907,6 +1915,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("$RunControlledLiveSubmit = $false", acceptance_inputs_template)
         self.assertIn("run_reachops_live_readiness_windows.ps1", acceptance_inputs_template)
         self.assertIn("run_reachops_live_preflight_windows.ps1", acceptance_inputs_template)
+        self.assertIn("-DmProfileUrl $DmProfileUrl", acceptance_inputs_template)
         self.assertIn("run_reachops_acceptance_windows.ps1", acceptance_inputs_template)
         self.assertIn("Set `$RunControlledLiveSubmit = `$true", acceptance_inputs_template)
         self.assertIn("placeholder value", acceptance_inputs_template)
@@ -1915,6 +1924,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("tools\\run_reachops_live_preflight_windows.ps1", live_acceptance_runbook)
         self.assertIn("tools\\reachops_activation_status_check.py", live_acceptance_runbook)
         self.assertIn("-TargetProfileUrl $FollowProfileUrl", live_acceptance_runbook)
+        self.assertIn("-DmProfileUrl $DmProfileUrl", live_acceptance_runbook)
         self.assertIn("goal_status_report.json", live_acceptance_runbook)
         self.assertIn("delivery_audit_payload.json", live_acceptance_runbook)
         self.assertIn("operator_pressure_payload.json", live_acceptance_runbook)

@@ -29,6 +29,11 @@ def username_from_profile_url(url: str) -> str:
     return value.rsplit("/@", 1)[-1].split("/", 1)[0].lstrip("@")
 
 
+def dm_profile_url(args) -> str:
+    explicit = str(getattr(args, "dm_profile_url", "") or "").strip()
+    return explicit or str(getattr(args, "profile_url", "") or "").strip()
+
+
 def validate_preflight_inputs(args) -> list[str]:
     errors: list[str] = []
     profile_ids = split_csv(getattr(args, "profile_ids", ""))
@@ -41,12 +46,17 @@ def validate_preflight_inputs(args) -> list[str]:
         errors.append("--video-url is required")
     if not str(getattr(args, "profile_url", "") or "").strip():
         errors.append("--profile-url is required")
+    if not dm_profile_url(args):
+        errors.append("--dm-profile-url is required")
     target_username = str(getattr(args, "target_username", "") or "").strip().lstrip("@").lower()
     profile_username = username_from_profile_url(getattr(args, "profile_url", "")).lower()
+    dm_username = username_from_profile_url(dm_profile_url(args)).lower()
     if not target_username and not profile_username:
         errors.append("--target-username is required when --profile-url does not contain /@username")
     if target_username and profile_username and target_username != profile_username:
         errors.append(f"target username mismatch: profile={profile_username}, username={target_username}")
+    if target_username and dm_username and target_username != dm_username:
+        errors.append(f"target username mismatch: dm_profile={dm_username}, username={target_username}")
     return errors
 
 
@@ -66,11 +76,11 @@ def blocked_preflight_result(args, errors: list[str]) -> dict:
     }
 
 
-def seed_preflight_actions(service: GrowthIntelligenceService, video_url: str, profile_url: str, target_username: str) -> list[str]:
+def seed_preflight_actions(service: GrowthIntelligenceService, video_url: str, profile_url: str, dm_url: str, target_username: str) -> list[str]:
     specs = [
         ("comment_reply", video_url, "Preflight only comment text for @{username}"),
         ("follow_review", profile_url, "Preflight only follow review for @{username}"),
-        ("dm_review", profile_url, "Preflight only DM text for @{username}"),
+        ("dm_review", dm_url, "Preflight only DM text for @{username}"),
     ]
     action_ids = []
     for action_type, target_url, suggested_text in specs:
@@ -114,7 +124,7 @@ def run_preflight(args, platform_executor=None) -> dict:
     service = GrowthIntelligenceService(base_dir=str(base_dir))
     workflow = GrowthWorkflowService(service)
     username = str(args.target_username or "").strip() or username_from_profile_url(args.profile_url)
-    action_ids = seed_preflight_actions(service, args.video_url, args.profile_url, username)
+    action_ids = seed_preflight_actions(service, args.video_url, args.profile_url, dm_profile_url(args), username)
     profiles = [{"profile_id": profile_id, "group_name": str(args.group_name or "")} for profile_id in split_csv(args.profile_ids)]
     executor = platform_executor or build_platform_executor(args)
     summary = workflow.run_action_router(
@@ -165,6 +175,11 @@ def run_preflight(args, platform_executor=None) -> dict:
         "summary": summary,
         "preflight_action_statuses": preflight_action_statuses,
         "missing_preflight_action_types": missing_preflight_action_types,
+        "target_urls": {
+            "comment_reply": str(args.video_url or ""),
+            "follow_review": str(args.profile_url or ""),
+            "dm_review": dm_profile_url(args),
+        },
         "no_submit": True,
         "preflight_only": True,
     }
@@ -177,6 +192,7 @@ def parse_args():
     parser.add_argument("--group-name", default="")
     parser.add_argument("--video-url", default="")
     parser.add_argument("--profile-url", default="")
+    parser.add_argument("--dm-profile-url", default="", help="Optional DM profile URL. Defaults to --profile-url when omitted.")
     parser.add_argument("--target-username", default="")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--per-profile-limit", type=int, default=3)

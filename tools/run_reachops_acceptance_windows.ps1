@@ -473,6 +473,9 @@ if ($CommentVideoUrl) {
 if ($FollowProfileUrl) {
     $preflightArgs += @("--profile-url", $FollowProfileUrl)
 }
+if ($DmProfileUrl) {
+    $preflightArgs += @("--dm-profile-url", $DmProfileUrl)
+}
 if ($TargetUsername) {
     $preflightArgs += @("--target-username", $TargetUsername)
 }

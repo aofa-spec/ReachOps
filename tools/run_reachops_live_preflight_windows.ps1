@@ -3,6 +3,7 @@ param(
     [string]$ProfileIds = "",
     [string]$CommentVideoUrl = "",
     [string]$TargetProfileUrl = "",
+    [string]$DmProfileUrl = "",
     [string]$TargetUsername = "",
     [int]$Workers = 2,
     [int]$PerProfileLimit = 3,
@@ -62,6 +63,8 @@ function Convert-StdoutJson {
 if (-not $TargetUsername) {
     if ($TargetProfileUrl -match "/@([^/?#]+)") {
         $TargetUsername = $Matches[1]
+    } elseif ($DmProfileUrl -match "/@([^/?#]+)") {
+        $TargetUsername = $Matches[1]
     }
 }
 
@@ -97,6 +100,9 @@ if ($CommentVideoUrl) {
 }
 if ($TargetProfileUrl) {
     $argsList += @("--profile-url", $TargetProfileUrl)
+}
+if ($DmProfileUrl) {
+    $argsList += @("--dm-profile-url", $DmProfileUrl)
 }
 if ($TargetUsername) {
     $argsList += @("--target-username", $TargetUsername)
