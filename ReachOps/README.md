@@ -2,6 +2,8 @@
 
 这是 ReachOps 独立增长获客客户端工程。
 
+当前版本：`0.4.0` / `mvp`。
+
 产品目标不是做数据展示页，而是交付一个可实盘运行的商家获客工作台：
 
 ```text
@@ -80,3 +82,28 @@ powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1 -SkipI
 ```
 
 升级策略默认保留独立配置目录、数据目录和授权状态。
+
+## 交付状态
+
+当前本地已验证：
+
+- 产品/关键词/达人/话题目标可以创建获客任务。
+- 系统可以生成受众画像、来源规划、客户线索和触达动作。
+- 执行预检、失败原因、换号、降级评论、限频和证据要求已有本地验收覆盖。
+- AI/规则策略、外部 AI 失败降级、人工策略编辑已有本地验收覆盖。
+
+仍需外部环境验证：
+
+- Windows UI startup smoke。
+- Windows PyInstaller build 和 Inno Setup installer。
+- 真实 ixBrowser profile readiness/preflight。
+- 授权后的真实 TikTok comment/follow/DM 受控提交。
+
+执行计划和实机 runbook：
+
+```text
+ReachOps/docs/REACHOPS_DELIVERY_EXECUTION_PLAN.md
+ReachOps/docs/REACHOPS_WINDOWS_LIVE_ACCEPTANCE_RUNBOOK.md
+```
+
+完整交付前，acceptance summary 必须达到 `passed`，且 `effective_pending_external_validation` 必须为 `0`。
