@@ -15,7 +15,11 @@
   #define MyAppBuild "0"
 #endif
 
-#define MyFullVersion MyAppVersion + "." + MyAppBuild
+#ifndef MyVersionInfoBuild
+  #define MyVersionInfoBuild "0"
+#endif
+
+#define MyFullVersion MyAppVersion + "." + MyVersionInfoBuild
 
 [Setup]
 AppId={{F0B97B8D-85D2-4A61-8B7A-1DA8A3291504}

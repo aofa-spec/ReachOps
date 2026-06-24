@@ -28,6 +28,15 @@ function Read-ReachOpsVersion {
     return (& $Python -c $code).Trim()
 }
 
+function Resolve-VersionInfoBuild {
+    param([string]$BuildValue)
+    $digits = @([regex]::Matches([string]$BuildValue, "\d+") | ForEach-Object { $_.Value })
+    if ($digits.Count -gt 0) {
+        return [string]([int]$digits[$digits.Count - 1])
+    }
+    return "0"
+}
+
 function Find-InnoSetupCompiler {
     $command = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
     if ($null -ne $command) {
@@ -59,6 +68,8 @@ Write-Host "ReachOps Windows build"
 Write-Host "Root: $Root"
 Write-Host "Version: $Version"
 Write-Host "Build: $Build"
+$VersionInfoBuild = Resolve-VersionInfoBuild $Build
+Write-Host "VersionInfoBuild: $VersionInfoBuild"
 
 if (!(Test-Path $VenvPython)) {
     & $Python -m venv $VenvDir
@@ -105,7 +116,7 @@ if (!$SkipInstaller) {
     if ([string]::IsNullOrWhiteSpace($iscc)) {
         Write-Warning "ISCC.exe not found. Skipping installer. Install Inno Setup or pass -SkipInstaller."
     } else {
-        & $iscc "ReachOps\packaging\ReachOps.iss" "/DMyAppVersion=$Version" "/DMyAppBuild=$Build"
+        & $iscc "ReachOps\packaging\ReachOps.iss" "/DMyAppVersion=$Version" "/DMyAppBuild=$Build" "/DMyVersionInfoBuild=$VersionInfoBuild"
         Assert-LastExitCode "ReachOps Inno Setup installer"
         $InstallerPath = Join-Path $Root "dist\installer\ReachOps-Setup-$Version.exe"
         if (Test-Path $InstallerPath) {
