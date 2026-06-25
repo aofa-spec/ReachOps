@@ -176,3 +176,4 @@ python tools\reachops_delivery_package_check.py --allow-external-pending --json
 - 不提交运行数据库、报告、证据截图、日志或授权状态文件。
 - 真实提交必须经过授权门、证据 sidecar、限频和可追溯报告。
 - 默认行为不得真实提交评论、关注或私信。
+- 启动 ixBrowser Profile 后如果 TikTok 出现登录/注册弹窗或强制登录页，系统必须立即记录 `LOGIN_REQUIRED`，停止该账号的获客采集流程，并进入账号不可用处理。

@@ -171,6 +171,7 @@ Acceptance criteria:
 
 - At least one profile is ready.
 - Login-required accounts are reported with `LOGIN_REQUIRED`.
+- Login/signup dialogs after profile launch are treated as `LOGIN_REQUIRED` and must stop the acquisition flow for that profile.
 - Captcha-gated accounts are reported with `CAPTCHA_DETECTED`.
 - Proxy failures are reported with `PROXY_FAILED`.
 - Missing comment/follow/DM entry points have explicit error codes.

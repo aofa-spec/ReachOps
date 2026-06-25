@@ -1798,6 +1798,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         live_acceptance_runbook = (root / "ReachOps" / "docs" / "REACHOPS_WINDOWS_LIVE_ACCEPTANCE_RUNBOOK.md").read_text(encoding="utf-8")
         handoff = (root / "HANDOFF.md").read_text(encoding="utf-8")
         readme = (root / "README.md").read_text(encoding="utf-8")
+        delivery_plan = (root / "ReachOps" / "docs" / "REACHOPS_DELIVERY_EXECUTION_PLAN.md").read_text(encoding="utf-8")
 
         self.assertIn('name="ReachOps"', spec)
         self.assertIn("ReachOpsApp.py", spec)
@@ -1999,6 +2000,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("effective_pending_external_validation=2", handoff)
         self.assertIn("27273", handoff)
         self.assertIn("reachops_acceptance_inputs.local.ps1", handoff)
+        self.assertIn("LOGIN_REQUIRED", handoff)
+        self.assertIn("登录/注册弹窗", readme)
+        self.assertIn("Login/signup dialogs", delivery_plan)
 
     def test_standalone_app_tiktok_url_validation_returns_boolean(self):
         self.assertTrue(GrowthIntelligenceStandaloneApp._is_tiktok_url(object(), "https://www.tiktok.com/@creator"))

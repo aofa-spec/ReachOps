@@ -46,6 +46,7 @@ Current delivery boundary:
 - The latest acceptance package includes `activation_status_payload.json`, `live_validation_manifest.json`, `live_readiness_payload.json`, and `live_preflight_payload.json` as blocked/no-submit reports.
 - Windows live validation can currently scan ixBrowser and select numeric profile IDs `27273`, `27240`, and `27230`.
 - Default client behavior must not submit real platform actions.
+- If TikTok shows a login/signup dialog or forced login page after an ixBrowser Profile opens, treat that account as `LOGIN_REQUIRED` immediately. Do not continue discovery, collection, comment scan, or customer acquisition with that Profile.
 - GUI is mandatory for client delivery. If the local environment lacks Tkinter, continue headless core development and validate GUI in Windows VM or another Tkinter-capable environment.
 - The next delivery focus is not UI decoration or broad feature expansion. Follow `ReachOps/docs/REACHOPS_DELIVERY_EXECUTION_PLAN.md`: run real ixBrowser/TikTok readiness and preflight, then run controlled live submit only after authorization and target confirmation.
 
