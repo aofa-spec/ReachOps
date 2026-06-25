@@ -103,7 +103,7 @@ def group_display_name(group: dict) -> str:
     group_id = str(group.get("group_id") or "").strip()
     count = int(group.get("count") or 0)
     count_label = f"{count} 个账号" if count > 0 else "待读取账号数"
-    return f"{name} | ID {group_id or '-'} | {count_label}"
+    return f"{count_label} | {name} | ID {group_id or '-'}"
 
 
 def group_display_label(group: dict) -> str:
@@ -143,6 +143,8 @@ def stable_combobox_values(values: list[str]) -> list[str]:
 
 def group_name_from_display(value: str) -> str:
     text = str(value or "").strip()
+    if " 个账号 | " in text or text.startswith("待读取账号数 | "):
+        text = text.split(" | ", 1)[1].strip()
     if text.endswith(")") and "(" in text:
         return text.rsplit("(", 1)[0].strip()
     if " | ID " in text:

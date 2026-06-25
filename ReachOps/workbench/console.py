@@ -66,6 +66,8 @@ def is_stable_combobox_option(value: str) -> bool:
 
 def group_name_from_display(value: str) -> str:
     text = str(value or "").strip()
+    if " 个账号 | " in text or text.startswith("待读取账号数 | "):
+        text = text.split(" | ", 1)[1].strip()
     if text.endswith(")") and "(" in text:
         text = text.rsplit("(", 1)[0].strip()
     if " | ID " in text:

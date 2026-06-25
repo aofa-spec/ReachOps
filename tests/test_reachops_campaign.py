@@ -25,7 +25,7 @@ from ReachOps.workbench.action_router import ActionRouterConfig
 from ReachOps.workbench.action_router import FixtureActionExecutor
 from ReachOps.workbench.profile_preflight import ProfilePreflightChecker, ProfilePreflightConfig
 from ReachOps.workbench.console import GrowthOpsConsole, format_campaign_plan_summary
-from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp, group_display_name, stable_combobox_values
+from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp, group_display_name, group_name_from_display, stable_combobox_values
 from ReachOps.workbench.tiktok_action_executor import TikTokActionExecutorConfig, TikTokSeleniumActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_action_preflight_existing_batch import run_preflight as run_reachops_action_preflight_existing_batch
@@ -4316,8 +4316,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
     def test_profile_group_display_keeps_operator_readable_group_name(self):
         display = group_display_name({"group_id": "281726", "group_name": "加拿大获客组", "count": 12})
 
-        self.assertEqual(display, "加拿大获客组 | ID 281726 | 12 个账号")
+        self.assertEqual(display, "12 个账号 | 加拿大获客组 | ID 281726")
         self.assertEqual(stable_combobox_values([display]), [display])
+        self.assertEqual(group_name_from_display(display), "加拿大获客组")
+        self.assertEqual(group_name_from_display("待读取账号数 | 加拿大获客组 | ID 281726"), "加拿大获客组")
 
     def test_standalone_logs_profile_preflight_details_for_operator(self):
         logs = []
