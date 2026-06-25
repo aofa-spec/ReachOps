@@ -44,6 +44,7 @@ from tools.reachops_visual_collection_preflight import build_operator_diagnosis 
 from tools.reachops_visual_collection_preflight import source_from_plan as visual_preflight_source_from_plan
 from tools.reachops_live_validation_manifest import build_manifest as build_reachops_live_validation_manifest
 from tools.reachops_live_validation_manifest import load_profile_snapshot as load_reachops_profile_snapshot
+from tools.reachops_live_acceptance_status import build_status as build_reachops_live_acceptance_status
 from tools.reachops_live_preflight import run_preflight as run_reachops_live_preflight
 from tools.reachops_live_readiness import run_readiness as run_reachops_live_readiness
 from tools.reachops_live_submit_acceptance import run_acceptance as run_reachops_live_submit_acceptance
@@ -1530,6 +1531,63 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertNotIn("ixBrowser 数字 Profile ID", manifest["missing_inputs"])
             self.assertIn("-ProfileIds '12345,67890'", manifest["commands"]["readiness_no_browser_no_submit"])
 
+    def test_reachops_live_acceptance_status_summarizes_remaining_live_gaps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            activation_path = tmp_path / "missing_activation.json"
+            template_path = tmp_path / "reachops_activation_status.template.json"
+            template_path.write_text("{}", encoding="utf-8")
+            acceptance_dir = tmp_path / "reports" / "reachops_acceptance" / "20260625_084637"
+            acceptance_dir.mkdir(parents=True)
+            (acceptance_dir / "acceptance_summary.json").write_text(
+                json.dumps(
+                    {
+                        "status": "ready_for_external_validation",
+                        "delivery_audit": {"effective_pending_external_validation": 2},
+                        "goal_status": {"pending_external_validation": ["授权允许时能真实执行", "真实 TikTok 平台提交"]},
+                        "pending_external_validation": ["授权允许时能真实执行", "真实 TikTok 平台提交"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (acceptance_dir / "delivery_package_check.json").write_text(
+                json.dumps({"status": "ready_for_external_validation", "passed": True}),
+                encoding="utf-8",
+            )
+
+            class Args:
+                profile_group = "BR"
+                profile_ids = "12345,67890"
+                profile_limit = 3
+                max_pages = 1
+                profile_scan_timeout = 1
+                target = "anti aging serum"
+                comment_video_url = ""
+                target_profile_url = ""
+                dm_profile_url = ""
+                target_username = ""
+                activation_status_path = str(activation_path)
+                activation_template_path = str(template_path)
+                local_inputs_path = str(tmp_path / "tools" / "reachops_acceptance_inputs.local.ps1")
+                acceptance_reports_dir = str(tmp_path / "reports" / "reachops_acceptance")
+                limit = 3
+                allow_pressure_submit = ""
+                confirm_authorized_targets = False
+
+            status = build_reachops_live_acceptance_status(Args())
+
+            self.assertEqual(status["status"], "blocked")
+            self.assertFalse(status["ready_for_live_preflight"])
+            self.assertFalse(status["final_delivery_ready"])
+            self.assertFalse(status["local_inputs"]["exists"])
+            self.assertTrue(status["activation"]["template_exists"])
+            self.assertFalse(status["activation"]["ready"])
+            self.assertEqual(status["live_validation"]["selected_profile_ids"], ["12345", "67890"])
+            self.assertIn("本地验收输入文件 tools/reachops_acceptance_inputs.local.ps1", status["live_validation"]["missing_inputs"])
+            self.assertIn("激活状态文件", status["live_validation"]["missing_inputs"])
+            self.assertEqual(status["latest_acceptance"]["effective_pending_external_validation"], 2)
+            self.assertEqual(status["next_required_actions"][0], "本地验收输入文件 tools/reachops_acceptance_inputs.local.ps1")
+
     def test_reachops_profile_snapshot_handles_worker_decode_failure_output(self):
         class Completed:
             returncode = 1
@@ -1988,6 +2046,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_visual_collection_preflight.py", sync_script)
         self.assertIn("capture_windows_desktop_hidden.ps1", sync_script)
         self.assertIn("reachops_live_validation_manifest.py", sync_script)
+        self.assertIn("reachops_live_acceptance_status.py", sync_script)
         self.assertIn("run_reachops_live_validation_manifest_windows.ps1", sync_script)
         self.assertIn("run_reachops_live_readiness_windows.ps1", sync_script)
         self.assertIn("run_reachops_live_preflight_windows.ps1", sync_script)
@@ -2018,10 +2077,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("Set `$RunControlledLiveSubmit = `$true", acceptance_inputs_template)
         self.assertIn("placeholder value", acceptance_inputs_template)
         self.assertIn("reachops_activation_status_check.py", acceptance_inputs_template)
+        self.assertIn("reachops_live_acceptance_status.py", acceptance_inputs_template)
+        self.assertIn("--confirm-authorized-targets", acceptance_inputs_template)
         self.assertIn("Activation status check blocked", acceptance_inputs_template)
         self.assertIn("tools\\run_reachops_live_preflight_windows.ps1", live_acceptance_runbook)
         self.assertIn("tools\\reachops_activation_status_check.py", live_acceptance_runbook)
         self.assertIn("tools\\reachops_activation_status_template.py", live_acceptance_runbook)
+        self.assertIn("tools\\reachops_live_acceptance_status.py", live_acceptance_runbook)
         self.assertIn("template_only", live_acceptance_runbook)
         self.assertIn("reachops_activation_status_template.py", readme)
         self.assertIn("-TargetProfileUrl $FollowProfileUrl", live_acceptance_runbook)

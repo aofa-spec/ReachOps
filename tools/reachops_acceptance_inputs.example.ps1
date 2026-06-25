@@ -52,6 +52,21 @@ if (-not (Test-Path $ActivationStatusPath)) {
     throw "ActivationStatusPath does not exist: $ActivationStatusPath"
 }
 
+Write-Host "[ReachOpsInputs] Summarizing live acceptance state. No browser opens and no platform action submits." -ForegroundColor Cyan
+python tools\reachops_live_acceptance_status.py `
+    --profile-group $ProfileGroup `
+    --profile-ids $ProfileIds `
+    --comment-video-url $CommentVideoUrl `
+    --target-profile-url $FollowProfileUrl `
+    --dm-profile-url $DmProfileUrl `
+    --target-username $TargetUsername `
+    --activation-status-path $ActivationStatusPath `
+    --confirm-authorized-targets `
+    --json
+if ($LASTEXITCODE -ne 0) {
+    throw "Live acceptance status probe failed."
+}
+
 Write-Host "[ReachOpsInputs] Checking activation status. No browser opens and no platform action submits." -ForegroundColor Cyan
 python tools\reachops_activation_status_check.py --activation-status-path $ActivationStatusPath --json
 if ($LASTEXITCODE -ne 0) {

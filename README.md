@@ -120,9 +120,12 @@ powershell -ExecutionPolicy Bypass -File tools\reachops_acceptance_inputs.local.
 ```powershell
 python tools\reachops_activation_status_template.py --bind-current-device --enable-live-submit --enable-comment-reply --enable-follow-review --enable-dm-review --json
 python tools\reachops_activation_status_check.py --activation-status-path "C:\path\to\reachops_activation_status.json" --json
+python tools\reachops_live_acceptance_status.py --json
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_readiness_windows.ps1
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windows.ps1
 ```
+
+`reachops_live_acceptance_status.py` 只读状态，不打开浏览器、不提交动作，用来汇总当前还缺本地输入、有效授权、目标 URL 还是真实提交证据。
 
 完整 Windows 验收顺序：
 
