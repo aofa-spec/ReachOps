@@ -1740,6 +1740,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         reachops_requirements = (root / "ReachOps" / "packaging" / "requirements-reachops.txt").read_text(encoding="utf-8")
         acceptance_inputs_template = (root / "tools" / "reachops_acceptance_inputs.example.ps1").read_text(encoding="utf-8")
         live_acceptance_runbook = (root / "ReachOps" / "docs" / "REACHOPS_WINDOWS_LIVE_ACCEPTANCE_RUNBOOK.md").read_text(encoding="utf-8")
+        handoff = (root / "HANDOFF.md").read_text(encoding="utf-8")
 
         self.assertIn('name="ReachOps"', spec)
         self.assertIn("ReachOpsApp.py", spec)
@@ -1932,6 +1933,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("live_readiness_payload.json", live_acceptance_runbook)
         self.assertIn("live_preflight_payload.json", live_acceptance_runbook)
         self.assertIn("live_submit_payload.json", live_acceptance_runbook)
+        self.assertIn("v0.4.0-mvp", handoff)
+        self.assertIn("20260624_193703", handoff)
+        self.assertIn("effective_pending_external_validation=2", handoff)
+        self.assertIn("27273", handoff)
+        self.assertIn("reachops_acceptance_inputs.local.ps1", handoff)
 
     def test_standalone_app_tiktok_url_validation_returns_boolean(self):
         self.assertTrue(GrowthIntelligenceStandaloneApp._is_tiktok_url(object(), "https://www.tiktok.com/@creator"))
