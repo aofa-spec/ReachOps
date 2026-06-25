@@ -73,6 +73,30 @@ class FakeDriver:
         self.quit_called = True
 
 
+class LoginDialogDriver(FakeDriver):
+    def execute_script(self, script):
+        text = str(script or "")
+        if "const text = String(document.body ? document.body.innerText" in text and "loginDialog" in text:
+            return {
+                "url": self.current_url,
+                "text": "creator video grid",
+                "title": "Creator | TikTok",
+                "videoLinks": 8,
+                "profileLinks": 4,
+                "loginDialog": True,
+                "exactLoginButton": True,
+                "forcedLoginText": False,
+                "loginPage": False,
+                "captcha": False,
+                "proxy": False,
+            }
+        if "document.readyState" in text:
+            return "complete"
+        if "querySelectorAll" in text:
+            return 8
+        return {"dismissed": 0, "labels": []}
+
+
 class FakeBrowserDriverAdapter:
     def __init__(self, fail: bool = False):
         self.fail = fail
@@ -304,6 +328,11 @@ class StaticVideoCollector:
 class EmptyVideoCollector:
     def collect(self, driver, task, context):
         return []
+
+
+class FailingCollector:
+    def collect(self, driver, task, context):
+        raise AssertionError("collector should not run after login dialog is detected")
 
 
 class StaticCommentCollector:
@@ -1995,6 +2024,45 @@ class ReachOpsCampaignTests(unittest.TestCase):
             ]
 
             self.assertEqual(service.router._detect_page_state(driver), "")
+
+    def test_login_dialog_blocks_even_when_page_has_entities(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            driver = LoginDialogDriver()
+            driver.current_url = "https://www.tiktok.com/@creator"
+
+            self.assertEqual(service.router._detect_page_state(driver), "LOGIN_REQUIRED")
+
+    def test_collection_stops_when_login_dialog_detected_after_profile_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            driver = LoginDialogDriver()
+            service = GrowthIntelligenceService(
+                base_dir=tmp,
+                browser_factory=lambda _profile_id: driver,
+                collectors={
+                    "profile": FailingCollector(),
+                    "video": FailingCollector(),
+                    "comment": FailingCollector(),
+                    "search": FailingCollector(),
+                },
+            )
+            service.router.profile_group_manager = FakeProfileGroupManager()
+            service.router._wait_for_page = lambda *_args, **_kwargs: True
+
+            result = service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+                [{"profile_id": "logged-out-profile", "group_name": "BR"}],
+                GrowthTaskConfig(test_mode=False, task_delay_min_seconds=0, task_delay_max_seconds=0),
+            )
+            tasks = service.storage.list_collection_tasks(limit=10)
+
+            self.assertEqual(result.processed_sources, 0)
+            self.assertEqual(result.errors.get("LOGIN_REQUIRED"), 1)
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0]["status"], "failed")
+            self.assertEqual(tasks[0]["error_code"], "LOGIN_REQUIRED")
+            self.assertEqual(service.router.profile_group_manager.moves, [("logged-out-profile", "LOGIN_REQUIRED")])
+            self.assertEqual(service.storage.list_candidates(), [])
 
     def test_real_mode_retries_next_profile_when_page_has_empty_result(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -254,7 +254,6 @@ class GrowthTaskRouter:
         state = self._detect_page_state(driver)
         if state:
             self.storage.log_error(state, f"page state detected: {state}", datasource.id, profile_id=profile_id)
-            self._record_blocking_profile_state(profile_id, getattr(config, "profile_group", "") or "", state)
             return False
         try:
             profile_data = self.collectors["profile"].collect(driver, {"source": datasource.__dict__}, {"config": config})
@@ -344,7 +343,6 @@ class GrowthTaskRouter:
         state = self._detect_page_state(driver)
         if state:
             self.storage.log_error(state, f"page state detected: {state}", datasource.id, profile_id=profile_id)
-            self._record_blocking_profile_state(profile_id, getattr(config, "profile_group", "") or "", state)
             return False
 
         creator_username = self._extract_creator_from_url(url) or "unknown"
@@ -409,7 +407,6 @@ class GrowthTaskRouter:
         state = self._detect_page_state(driver)
         if state:
             self.storage.log_error(state, f"page state detected: {state}", datasource.id, profile_id=profile_id)
-            self._record_blocking_profile_state(profile_id, getattr(config, "profile_group", "") or "", state)
             return False
 
         creator_username = self._extract_creator_from_url(url) or "live_room"
@@ -478,7 +475,8 @@ class GrowthTaskRouter:
             if state:
                 last_error = state
                 self.storage.log_error(state, f"page state detected: {state}", datasource.id, profile_id=profile_id)
-                self._record_blocking_profile_state(profile_id, getattr(config, "profile_group", "") or "", state)
+                if state in {"LOGIN_REQUIRED", "CAPTCHA_DETECTED", "PROXY_FAILED"}:
+                    return False
                 continue
             try:
                 materials, evidence = self._collect_with_evidence(
@@ -1305,7 +1303,9 @@ class GrowthTaskRouter:
         if bool(state.get("captcha")):
             return "CAPTCHA_DETECTED"
         has_page_entities = int(state.get("videoLinks") or 0) > 0 or int(state.get("profileLinks") or 0) > 0
-        if (bool(state.get("loginPage")) or bool(state.get("loginDialog")) or bool(state.get("exactLoginButton")) or bool(state.get("forcedLoginText"))) and not has_page_entities:
+        if bool(state.get("loginPage")) or bool(state.get("loginDialog")) or bool(state.get("forcedLoginText")):
+            return "LOGIN_REQUIRED"
+        if bool(state.get("exactLoginButton")) and not has_page_entities:
             return "LOGIN_REQUIRED"
         return ""
 
