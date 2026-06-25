@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from ReachOps.runtime_paths import RuntimePaths
+from tools.reachops_activation_status_check import check_activation_status
 from tools.reachops_live_readiness import is_tiktok_url, normalize_username, username_from_profile_url
 
 
@@ -219,6 +220,8 @@ def build_manifest(args, snapshot: dict[str, Any] | None = None) -> dict[str, An
     dm_profile_url = str(args.dm_profile_url or target_profile_url).strip()
     target_username = normalize_username(args.target_username) or normalize_username(username_from_profile_url(target_profile_url))
     activation_status_path = str(args.activation_status_path or RuntimePaths.build().activation_status_path)
+    activation_status = check_activation_status(activation_status_path)
+    activation_ready = bool(activation_status.get("ready"))
 
     missing_inputs = []
     if not selected_profile_ids:
@@ -231,6 +234,8 @@ def build_manifest(args, snapshot: dict[str, Any] | None = None) -> dict[str, An
         missing_inputs.append("目标用户名")
     if not Path(activation_status_path).exists():
         missing_inputs.append("激活状态文件")
+    elif not activation_ready:
+        missing_inputs.append("有效激活状态文件")
     if str(args.confirm_authorized_targets or "").upper() != "YES":
         missing_inputs.append("授权确认 ConfirmAuthorizedTargets=YES")
 
@@ -263,7 +268,7 @@ def build_manifest(args, snapshot: dict[str, Any] | None = None) -> dict[str, An
     blocking_summary = {
         "profile_ready": selected_profile_count > 0,
         "target_ready": bool(is_tiktok_url(args.comment_video_url, video=True) and is_tiktok_url(target_profile_url, profile=True) and target_username),
-        "activation_ready": Path(activation_status_path).exists(),
+        "activation_ready": activation_ready,
         "authorization_confirmed": str(args.confirm_authorized_targets or "").upper() == "YES",
         "next_blocking_item": missing_inputs[0] if missing_inputs else "",
     }
@@ -315,6 +320,24 @@ def build_manifest(args, snapshot: dict[str, Any] | None = None) -> dict[str, An
         "missing_inputs": missing_inputs,
         "blocking_summary": blocking_summary,
         "activation_status_path": activation_status_path,
+        "activation_status": {
+            "status": str(activation_status.get("status") or ""),
+            "ready": activation_ready,
+            "exists": bool(activation_status.get("activation_status_exists")),
+            "checks": [
+                {
+                    "name": str(item.get("name") or ""),
+                    "passed": bool(item.get("passed")),
+                    "error_code": (
+                        (((item.get("evidence") or {}).get("decisions") or [{}])[0] or {}).get("error_code", "")
+                        if isinstance(item.get("evidence"), dict)
+                        else ""
+                    ),
+                }
+                for item in (activation_status.get("checks") or [])
+                if isinstance(item, dict)
+            ],
+        },
         "commands": {
             "readiness_no_browser_no_submit": readiness_command,
             "acceptance_preflight": acceptance_command,

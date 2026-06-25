@@ -94,6 +94,7 @@ Expected result:
 
 - JSON contains `current_device_id`; use that value when preparing a device-bound activation file.
 - JSON contains `ready = true` before controlled live submit.
+- Validation manifests must show `activation_ready = true`; template-only or inactive activation files are blocked even when the file exists.
 - If blocked, fix `active`, `device_id`, `expires_at`, or the `live_submit/comment_reply/follow_review/dm_review` capabilities before continuing.
 
 ## Milestone 2: Windows Client Validation

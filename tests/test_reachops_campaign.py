@@ -1464,6 +1464,44 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(manifest["blocking_summary"]["next_blocking_item"], "ixBrowser 数字 Profile ID")
         self.assertEqual(manifest["commands"]["controlled_live_submit"], "")
 
+    def test_reachops_live_validation_manifest_rejects_activation_template(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "activation.json"
+            payload = build_reachops_activation_status_template(type("Args", (), {
+                "bind_current_device": True,
+                "enable_live_submit": True,
+                "enable_comment_reply": True,
+                "enable_follow_review": True,
+                "enable_dm_review": True,
+                "days": 7,
+            })())
+            status_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            class Args:
+                profile_group = "BR"
+                profile_ids = "12345"
+                profile_limit = 3
+                max_pages = 1
+                profile_scan_timeout = 1
+                target = "anti aging serum"
+                comment_video_url = "https://www.tiktok.com/@creator/video/123"
+                target_profile_url = "https://www.tiktok.com/@buyer_one"
+                dm_profile_url = ""
+                target_username = "buyer_one"
+                activation_status_path = str(status_path)
+                confirm_authorized_targets = "YES"
+                include_live_submit_command = False
+
+            manifest = build_reachops_live_validation_manifest(Args())
+
+            self.assertEqual(manifest["status"], "blocked")
+            self.assertIn("有效激活状态文件", manifest["missing_inputs"])
+            self.assertFalse(manifest["blocking_summary"]["activation_ready"])
+            self.assertTrue(manifest["activation_status"]["exists"])
+            self.assertFalse(manifest["activation_status"]["ready"])
+            checks = {item["name"]: item for item in manifest["activation_status"]["checks"]}
+            self.assertFalse(checks["activation_not_template"]["passed"])
+
     def test_reachops_live_validation_manifest_skips_profile_scan_with_explicit_profile_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             status_path = Path(tmp) / "activation.json"
@@ -1996,7 +2034,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("live_preflight_payload.json", live_acceptance_runbook)
         self.assertIn("live_submit_payload.json", live_acceptance_runbook)
         self.assertIn("v0.4.0-mvp", handoff)
-        self.assertIn("20260625_084122", handoff)
+        self.assertIn("20260625_084637", handoff)
         self.assertIn("effective_pending_external_validation=2", handoff)
         self.assertIn("27273", handoff)
         self.assertIn("reachops_acceptance_inputs.local.ps1", handoff)

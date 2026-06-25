@@ -41,10 +41,11 @@ Current delivery boundary:
 - Stage 5 standalone packaging is implemented and passing for the non-live path.
 - Stage 3 is implemented locally for authorization gates, rate/cooldown behavior, account switch, fallback comment, and evidence enforcement, but real TikTok platform submission remains pending external validation.
 - Windows client delivery validation is complete for the non-live path: build, `ReachOps.exe`, installer, update manifest, installer smoke, UI startup smoke, and package check have passed in the Windows VM.
-- The latest non-live Windows acceptance report is `reports\reachops_acceptance\20260625_084122\acceptance_summary.json` on the Windows VM.
-- The latest package check is `reports\reachops_acceptance\20260625_084122\delivery_package_check.json`, with `passed=true`, `status=ready_for_external_validation`, and `effective_pending_external_validation=2`.
+- The latest non-live Windows acceptance report is `reports\reachops_acceptance\20260625_084637\acceptance_summary.json` on the Windows VM.
+- The latest package check is `reports\reachops_acceptance\20260625_084637\delivery_package_check.json`, with `passed=true`, `status=ready_for_external_validation`, and `effective_pending_external_validation=2`.
 - The latest acceptance package includes `activation_status_payload.json`, `live_validation_manifest.json`, `live_readiness_payload.json`, and `live_preflight_payload.json` as blocked/no-submit reports.
 - Windows live validation can currently scan ixBrowser and select numeric profile IDs `27273`, `27240`, and `27230`.
+- Live validation now checks activation readiness through the same activation gate used by readiness; `template_only` activation files are reported as blocked, not ready.
 - Default client behavior must not submit real platform actions.
 - If TikTok shows a login/signup dialog or forced login page after an ixBrowser Profile opens, treat that account as `LOGIN_REQUIRED` immediately. Do not continue discovery, collection, comment scan, or customer acquisition with that Profile.
 - GUI is mandatory for client delivery. If the local environment lacks Tkinter, continue headless core development and validate GUI in Windows VM or another Tkinter-capable environment.
