@@ -1548,7 +1548,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             activation_path = tmp_path / "missing_activation.json"
             template_path = tmp_path / "reachops_activation_status.template.json"
             template_path.write_text("{}", encoding="utf-8")
-            acceptance_dir = tmp_path / "reports" / "reachops_acceptance" / "20260625_090334"
+            acceptance_dir = tmp_path / "reports" / "reachops_acceptance" / "20260625_091523"
             acceptance_dir.mkdir(parents=True)
             (acceptance_dir / "acceptance_summary.json").write_text(
                 json.dumps(
@@ -1598,6 +1598,130 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("激活状态文件", status["live_validation"]["missing_inputs"])
             self.assertEqual(status["latest_acceptance"]["effective_pending_external_validation"], 2)
             self.assertEqual(status["next_required_actions"][0], "本地验收输入文件 tools/reachops_acceptance_inputs.local.ps1")
+
+    def test_reachops_live_acceptance_status_blocks_placeholder_local_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            local_inputs_path = tmp_path / "tools" / "reachops_acceptance_inputs.local.ps1"
+            local_inputs_path.parent.mkdir(parents=True)
+            local_inputs_path.write_text(
+                "\n".join(
+                    [
+                        '$ProfileIds = "123,456,789"',
+                        '$CommentVideoUrl = "https://www.tiktok.com/@creator/video/123"',
+                        '$FollowProfileUrl = "https://www.tiktok.com/@target_user"',
+                        '$DmProfileUrl = "https://www.tiktok.com/@target_user"',
+                        '$TargetUsername = "target_user"',
+                        '$ActivationStatusPath = "C:\\path\\to\\reachops_activation_status.json"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            args = type(
+                "Args",
+                (),
+                {
+                    "profile_group": "BR",
+                    "profile_ids": "",
+                    "profile_limit": 3,
+                    "max_pages": 1,
+                    "profile_scan_timeout": 1,
+                    "target": "anti aging serum",
+                    "comment_video_url": "",
+                    "target_profile_url": "",
+                    "dm_profile_url": "",
+                    "target_username": "",
+                    "activation_status_path": "",
+                    "activation_template_path": "",
+                    "local_inputs_path": str(local_inputs_path),
+                    "acceptance_reports_dir": str(tmp_path / "reports" / "reachops_acceptance"),
+                    "limit": 3,
+                    "allow_pressure_submit": "",
+                    "confirm_authorized_targets": False,
+                },
+            )()
+
+            status = build_reachops_live_acceptance_status(args)
+
+            self.assertTrue(status["local_inputs"]["exists"])
+            self.assertFalse(status["local_inputs"]["usable"])
+            self.assertIn("ProfileIds", status["local_inputs"]["placeholder_fields"])
+            self.assertIn("ActivationStatusPath", status["local_inputs"]["placeholder_fields"])
+            self.assertIn("本地验收输入文件仍有占位值或缺失字段", status["live_validation"]["missing_inputs"])
+
+    def test_reachops_live_acceptance_status_reads_filled_local_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            activation_path = tmp_path / "reachops_activation_status.json"
+            payload = build_reachops_activation_status_template(
+                type(
+                    "Args",
+                    (),
+                    {
+                        "active": True,
+                        "bind_current_device": True,
+                        "enable_live_submit": True,
+                        "enable_comment_reply": True,
+                        "enable_follow_review": True,
+                        "enable_dm_review": True,
+                        "license_tier": "enterprise",
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "days": 7,
+                    },
+                )()
+            )
+            payload["template_only"] = False
+            activation_path.write_text(json.dumps(payload), encoding="utf-8")
+            local_inputs_path = tmp_path / "tools" / "reachops_acceptance_inputs.local.ps1"
+            local_inputs_path.parent.mkdir(parents=True)
+            local_inputs_path.write_text(
+                "\n".join(
+                    [
+                        '$ProfileIds = "27273,27240"',
+                        '$Target = "anti aging serum"',
+                        '$CommentVideoUrl = "https://www.tiktok.com/@creator/video/987654321"',
+                        '$FollowProfileUrl = "https://www.tiktok.com/@buyer_one"',
+                        '$DmProfileUrl = "https://www.tiktok.com/@buyer_one"',
+                        '$TargetUsername = "buyer_one"',
+                        f'$ActivationStatusPath = "{activation_path}"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            args = type(
+                "Args",
+                (),
+                {
+                    "profile_group": "BR",
+                    "profile_ids": "",
+                    "profile_limit": 3,
+                    "max_pages": 1,
+                    "profile_scan_timeout": 1,
+                    "target": "",
+                    "comment_video_url": "",
+                    "target_profile_url": "",
+                    "dm_profile_url": "",
+                    "target_username": "",
+                    "activation_status_path": "",
+                    "activation_template_path": "",
+                    "local_inputs_path": str(local_inputs_path),
+                    "acceptance_reports_dir": str(tmp_path / "reports" / "reachops_acceptance"),
+                    "limit": 3,
+                    "allow_pressure_submit": "",
+                    "confirm_authorized_targets": True,
+                },
+            )()
+
+            status = build_reachops_live_acceptance_status(args)
+
+            self.assertTrue(status["local_inputs"]["usable"])
+            self.assertEqual(status["local_inputs"]["placeholder_fields"], [])
+            self.assertEqual(status["live_validation"]["selected_profile_ids"], ["27273", "27240"])
+            self.assertTrue(status["activation"]["ready"])
+            self.assertTrue(status["ready_for_live_preflight"])
+            self.assertEqual(status["next_required_actions"], ["运行受控真实提交并生成 live submit evidence"])
 
     def test_reachops_profile_snapshot_handles_worker_decode_failure_output(self):
         class Completed:
@@ -2111,7 +2235,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("live_preflight_payload.json", live_acceptance_runbook)
         self.assertIn("live_submit_payload.json", live_acceptance_runbook)
         self.assertIn("v0.4.0-mvp", handoff)
-        self.assertIn("20260625_090334", handoff)
+        self.assertIn("20260625_091523", handoff)
         self.assertIn("effective_pending_external_validation=2", handoff)
         self.assertIn("27273", handoff)
         self.assertIn("reachops_acceptance_inputs.local.ps1", handoff)
@@ -3199,6 +3323,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(any(row["intent_type"] == "purchase" for row in strategy["intent_taxonomy"]))
             self.assertTrue(any(row["action_type"] == "comment_reply" for row in strategy["outreach_recommendations"]))
             self.assertIn("source_expansion", strategy["editable_fields"])
+
+    def test_comma_separated_promotion_keywords_become_individual_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            target = "skincare,skincareroutine,skintok,glassskin,glowingskin"
+            plan = service.create_campaign_plan(target, max_sources=5)
+
+            self.assertEqual(plan["campaign"]["input_type"], "keyword")
+            self.assertEqual(plan["campaign"]["product_name"], "skincare")
+            source_values = [row["source_value"] for row in plan["sources"]]
+            self.assertEqual(source_values[:5], ["skincare", "skincareroutine", "skintok", "glassskin", "glowingskin"])
+            self.assertNotIn(target, source_values)
+            strategy_sources = [row["source_value"] for row in plan["strategy"]["source_expansion"]]
+            self.assertIn("skincare", strategy_sources)
+            self.assertIn("skintok", plan["persona"]["search_keywords"])
 
     def test_amazon_product_link_becomes_executable_social_search_sources(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -99,6 +99,7 @@ class SmokeCommentCollector:
 class SmokeTopicContentCollector:
     def collect(self, driver, task, context):
         limit = max(1, min(3, int(context.get("limit", 3) or 3)))
+        source_value = str((task.get("source") or {}).get("value") or "beauty product").strip()
         return [
             {
                 "content": {
@@ -116,9 +117,9 @@ class SmokeTopicContentCollector:
             }
             for index, (caption, views, likes, comments, shares) in enumerate(
                 [
-                    ("where can I buy anti aging serum link", 210000, 12200, 980, 160),
-                    ("free sample app name for beauty product", 115000, 5400, 460, 70),
-                    ("watch episode review of this serum", 84000, 2400, 210, 35),
+                    (f"where can I buy {source_value} link", 210000, 12200, 980, 160),
+                    (f"free sample app name for {source_value}", 115000, 5400, 460, 70),
+                    (f"watch review routine with {source_value}", 84000, 2400, 210, 35),
                 ][:limit],
                 start=1,
             )

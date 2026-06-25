@@ -124,7 +124,7 @@ Current evidence:
 - `dist\installer\ReachOps-Setup-0.4.0.exe` was generated.
 - `dist\installer\reachops-update-manifest.json` was generated and hash-verified.
 - Installer smoke returned `status=ok`, `exe_exists=true`, `data_in_install_dir=false`, and `hash_ok=true`.
-- Non-live Windows acceptance wrote `reports\reachops_acceptance\20260625_090334\acceptance_summary.json` with status `ready_for_external_validation`.
+- Non-live Windows acceptance wrote `reports\reachops_acceptance\20260625_091523\acceptance_summary.json` with status `ready_for_external_validation`.
 - The same acceptance run includes `live_readiness_payload.json` and `live_preflight_payload.json`, so missing live inputs are represented in the full acceptance package instead of only standalone reports.
 - Delivery package check now requires `live_readiness_payload.json` and `live_preflight_payload.json` for intermediate `ready_for_external_validation` packages as well as final packages.
 - This milestone is complete for non-live Windows client delivery validation.
@@ -189,7 +189,7 @@ Current evidence:
 - `tools\run_reachops_live_preflight_windows.ps1` now writes a blocked JSON report before any action routing when required live inputs are missing.
 - Latest missing-input preflight proof on the Windows VM: `reports\reachops_live_preflight\20260624_191735\live_preflight_payload.json`.
 - That report has `status=blocked`, `no_browser_started=true`, `no_submit=true`, and empty preflight statuses for comment/follow/DM.
-- Full Windows acceptance proof on the Windows VM: `reports\reachops_acceptance\20260625_090334\live_acceptance_status_payload.json`, `reports\reachops_acceptance\20260625_090334\live_readiness_payload.json`, `reports\reachops_acceptance\20260625_090334\live_preflight_payload.json`, and `reports\reachops_acceptance\20260625_090334\activation_status_payload.json`.
+- Full Windows acceptance proof on the Windows VM: `reports\reachops_acceptance\20260625_091523\live_acceptance_status_payload.json`, `reports\reachops_acceptance\20260625_091523\live_readiness_payload.json`, `reports\reachops_acceptance\20260625_091523\live_preflight_payload.json`, and `reports\reachops_acceptance\20260625_091523\activation_status_payload.json`.
 - Live validation manifest now treats activation templates or inactive files as `有效激活状态文件` missing; file existence alone is not enough for Milestone 3 readiness.
 - This milestone still requires real ixBrowser profile IDs and authorized TikTok target evidence.
 

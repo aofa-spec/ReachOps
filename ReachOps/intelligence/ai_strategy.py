@@ -9,6 +9,7 @@ import urllib.request
 from typing import Any, Protocol
 
 from .schemas import AcquisitionCampaign
+from .source_planner import split_operator_keywords
 
 
 class AcquisitionIntelligenceProvider(Protocol):
@@ -315,15 +316,27 @@ class RuleBasedAcquisitionIntelligenceProvider:
     def _source_suggestions(self, campaign: AcquisitionCampaign, category: str) -> list[dict[str, Any]]:
         direct_value = str(campaign.input_value or "").strip()
         suggestions = []
+        operator_keywords = split_operator_keywords(direct_value)
         if campaign.input_type in {"creator_url", "content_url", "live_room_url", "hashtag", "keyword"}:
-            suggestions.append(
-                {
-                    "source_type": campaign.input_type,
-                    "source_value": direct_value,
-                    "reason": "运营输入的直接目标",
-                    "priority": 100,
-                }
-            )
+            if campaign.input_type == "keyword" and operator_keywords:
+                for index, keyword in enumerate(operator_keywords):
+                    suggestions.append(
+                        {
+                            "source_type": "keyword",
+                            "source_value": keyword,
+                            "reason": "运营输入的关键词列表",
+                            "priority": max(80, 100 - index * 2),
+                        }
+                    )
+            else:
+                suggestions.append(
+                    {
+                        "source_type": campaign.input_type,
+                        "source_value": direct_value,
+                        "reason": "运营输入的直接目标",
+                        "priority": 100,
+                    }
+                )
         for keyword in self._search_keywords(campaign, category):
             suggestions.append({"source_type": "keyword", "source_value": keyword, "reason": "智能策略推荐搜索词", "priority": 82})
         for tag in self._hashtags(category):
@@ -331,9 +344,10 @@ class RuleBasedAcquisitionIntelligenceProvider:
         return suggestions
 
     def _search_keywords(self, campaign: AcquisitionCampaign, category: str) -> list[str]:
-        name = campaign.product_name or campaign.input_value
+        operator_keywords = split_operator_keywords(campaign.input_value)
+        name = campaign.product_name or (operator_keywords[0] if operator_keywords else campaign.input_value)
         if category == "beauty":
-            return self._dedupe([name, f"{name} review", "skincare routine", "beauty product review"])
+            return self._dedupe([*operator_keywords[:6], name, f"{name} review", "skincare routine", "beauty product review"])
         if category == "digital_content":
             return self._dedupe([name, f"{name} episode", f"{name} app", "where to watch"])
         return self._dedupe([name, f"{name} review", "best product", "tiktok shop finds"])

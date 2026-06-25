@@ -8,6 +8,26 @@ from .schemas import AcquisitionCampaign, AcquisitionSource, AcquisitionStrategy
 from .storage import GrowthStorage, new_id
 
 
+def split_operator_keywords(value: str, limit: int = 12) -> list[str]:
+    text = str(value or "").strip()
+    if not re.search(r"[,，;；\n]", text):
+        return []
+    seen = set()
+    keywords = []
+    for part in re.split(r"[,，;；\n]+", text):
+        item = re.sub(r"\s+", " ", str(part or "").strip().lstrip("#"))
+        key = item.lower()
+        if not item or key in seen:
+            continue
+        if item.startswith(("http://", "https://", "@")):
+            continue
+        seen.add(key)
+        keywords.append(item[:80])
+        if len(keywords) >= limit:
+            break
+    return keywords
+
+
 class CampaignAnalyzer:
     """Rule-based product and audience analyzer for ReachOps MVP."""
 
@@ -75,13 +95,13 @@ class CampaignAnalyzer:
             interests = ["beauty routine", "skincare", "makeup review", "product demo"]
             pain_points = ["skin concern", "shade match", "before after", "routine uncertainty"]
             triggers = ["where to buy", "product name", "price", "does it work", "before after result"]
-            searches = [campaign.product_name, "beauty review", "skincare routine", "makeup must haves"]
+            searches = [*split_operator_keywords(campaign.input_value), campaign.product_name, "beauty review", "skincare routine", "makeup must haves"]
             hashtags = ["beauty", "skincare", "makeup", "beautyroutine"]
         else:
             interests = ["product review", "shopping", "tips", "recommendations"]
             pain_points = ["price", "availability", "trust", "how to use"]
             triggers = ["where to buy", "link", "price", "need this", "product name"]
-            searches = [campaign.product_name, str(campaign.input_value or ""), "review", "best product"]
+            searches = [*split_operator_keywords(campaign.input_value), campaign.product_name, str(campaign.input_value or ""), "review", "best product"]
             hashtags = ["review", "shopping", "tiktokshop", "fyp"]
         merged_intent = self._dedupe(base_keywords + consult_keywords + triggers + ai_intent_keywords + (extra_intent or []))
         merged_exclude = self._dedupe(exclude + ai_exclude_keywords + (extra_exclude or []))
@@ -125,6 +145,9 @@ class CampaignAnalyzer:
                 path = parsed.path
                 slug = re.sub(r"[-_/]+", " ", path).strip()
             return (slug or parsed.netloc)[:80]
+        keyword_list = split_operator_keywords(text, limit=1)
+        if keyword_list:
+            return keyword_list[0]
         return text[:80]
 
     def _category(self, value: str) -> str:
@@ -256,6 +279,9 @@ class SourcePlanner:
         product = str(campaign.product_name or campaign.input_value or "").strip()
         is_beauty = str(campaign.category or "").lower() == "beauty"
         candidates: list[tuple[str, str, str, int]] = []
+        operator_keywords = split_operator_keywords(campaign.input_value, limit=limit)
+        for index, keyword in enumerate(operator_keywords):
+            candidates.append(("keyword", keyword, "运营输入的关键词列表", max(80, 100 - index * 2)))
         if product:
             candidates.append(("keyword", product, "核心产品词：先找最直接相关内容", 100))
             candidates.append(("keyword", f"{product} review", "评测内容：评论区更容易出现购买咨询", 94))
@@ -282,7 +308,7 @@ class SourcePlanner:
     def _expanded_search_keywords(self, campaign: AcquisitionCampaign, persona: AudiencePersona) -> list[str]:
         product = str(campaign.product_name or "").strip()
         rows = []
-        for item in [product, *list(persona.search_keywords or [])]:
+        for item in [*split_operator_keywords(campaign.input_value), product, *list(persona.search_keywords or [])]:
             text = str(item or "").strip()
             if text:
                 rows.append(text)
