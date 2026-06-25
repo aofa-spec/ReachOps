@@ -41,8 +41,8 @@ Current delivery boundary:
 - Stage 5 standalone packaging is implemented and passing for the non-live path.
 - Stage 3 is implemented locally for authorization gates, rate/cooldown behavior, account switch, fallback comment, and evidence enforcement, but real TikTok platform submission remains pending external validation.
 - Windows client delivery validation is complete for the non-live path: build, `ReachOps.exe`, installer, update manifest, installer smoke, UI startup smoke, and package check have passed in the Windows VM.
-- The latest non-live Windows acceptance report is `reports\reachops_acceptance\20260624_193703\acceptance_summary.json` on the Windows VM.
-- The latest package check is `reports\reachops_acceptance\20260624_193703\delivery_package_check.json`, with `passed=true`, `status=ready_for_external_validation`, and `effective_pending_external_validation=2`.
+- The latest non-live Windows acceptance report is `reports\reachops_acceptance\20260625_084122\acceptance_summary.json` on the Windows VM.
+- The latest package check is `reports\reachops_acceptance\20260625_084122\delivery_package_check.json`, with `passed=true`, `status=ready_for_external_validation`, and `effective_pending_external_validation=2`.
 - The latest acceptance package includes `activation_status_payload.json`, `live_validation_manifest.json`, `live_readiness_payload.json`, and `live_preflight_payload.json` as blocked/no-submit reports.
 - Windows live validation can currently scan ixBrowser and select numeric profile IDs `27273`, `27240`, and `27230`.
 - Default client behavior must not submit real platform actions.
