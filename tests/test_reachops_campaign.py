@@ -855,6 +855,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "installer_smoke_payload.json",
                 "ui_startup_payload.json",
                 "activation_status_payload.json",
+                "live_acceptance_status_payload.json",
                 "live_validation_manifest.json",
                 "live_readiness_payload.json",
                 "live_preflight_payload.json",
@@ -917,6 +918,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "activation_status_exists": True,
                     "current_device_id": "device-a",
                     "json_path": str(report_dir / "activation_status_payload.json"),
+                },
+                "live_acceptance_status": {
+                    "status": "passed",
+                    "ready_for_live_preflight": True,
+                    "ready_for_live_submit": True,
+                    "final_delivery_ready": True,
+                    "no_browser_started": True,
+                    "no_submit": True,
+                    "next_required_actions": [],
+                    "json_path": str(report_dir / "live_acceptance_status_payload.json"),
                 },
                 "live_validation": {
                     "status": "ready",
@@ -1537,7 +1548,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             activation_path = tmp_path / "missing_activation.json"
             template_path = tmp_path / "reachops_activation_status.template.json"
             template_path.write_text("{}", encoding="utf-8")
-            acceptance_dir = tmp_path / "reports" / "reachops_acceptance" / "20260625_084637"
+            acceptance_dir = tmp_path / "reports" / "reachops_acceptance" / "20260625_090334"
             acceptance_dir.mkdir(parents=True)
             (acceptance_dir / "acceptance_summary.json").write_text(
                 json.dumps(
@@ -1941,6 +1952,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("GOAL_STATUS_JSON", acceptance_script)
         self.assertIn("PACKAGE_CHECK_JSON", acceptance_script)
         self.assertIn("ACTIVATION_STATUS_JSON", acceptance_script)
+        self.assertIn("LIVE_ACCEPTANCE_STATUS_JSON", acceptance_script)
+        self.assertIn("live_acceptance_status_payload.json", acceptance_script)
+        self.assertIn("live_acceptance_status", acceptance_script)
         self.assertIn("delivery_package_check.json", acceptance_script)
         self.assertIn("ReachOps delivery package check failed for final passed acceptance", acceptance_script)
         self.assertIn("goal_status", acceptance_script)
@@ -2039,6 +2053,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_live_readiness.py", sync_script)
         self.assertIn("reachops_activation_status_check.py", sync_script)
         self.assertIn("reachops_activation_status_template.py", sync_script)
+        self.assertIn("reachops_live_acceptance_status.py", sync_script)
         self.assertIn("reachops_goal_status_report.py", sync_script)
         self.assertIn("reachops_operator_pressure.py", sync_script)
         self.assertIn("reachops_action_preflight_existing_batch.py", sync_script)
@@ -2096,7 +2111,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("live_preflight_payload.json", live_acceptance_runbook)
         self.assertIn("live_submit_payload.json", live_acceptance_runbook)
         self.assertIn("v0.4.0-mvp", handoff)
-        self.assertIn("20260625_084637", handoff)
+        self.assertIn("20260625_090334", handoff)
         self.assertIn("effective_pending_external_validation=2", handoff)
         self.assertIn("27273", handoff)
         self.assertIn("reachops_acceptance_inputs.local.ps1", handoff)
@@ -2136,6 +2151,29 @@ class ReachOpsCampaignTests(unittest.TestCase):
             driver.current_url = "https://www.tiktok.com/@creator"
 
             self.assertEqual(service.router._detect_page_state(driver), "LOGIN_REQUIRED")
+
+    def test_ordinary_popup_with_entities_does_not_block_acquisition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            driver = FakeDriver()
+            driver.current_url = "https://www.tiktok.com/@creator"
+            driver.script_results = [
+                {
+                    "url": driver.current_url,
+                    "text": "creator video grid new feature notice log in later",
+                    "title": "Creator | TikTok",
+                    "videoLinks": 8,
+                    "profileLinks": 4,
+                    "loginDialog": False,
+                    "exactLoginButton": True,
+                    "forcedLoginText": False,
+                    "loginPage": False,
+                    "captcha": False,
+                    "proxy": False,
+                }
+            ]
+
+            self.assertEqual(service.router._detect_page_state(driver), "")
 
     def test_collection_stops_when_login_dialog_detected_after_profile_start(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4298,6 +4336,58 @@ class ReachOpsCampaignTests(unittest.TestCase):
         loader.assert_called_once()
         self.assertEqual(loader.call_args.kwargs["group_id"], "281726")
         self.assertEqual([row["profile_id"] for row in rows], ["ca-1", "ca-2"])
+
+    def test_ixbrowser_group_profile_count_pages_without_total(self):
+        import sys
+        import types
+
+        class FakeIXBrowserClient:
+            def get_profile_list(self, page=1, limit=100, group_id=0, **_kwargs):
+                self.total = 0
+                if str(group_id) != "281726":
+                    return []
+                pages = {
+                    1: [{"profile_id": "ca-1", "group_id": "281726", "group_name": "Canada"}],
+                    2: [{"profile_id": "ca-2", "group_id": "281726", "group_name": "Canada"}],
+                    3: [],
+                    4: [],
+                    5: [],
+                }
+                return pages.get(page, [])
+
+        fake_module = types.SimpleNamespace(IXBrowserClient=FakeIXBrowserClient)
+        with patch.dict(sys.modules, {"ixbrowser_local_api": fake_module}):
+            from ReachOps.workbench.standalone_app import load_ixbrowser_group_profile_count
+
+            count = load_ixbrowser_group_profile_count("281726", max_pages=5, limit=1)
+
+        self.assertEqual(count, 2)
+
+    def test_profile_registry_refresh_resolves_group_counts(self):
+        import sys
+        import types
+
+        class FakeIXBrowserClient:
+            def get_group_list(self, page=1, limit=100):
+                if page == 1:
+                    return [{"id": "281726", "title": "Canada", "count": 0}]
+                return []
+
+            def get_profile_list(self, page=1, limit=100, group_id=0, **_kwargs):
+                self.total = 0
+                if str(group_id) == "281726":
+                    return [{"profile_id": "ca-1", "group_id": "281726", "group_name": "Canada"}] if page == 1 else []
+                return []
+
+        fake_module = types.SimpleNamespace(IXBrowserClient=FakeIXBrowserClient)
+        with patch.dict(sys.modules, {"ixbrowser_local_api": fake_module}):
+            from ReachOps.workbench.standalone_app import StandaloneProfileRegistry
+
+            registry = StandaloneProfileRegistry()
+            snapshot = registry.refresh(max_pages=3, include_profiles=False)
+
+        self.assertEqual(snapshot["groups"][0]["count"], 1)
+        self.assertIn("1 个账号", group_display_name(snapshot["groups"][0]))
 
     def test_operator_automation_paths_log_instead_of_blocking_popups(self):
         console_source = Path("ReachOps/workbench/console.py").read_text(encoding="utf-8")

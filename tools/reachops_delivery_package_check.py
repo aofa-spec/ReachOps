@@ -133,6 +133,7 @@ def _report_sections(summary: dict[str, Any], final_required: bool) -> list[str]
         "installer_smoke",
         "ui_startup",
         "activation_status",
+        "live_acceptance_status",
         "live_validation",
         "live_readiness",
         "live_preflight",

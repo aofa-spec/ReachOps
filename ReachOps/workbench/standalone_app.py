@@ -207,18 +207,11 @@ def load_ixbrowser_group_rows(max_pages: int = 20) -> list[dict]:
     return rows
 
 
-def load_ixbrowser_group_profile_count(group_id: str | int) -> int:
-    from ixbrowser_local_api import IXBrowserClient
-
+def load_ixbrowser_group_profile_count(group_id: str | int, max_pages: int = 50, limit: int = 100) -> int:
     if not str(group_id or "").strip():
         return 0
-    client = IXBrowserClient()
-    rows = client.get_profile_list(page=1, limit=1, group_id=int(group_id)) or []
-    try:
-        total = int(getattr(client, "total", 0) or 0)
-    except Exception:
-        total = 0
-    return total or len(rows)
+    rows = load_ixbrowser_profile_rows(max_pages=max_pages, group_id=group_id, limit=limit)
+    return len(rows)
 
 
 def resolve_ixbrowser_group_counts(groups: list[dict], max_workers: int = 8) -> list[dict]:
@@ -293,7 +286,7 @@ class StandaloneProfileRegistry:
         self.group_by_name: dict[str, dict] = {}
 
     def refresh(self, max_pages: int = 50, include_profiles: bool = False) -> dict:
-        snapshot = load_ixbrowser_profile_snapshot(max_pages=max_pages, resolve_group_counts=False, include_profiles=include_profiles)
+        snapshot = load_ixbrowser_profile_snapshot(max_pages=max_pages, resolve_group_counts=True, include_profiles=include_profiles)
         if include_profiles:
             self.profiles = list(snapshot["profiles"])
         snapshot_groups = list(snapshot["groups"])

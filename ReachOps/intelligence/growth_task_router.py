@@ -1282,8 +1282,14 @@ class GrowthTaskRouter:
                   .some((node) => {
                     const value = String(node.innerText || '').toLowerCase();
                     const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : {width: 0, height: 0};
-                    return rect.width > 240 && rect.height > 160 &&
-                      /(log in|login|sign in|sign up|登录|注册|登入|entrar|inscrever|criar conta|iniciar sesión|registrarse)/.test(value);
+                    const authActionCount = [
+                      /(^|\\s)(log in|login|sign in)(\\s|$)/,
+                      /(^|\\s)(sign up|create account|register)(\\s|$)/,
+                      /(登录|登入|注册|註冊|entrar|inscrever|criar conta|iniciar sesión|registrarse)/
+                    ].filter(pattern => pattern.test(value)).length;
+                    const authSpecificText =
+                      /(log in to tiktok|sign up for tiktok|continue with (google|facebook|apple|phone|email)|use phone \\/ email|don't have an account|already have an account|管理你的账号|创建账号|使用手机|使用邮箱|继续使用)/.test(value);
+                    return rect.width > 240 && rect.height > 160 && (authActionCount >= 2 || authSpecificText);
                   });
                 const combined = [text, title, labels.join(' '), dialogTexts.join(' ')].join(' ');
                 const exactLoginButton = labels.some(v => /^(log in|login|sign in|sign up|entrar|inscrever-se|criar conta|iniciar sesión|registrarse)$/.test(v));

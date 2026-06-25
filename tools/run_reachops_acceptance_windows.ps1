@@ -128,6 +128,7 @@ function Write-AcceptanceSummary {
         [string]$InstallerSmokeJsonPath,
         [string]$UiStartupJsonPath,
         [string]$ActivationStatusJsonPath,
+        [string]$LiveAcceptanceStatusJsonPath,
         [string]$LiveValidationJsonPath,
         [string]$ReadinessJsonPath,
         [string]$PreflightJsonPath,
@@ -139,6 +140,7 @@ function Write-AcceptanceSummary {
     $installer = Read-JsonObject $InstallerSmokeJsonPath
     $uiStartup = Read-JsonObject $UiStartupJsonPath
     $activationStatus = Read-JsonObject $ActivationStatusJsonPath
+    $liveAcceptanceStatus = Read-JsonObject $LiveAcceptanceStatusJsonPath
     $liveValidation = Read-JsonObject $LiveValidationJsonPath
     $readiness = Read-JsonObject $ReadinessJsonPath
     $preflight = Read-JsonObject $PreflightJsonPath
@@ -269,6 +271,16 @@ function Write-AcceptanceSummary {
             checks = if ($activationStatus) { @($activationStatus.checks) } else { Empty-JsonArray }
             json_path = if (Test-Path $ActivationStatusJsonPath) { $ActivationStatusJsonPath } else { "" }
         }
+        live_acceptance_status = [ordered]@{
+            status = if ($liveAcceptanceStatus) { [string]$liveAcceptanceStatus.status } else { "skipped" }
+            ready_for_live_preflight = if ($liveAcceptanceStatus) { [bool]$liveAcceptanceStatus.ready_for_live_preflight } else { $false }
+            ready_for_live_submit = if ($liveAcceptanceStatus) { [bool]$liveAcceptanceStatus.ready_for_live_submit } else { $false }
+            final_delivery_ready = if ($liveAcceptanceStatus) { [bool]$liveAcceptanceStatus.final_delivery_ready } else { $false }
+            no_browser_started = if ($liveAcceptanceStatus) { [bool]$liveAcceptanceStatus.no_browser_started } else { $true }
+            no_submit = if ($liveAcceptanceStatus) { [bool]$liveAcceptanceStatus.no_submit } else { $true }
+            next_required_actions = if ($liveAcceptanceStatus) { @($liveAcceptanceStatus.next_required_actions) } else { Empty-JsonArray }
+            json_path = if (Test-Path $LiveAcceptanceStatusJsonPath) { $LiveAcceptanceStatusJsonPath } else { "" }
+        }
         live_preflight = [ordered]@{
             status = $preflightStatus
             preflight_action_statuses = if ($preflight) { $preflight.preflight_action_statuses } else { @{} }
@@ -348,6 +360,8 @@ $uiStartupStdout = Join-Path $root "ui_startup_stdout.json"
 $uiStartupJson = Join-Path $root "ui_startup_payload.json"
 $activationStatusStdout = Join-Path $root "activation_status_stdout.json"
 $activationStatusJson = Join-Path $root "activation_status_payload.json"
+$liveAcceptanceStatusStdout = Join-Path $root "live_acceptance_status_stdout.json"
+$liveAcceptanceStatusJson = Join-Path $root "live_acceptance_status_payload.json"
 $liveValidationStdout = Join-Path $root "live_validation_manifest_stdout.json"
 $liveValidationJson = Join-Path $root "live_validation_manifest.json"
 $goalStatusStdout = Join-Path $root "goal_status_stdout.json"
@@ -392,6 +406,37 @@ $activationStatusOutput = & python @activationStatusArgs 2>&1
 $activationStatusOutput | ForEach-Object { Write-Host $_ }
 Write-Utf8NoBom -Path $activationStatusStdout -Content ($activationStatusOutput -join [Environment]::NewLine)
 Convert-StdoutJson -StdoutPath $activationStatusStdout -OutputPath $activationStatusJson | Out-Null
+
+Write-Step "ReachOps live acceptance status without browser"
+$liveAcceptanceStatusArgs = @("tools\reachops_live_acceptance_status.py", "--profile-group", $ProfileGroup, "--profile-limit", "3", "--profile-scan-timeout", "5", "--limit", ([string]$Limit), "--target", $Target, "--json")
+if ($AllowPressureSubmit) {
+    $liveAcceptanceStatusArgs += @("--allow-pressure-submit", $AllowPressureSubmit)
+}
+if ($ProfileIds) {
+    $liveAcceptanceStatusArgs += @("--profile-ids", $ProfileIds)
+}
+if ($CommentVideoUrl) {
+    $liveAcceptanceStatusArgs += @("--comment-video-url", $CommentVideoUrl)
+}
+if ($FollowProfileUrl) {
+    $liveAcceptanceStatusArgs += @("--target-profile-url", $FollowProfileUrl)
+}
+if ($DmProfileUrl) {
+    $liveAcceptanceStatusArgs += @("--dm-profile-url", $DmProfileUrl)
+}
+if ($TargetUsername) {
+    $liveAcceptanceStatusArgs += @("--target-username", $TargetUsername)
+}
+if ($ActivationStatusPath) {
+    $liveAcceptanceStatusArgs += @("--activation-status-path", $ActivationStatusPath)
+}
+if ($ConfirmAuthorizedTargets) {
+    $liveAcceptanceStatusArgs += @("--confirm-authorized-targets")
+}
+$liveAcceptanceStatusOutput = & python @liveAcceptanceStatusArgs 2>&1
+$liveAcceptanceStatusOutput | ForEach-Object { Write-Host $_ }
+Write-Utf8NoBom -Path $liveAcceptanceStatusStdout -Content ($liveAcceptanceStatusOutput -join [Environment]::NewLine)
+Convert-StdoutJson -StdoutPath $liveAcceptanceStatusStdout -OutputPath $liveAcceptanceStatusJson | Out-Null
 
 Write-Step "ReachOps live validation manifest without browser"
 $liveValidationArgs = @("tools\reachops_live_validation_manifest.py", "--profile-group", $ProfileGroup, "--profile-limit", "3", "--profile-scan-timeout", "5", "--limit", ([string]$Limit), "--target", $Target, "--json")
@@ -512,7 +557,7 @@ if ($RunLiveSubmit) {
     Write-Step "Skipping controlled live submit: RunLiveSubmit not set"
 }
 
-Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveValidationJsonPath $liveValidationJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
+Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveAcceptanceStatusJsonPath $liveAcceptanceStatusJson -LiveValidationJsonPath $liveValidationJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
 
 Write-Step "ReachOps goal status report"
 Invoke-PythonCapture -StepName "ReachOps goal status report" -StdoutPath $goalStatusStdout -Arguments @("tools\reachops_goal_status_report.py", "--audit-json", $auditJson, "--acceptance-summary", $acceptanceSummaryJson, "--json")
@@ -539,6 +584,7 @@ Write-Host "REACHOPS_ACCEPTANCE_DIR=$root"
 Write-Host "DELIVERY_AUDIT_JSON=$auditJson"
 Write-Host "OPERATOR_PRESSURE_JSON=$operatorPressureJson"
 Write-Host "ACTIVATION_STATUS_JSON=$activationStatusJson"
+Write-Host "LIVE_ACCEPTANCE_STATUS_JSON=$liveAcceptanceStatusJson"
 Write-Host "LIVE_VALIDATION_MANIFEST_JSON=$liveValidationJson"
 Write-Host "GOAL_STATUS_JSON=$goalStatusJson"
 Write-Host "PACKAGE_CHECK_JSON=$packageCheckJson"
