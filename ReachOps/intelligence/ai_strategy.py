@@ -213,7 +213,36 @@ class RuleBasedAcquisitionIntelligenceProvider:
 
     name = "rules_ai_ready_v1"
 
-    BEAUTY_TERMS = {"beauty", "makeup", "skincare", "serum", "cosmetic", "hair", "nail", "lip", "anti aging", "acne"}
+    BEAUTY_TERMS = {
+        "beauty",
+        "beautytok",
+        "makeup",
+        "skincare",
+        "skintok",
+        "skinbarrier",
+        "glassskin",
+        "glowingskin",
+        "serum",
+        "cosmetic",
+        "hair",
+        "hairtok",
+        "haircare",
+        "nail",
+        "lip",
+        "anti aging",
+        "antiaging",
+        "acne",
+        "darkspots",
+        "hyperpigmentation",
+        "retinol",
+        "vitaminc",
+        "niacinamide",
+        "hyaluronicacid",
+        "sunscreen",
+        "kbeauty",
+        "jbeauty",
+        "glowup",
+    }
     DIGITAL_TERMS = {"app", "download", "watch", "episode", "movie", "series", "tool", "software"}
     COMMERCE_TERMS = {"shop", "store", "buy", "coupon", "discount", "sale", "product", "tiktokshop"}
 

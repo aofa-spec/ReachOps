@@ -1548,7 +1548,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             activation_path = tmp_path / "missing_activation.json"
             template_path = tmp_path / "reachops_activation_status.template.json"
             template_path.write_text("{}", encoding="utf-8")
-            acceptance_dir = tmp_path / "reports" / "reachops_acceptance" / "20260625_091523"
+            acceptance_dir = tmp_path / "reports" / "reachops_acceptance" / "20260625_092516"
             acceptance_dir.mkdir(parents=True)
             (acceptance_dir / "acceptance_summary.json").write_text(
                 json.dumps(
@@ -2235,7 +2235,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("live_preflight_payload.json", live_acceptance_runbook)
         self.assertIn("live_submit_payload.json", live_acceptance_runbook)
         self.assertIn("v0.4.0-mvp", handoff)
-        self.assertIn("20260625_091523", handoff)
+        self.assertIn("20260625_092516", handoff)
         self.assertIn("effective_pending_external_validation=2", handoff)
         self.assertIn("27273", handoff)
         self.assertIn("reachops_acceptance_inputs.local.ps1", handoff)
@@ -3338,6 +3338,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             strategy_sources = [row["source_value"] for row in plan["strategy"]["source_expansion"]]
             self.assertIn("skincare", strategy_sources)
             self.assertIn("skintok", plan["persona"]["search_keywords"])
+
+    def test_beauty_social_terms_use_beauty_strategy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+
+            for target in ["skintok", "glassskin", "skinbarrier", "hyperpigmentation", "kbeauty"]:
+                with self.subTest(target=target):
+                    plan = service.create_campaign_plan(target, max_sources=2)
+
+                    self.assertEqual(plan["campaign"]["category"], "beauty")
+                    self.assertEqual(plan["strategy"]["product_analysis"]["category"], "beauty")
+                    self.assertIn("beauty routine", plan["persona"]["interests"])
+                    self.assertTrue(any(row["source_type"] == "keyword" for row in plan["sources"]))
 
     def test_amazon_product_link_becomes_executable_social_search_sources(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -31,7 +31,36 @@ def split_operator_keywords(value: str, limit: int = 12) -> list[str]:
 class CampaignAnalyzer:
     """Rule-based product and audience analyzer for ReachOps MVP."""
 
-    BEAUTY_TERMS = {"beauty", "makeup", "skincare", "serum", "cosmetic", "hair", "nail", "lip", "anti aging", "acne"}
+    BEAUTY_TERMS = {
+        "beauty",
+        "beautytok",
+        "makeup",
+        "skincare",
+        "skintok",
+        "skinbarrier",
+        "glassskin",
+        "glowingskin",
+        "serum",
+        "cosmetic",
+        "hair",
+        "hairtok",
+        "haircare",
+        "nail",
+        "lip",
+        "anti aging",
+        "antiaging",
+        "acne",
+        "darkspots",
+        "hyperpigmentation",
+        "retinol",
+        "vitaminc",
+        "niacinamide",
+        "hyaluronicacid",
+        "sunscreen",
+        "kbeauty",
+        "jbeauty",
+        "glowup",
+    }
     SHOP_TERMS = {"shop", "store", "tiktokshop", "buy", "sale", "coupon", "product"}
     MARKETPLACE_DOMAINS = {"amazon.", "amzn.", "walmart.", "etsy.", "ebay.", "shopify.", "temu.", "aliexpress."}
 
