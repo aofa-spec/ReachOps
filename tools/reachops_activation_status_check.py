@@ -64,6 +64,7 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
 
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
     bound_device_id = str(payload.get("device_id") or "").strip()
+    add("activation_not_template", not bool(payload.get("template_only")), template_only=bool(payload.get("template_only")))
     add("activation_active", bool(payload.get("active")), active=bool(payload.get("active")))
     add("device_binding_matches", not bound_device_id or bound_device_id == current_device_id, bound_device_id=bound_device_id, current_device_id=current_device_id)
     add("live_submit_capability_enabled", bool(capabilities.get("live_submit")), capabilities=capabilities)

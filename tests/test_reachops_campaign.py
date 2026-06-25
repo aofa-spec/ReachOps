@@ -37,6 +37,7 @@ from ReachOps.collectors.tiktok_search_collector import TikTokSearchCollector
 from ReachOps.collectors.tiktok_topic_content_collector import TikTokTopicContentCollector
 from tools.reachops_delivery_audit import run_audit as run_reachops_delivery_audit
 from tools.reachops_activation_status_check import check_activation_status as check_reachops_activation_status
+from tools.reachops_activation_status_template import build_template as build_reachops_activation_status_template
 from tools.reachops_goal_status_report import build_goal_status_report
 from tools.reachops_operator_pressure import run_pressure as run_reachops_operator_pressure
 from tools.reachops_visual_collection_preflight import build_operator_diagnosis as visual_preflight_operator_diagnosis
@@ -1309,6 +1310,32 @@ class ReachOpsCampaignTests(unittest.TestCase):
             decisions = checks["authorization_allows_live_actions"]["evidence"]["decisions"]
             self.assertTrue(all(item["error_code"] == "LIVE_SUBMIT_DEVICE_MISMATCH" for item in decisions))
 
+    def test_reachops_activation_status_template_is_not_authorization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            class Args:
+                active = True
+                bind_current_device = True
+                enable_live_submit = True
+                enable_comment_reply = True
+                enable_follow_review = True
+                enable_dm_review = True
+                license_tier = "enterprise"
+                expires_at = "2999-01-01T00:00:00Z"
+                days = 7
+
+            activation_path = Path(tmp) / "reachops_activation_status.json"
+            payload = build_reachops_activation_status_template(Args())
+            activation_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            result = check_reachops_activation_status(activation_path)
+
+            self.assertFalse(result["ready"])
+            checks = {item["name"]: item for item in result["checks"]}
+            self.assertFalse(checks["activation_not_template"]["passed"])
+            decisions = checks["authorization_allows_live_actions"]["evidence"]["decisions"]
+            self.assertTrue(all(item["error_code"] == "LIVE_SUBMIT_NOT_AUTHORIZED" for item in decisions))
+            self.assertTrue(all("template" in item["error_message"] for item in decisions))
+
     def test_reachops_live_validation_manifest_builds_operator_next_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
             status_path = Path(tmp) / "activation.json"
@@ -1741,6 +1768,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         acceptance_inputs_template = (root / "tools" / "reachops_acceptance_inputs.example.ps1").read_text(encoding="utf-8")
         live_acceptance_runbook = (root / "ReachOps" / "docs" / "REACHOPS_WINDOWS_LIVE_ACCEPTANCE_RUNBOOK.md").read_text(encoding="utf-8")
         handoff = (root / "HANDOFF.md").read_text(encoding="utf-8")
+        readme = (root / "README.md").read_text(encoding="utf-8")
 
         self.assertIn('name="ReachOps"', spec)
         self.assertIn("ReachOpsApp.py", spec)
@@ -1884,6 +1912,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_live_submit_acceptance.py", sync_script)
         self.assertIn("reachops_live_readiness.py", sync_script)
         self.assertIn("reachops_activation_status_check.py", sync_script)
+        self.assertIn("reachops_activation_status_template.py", sync_script)
         self.assertIn("reachops_goal_status_report.py", sync_script)
         self.assertIn("reachops_operator_pressure.py", sync_script)
         self.assertIn("reachops_action_preflight_existing_batch.py", sync_script)
@@ -1924,6 +1953,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("Activation status check blocked", acceptance_inputs_template)
         self.assertIn("tools\\run_reachops_live_preflight_windows.ps1", live_acceptance_runbook)
         self.assertIn("tools\\reachops_activation_status_check.py", live_acceptance_runbook)
+        self.assertIn("tools\\reachops_activation_status_template.py", live_acceptance_runbook)
+        self.assertIn("template_only", live_acceptance_runbook)
+        self.assertIn("reachops_activation_status_template.py", readme)
         self.assertIn("-TargetProfileUrl $FollowProfileUrl", live_acceptance_runbook)
         self.assertIn("-DmProfileUrl $DmProfileUrl", live_acceptance_runbook)
         self.assertIn("goal_status_report.json", live_acceptance_runbook)

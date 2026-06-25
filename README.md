@@ -118,6 +118,7 @@ powershell -ExecutionPolicy Bypass -File tools\reachops_acceptance_inputs.local.
 缺少真实参数时，可以先运行 readiness / preflight 门控生成 blocked 报告；这些检查不会提交评论、关注或私信：
 
 ```powershell
+python tools\reachops_activation_status_template.py --bind-current-device --enable-live-submit --enable-comment-reply --enable-follow-review --enable-dm-review --json
 python tools\reachops_activation_status_check.py --activation-status-path "C:\path\to\reachops_activation_status.json" --json
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_readiness_windows.ps1
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windows.ps1

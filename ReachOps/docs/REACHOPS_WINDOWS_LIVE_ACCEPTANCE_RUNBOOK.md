@@ -53,9 +53,23 @@ Profile requirements:
 
 Activation requirements:
 
+Generate a local template first. This does not authorize live submit because the output contains `template_only: true`:
+
+```powershell
+python tools\reachops_activation_status_template.py `
+  --bind-current-device `
+  --enable-live-submit `
+  --enable-comment-reply `
+  --enable-follow-review `
+  --enable-dm-review `
+  --write `
+  --output "$env:LOCALAPPDATA\ReachOps\config\reachops_activation_status.template.json"
+```
+
 ```json
 {
   "active": true,
+  "template_only": false,
   "device_id": "must-match-current-device-when-bound",
   "expires_at": "2999-01-01T00:00:00Z",
   "license_tier": "enterprise",

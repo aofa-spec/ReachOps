@@ -55,6 +55,8 @@ class LiveSubmitAuthorizationGate:
         }
         if not status:
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status not found", evidence)
+        if bool(status.get("template_only")):
+            return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status is a template", evidence)
         if not bool(status.get("active")):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation is inactive", evidence)
         bound_device_id = str(status.get("device_id") or "").strip()
