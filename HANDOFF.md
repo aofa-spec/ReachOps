@@ -46,6 +46,8 @@ Current delivery boundary:
 - The latest acceptance package includes `live_acceptance_status_payload.json`, `activation_status_payload.json`, `live_validation_manifest.json`, `live_readiness_payload.json`, and `live_preflight_payload.json` as blocked/no-submit reports.
 - Windows live validation can currently scan ixBrowser and select numeric profile IDs `27273`, `27240`, and `27230`.
 - Live validation now checks activation readiness through the same activation gate used by readiness; `template_only` activation files are reported as blocked, not ready.
+- Windows `tools\reachops_acceptance_inputs.local.ps1` has been prepared with Profile IDs `27273,27240,27230` and the skincare/beauty keyword-list target. `CommentVideoUrl`, `FollowProfileUrl`, `DmProfileUrl`, and `TargetUsername` are still placeholders.
+- Windows activation template exists at `C:\Users\aofa\AppData\Local\ReachOps\config\reachops_activation_status.template.json` for device `1d3a691ec71f6a3356d1414ad8540f3e`. It is intentionally `template_only=true` and `active=false`; live submit remains blocked until a real activation status JSON replaces it.
 - Default client behavior must not submit real platform actions.
 - If TikTok shows a login/signup dialog or forced login page after an ixBrowser Profile opens, treat that account as `LOGIN_REQUIRED` immediately. Do not continue discovery, collection, comment scan, or customer acquisition with that Profile.
 - GUI is mandatory for client delivery. If the local environment lacks Tkinter, continue headless core development and validate GUI in Windows VM or another Tkinter-capable environment.
@@ -63,7 +65,6 @@ Remaining external inputs before live readiness can pass:
 Safe Windows next command pattern:
 
 ```powershell
-Copy-Item tools\reachops_acceptance_inputs.example.ps1 tools\reachops_acceptance_inputs.local.ps1
 notepad tools\reachops_acceptance_inputs.local.ps1
 powershell -ExecutionPolicy Bypass -File tools\reachops_acceptance_inputs.local.ps1
 ```
