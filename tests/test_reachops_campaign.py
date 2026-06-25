@@ -25,6 +25,8 @@ from ReachOps.workbench.action_router import ActionRouterConfig
 from ReachOps.workbench.action_router import FixtureActionExecutor
 from ReachOps.workbench.profile_preflight import ProfilePreflightChecker, ProfilePreflightConfig
 from ReachOps.workbench.console import GrowthOpsConsole, format_campaign_plan_summary
+from ReachOps.workbench.console import group_name_from_display as console_group_name_from_display
+from ReachOps.workbench.console import safe_tk_option as console_safe_tk_option
 from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp, group_display_name, group_name_from_display, stable_combobox_values
 from ReachOps.workbench.tiktok_action_executor import TikTokActionExecutorConfig, TikTokSeleniumActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
@@ -579,11 +581,69 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertGreaterEqual(result["summary"]["pending_external_validation"], 1)
         self.assertEqual(result["summary"]["failed"], 0)
         checks = {row["name"]: row for row in result["checks"]}
+        self.assertEqual(checks["产品链接能自动生成获客任务和可执行来源"]["status"], "passed")
+        self.assertEqual(checks["产品链接能自动生成获客任务和可执行来源"]["evidence"]["campaign"]["input_type"], "product_url")
+        self.assertTrue(checks["产品链接能自动生成获客任务和可执行来源"]["evidence"]["all_sources_executable"])
+        self.assertEqual(checks["产品链接能自动生成获客任务和可执行来源"]["evidence"]["direct_product_url_source_count"], 0)
+        self.assertEqual(checks["产品链接能自动生成获客任务和可执行来源"]["evidence"]["non_executable_source_types"], [])
+        self.assertIn("keyword", checks["产品链接能自动生成获客任务和可执行来源"]["evidence"]["source_types"])
+        self.assertIn("hashtag", checks["产品链接能自动生成获客任务和可执行来源"]["evidence"]["source_types"])
+        self.assertEqual(checks["达人链接和话题能自动生成获客任务"]["status"], "passed")
+        self.assertEqual(checks["达人链接和话题能自动生成获客任务"]["evidence"]["creator"]["campaign"]["input_type"], "creator_url")
+        self.assertIn(("creator_url", "https://www.tiktok.com/@beauty_creator"), [tuple(row) for row in checks["达人链接和话题能自动生成获客任务"]["evidence"]["creator"]["source_pairs"]])
+        self.assertEqual(checks["达人链接和话题能自动生成获客任务"]["evidence"]["topic"]["campaign"]["input_type"], "hashtag")
+        self.assertIn(("hashtag", "skincare"), [tuple(row) for row in checks["达人链接和话题能自动生成获客任务"]["evidence"]["topic"]["source_pairs"]])
         self.assertEqual(checks["升级清单和安装校验机制可用"]["status"], "passed")
         self.assertTrue(checks["升级清单和安装校验机制可用"]["evidence"]["hash_ok"])
         self.assertEqual(checks["授权门覆盖设备绑定、过期和能力限制"]["status"], "passed")
         self.assertEqual(checks["授权门覆盖设备绑定、过期和能力限制"]["evidence"]["expired"]["error_code"], "LIVE_SUBMIT_LICENSE_EXPIRED")
         self.assertEqual(checks["真实执行成功必须有有效证据"]["status"], "passed")
+        self.assertEqual(checks["刷新分组能完整读取 ixBrowser 配置列表"]["status"], "passed")
+        self.assertEqual(checks["刷新分组能完整读取 ixBrowser 配置列表"]["evidence"]["counts"]["Canada"], 2)
+        self.assertTrue(checks["刷新分组能完整读取 ixBrowser 配置列表"]["evidence"]["all_profile_calls_omit_group_id"])
+        self.assertEqual(checks["选择哪个分组就实际用哪个分组执行"]["status"], "passed")
+        self.assertEqual(checks["选择哪个分组就实际用哪个分组执行"]["evidence"]["selected_canada_profile_ids"], ["ca-1", "ca-2"])
+        self.assertEqual(checks["能识别并排除异常账号"]["status"], "passed")
+        self.assertEqual(checks["能识别并排除异常账号"]["evidence"]["available_profile_ids"], ["10001"])
+        self.assertEqual(checks["能识别并排除异常账号"]["evidence"]["errors"]["LOGIN_REQUIRED"], 1)
+        self.assertEqual(checks["能识别并排除异常账号"]["evidence"]["errors"]["CAPTCHA_DETECTED"], 1)
+        self.assertEqual(checks["能识别并排除异常账号"]["evidence"]["errors"]["PROXY_FAILED"], 1)
+        self.assertEqual(checks["客户端按钮和设置接入真实执行链路"]["status"], "passed")
+        self.assertTrue(checks["客户端按钮和设置接入真实执行链路"]["evidence"]["settings_consumed_by_execution"])
+        self.assertEqual(checks["客户可见设置都有执行证据映射"]["status"], "passed")
+        self.assertTrue(checks["客户可见设置都有执行证据映射"]["evidence"]["operator_controls_all_real"])
+        self.assertTrue(checks["客户可见设置都有执行证据映射"]["evidence"]["operator_control_evidence"]["账号分组"]["passed"])
+        self.assertEqual(checks["客户能看到成功失败换号和错误码"]["status"], "passed")
+        result_visibility = checks["客户能看到成功失败换号和错误码"]["evidence"]["operator_result_visibility"]
+        self.assertTrue(result_visibility["execution_success"])
+        self.assertTrue(result_visibility["failed"])
+        self.assertTrue(result_visibility["account_switches"])
+        self.assertTrue(result_visibility["error_code"])
+        self.assertEqual(checks["开始任务后日志能实时显示执行进度"]["status"], "passed")
+        self.assertEqual(checks["异常不弹窗卡死"]["status"], "passed")
+        self.assertFalse(any(checks["异常不弹窗卡死"]["evidence"]["popup_hits"].values()))
+        self.assertEqual(checks["客户端文案面向运营用户"]["status"], "passed")
+        self.assertEqual(checks["客户端文案面向运营用户"]["evidence"]["start_page_technical_hits"], [])
+        self.assertEqual(checks["漏斗只显示本轮 Campaign"]["status"], "passed")
+        self.assertNotEqual(
+            checks["漏斗只显示本轮 Campaign"]["evidence"]["old_funnel"]["campaign_id"],
+            checks["漏斗只显示本轮 Campaign"]["evidence"]["new_funnel"]["campaign_id"],
+        )
+        self.assertEqual(checks["漏斗只显示本轮 Campaign"]["evidence"]["new_execution_success"], 0)
+        self.assertEqual(checks["能识别页面打不开和无评论"]["status"], "passed")
+        self.assertGreaterEqual(checks["能识别页面打不开和无评论"]["evidence"]["page_open_failed"]["errors"]["CREATOR_PAGE_OPEN_FAILED"], 1)
+        self.assertGreaterEqual(checks["能识别页面打不开和无评论"]["evidence"]["empty_comments"]["errors"]["COMMENT_SCAN_EMPTY"], 1)
+        self.assertEqual(checks["导出内容包含客户池动作漏斗和错误统计"]["status"], "passed")
+        export_evidence = checks["导出内容包含客户池动作漏斗和错误统计"]["evidence"]
+        self.assertTrue(export_evidence["has_funnel"])
+        self.assertTrue(export_evidence["has_error_counts"])
+        self.assertTrue(export_evidence["outreach_executions_present"])
+        self.assertTrue(export_evidence["execution_summary_present"])
+        self.assertTrue(export_evidence["execution_summary_total_matches"])
+        self.assertTrue(export_evidence["execution_summary_has_switches"])
+        self.assertTrue(export_evidence["execution_columns_ok"])
+        self.assertGreater(export_evidence["customer_csv_rows"], 0)
+        self.assertGreater(export_evidence["action_csv_rows"], 0)
         self.assertGreaterEqual(
             checks["真实执行成功必须有有效证据"]["evidence"]["result"]["errors"]["LIVE_SUBMIT_EVIDENCE_MISSING"],
             1,
@@ -736,6 +796,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
             "summary": {"stages_passed": 5, "stages_pending_external_validation": 0, "stages_failed": 0},
             "pending_external_validation": [],
         }
+        passed_summary["live_readiness"] = {
+            "status": "ready",
+            "ready": True,
+            "no_browser_started": False,
+            "no_submit": True,
+        }
+        passed_summary["live_preflight"] = {
+            "status": "completed",
+            "preflight_action_statuses": {
+                "comment_reply": [{"status": "success"}],
+                "follow_review": [{"status": "success"}],
+                "dm_review": [{"status": "success"}],
+            },
+            "missing_preflight_action_types": [],
+        }
         png_sha = hashlib.sha256(b"png").hexdigest()
         def sidecar(action_type):
             return {
@@ -749,9 +824,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
             "status": "completed",
             "executor_mode": "platform_selenium",
             "platform_validation": True,
+            "passed": True,
+            "live_submit": True,
             "activation_status_loaded": True,
             "activation_status_source": "C:/Users/aofa/AppData/Local/ReachOps/config/reachops_activation_status.json",
             "activation_status_path": "reports/reachops_acceptance/live_submit/config/reachops_activation_status.json",
+            "summary": {
+                "selected_actions": 3,
+                "success": 3,
+                "failed": 0,
+                "skipped": 0,
+                "results": [
+                    {"action_type": "comment_reply", "status": "success"},
+                    {"action_type": "follow_review", "status": "success"},
+                    {"action_type": "dm_review", "status": "success"},
+                ],
+            },
             "evidence_by_action_type": {
                 "comment_reply": ["evidence://submit/comment"],
                 "follow_review": ["evidence://submit/follow"],
@@ -771,6 +859,18 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(passed["delivery_audit"]["effective_pending_external_validation"], 0)
         self.assertEqual(passed["goal_status"]["status"], "passed")
 
+        missing_readiness_summary = json.loads(json.dumps(passed_summary))
+        missing_readiness_summary["live_readiness"] = {"status": "skipped", "ready": False, "no_submit": True}
+        missing_readiness = verify_reachops_acceptance_summary(missing_readiness_summary, allow_external_pending=True)
+        self.assertFalse(missing_readiness["passed"])
+        self.assertIn("live_readiness_not_ready", missing_readiness["failures"])
+
+        missing_preflight_summary = json.loads(json.dumps(passed_summary))
+        missing_preflight_summary["live_preflight"] = {"status": "skipped"}
+        missing_preflight = verify_reachops_acceptance_summary(missing_preflight_summary, allow_external_pending=True)
+        self.assertFalse(missing_preflight["passed"])
+        self.assertIn("live_preflight_not_completed", missing_preflight["failures"])
+
         fixture_completed_summary = json.loads(json.dumps(passed_summary))
         fixture_completed_summary["live_submit"] = {
             "status": "completed",
@@ -786,6 +886,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
         missing_activation = verify_reachops_acceptance_summary(missing_activation_summary, allow_external_pending=True)
         self.assertFalse(missing_activation["passed"])
         self.assertIn("live_submit_activation_status_missing", missing_activation["failures"])
+
+        wrong_executor_summary = json.loads(json.dumps(passed_summary))
+        wrong_executor_summary["live_submit"]["executor_mode"] = "fixture"
+        wrong_executor = verify_reachops_acceptance_summary(wrong_executor_summary, allow_external_pending=True)
+        self.assertFalse(wrong_executor["passed"])
+        self.assertIn("live_submit_executor_not_platform_selenium", wrong_executor["failures"])
+
+        missing_execution_summary = json.loads(json.dumps(passed_summary))
+        missing_execution_summary["live_submit"]["summary"]["success"] = 2
+        missing_execution_summary["live_submit"]["summary"]["results"] = [
+            {"action_type": "comment_reply", "status": "success"},
+            {"action_type": "follow_review", "status": "success"},
+        ]
+        missing_execution = verify_reachops_acceptance_summary(missing_execution_summary, allow_external_pending=True)
+        self.assertFalse(missing_execution["passed"])
+        self.assertIn("live_submit_execution_summary_invalid", missing_execution["failures"])
 
         missing_action_evidence_summary = json.loads(json.dumps(passed_summary))
         missing_action_evidence_summary["live_submit"]["evidence_by_action_type"]["dm_review"] = []
@@ -956,8 +1072,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "status": "completed",
                     "executor_mode": "platform_selenium",
                     "platform_validation": True,
+                    "passed": True,
+                    "live_submit": True,
                     "activation_status_loaded": True,
                     "activation_status_source": "C:/ReachOps/config/reachops_activation_status.json",
+                    "summary": {
+                        "selected_actions": 3,
+                        "success": 3,
+                        "failed": 0,
+                        "skipped": 0,
+                        "results": [
+                            {"action_type": "comment_reply", "status": "success"},
+                            {"action_type": "follow_review", "status": "success"},
+                            {"action_type": "dm_review", "status": "success"},
+                        ],
+                    },
                     "evidence_by_action_type": {
                         "comment_reply": ["evidence://comment"],
                         "follow_review": ["evidence://follow"],
@@ -2207,6 +2336,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("selenium>=4.40", reachops_requirements)
         self.assertIn("ixbrowser_local_api>=1.2", reachops_requirements)
         self.assertIn("pyinstaller>=6.3", reachops_requirements)
+        self.assertIn("selenium.webdriver.chrome.webdriver", spec)
+        self.assertIn("selenium.webdriver.chrome.service", spec)
         self.assertNotIn("opencv-python", reachops_requirements)
         self.assertIn("$RunControlledLiveSubmit = $false", acceptance_inputs_template)
         self.assertIn("run_reachops_live_readiness_windows.ps1", acceptance_inputs_template)
@@ -2273,6 +2404,30 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service = make_reachops_service(tmp)
             driver = LoginDialogDriver()
             driver.current_url = "https://www.tiktok.com/@creator"
+
+            self.assertEqual(service.router._detect_page_state(driver), "LOGIN_REQUIRED")
+
+    def test_tiktok_account_setup_modal_blocks_acquisition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            driver = FakeDriver()
+            driver.current_url = "https://www.tiktok.com/"
+            driver.script_results = [
+                {
+                    "url": driver.current_url,
+                    "text": "how face or voice data is used important things to know got it",
+                    "title": "TikTok - Make Your Day",
+                    "videoLinks": 0,
+                    "profileLinks": 0,
+                    "loginDialog": False,
+                    "exactLoginButton": False,
+                    "forcedLoginText": False,
+                    "accountSetupGate": True,
+                    "loginPage": False,
+                    "captcha": False,
+                    "proxy": False,
+                }
+            ]
 
             self.assertEqual(service.router._detect_page_state(driver), "LOGIN_REQUIRED")
 
@@ -2829,6 +2984,41 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(summary["errors"]["LOGIN_REQUIRED"], 1)
             self.assertEqual(group_manager.moves, [("12345", "LOGIN_REQUIRED")])
 
+    def test_profile_preflight_detects_tiktok_account_setup_modal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = GrowthIntelligenceService(base_dir=tmp)
+            group_manager = FakeProfileGroupManager()
+            driver = FakeProfilePreflightDriver("For You")
+            driver.script_results = [
+                {
+                    "url": "https://www.tiktok.com/",
+                    "title": "TikTok - Make Your Day",
+                    "loginGate": True,
+                    "loggedIn": False,
+                    "exactLoginButton": False,
+                    "dialogLoginGate": False,
+                    "forcedLoginText": False,
+                    "accountSetupGate": True,
+                    "pumbaaCtx": "login=1,ftc=0,cb_enabled=0",
+                    "labels": ["got it"],
+                    "dialogs": ["how face or voice data is used important things to know got it"],
+                    "sample": "how face or voice data is used important things to know got it",
+                }
+            ]
+            checker = ProfilePreflightChecker(
+                service.storage,
+                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0),
+                driver_factory=lambda _profile: (driver, (FakeReleaseManager(), "setup-modal"), ""),
+                group_manager=group_manager,
+            )
+            checker._executor._release = lambda _handle: None
+
+            available, summary = checker.available_profiles([{"profile_id": "12345", "group_name": "US"}])
+
+            self.assertEqual(available, [])
+            self.assertEqual(summary["errors"]["LOGIN_REQUIRED"], 1)
+            self.assertEqual(group_manager.moves, [("12345", "LOGIN_REQUIRED")])
+
     def test_profile_preflight_timeout_marks_profile_unavailable_and_quarantines(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = GrowthIntelligenceService(base_dir=tmp)
@@ -3055,11 +3245,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
     def test_goal_status_report_keeps_real_platform_submit_pending(self):
         passed_names = [
             "输入产品/关键词即可创建获客任务",
+            "产品链接能自动生成获客任务和可执行来源",
+            "达人链接和话题能自动生成获客任务",
             "AI/规则能生成产品分析",
             "外部 AI 故障可自动降级规则策略",
             "系统能自动生成受众画像",
             "AI/规则能生成意图分类和话术建议",
             "系统能自动规划来源",
+            "刷新分组能完整读取 ixBrowser 配置列表",
+            "选择哪个分组就实际用哪个分组执行",
+            "能识别并排除异常账号",
+            "客户端按钮和设置接入真实执行链路",
+            "客户可见设置都有执行证据映射",
+            "客户能看到成功失败换号和错误码",
+            "开始任务后日志能实时显示执行进度",
+            "异常不弹窗卡死",
+            "客户端文案面向运营用户",
+            "漏斗只显示本轮 Campaign",
+            "能识别页面打不开和无评论",
             "AI/规则能扩展获客来源",
             "人工可编辑策略可保存并进入报告",
             "系统能发现内容",
@@ -3077,6 +3280,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             "全程有实时漏斗",
             "全程有错误码和证据",
             "可导出客户名单和执行报告",
+            "导出内容包含客户池动作漏斗和错误统计",
             "独立配置/数据/授权目录存在",
             "Windows 打包入口存在",
             "升级清单和安装校验机制可用",
@@ -3139,11 +3343,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     {"name": name, "status": "passed", "evidence": {}}
                     for name in [
                         "输入产品/关键词即可创建获客任务",
+                        "产品链接能自动生成获客任务和可执行来源",
+                        "达人链接和话题能自动生成获客任务",
                         "AI/规则能生成产品分析",
                         "外部 AI 故障可自动降级规则策略",
                         "系统能自动生成受众画像",
                         "AI/规则能生成意图分类和话术建议",
                         "系统能自动规划来源",
+                        "刷新分组能完整读取 ixBrowser 配置列表",
+                        "选择哪个分组就实际用哪个分组执行",
+                        "能识别并排除异常账号",
+                        "客户端按钮和设置接入真实执行链路",
+                        "客户可见设置都有执行证据映射",
+                        "客户能看到成功失败换号和错误码",
+                        "开始任务后日志能实时显示执行进度",
+                        "异常不弹窗卡死",
+                        "客户端文案面向运营用户",
+                        "漏斗只显示本轮 Campaign",
+                        "能识别页面打不开和无评论",
                         "AI/规则能扩展获客来源",
                         "人工可编辑策略可保存并进入报告",
                         "系统能发现内容",
@@ -3163,6 +3380,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         "全程有实时漏斗",
                         "全程有错误码和证据",
                         "可导出客户名单和执行报告",
+                        "导出内容包含客户池动作漏斗和错误统计",
                         "独立配置/数据/授权目录存在",
                         "Windows 打包入口存在",
                         "升级清单和安装校验机制可用",
@@ -3192,10 +3410,34 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "installer_smoke": {"status": "ok", "exe_exists": True, "data_in_install_dir": False, "hash_ok": True},
                 "ui_startup": {"status": "ok", "process_running": True, "interactive_task": True},
                 "live_validation": {"status": "ready", "no_browser_started": True, "no_submit": True},
+                "live_readiness": {"status": "ready", "ready": True, "no_browser_started": False, "no_submit": True},
+                "live_preflight": {
+                    "status": "completed",
+                    "preflight_action_statuses": {
+                        "comment_reply": [{"status": "success"}],
+                        "follow_review": [{"status": "success"}],
+                        "dm_review": [{"status": "success"}],
+                    },
+                    "missing_preflight_action_types": [],
+                },
                 "live_submit": {
                     "status": "completed",
+                    "executor_mode": "platform_selenium",
                     "platform_validation": True,
+                    "passed": True,
+                    "live_submit": True,
                     "activation_status_loaded": True,
+                    "summary": {
+                        "selected_actions": 3,
+                        "success": 3,
+                        "failed": 0,
+                        "skipped": 0,
+                        "results": [
+                            {"action_type": "comment_reply", "status": "success"},
+                            {"action_type": "follow_review", "status": "success"},
+                            {"action_type": "dm_review", "status": "success"},
+                        ],
+                    },
                     "evidence_by_action_type": {
                         "comment_reply": ["C:/evidence/comment_reply.png"],
                         "follow_review": ["C:/evidence/follow_review.png"],
@@ -3249,7 +3491,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertGreaterEqual(funnel["outreach_actions"], 1)
 
             artifacts = workflow.export_campaign_artifacts(campaign_id=campaign_id)
-            for key in ["json_path", "sources_csv_path", "customers_csv_path", "actions_csv_path"]:
+            for key in ["json_path", "sources_csv_path", "customers_csv_path", "actions_csv_path", "executions_csv_path"]:
                 self.assertTrue(os.path.exists(artifacts[key]), key)
 
             with open(artifacts["json_path"], "r", encoding="utf-8") as fh:
@@ -3259,6 +3501,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(len(payload["candidate_users"]), 1)
             self.assertGreaterEqual(len(payload["operation_leads"]), 1)
             self.assertGreaterEqual(len(payload["action_queue"]), 1)
+            self.assertIn("outreach_executions", payload)
+            self.assertIn("execution_summary", payload)
+            self.assertEqual(payload["execution_summary"]["total"], len(payload["outreach_executions"]))
+            self.assertIn("error_counts", payload["execution_summary"])
             self.assertEqual(payload["strategy"]["campaign_id"], campaign_id)
             self.assertTrue(payload["strategy"]["intent_taxonomy"])
             self.assertIn("intent_taxonomy", payload["strategy"]["editable_fields"])
@@ -3272,6 +3518,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 actions = list(csv.DictReader(fh))
             self.assertTrue(actions)
             self.assertEqual(actions[0]["target_username"], "buyer_one")
+
+            with open(artifacts["executions_csv_path"], "r", encoding="utf-8") as fh:
+                execution_reader = csv.DictReader(fh)
+                self.assertIn("action_type", execution_reader.fieldnames or [])
+                self.assertIn("profile_id", execution_reader.fieldnames or [])
+                self.assertIn("evidence_path", execution_reader.fieldnames or [])
 
     def test_campaign_report_export_paths_do_not_overwrite_same_second_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3299,7 +3551,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 self.assertEqual(result.processed_sources, 1)
                 exported.append(workflow.export_campaign_artifacts(campaign_id=campaign_id))
 
-            for key in ["json_path", "sources_csv_path", "customers_csv_path", "actions_csv_path"]:
+            for key in ["json_path", "sources_csv_path", "customers_csv_path", "actions_csv_path", "executions_csv_path"]:
                 paths = [row[key] for row in exported]
                 self.assertEqual(len(set(paths)), len(paths), key)
                 self.assertTrue(all(os.path.exists(path) for path in paths), key)
@@ -4313,13 +4565,76 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(app.console.action_execution_group_var.get(), "Canada")
         self.assertEqual(app.group_var.get(), "Canada")
 
+    def test_standalone_selected_profiles_excludes_health_cooldown_accounts_before_preflight(self):
+        class Value:
+            def __init__(self, value=""):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        class Registry:
+            groups = [{"group_id": "281726", "group_name": "Canada"}]
+
+            def __init__(self):
+                self.calls = []
+
+            def refresh(self, include_profiles=False):
+                raise AssertionError("groups are already loaded")
+
+            def select_profiles(self, group, limit=50):
+                self.calls.append((group, limit))
+                return [
+                    {"profile_id": "ca-cooldown", "group_id": "281726", "group_name": "Canada"},
+                    {"profile_id": "ca-comment", "group_id": "281726", "group_name": "Canada comment"},
+                    {"profile_id": "ca-publish", "group_id": "281726", "group_name": "Canada publish"},
+                ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            service.storage.force_profile_cooldown(
+                "ca-cooldown",
+                error_code="LOGIN_REQUIRED",
+                error_message="login popup",
+            )
+            app = GrowthIntelligenceStandaloneApp.__new__(GrowthIntelligenceStandaloneApp)
+            app.service = service
+            app.profile_registry = Registry()
+            app.profile_group_display_map = {}
+            app.group_var = Value("Canada")
+            app.console = type(
+                "Console",
+                (),
+                {
+                    "scan_profile_limit_var": Value(2),
+                    "scan_profile_group_display_var": Value("Canada"),
+                    "scan_profile_group_var": Value("Canada"),
+                    "action_execution_group_var": Value(""),
+                },
+            )()
+            logs = []
+            app._log = logs.append
+
+            selected = app._selected_profiles()
+
+        self.assertEqual([row["profile_id"] for row in selected], ["ca-comment", "ca-publish"])
+        self.assertEqual(app.profile_registry.calls[0], ("Canada", 50))
+        self.assertTrue(any("candidates=3 selected=2 excluded=1" in row for row in logs))
+
     def test_profile_group_display_keeps_operator_readable_group_name(self):
         display = group_display_name({"group_id": "281726", "group_name": "加拿大获客组", "count": 12})
 
-        self.assertEqual(display, "12 个账号 | 加拿大获客组 | ID 281726")
+        self.assertEqual(display, "[   12] 加拿大获客组 (ID: 281726)")
         self.assertEqual(stable_combobox_values([display]), [display])
         self.assertEqual(group_name_from_display(display), "加拿大获客组")
         self.assertEqual(group_name_from_display("待读取账号数 | 加拿大获客组 | ID 281726"), "加拿大获客组")
+        self.assertEqual(group_name_from_display("[    3] Canada (ID: 281726)"), "Canada")
+        self.assertEqual(console_safe_tk_option(display), display)
+        self.assertEqual(console_group_name_from_display(display), "加拿大获客组")
+        self.assertEqual(console_group_name_from_display("[    3] Canada (ID: 281726)"), "Canada")
 
     def test_standalone_logs_profile_preflight_details_for_operator(self):
         logs = []
@@ -4371,6 +4686,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "json_path": "/tmp/current.json",
                     "customers_csv_path": "/tmp/customers.csv",
                     "actions_csv_path": "/tmp/actions.csv",
+                    "executions_csv_path": "/tmp/executions.csv",
                 }
 
         app = GrowthIntelligenceStandaloneApp.__new__(GrowthIntelligenceStandaloneApp)
@@ -4470,25 +4786,56 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
         self.assertEqual([str(row["profile_id"]) for row in rows], ["p1", "p3"])
 
-    def test_profile_registry_selects_profiles_by_group_id_not_partial_cache(self):
+    def test_ixbrowser_profile_loader_matches_smart_publish_by_omitting_group_id_for_all_profiles(self):
+        import sys
+        import types
+
+        class FakeIXBrowserClient:
+            calls = []
+
+            def __init__(self):
+                self.total = 2
+
+            def get_profile_list(self, page=1, limit=100, **kwargs):
+                self.calls.append({"page": page, "limit": limit, **kwargs})
+                if "group_id" in kwargs:
+                    return []
+                if page == 1:
+                    return [
+                        {"profile_id": "ca-1", "group_id": "281726", "group_name": "Canada"},
+                        {"profile_id": "br-1", "group_id": "286343", "group_name": "BR"},
+                    ]
+                return []
+
+        fake_module = types.SimpleNamespace(IXBrowserClient=FakeIXBrowserClient)
+        with patch.dict(sys.modules, {"ixbrowser_local_api": fake_module}):
+            from ReachOps.workbench.standalone_app import load_ixbrowser_profile_rows
+
+            rows = load_ixbrowser_profile_rows(max_pages=3)
+
+        self.assertEqual([str(row["profile_id"]) for row in rows], ["ca-1", "br-1"])
+        self.assertTrue(FakeIXBrowserClient.calls)
+        self.assertTrue(all("group_id" not in call for call in FakeIXBrowserClient.calls))
+
+    def test_profile_registry_selects_profiles_by_group_id_from_refreshed_catalog(self):
         from ReachOps.workbench.standalone_app import StandaloneProfileRegistry
 
         registry = StandaloneProfileRegistry()
-        registry.profiles = [{"profile_id": "old", "group_id": "old", "group_name": "Old"}]
+        registry.profiles = [
+            {"profile_id": "ca-1", "group_id": "281726", "group_name": "Canada"},
+            {"profile_id": "ca-2", "group_id": "281726", "group_name": "Canada"},
+            {"profile_id": "br-1", "group_id": "286343", "group_name": "BR"},
+        ]
         registry.groups = [{"group_id": "281726", "group_name": "Canada", "count": 0}]
         registry.group_by_name = {"Canada": registry.groups[0]}
 
         with patch(
             "ReachOps.workbench.standalone_app.load_ixbrowser_profile_rows",
-            return_value=[
-                {"profile_id": "ca-1", "group_id": "281726", "group_name": "Canada"},
-                {"profile_id": "ca-2", "group_id": "281726", "group_name": "Canada"},
-            ],
+            side_effect=AssertionError("select_profiles should use refreshed profile catalog"),
         ) as loader:
             rows = registry.select_profiles("Canada", limit=10)
 
-        loader.assert_called_once()
-        self.assertEqual(loader.call_args.kwargs["group_id"], "281726")
+        loader.assert_not_called()
         self.assertEqual([row["profile_id"] for row in rows], ["ca-1", "ca-2"])
 
     def test_ixbrowser_group_profile_count_pages_without_total(self):
@@ -4517,6 +4864,37 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
         self.assertEqual(count, 2)
 
+    def test_ixbrowser_adapter_closes_profile_when_driver_import_fails(self):
+        import builtins
+        import sys
+        import types
+
+        from ReachOps.adapters.browser_manager import IxBrowserLocalAdapter
+
+        class FakeIXBrowserClient:
+            closed = []
+
+            def open_profile(self, profile_id, **_kwargs):
+                return {"webdriver": "C:\\fake\\chromedriver.exe", "debugging_port": 9222}
+
+            def close_profile(self, profile_id):
+                self.closed.append(str(profile_id))
+
+        fake_module = types.SimpleNamespace(IXBrowserClient=FakeIXBrowserClient)
+        original_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "selenium" or name.startswith("selenium."):
+                raise ModuleNotFoundError("No module named 'selenium.webdriver.chrome.webdriver'")
+            return original_import(name, *args, **kwargs)
+
+        with patch.dict(sys.modules, {"ixbrowser_local_api": fake_module}), patch("builtins.__import__", side_effect=fake_import):
+            driver, client = IxBrowserLocalAdapter().create_driver("22315")
+
+        self.assertIsNone(driver)
+        self.assertIsNone(client)
+        self.assertEqual(FakeIXBrowserClient.closed, ["22315"])
+
     def test_profile_registry_refresh_resolves_group_counts(self):
         import sys
         import types
@@ -4524,13 +4902,23 @@ class ReachOpsCampaignTests(unittest.TestCase):
         class FakeIXBrowserClient:
             def get_group_list(self, page=1, limit=100):
                 if page == 1:
-                    return [{"id": "281726", "title": "Canada", "count": 0}]
+                    return []
                 return []
 
             def get_profile_list(self, page=1, limit=100, group_id=0, **_kwargs):
                 self.total = 0
-                if str(group_id) == "281726":
-                    return [{"profile_id": "ca-1", "group_id": "281726", "group_name": "Canada"}] if page == 1 else []
+                if int(group_id or 0) == 0:
+                    pages = {
+                        1: [
+                            {"profile_id": "ca-1", "group_id": "281726", "group_name": "Canada"},
+                            {"profile_id": "ca-2", "group_id": "281726", "group_name": "Canada"},
+                            {"profile_id": "br-1", "group_id": "286343", "group_name": "BR"},
+                        ],
+                        2: [],
+                        3: [],
+                        4: [],
+                    }
+                    return pages.get(page, [])
                 return []
 
         fake_module = types.SimpleNamespace(IXBrowserClient=FakeIXBrowserClient)
@@ -4540,8 +4928,137 @@ class ReachOpsCampaignTests(unittest.TestCase):
             registry = StandaloneProfileRegistry()
             snapshot = registry.refresh(max_pages=3, include_profiles=False)
 
-        self.assertEqual(snapshot["groups"][0]["count"], 1)
-        self.assertIn("1 个账号", group_display_name(snapshot["groups"][0]))
+        counts = {row["group_name"]: row["count"] for row in snapshot["groups"]}
+        self.assertEqual(counts, {"全部配置": 3, "BR": 1, "Canada": 2})
+        self.assertIn("[    2]", group_display_name(next(row for row in snapshot["groups"] if row["group_name"] == "Canada")))
+        self.assertEqual([row["profile_id"] for row in registry.select_profiles("Canada", limit=10)], ["ca-1", "ca-2"])
+
+    def test_ixbrowser_group_loader_pages_all_groups_until_total(self):
+        import sys
+        import types
+
+        class FakeIXBrowserClient:
+            def __init__(self):
+                self.total = 0
+
+            def get_group_list(self, page=1, limit=100):
+                self.total = 3
+                pages = {
+                    1: [{"id": "g1", "title": "BR"}],
+                    2: [],
+                    3: [{"id": "g2", "title": "Canada"}],
+                    4: [{"id": "g3", "title": "US"}],
+                }
+                return pages.get(page, [])
+
+        fake_module = types.SimpleNamespace(IXBrowserClient=FakeIXBrowserClient)
+        with patch.dict(sys.modules, {"ixbrowser_local_api": fake_module}):
+            from ReachOps.workbench.standalone_app import load_ixbrowser_group_rows
+
+            rows = load_ixbrowser_group_rows(max_pages=10, limit=1)
+
+        self.assertEqual([str(row["id"]) for row in rows], ["g1", "g2", "g3"])
+
+    def test_ixbrowser_group_loader_accepts_wrapped_api_response(self):
+        import sys
+        import types
+
+        class FakeIXBrowserClient:
+            def __init__(self):
+                self.total = 0
+
+            def get_group_list(self, page=1, limit=100):
+                pages = {
+                    1: {
+                        "data": {
+                            "list": [
+                                {"groupId": "281726", "groupName": "Canada", "profileCount": 2},
+                                {"groupId": "257999", "groupName": "United States", "profileCount": 3},
+                            ],
+                            "total": 3,
+                        }
+                    },
+                    2: {"data": {"list": [{"groupId": "286343", "groupName": "BR", "profileCount": 1}], "total": 3}},
+                }
+                return pages.get(page, {"data": {"list": [], "total": 3}})
+
+            def get_profile_list(self, page=1, limit=100, group_id=0, **_kwargs):
+                return {"data": {"list": [], "total": 0}}
+
+        fake_module = types.SimpleNamespace(IXBrowserClient=FakeIXBrowserClient)
+        with patch.dict(sys.modules, {"ixbrowser_local_api": fake_module}):
+            from ReachOps.workbench.standalone_app import load_ixbrowser_profile_snapshot
+
+            snapshot = load_ixbrowser_profile_snapshot(resolve_group_counts=False, include_profiles=False)
+
+        self.assertEqual(snapshot["group_count"], 3)
+        self.assertEqual([row["group_name"] for row in snapshot["groups"]], ["BR", "Canada", "United States"])
+        self.assertEqual({row["group_name"]: row["count"] for row in snapshot["groups"]}, {"Canada": 2, "United States": 3, "BR": 1})
+
+    def test_ixbrowser_profile_loader_accepts_wrapped_api_response(self):
+        import sys
+        import types
+
+        class FakeIXBrowserClient:
+            def get_profile_list(self, page=1, limit=100, group_id=0, **_kwargs):
+                if page == 1:
+                    return {
+                        "data": {
+                            "records": [
+                                {"profileId": "ca-1", "profileName": "CA 1", "groupId": "281726", "groupName": "Canada"},
+                                {"profileId": "ca-2", "profileName": "CA 2", "groupId": "281726", "groupName": "Canada"},
+                            ],
+                            "totalCount": 2,
+                        }
+                    }
+                return {"data": {"records": [], "totalCount": 2}}
+
+        fake_module = types.SimpleNamespace(IXBrowserClient=FakeIXBrowserClient)
+        with patch.dict(sys.modules, {"ixbrowser_local_api": fake_module}):
+            from ReachOps.workbench.standalone_app import load_ixbrowser_profile_rows
+
+            rows = load_ixbrowser_profile_rows(max_pages=3, group_id=281726)
+
+        self.assertEqual([row["profileId"] for row in rows], ["ca-1", "ca-2"])
+
+    def test_profile_registry_refresh_builds_groups_from_full_profile_list(self):
+        import sys
+        import types
+
+        class FakeIXBrowserClient:
+            def __init__(self):
+                self.total = 0
+
+            def get_group_list(self, page=1, limit=100):
+                self.total = 1
+                if page == 1:
+                    return [{"id": "stale", "title": "Stale Group", "count": 999}]
+                return []
+
+            def get_profile_list(self, page=1, limit=100, group_id=0, **_kwargs):
+                self.total = 3
+                if int(group_id or 0) == 0 and page == 1:
+                    return [
+                        {"profile_id": "ca-1", "group_id": "281726", "group_name": "Canada"},
+                        {"profile_id": "ca-2", "group_id": "281726", "group_name": "Canada"},
+                        {"profile_id": "us-1", "group_id": "257999", "group_name": "United States"},
+                    ]
+                return []
+
+        fake_module = types.SimpleNamespace(IXBrowserClient=FakeIXBrowserClient)
+        with patch.dict(sys.modules, {"ixbrowser_local_api": fake_module}):
+            from ReachOps.workbench.standalone_app import StandaloneProfileRegistry
+
+            registry = StandaloneProfileRegistry()
+            snapshot = registry.refresh(max_pages=5, include_profiles=False)
+
+        counts = {row["group_name"]: row["count"] for row in snapshot["groups"]}
+        self.assertEqual(counts, {"全部配置": 3, "Canada": 2, "United States": 1})
+        self.assertNotIn("Stale Group", counts)
+        labels = {row["group_name"]: group_display_name(row) for row in snapshot["groups"]}
+        self.assertIn("[    2]", labels["Canada"])
+        self.assertIn("[    3]", labels["全部配置"])
+        self.assertNotIn("待读取账号数", labels["Canada"])
 
     def test_operator_automation_paths_log_instead_of_blocking_popups(self):
         console_source = Path("ReachOps/workbench/console.py").read_text(encoding="utf-8")
@@ -4700,6 +5217,31 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
         self.assertEqual(diagnostics["error_code"], "LOGIN_REQUIRED")
         self.assertTrue(diagnostics["login_prompt_detected"])
+
+    def test_comment_collector_detects_account_setup_modal_as_login_required(self):
+        driver = FakeDriver()
+        driver.current_url = "https://www.tiktok.com/"
+        driver.title = "TikTok - Make Your Day"
+        driver.script_results = [
+            {
+                "url": driver.current_url,
+                "title": "tiktok - make your day",
+                "commentNodes": 0,
+                "loginPrompt": False,
+                "loginPage": False,
+                "accountSetupGate": True,
+                "loginDialog": False,
+                "captcha": False,
+                "proxy": False,
+                "emptyHint": False,
+                "containers": 0,
+            }
+        ]
+
+        diagnostics = TikTokCommentCollector()._inspect_comment_state(driver, {"max_visible_nodes": 0})
+
+        self.assertEqual(diagnostics["error_code"], "LOGIN_REQUIRED")
+        self.assertTrue(diagnostics["account_setup_gate_detected"])
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ OPERATOR_VIEW_NAMES = ["获客任务", "线索分析", "触达执行", "账号�
 def safe_tk_option(value: str) -> str:
     text = str(value or "").replace("\ufffd", "?")
     text = "".join(ch if (ch == "\t" or ord(ch) >= 32) else " " for ch in text)
-    return " ".join(text.split())
+    return text.strip()
 
 
 def is_stable_combobox_option(value: str) -> bool:
@@ -66,8 +66,13 @@ def is_stable_combobox_option(value: str) -> bool:
 
 def group_name_from_display(value: str) -> str:
     text = str(value or "").strip()
+    if text.startswith("[") and "] " in text:
+        text = text.split("] ", 1)[1].strip()
     if " 个账号 | " in text or text.startswith("待读取账号数 | "):
         text = text.split(" | ", 1)[1].strip()
+    if text.endswith(")") and "(ID:" in text:
+        text = text.rsplit("(ID:", 1)[0].strip()
+        return text
     if text.endswith(")") and "(" in text:
         text = text.rsplit("(", 1)[0].strip()
     if " | ID " in text:
@@ -412,6 +417,7 @@ class GrowthOpsConsole(ttk.Frame):
         self.campaign_plan_text = None
         self.funnel_result_vars = {}
         self.start_group_combobox = None
+        self.start_group_listbox = None
         self.start_refresh_groups_button = None
         self._trees = {}
         self._nav_buttons = {}
@@ -474,13 +480,11 @@ class GrowthOpsConsole(ttk.Frame):
         self.stack.grid(row=0, column=0, sticky="nsew")
         self.stack.columnconfigure(0, weight=1)
         self.stack.rowconfigure(0, weight=1)
-        self.stack.grid_propagate(False)
         self.views = {}
         hidden_view_names = ["数据源", "定时扫描", "采集批次", "采集任务", "执行计划", "执行记录", "设置/风控"]
         for name in view_names + hidden_view_names:
             frame = ttk.Frame(self.stack, style="Content.TFrame")
             frame.grid(row=0, column=0, sticky="nsew")
-            frame.grid_propagate(False)
             self.views[name] = frame
         self._build_nested_tab_view(
             "线索分析",
@@ -736,6 +740,22 @@ class GrowthOpsConsole(ttk.Frame):
         self.start_group_combobox.bind("<<ComboboxSelected>>", self._on_start_group_selected)
         self.start_refresh_groups_button = ttk.Button(group_row, text="刷新", command=self._refresh_profile_groups)
         self.start_refresh_groups_button.grid(row=0, column=1, sticky="e", padx=(6, 0))
+        ttk.Label(task_box, text="账号分组列表").grid(row=1, column=4, sticky="nw", pady=(6, 0))
+        group_list_frame = ttk.Frame(task_box, style="Panel.TFrame")
+        group_list_frame.grid(row=1, column=5, sticky="ew", padx=(6, 0), pady=(6, 0))
+        group_list_frame.columnconfigure(0, weight=1)
+        self.start_group_listbox = tk.Listbox(
+            group_list_frame,
+            height=4,
+            exportselection=False,
+            activestyle="dotbox",
+            font=("Microsoft YaHei UI", 9),
+        )
+        self.start_group_listbox.grid(row=0, column=0, sticky="ew")
+        self.start_group_listbox.bind("<<ListboxSelect>>", self._on_start_group_list_selected)
+        group_scroll = ttk.Scrollbar(group_list_frame, orient=tk.VERTICAL, command=self.start_group_listbox.yview)
+        group_scroll.grid(row=0, column=1, sticky="ns")
+        self.start_group_listbox.configure(yscrollcommand=group_scroll.set)
         ttk.Label(
             task_box,
             text="系统自动识别产品链接、关键词、达人主页、视频链接、话题或直播间。",
@@ -746,14 +766,14 @@ class GrowthOpsConsole(ttk.Frame):
             textvariable=self.scan_profile_group_detail_var,
             foreground=UI_COLORS["muted"],
             wraplength=760,
-        ).grid(row=1, column=3, columnspan=3, sticky="ew", pady=(6, 0))
+        ).grid(row=2, column=0, columnspan=6, sticky="ew", pady=(6, 0))
 
         task_actions = ttk.Frame(task_box, style="Panel.TFrame")
-        task_actions.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(6, 0))
+        task_actions.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(6, 0))
         ttk.Button(task_actions, text="开始获客", command=self._start_collection, style="Primary.TButton").pack(side=tk.LEFT)
         ttk.Button(task_actions, text="导出报告", command=self._export_report).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Label(task_box, textvariable=self.operator_status_var, foreground=UI_COLORS["muted"]).grid(
-            row=3,
+            row=4,
             column=0,
             columnspan=6,
             sticky="w",
@@ -921,10 +941,22 @@ class GrowthOpsConsole(ttk.Frame):
             values = ["请刷新账号分组"]
         if self.start_group_combobox:
             self.start_group_combobox.configure(values=tuple(values))
+        if self.start_group_listbox:
+            self.start_group_listbox.delete(0, tk.END)
+            for item in values:
+                self.start_group_listbox.insert(tk.END, item)
         selected_value = safe_tk_option(selected)
         selected_value = selected_value if selected_value in values else values[0]
         self.scan_profile_group_display_var.set(selected_value)
-        self.scan_profile_group_detail_var.set(f"当前账号分组：{selected_value}")
+        if self.start_group_listbox:
+            try:
+                selected_index = values.index(selected_value)
+                self.start_group_listbox.selection_clear(0, tk.END)
+                self.start_group_listbox.selection_set(selected_index)
+                self.start_group_listbox.see(selected_index)
+            except Exception:
+                pass
+        self.scan_profile_group_detail_var.set(f"已读取账号分组：{len(values)} 个；当前账号分组：{selected_value}")
         group = "" if selected_value in {"请刷新账号分组", "正在刷新...", "正在读取分组..."} else group_name_from_display(selected_value)
         self.scan_profile_group_var.set(group)
         self.action_execution_group_var.set(group)
@@ -936,6 +968,16 @@ class GrowthOpsConsole(ttk.Frame):
         self.scan_profile_group_detail_var.set(f"当前账号分组：{self.scan_profile_group_display_var.get() or '未选择'}")
         self.scan_profile_group_var.set(group)
         self.action_execution_group_var.set(group)
+
+    def _on_start_group_list_selected(self, _event=None):
+        if not self.start_group_listbox:
+            return
+        selection = self.start_group_listbox.curselection()
+        if not selection:
+            return
+        value = self.start_group_listbox.get(selection[0])
+        self.scan_profile_group_display_var.set(value)
+        self._on_start_group_selected()
 
     def _selected_profile_group(self) -> str:
         group = group_name_from_display(self.scan_profile_group_display_var.get())
@@ -1210,6 +1252,11 @@ class GrowthOpsConsole(ttk.Frame):
         operation_leads = numbers.get("operation_leads", 0)
         action_queue = numbers.get("action_queue", 0)
         errors = numbers.get("error_diagnostics", 0)
+        execution_success = self._safe_int(funnel.get("execution_success"))
+        error_counts = funnel.get("error_counts") or {}
+        top_error_code = "-"
+        if isinstance(error_counts, dict) and error_counts:
+            top_error_code = str(sorted(error_counts.items(), key=lambda item: int(item[1] or 0), reverse=True)[0][0] or "-")
         lines = [
             "REACHOPS 本轮获客",
             "================",
@@ -1227,8 +1274,10 @@ class GrowthOpsConsole(ttk.Frame):
             f"客户线索 {operation_leads:>8}",
             f"待触达   {action_queue:>8}",
             f"预检通过 {self._safe_int(funnel.get('preflight_ok')):>8}",
+            f"执行成功 {execution_success:>8}",
             f"失败异常 {errors:>8}",
             f"换号次数 {self._safe_int(funnel.get('account_switches')):>8}",
+            f"首要错误 {display_error_code(top_error_code)[:14]:>8}",
             "",
             "转化率",
             f"来源到内容 {self._rate(contents, data_sources):>7}",

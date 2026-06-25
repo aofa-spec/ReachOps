@@ -37,6 +37,11 @@ class ExecutionReport:
                 missing_evidence_count += 1
         report_summary.update(
             {
+                "total": len(executions),
+                "success": int(report_summary.get("success") or public_status_counts.get("success", 0) or 0),
+                "failed": int(report_summary.get("failed") or public_status_counts.get("failed", 0) or 0),
+                "skipped": int(report_summary.get("skipped") or public_status_counts.get("skipped", 0) or 0),
+                "account_switched": int(report_summary.get("account_switched") or public_status_counts.get("account_switched", 0) or 0),
                 "public_status_counts": public_status_counts,
                 "error_counts": error_counts,
                 "missing_evidence_count": missing_evidence_count,

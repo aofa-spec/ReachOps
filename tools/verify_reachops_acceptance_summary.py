@@ -67,6 +67,7 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
         effective_pending_external = int(delivery_audit.get("effective_pending_external_validation") or 0)
     else:
         effective_pending_external = max(0, pending_external - resolved_external)
+    final_external_resolved = status == STATUS_PASSED or effective_pending_external == 0
     if effective_pending_external > 0:
         pending.append("external_platform_validation")
 
@@ -98,6 +99,15 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
         if not bool(live_validation.get("no_submit", True)):
             failures.append("live_validation_submitted_action")
 
+    if final_external_resolved:
+        readiness_status = str(live_readiness.get("status") or "")
+        if readiness_status not in {"ready", "completed"} or not bool(live_readiness.get("ready")):
+            failures.append("live_readiness_not_ready")
+        if not bool(live_readiness.get("no_submit", True)):
+            failures.append("live_readiness_submitted_action")
+        if str(live_preflight.get("status") or "") != "completed":
+            failures.append("live_preflight_not_completed")
+
     if str(live_preflight.get("status") or "") == "completed":
         missing_preflight = (
             live_preflight.get("missing_preflight_action_types")
@@ -125,6 +135,12 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
     if (
         str(live_submit.get("status") or "") == "completed"
         and bool(live_submit.get("platform_validation"))
+        and str(live_submit.get("executor_mode") or "") != "platform_selenium"
+    ):
+        failures.append("live_submit_executor_not_platform_selenium")
+    if (
+        str(live_submit.get("status") or "") == "completed"
+        and bool(live_submit.get("platform_validation"))
         and not bool(live_submit.get("activation_status_loaded"))
     ):
         failures.append("live_submit_activation_status_missing")
@@ -137,6 +153,23 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
         else []
     )
     if str(live_submit.get("status") or "") == "completed" and bool(live_submit.get("platform_validation")):
+        live_submit_summary = live_submit.get("summary") if isinstance(live_submit.get("summary"), dict) else {}
+        live_submit_required_types = {"comment_reply", "follow_review", "dm_review"}
+        live_submit_result_types = {
+            str(row.get("action_type") or "")
+            for row in (live_submit_summary.get("results") or [])
+            if isinstance(row, dict) and str(row.get("status") or "") == "success"
+        }
+        if (
+            not bool(live_submit.get("passed"))
+            or not bool(live_submit.get("live_submit"))
+            or int(live_submit_summary.get("selected_actions") or 0) < len(live_submit_required_types)
+            or int(live_submit_summary.get("success") or 0) < len(live_submit_required_types)
+            or int(live_submit_summary.get("failed") or 0) > 0
+            or int(live_submit_summary.get("skipped") or 0) > 0
+            or sorted(live_submit_required_types - live_submit_result_types)
+        ):
+            failures.append("live_submit_execution_summary_invalid")
         required_action_types = {"comment_reply", "follow_review", "dm_review"}
         present_action_types = {key for key, value in evidence_by_action_type.items() if value}
         missing_required = sorted(required_action_types - present_action_types)
@@ -265,6 +298,11 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
             "platform_validation": bool(live_submit.get("platform_validation")),
             "activation_status_loaded": bool(live_submit.get("activation_status_loaded")),
             "activation_status_source": str(live_submit.get("activation_status_source") or ""),
+            "passed": bool(live_submit.get("passed")),
+            "selected_actions": int(((live_submit.get("summary") or {}) if isinstance(live_submit.get("summary"), dict) else {}).get("selected_actions") or 0),
+            "success": int(((live_submit.get("summary") or {}) if isinstance(live_submit.get("summary"), dict) else {}).get("success") or 0),
+            "failed": int(((live_submit.get("summary") or {}) if isinstance(live_submit.get("summary"), dict) else {}).get("failed") or 0),
+            "skipped": int(((live_submit.get("summary") or {}) if isinstance(live_submit.get("summary"), dict) else {}).get("skipped") or 0),
             "missing_evidence_action_types": list(missing_evidence_action_types),
             "missing_local_evidence_file_action_types": list(missing_local_evidence_file_action_types),
             "evidence_file_detail_action_types": sorted(evidence_file_details.keys()),

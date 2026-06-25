@@ -20,6 +20,8 @@ Environment:
 Synced:
   ReachOps/
   ReachOpsApp.py
+  HANDOFF.md
+  README.md
   tests/test_reachops_campaign.py
   selected ReachOps helper scripts under tools/
 
@@ -64,6 +66,7 @@ require_file "GrowthIntelligenceApp.py"
 require_file "tests/test_reachops_campaign.py"
 require_file "requirements.txt"
 require_file "README.md"
+require_file "HANDOFF.md"
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/reachops-sync.XXXXXX")"
 cleanup() {
@@ -96,6 +99,7 @@ cp "$ROOT_DIR/GrowthIntelligenceApp.py" "$STAGE_DIR/GrowthIntelligenceApp.py"
 cp "$ROOT_DIR/tests/test_reachops_campaign.py" "$STAGE_DIR/tests/test_reachops_campaign.py"
 cp "$ROOT_DIR/requirements.txt" "$STAGE_DIR/requirements.txt"
 cp "$ROOT_DIR/README.md" "$STAGE_DIR/README.md"
+cp "$ROOT_DIR/HANDOFF.md" "$STAGE_DIR/HANDOFF.md"
 if [[ -f "$ROOT_DIR/ico/startup_icon.ico" ]]; then
   cp "$ROOT_DIR/ico/startup_icon.ico" "$STAGE_DIR/ico/startup_icon.ico"
 fi

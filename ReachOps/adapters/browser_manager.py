@@ -43,6 +43,8 @@ class IxBrowserLocalAdapter:
         self.last_error = ""
 
     def create_driver(self, profile_id: str) -> tuple[Any | None, Any | None]:
+        client = None
+        profile_key = None
         try:
             self.last_error = ""
             from ixbrowser_local_api import IXBrowserClient
@@ -77,13 +79,16 @@ class IxBrowserLocalAdapter:
             debug_port = self._resolve_debug_port(client, result)
             if not debug_port:
                 self.last_error = "ixBrowser remote debug port is not reachable"
-                return None, client
+                self.close_profile(client, profile_id)
+                return None, None
             options.debugger_address = f"127.0.0.1:{debug_port}"
             driver = webdriver.Chrome(service=Service(result["webdriver"]), options=options)
             client.profile_id = profile_id
             return driver, client
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
+            if client is not None and profile_key is not None:
+                self.close_profile(client, profile_id)
             return None, None
 
     def close_profile(self, client: Any, profile_id: str):

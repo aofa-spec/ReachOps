@@ -241,6 +241,22 @@ class GrowthWorkflowService:
         candidate_users = self.storage.list_candidates_with_content(batch_id=batch_filter)
         operation_leads = self.storage.list_operation_leads(limit=1000, batch_id=batch_filter)
         action_queue = self.storage.list_action_queue(limit=1000, batch_id=batch_filter)
+        outreach_executions = self.storage.list_outreach_executions(limit=1000, batch_id=batch_filter)
+        execution_status_counts = self.storage.outreach_execution_status_counts(batch_filter)
+        execution_error_counts: dict[str, int] = {}
+        for row in outreach_executions:
+            code = str(row.get("error_code") or "").strip()
+            if code:
+                execution_error_counts[code] = execution_error_counts.get(code, 0) + 1
+        execution_summary = {
+            "total": len(outreach_executions),
+            "success": int(execution_status_counts.get("success", 0) or 0),
+            "failed": int(execution_status_counts.get("failed", 0) or 0),
+            "skipped": int(execution_status_counts.get("skipped", 0) or 0),
+            "account_switched": int(execution_status_counts.get("account_switched", 0) or 0),
+            "status_counts": execution_status_counts,
+            "error_counts": execution_error_counts,
+        }
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
         campaign_slug = "".join(ch if ch.isalnum() else "_" for ch in campaign_id)[-12:] or "campaign"
         file_key = f"{campaign_slug}_{stamp}"
@@ -248,6 +264,7 @@ class GrowthWorkflowService:
         sources_csv_path = os.path.join(report_dir, f"reachops_sources_{file_key}.csv")
         customers_csv_path = os.path.join(report_dir, f"reachops_customers_{file_key}.csv")
         actions_csv_path = os.path.join(report_dir, f"reachops_actions_{file_key}.csv")
+        executions_csv_path = os.path.join(report_dir, f"reachops_executions_{file_key}.csv")
         with open(json_path, "w", encoding="utf-8") as fh:
             json.dump(
                 {
@@ -259,6 +276,8 @@ class GrowthWorkflowService:
                     "candidate_users": candidate_users,
                     "operation_leads": operation_leads,
                     "action_queue": action_queue,
+                    "outreach_executions": outreach_executions,
+                    "execution_summary": execution_summary,
                 },
                 fh,
                 ensure_ascii=False,
@@ -308,6 +327,23 @@ class GrowthWorkflowService:
             writer.writeheader()
             for row in action_queue:
                 writer.writerow({key: row.get(key, "") for key in fieldnames})
+        with open(executions_csv_path, "w", encoding="utf-8", newline="") as fh:
+            fieldnames = [
+                "id",
+                "action_id",
+                "action_type",
+                "target_username",
+                "status",
+                "profile_id",
+                "evidence_path",
+                "error_code",
+                "error_message",
+                "created_at",
+            ]
+            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in outreach_executions:
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
         self.storage.log_event(
             "campaign_artifacts_exported",
             campaign_id,
@@ -316,8 +352,10 @@ class GrowthWorkflowService:
                 "sources_csv_path": sources_csv_path,
                 "customers_csv_path": customers_csv_path,
                 "actions_csv_path": actions_csv_path,
+                "executions_csv_path": executions_csv_path,
                 "candidate_count": len(candidate_users),
                 "action_count": len(action_queue),
+                "execution_count": len(outreach_executions),
             },
         )
         return {
@@ -325,6 +363,7 @@ class GrowthWorkflowService:
             "sources_csv_path": sources_csv_path,
             "customers_csv_path": customers_csv_path,
             "actions_csv_path": actions_csv_path,
+            "executions_csv_path": executions_csv_path,
             "csv_path": customers_csv_path,
         }
 

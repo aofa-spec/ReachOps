@@ -11,6 +11,7 @@ Read these files in order:
 ```text
 HANDOFF.md
 ReachOps/docs/REACHOPS_CLIENT_DELIVERY_PLAN.md
+ReachOps/docs/REACHOPS_OPERATOR_ACCEPTANCE_MATRIX.md
 ReachOps/docs/REACHOPS_DELIVERY_EXECUTION_PLAN.md
 ReachOps/docs/REACHOPS_WINDOWS_LIVE_ACCEPTANCE_RUNBOOK.md
 HERMES_DEVELOPMENT_GUIDE.md
@@ -65,6 +66,8 @@ The GUI must not show confusing technical language to normal operators, such as:
 - `checkpoint`
 
 The GUI may contain technical IDs inside logs or diagnostics only when they are needed for debugging.
+
+Every visible operator control must map to backend execution, runtime logs, and exported evidence. Use `ReachOps/docs/REACHOPS_OPERATOR_ACCEPTANCE_MATRIX.md` as the acceptance contract. A control without real execution and evidence is a fake UI control and must not be accepted.
 
 ## 4. Tkinter / No-GUI Environment Policy
 

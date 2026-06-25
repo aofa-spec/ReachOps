@@ -1258,6 +1258,11 @@ class GrowthTaskRouter:
                 const text = String(document.body ? document.body.innerText : '').toLowerCase();
                 const title = String(document.title || '').toLowerCase();
                 const url = String(location.href || '').toLowerCase();
+                const pumbaaCtx = String(document.querySelector('meta[name="pumbaa-ctx"]')?.getAttribute('content') || '').toLowerCase();
+                const loginStaticAsset = Array.from(document.querySelectorAll('script[src], link[href]')).some((node) => {
+                  const value = String(node.getAttribute('src') || node.getAttribute('href') || '').toLowerCase();
+                  return /website-login|tiktok_web_login_static/.test(value);
+                });
                 const videoLinks = document.querySelectorAll("a[href*='/video/']").length;
                 const profileLinks = document.querySelectorAll("a[href*='/@']").length;
                 const visible = el => {
@@ -1294,10 +1299,13 @@ class GrowthTaskRouter:
                 const combined = [text, title, labels.join(' '), dialogTexts.join(' ')].join(' ');
                 const exactLoginButton = labels.some(v => /^(log in|login|sign in|sign up|entrar|inscrever-se|criar conta|iniciar sesión|registrarse)$/.test(v));
                 const forcedLoginText = /(log in to|login to|sign up for|sign up \\| tiktok|log in to follow creators|log in to like videos|log in to comment|log in to view comments|登录后即可|登入後即可|entrar para|faça login|inicia sesión)/.test(combined);
+                const accountSetupGate =
+                  (/login=1/.test(pumbaaCtx) || loginStaticAsset) &&
+                  /(got it|how face or voice data is used|important things to know|location services|allow cookies from tiktok|privacy policy|terms of service)/.test(combined);
                 const loginPage = /\\/login|\\/signup|login\\?/.test(url) || /(^|\\|\\s*)(sign up|log in|login)(\\s*\\||$)/.test(title);
                 const captcha = /captcha|verify to continue|verification|security check|验证码|验证/.test(text);
                 const proxy = /proxy|tunnel connection failed|err_tunnel|err_proxy|dns_probe|site can't be reached|无法访问/.test(text);
-                return {url, text, title, videoLinks, profileLinks, loginDialog, exactLoginButton, forcedLoginText, loginPage, captcha, proxy};
+                return {url, text, title, videoLinks, profileLinks, loginDialog, exactLoginButton, forcedLoginText, accountSetupGate, loginPage, captcha, proxy};
                 """
             ) or {}
             text = str(state.get("text") or "").lower()
@@ -1309,7 +1317,7 @@ class GrowthTaskRouter:
         if bool(state.get("captcha")):
             return "CAPTCHA_DETECTED"
         has_page_entities = int(state.get("videoLinks") or 0) > 0 or int(state.get("profileLinks") or 0) > 0
-        if bool(state.get("loginPage")) or bool(state.get("loginDialog")) or bool(state.get("forcedLoginText")):
+        if bool(state.get("loginPage")) or bool(state.get("loginDialog")) or bool(state.get("forcedLoginText")) or bool(state.get("accountSetupGate")):
             return "LOGIN_REQUIRED"
         if bool(state.get("exactLoginButton")) and not has_page_entities:
             return "LOGIN_REQUIRED"

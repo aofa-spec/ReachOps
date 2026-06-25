@@ -227,9 +227,17 @@ class TikTokCommentCollector(CollectorAdapter):
                 const text = (document.body && document.body.innerText || '').toLowerCase();
                 const title = (document.title || '').toLowerCase();
                 const url = location.href || '';
+                const pumbaaCtx = String(document.querySelector('meta[name="pumbaa-ctx"]')?.getAttribute('content') || '').toLowerCase();
+                const loginStaticAsset = Array.from(document.querySelectorAll('script[src], link[href]')).some((node) => {
+                  const value = String(node.getAttribute('src') || node.getAttribute('href') || '').toLowerCase();
+                  return /website-login|tiktok_web_login_static/.test(value);
+                });
                 const commentNodes = document.querySelectorAll("[data-e2e*='comment'], [class*='Comment'], div[class*='comment'], [data-e2e*='reply']").length;
                 const loginPrompt = /(log in to|sign up for|sign up \\| tiktok|log in to comment|log in to view comments|登录后|登入後|entrar para|iniciar sesión para)/.test(text + ' ' + title);
                 const loginPage = /(^|\\|\\s*)sign up(\\s*\\||$)|login|log in/.test(title) || /\\/login|\\/signup/.test(url);
+                const accountSetupGate =
+                  (/login=1/.test(pumbaaCtx) || loginStaticAsset) &&
+                  /(got it|how face or voice data is used|important things to know|location services|allow cookies from tiktok|privacy policy|terms of service)/.test(text + ' ' + title);
                 const loginDialog = Array.from(document.querySelectorAll('[role="dialog"], [data-e2e*="modal"], div')).some((node) => {
                   try {
                     const value = String(node.innerText || '').toLowerCase();
@@ -248,7 +256,7 @@ class TikTokCommentCollector(CollectorAdapter):
                       (nodeText.includes('comment') || nodeText.includes('coment') || node.querySelector("[data-e2e*='comment']"));
                   } catch (e) { return false; }
                 }).length;
-                return {url, title, commentNodes, loginPrompt, loginPage, loginDialog, captcha, proxy, emptyHint, containers};
+                return {url, title, commentNodes, loginPrompt, loginPage, accountSetupGate, loginDialog, captcha, proxy, emptyHint, containers};
                 """
             ) or {}
             diagnostics.update(
@@ -257,7 +265,8 @@ class TikTokCommentCollector(CollectorAdapter):
                     "page_title": str(state.get("title") or getattr(driver, "title", "") or "")[:160],
                     "visible_node_count": int(state.get("commentNodes") or 0),
                     "comment_container_count": int(state.get("containers") or 0),
-                    "login_prompt_detected": bool(state.get("loginPrompt") or state.get("loginPage")),
+                    "login_prompt_detected": bool(state.get("loginPrompt") or state.get("loginPage") or state.get("accountSetupGate")),
+                    "account_setup_gate_detected": bool(state.get("accountSetupGate")),
                     "login_dialog_detected": bool(state.get("loginDialog")),
                     "captcha_detected": bool(state.get("captcha")),
                     "proxy_failure_detected": bool(state.get("proxy")),

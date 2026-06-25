@@ -72,19 +72,86 @@ def parse_keyword_list(value: str) -> list[str]:
 
 def normalize_ixbrowser_profile(row: dict) -> dict:
     return {
-        "profile_id": str(row.get("profile_id") or row.get("id") or ""),
-        "name": row.get("name") or row.get("profile_name") or row.get("title") or "",
-        "group_id": str(row.get("group_id") or ""),
-        "group_name": str(row.get("group_name") or ""),
+        "profile_id": str(row.get("profile_id") or row.get("profileId") or row.get("browser_id") or row.get("id") or ""),
+        "name": row.get("name") or row.get("profile_name") or row.get("profileName") or row.get("title") or "",
+        "group_id": str(row.get("group_id") or row.get("groupId") or row.get("group") or ""),
+        "group_name": str(row.get("group_name") or row.get("groupName") or row.get("group_title") or row.get("groupTitle") or ""),
     }
 
 
 def normalize_ixbrowser_group(row: dict) -> dict:
+    count_keys = ["count", "profile_count", "profileCount", "profile_num", "profileNum", "profileNumber", "browser_count", "browserCount"]
+    count_value = None
+    for key in count_keys:
+        if key in row and row.get(key) not in {None, ""}:
+            count_value = row.get(key)
+            break
+    try:
+        count = int(count_value) if count_value is not None else 0
+    except Exception:
+        count = 0
     return {
-        "group_id": str(row.get("group_id") or row.get("id") or ""),
-        "group_name": str(row.get("group_name") or row.get("title") or row.get("name") or row.get("id") or "未分组"),
-        "count": int(row.get("count") or row.get("profile_count") or 0),
+        "group_id": str(row.get("group_id") or row.get("groupId") or row.get("id") or ""),
+        "group_name": str(
+            row.get("group_name")
+            or row.get("groupName")
+            or row.get("group_title")
+            or row.get("groupTitle")
+            or row.get("title")
+            or row.get("name")
+            or row.get("id")
+            or "未分组"
+        ),
+        "count": count,
+        "count_known": count_value is not None,
     }
+
+
+def extract_ixbrowser_rows(response) -> tuple[list[dict], int]:
+    """Normalize ixBrowser list responses that may be a bare list or a wrapped dict."""
+
+    total = 0
+    rows = response
+    if isinstance(response, dict):
+        for key in ("total", "total_count", "totalCount", "count"):
+            try:
+                value = response.get(key)
+                if value not in {None, ""}:
+                    total = int(value)
+                    break
+            except Exception:
+                total = 0
+        data = response.get("data")
+        if isinstance(data, dict):
+            for key in ("list", "rows", "items", "records", "data"):
+                candidate = data.get(key)
+                if isinstance(candidate, list):
+                    rows = candidate
+                    break
+            else:
+                rows = []
+            if not total:
+                for key in ("total", "total_count", "totalCount", "count"):
+                    try:
+                        value = data.get(key)
+                        if value not in {None, ""}:
+                            total = int(value)
+                            break
+                    except Exception:
+                        total = 0
+        elif isinstance(data, list):
+            rows = data
+        else:
+            for key in ("list", "rows", "items", "records"):
+                candidate = response.get(key)
+                if isinstance(candidate, list):
+                    rows = candidate
+                    break
+            else:
+                rows = []
+    if not isinstance(rows, list):
+        rows = []
+    return [row for row in rows if isinstance(row, dict)], total
 
 
 def summarize_profile_groups(profiles: list[dict]) -> list[dict]:
@@ -93,17 +160,32 @@ def summarize_profile_groups(profiles: list[dict]) -> list[dict]:
         group_name = str(profile.get("group_name") or profile.get("group_id") or "未分组")
         group_id = str(profile.get("group_id") or group_name)
         key = f"{group_id}:{group_name}"
-        item = grouped.setdefault(key, {"group_id": group_id, "group_name": group_name, "count": 0})
+        item = grouped.setdefault(key, {"group_id": group_id, "group_name": group_name, "count": 0, "count_known": True})
         item["count"] += 1
-    return sorted(grouped.values(), key=lambda row: (str(row.get("group_name") or ""), str(row.get("group_id") or "")))
+    groups = sorted(grouped.values(), key=lambda row: (str(row.get("group_name") or ""), str(row.get("group_id") or "")))
+    if profiles:
+        groups.insert(
+            0,
+            {
+                "group_id": "",
+                "group_name": "全部配置",
+                "count": len(profiles),
+                "count_known": True,
+                "all_profiles": True,
+            },
+        )
+    return groups
 
 
 def group_display_name(group: dict) -> str:
     name = group_display_label(group)
     group_id = str(group.get("group_id") or "").strip()
     count = int(group.get("count") or 0)
-    count_label = f"{count} 个账号" if count > 0 else "待读取账号数"
-    return f"{count_label} | {name} | ID {group_id or '-'}"
+    if group.get("count_known") or count > 0:
+        count_label = "9999+" if count > 9999 else str(count).rjust(5)
+    else:
+        count_label = "    ?"
+    return f"[{count_label}] {name} (ID: {group_id or '-'})"
 
 
 def group_display_label(group: dict) -> str:
@@ -132,7 +214,7 @@ def sanitize_tk_text(value: str) -> str:
     text = str(value or "")
     text = text.replace("\ufffd", "?")
     text = "".join(ch if (ch == "\t" or ord(ch) >= 32) else " " for ch in text)
-    return " ".join(text.split())
+    return text.strip()
 
 
 def stable_combobox_values(values: list[str]) -> list[str]:
@@ -143,8 +225,12 @@ def stable_combobox_values(values: list[str]) -> list[str]:
 
 def group_name_from_display(value: str) -> str:
     text = str(value or "").strip()
+    if text.startswith("[") and "] " in text:
+        text = text.split("] ", 1)[1].strip()
     if " 个账号 | " in text or text.startswith("待读取账号数 | "):
         text = text.split(" | ", 1)[1].strip()
+    if text.endswith(")") and "(ID:" in text:
+        return text.rsplit("(ID:", 1)[0].strip()
     if text.endswith(")") and "(" in text:
         return text.rsplit("(", 1)[0].strip()
     if " | ID " in text:
@@ -156,14 +242,19 @@ def load_ixbrowser_profile_rows(max_pages: int = 50, group_id: str | int = 0, li
     from ixbrowser_local_api import IXBrowserClient
 
     client = IXBrowserClient()
+    requested_group_id = str(group_id or "").strip()
     rows = []
     seen = set()
     consecutive_empty = 0
     total = 0
     for page in range(1, max(1, int(max_pages or 50)) + 1):
-        batch = client.get_profile_list(page=page, limit=max(1, int(limit or 100)), group_id=int(group_id or 0)) or []
+        kwargs = {"page": page, "limit": max(1, int(limit or 100))}
+        if requested_group_id and requested_group_id != "0":
+            kwargs["group_id"] = int(requested_group_id)
+        response = client.get_profile_list(**kwargs)
+        batch, response_total = extract_ixbrowser_rows(response)
         try:
-            total = int(getattr(client, "total", 0) or total)
+            total = int(response_total or getattr(client, "total", 0) or total)
         except Exception:
             total = total
         if not batch:
@@ -173,7 +264,7 @@ def load_ixbrowser_profile_rows(max_pages: int = 50, group_id: str | int = 0, li
             continue
         consecutive_empty = 0
         for row in batch:
-            profile_id = str(row.get("profile_id") or row.get("id") or "")
+            profile_id = str(row.get("profile_id") or row.get("profileId") or row.get("browser_id") or row.get("id") or "")
             if profile_id and profile_id in seen:
                 continue
             if profile_id:
@@ -184,18 +275,24 @@ def load_ixbrowser_profile_rows(max_pages: int = 50, group_id: str | int = 0, li
     return rows
 
 
-def load_ixbrowser_group_rows(max_pages: int = 20) -> list[dict]:
+def load_ixbrowser_group_rows(max_pages: int = 100, limit: int = 100) -> list[dict]:
     from ixbrowser_local_api import IXBrowserClient
 
     client = IXBrowserClient()
     rows = []
     seen = set()
     consecutive_empty = 0
-    for page in range(1, max(1, int(max_pages or 20)) + 1):
-        batch = client.get_group_list(page=page, limit=100) or []
+    total = 0
+    for page in range(1, max(1, int(max_pages or 100)) + 1):
+        response = client.get_group_list(page=page, limit=max(1, int(limit or 100)))
+        batch, response_total = extract_ixbrowser_rows(response)
+        try:
+            total = int(response_total or getattr(client, "total", 0) or total)
+        except Exception:
+            total = total
         if not batch:
             consecutive_empty += 1
-            if consecutive_empty >= 2:
+            if consecutive_empty >= 3:
                 break
             continue
         consecutive_empty = 0
@@ -206,18 +303,48 @@ def load_ixbrowser_group_rows(max_pages: int = 20) -> list[dict]:
             if group_id:
                 seen.add(group_id)
             rows.append(row)
+        if total and len(seen) >= total:
+            break
     return rows
 
 
 def load_ixbrowser_group_profile_count(group_id: str | int, max_pages: int = 50, limit: int = 100) -> int:
     if not str(group_id or "").strip():
         return 0
-    rows = load_ixbrowser_profile_rows(max_pages=max_pages, group_id=group_id, limit=limit)
+    from ixbrowser_local_api import IXBrowserClient
+
+    client = IXBrowserClient()
+    rows = []
+    seen = set()
+    consecutive_empty = 0
+    total = 0
+    for page in range(1, max(1, int(max_pages or 50)) + 1):
+        response = client.get_profile_list(page=page, limit=max(1, int(limit or 100)), group_id=int(group_id or 0))
+        batch, response_total = extract_ixbrowser_rows(response)
+        try:
+            total = int(response_total or getattr(client, "total", 0) or total)
+        except Exception:
+            total = total
+        if total and page == 1:
+            return total
+        if not batch:
+            consecutive_empty += 1
+            if consecutive_empty >= 3:
+                break
+            continue
+        consecutive_empty = 0
+        for row in batch:
+            profile_id = str(row.get("profile_id") or row.get("profileId") or row.get("browser_id") or row.get("id") or "")
+            if profile_id and profile_id in seen:
+                continue
+            if profile_id:
+                seen.add(profile_id)
+            rows.append(row)
     return len(rows)
 
 
 def resolve_ixbrowser_group_counts(groups: list[dict], max_workers: int = 8) -> list[dict]:
-    pending = [group for group in groups or [] if not int(group.get("count") or 0) and group.get("group_id")]
+    pending = [group for group in groups or [] if group.get("group_id")]
     if not pending:
         return groups
     with ThreadPoolExecutor(max_workers=max(1, min(int(max_workers or 8), len(pending)))) as executor:
@@ -225,7 +352,8 @@ def resolve_ixbrowser_group_counts(groups: list[dict], max_workers: int = 8) -> 
         for future in as_completed(futures):
             group = futures[future]
             try:
-                group["count"] = int(future.result() or group.get("count") or 0)
+                group["count"] = int(future.result())
+                group["count_known"] = True
             except Exception:
                 group["count"] = int(group.get("count") or 0)
     return groups
@@ -237,7 +365,7 @@ def load_ixbrowser_profile_snapshot(max_pages: int = 50, resolve_group_counts: b
         profiles = [
             normalize_ixbrowser_profile(row)
             for row in load_ixbrowser_profile_rows(max_pages=max_pages)
-            if row.get("profile_id") or row.get("id")
+            if row.get("profile_id") or row.get("profileId") or row.get("browser_id") or row.get("id")
         ]
     profile_groups = summarize_profile_groups(profiles)
     profile_counts = {}
@@ -249,25 +377,30 @@ def load_ixbrowser_profile_snapshot(max_pages: int = 50, resolve_group_counts: b
             profile_counts[group_id] = count
         if group_name:
             profile_counts[group_name] = count
-    groups = []
+    groups = list(profile_groups)
     seen_groups = set()
-    for group in [normalize_ixbrowser_group(row) for row in load_ixbrowser_group_rows()]:
+    for group in groups:
         key = str(group.get("group_id") or group.get("group_name") or "")
-        if not key or key in seen_groups:
-            continue
-        resolved_count = profile_counts.get(
-            str(group.get("group_id") or ""),
-            profile_counts.get(str(group.get("group_name") or ""), int(group.get("count") or 0)),
-        )
-        group["count"] = resolved_count
-        groups.append(group)
-        seen_groups.add(key)
-    for group in profile_groups:
-        key = str(group.get("group_id") or group.get("group_name") or "")
-        if key and key not in seen_groups:
+        if key:
+            seen_groups.add(key)
+    if not groups:
+        for group in [normalize_ixbrowser_group(row) for row in load_ixbrowser_group_rows()]:
+            key = str(group.get("group_id") or group.get("group_name") or "")
+            if not key or key in seen_groups:
+                continue
+            resolved_count = profile_counts.get(
+                str(group.get("group_id") or ""),
+                profile_counts.get(str(group.get("group_name") or ""), int(group.get("count") or 0)),
+            )
+            group["count"] = resolved_count
+            if profile_counts:
+                group["count_known"] = True
             groups.append(group)
             seen_groups.add(key)
-    groups = sorted(groups, key=lambda row: (str(row.get("group_name") or ""), str(row.get("group_id") or "")))
+    all_profile_groups = [group for group in groups if group.get("all_profiles")]
+    regular_groups = [group for group in groups if not group.get("all_profiles")]
+    regular_groups = sorted(regular_groups, key=lambda row: (str(row.get("group_name") or ""), str(row.get("group_id") or "")))
+    groups = all_profile_groups + regular_groups
     if resolve_group_counts:
         groups = resolve_ixbrowser_group_counts(groups)
     return {
@@ -288,9 +421,10 @@ class StandaloneProfileRegistry:
         self.group_by_name: dict[str, dict] = {}
 
     def refresh(self, max_pages: int = 50, include_profiles: bool = False) -> dict:
-        snapshot = load_ixbrowser_profile_snapshot(max_pages=max_pages, resolve_group_counts=True, include_profiles=include_profiles)
-        if include_profiles:
-            self.profiles = list(snapshot["profiles"])
+        # Keep ReachOps aligned with Smart Publish: refresh the complete profile
+        # catalog first, then build group options locally from group_id/group_name.
+        snapshot = load_ixbrowser_profile_snapshot(max_pages=max_pages, resolve_group_counts=False, include_profiles=True)
+        self.profiles = list(snapshot["profiles"])
         snapshot_groups = list(snapshot["groups"])
         if snapshot_groups or not self.groups:
             self.groups = snapshot_groups
@@ -308,16 +442,16 @@ class StandaloneProfileRegistry:
         return snapshot
 
     def select_profiles(self, group_name: str = "", limit: int = 50) -> list[dict]:
+        if not self.profiles:
+            self.refresh(include_profiles=True)
         group = self.group_by_name.get(str(group_name or "")) or self.group_by_name.get(str(group_name or "").lower())
         group_id = str((group or {}).get("group_id") or "")
-        if group_id:
-            profiles = [
-                normalize_ixbrowser_profile(row)
-                for row in load_ixbrowser_profile_rows(max_pages=50, group_id=group_id)
-                if row.get("profile_id") or row.get("id")
-            ]
-            self.profiles = [profile for profile in self.profiles if str(profile.get("group_id") or "") != group_id] + profiles
-            group["count"] = len(profiles) or int(group.get("count") or 0)
+        if (group or {}).get("all_profiles") or str(group_name or "").strip() in {"", "全部配置"}:
+            profiles = list(self.profiles)
+        elif group_id:
+            profiles = [profile for profile in self.profiles if str(profile.get("group_id") or "") == group_id]
+            group["count"] = len(profiles)
+            group["count_known"] = True
         else:
             profiles = [profile for profile in self.profiles if profile_matches_group(profile, group_name)]
         return profiles[: max(1, int(limit or 50))]
@@ -431,8 +565,20 @@ class GrowthIntelligenceStandaloneApp:
         limit = max(1, int(limit_var.get() or 3))
         if not self.profile_registry.groups:
             self.profile_registry.refresh(include_profiles=False)
-        profiles = self.profile_registry.select_profiles(group, limit=limit)
-        self._log(f"CONFIG selected_profiles group={group or '全部'} requested={limit} selected={len(profiles)}")
+        candidate_limit = max(limit * 5, 50)
+        candidate_profiles = self.profile_registry.select_profiles(group, limit=candidate_limit)
+        try:
+            from .account_health_manager import AccountHealthManager
+
+            profiles = AccountHealthManager(self.service.storage).rank_profiles(candidate_profiles, max_count=limit)
+        except Exception as exc:
+            profiles = list(candidate_profiles)[:limit]
+            self._log(f"WARN   selected_profiles health_rank_failed error={exc}")
+        self._log(
+            f"CONFIG selected_profiles group={group or '全部'} requested={limit} "
+            f"candidates={len(candidate_profiles)} selected={len(profiles)} "
+            f"excluded={max(0, len(candidate_profiles) - len(profiles))}"
+        )
         return profiles
 
     def _current_group_name(self) -> str:
@@ -571,14 +717,8 @@ class GrowthIntelligenceStandaloneApp:
         if safe_selected not in safe_groups:
             safe_selected = next((item for item in safe_groups if group_name_from_display(item).lower() == "canada"), safe_groups[0])
         self._log(f"CONFIG refresh_profiles apply_values count={len(safe_groups)} selected={group_name_from_display(safe_selected)}")
-        if self.console.start_group_combobox:
-            self.console.start_group_combobox.configure(values=tuple(safe_groups))
+        self.console.set_profile_group_options(safe_groups, safe_selected)
         self._log("CONFIG refresh_profiles values_applied")
-        self.console.scan_profile_group_display_var.set(safe_selected)
-        try:
-            self.console.scan_profile_group_detail_var.set(f"当前账号分组：{safe_selected}")
-        except Exception:
-            pass
         group = "" if safe_selected in {"请刷新账号分组", "正在刷新...", "正在读取分组..."} else group_name_from_display(safe_selected)
         group = self.profile_group_display_map.get(group, group)
         self.console.scan_profile_group_var.set(group)
@@ -723,6 +863,8 @@ class GrowthIntelligenceStandaloneApp:
             f"PLAN   campaign id={campaign.get('id', '')} input_type={campaign.get('input_type', '')} "
             f"product={campaign.get('product_name', '')} sources={len(planned_sources)} "
             f"range=每来源最多{max_videos}条视频/每视频最多{max_comments}条评论/任务间隔{task_interval}秒 "
+            f"intent_keywords={','.join(intent_keywords) or 'auto'} "
+            f"exclude_keywords={','.join(exclude_keywords) or 'none'} "
             f"planned_sources={' | '.join(planned_source_labels)}"
         )
         profiles = self._selected_profiles()
@@ -1126,7 +1268,7 @@ class GrowthIntelligenceStandaloneApp:
             self._log(
                 f"DONE   report_exported campaign={self.active_campaign_id} "
                 f"json={campaign_artifacts.get('json_path')} customers={campaign_artifacts.get('customers_csv_path')} "
-                f"actions={campaign_artifacts.get('actions_csv_path')}"
+                f"actions={campaign_artifacts.get('actions_csv_path')} executions={campaign_artifacts.get('executions_csv_path')}"
             )
         else:
             self._log("ERROR  report_export_failed error=REPORT_EXPORT_FAILED")

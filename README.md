@@ -101,6 +101,7 @@ powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1
 Windows 真实交付验收请先阅读：
 
 ```text
+ReachOps/docs/REACHOPS_OPERATOR_ACCEPTANCE_MATRIX.md
 ReachOps/docs/REACHOPS_DELIVERY_EXECUTION_PLAN.md
 ReachOps/docs/REACHOPS_WINDOWS_LIVE_ACCEPTANCE_RUNBOOK.md
 ```
