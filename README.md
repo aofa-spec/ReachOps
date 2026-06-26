@@ -85,6 +85,13 @@ powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.ps1
 ```
 
+SSH 或远程桌面不稳定时，用后台模式启动，再重新连接查询结果：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\start_reachops_acceptance_background_windows.ps1 -ConfirmAuthorizedTargets
+powershell -ExecutionPolicy Bypass -File tools\get_reachops_acceptance_background_status_windows.ps1 -Json
+```
+
 Windows 真实交付验收请先阅读：
 
 ```text

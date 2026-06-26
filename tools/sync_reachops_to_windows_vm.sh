@@ -132,6 +132,8 @@ for helper in \
   run_reachops_ui_startup_smoke_windows.ps1 \
   run_reachops_installer_smoke_windows.ps1 \
   run_reachops_acceptance_windows.ps1 \
+  start_reachops_acceptance_background_windows.ps1 \
+  get_reachops_acceptance_background_status_windows.ps1 \
   sync_reachops_to_windows_vm.sh \
   verify_reachops_acceptance_summary.py \
   write_reachops_update_manifest.py \

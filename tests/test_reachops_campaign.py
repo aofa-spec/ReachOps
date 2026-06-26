@@ -47,6 +47,7 @@ from tools.reachops_visual_collection_preflight import source_from_plan as visua
 from tools.reachops_live_validation_manifest import build_manifest as build_reachops_live_validation_manifest
 from tools.reachops_live_validation_manifest import load_profile_snapshot as load_reachops_profile_snapshot
 from tools.reachops_live_acceptance_status import build_status as build_reachops_live_acceptance_status
+from tools.reachops_live_preflight import build_environment_diagnostics as build_reachops_live_preflight_environment_diagnostics
 from tools.reachops_live_preflight import run_preflight as run_reachops_live_preflight
 from tools.reachops_live_readiness import run_readiness as run_reachops_live_readiness
 from tools.reachops_live_submit_acceptance import run_acceptance as run_reachops_live_submit_acceptance
@@ -1310,7 +1311,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
             )
 
             diagnostics = result["environment_diagnostics"]
-            failure_count = sum(int(row["attempts"]) for row in diagnostics["profile_failures"])
+            failure_count = sum(
+                int(row["attempts"])
+                for row in diagnostics["profile_failures"]
+                if "profile_start_failed" in row["classifications"]
+            )
             self.assertEqual(diagnostics["status"], "blocked")
             self.assertEqual(diagnostics["blocking_stage"], "ixbrowser_open_profile")
             self.assertGreaterEqual(failure_count, 1)
@@ -1320,10 +1325,35 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(diagnostics["classification_counts"]["legacy_adapter_missing"], failure_count)
             self.assertTrue(set(diagnostics["failed_profile_ids"]).issubset({"27273", "27240"}))
             self.assertEqual(diagnostics["error_counts"]["PROFILE_START_FAILED"], failure_count)
-            self.assertTrue(diagnostics["account_switches"])
-            self.assertTrue(all(row["error_code"] == "PROFILE_START_FAILED" for row in diagnostics["account_switches"]))
+            self.assertIsInstance(diagnostics["account_switches"], list)
             self.assertIn("Fix ixBrowser profile proxy credentials and pass ixBrowser proxy detection.", diagnostics["next_required_actions"])
             self.assertEqual(set(result["missing_preflight_action_types"]), {"comment_reply", "follow_review", "dm_review"})
+
+    def test_reachops_live_preflight_environment_diagnostics_separates_account_switches(self):
+        diagnostics = build_reachops_live_preflight_environment_diagnostics(
+            [
+                {
+                    "status": "failed",
+                    "profile_id": "27240",
+                    "error_code": "PROFILE_START_FAILED",
+                    "error_message": "Proxy detection failed: Connection Error: Socks5 Authentication failed",
+                },
+                {
+                    "status": "account_switched",
+                    "profile_id": "27240",
+                    "next_profile_id": "27273",
+                    "error_code": "PROFILE_START_FAILED",
+                    "error_message": "switch profile to 27273 after PROFILE_START_FAILED",
+                },
+            ],
+            [{"profile_id": "27240"}, {"profile_id": "27273"}],
+        )
+
+        self.assertEqual(diagnostics["error_counts"]["PROFILE_START_FAILED"], 1)
+        self.assertEqual(diagnostics["classification_counts"]["profile_start_failed"], 1)
+        self.assertEqual(diagnostics["classification_counts"]["socks5_auth_failed"], 1)
+        self.assertEqual(diagnostics["account_switches"][0]["profile_id"], "27240")
+        self.assertEqual(diagnostics["account_switches"][0]["next_profile_id"], "27273")
 
     def test_reachops_live_submit_acceptance_blocks_without_explicit_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2238,6 +2268,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         iss = (root / "ReachOps" / "packaging" / "ReachOps.iss").read_text(encoding="utf-8")
         build_script = (root / "tools" / "build_reachops_windows.ps1").read_text(encoding="utf-8")
         acceptance_script = (root / "tools" / "run_reachops_acceptance_windows.ps1").read_text(encoding="utf-8")
+        acceptance_background_script = (root / "tools" / "start_reachops_acceptance_background_windows.ps1").read_text(encoding="utf-8")
+        acceptance_background_status_script = (root / "tools" / "get_reachops_acceptance_background_status_windows.ps1").read_text(encoding="utf-8")
         live_readiness_windows_script = (root / "tools" / "run_reachops_live_readiness_windows.ps1").read_text(encoding="utf-8")
         live_validation_windows_script = (root / "tools" / "run_reachops_live_validation_manifest_windows.ps1").read_text(encoding="utf-8")
         live_preflight_windows_script = (root / "tools" / "run_reachops_live_preflight_windows.ps1").read_text(encoding="utf-8")
@@ -2351,6 +2383,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("(Get-Location).ProviderPath", acceptance_script)
         self.assertIn("while ($idx -ge 0)", acceptance_script)
         self.assertNotIn("Tee-Object", acceptance_script)
+        self.assertIn("Start-Process", acceptance_background_script)
+        self.assertIn("-RedirectStandardOutput", acceptance_background_script)
+        self.assertIn("-RedirectStandardError", acceptance_background_script)
+        self.assertIn("acceptance_background_run.json", acceptance_background_script)
+        self.assertIn("ACCEPTANCE_BACKGROUND_PID", acceptance_background_script)
+        self.assertIn("run_reachops_acceptance_windows.ps1", acceptance_background_script)
+        self.assertIn("verify_reachops_acceptance_summary.py", acceptance_background_status_script)
+        self.assertIn("ACCEPTANCE_SUMMARY_JSON=", acceptance_background_status_script)
+        self.assertIn("acceptance_verification", acceptance_background_status_script)
+        self.assertIn("stdout_tail", acceptance_background_status_script)
+        self.assertIn("stderr_tail", acceptance_background_status_script)
         self.assertIn("tools\\reachops_live_readiness.py", live_readiness_windows_script)
         self.assertIn("No browser will be opened", live_readiness_windows_script)
         self.assertIn("No comment/follow/dm will be submitted", live_readiness_windows_script)
@@ -2417,6 +2460,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("run_reachops_ui_startup_smoke_windows.ps1", sync_script)
         self.assertIn("run_reachops_installer_smoke_windows.ps1", sync_script)
         self.assertIn("run_reachops_acceptance_windows.ps1", sync_script)
+        self.assertIn("start_reachops_acceptance_background_windows.ps1", sync_script)
+        self.assertIn("get_reachops_acceptance_background_status_windows.ps1", sync_script)
         self.assertIn("verify_reachops_acceptance_summary.py", sync_script)
         self.assertIn("reachops_delivery_package_check.py", sync_script)
         self.assertIn("reachops_acceptance_inputs.example.ps1", sync_script)
