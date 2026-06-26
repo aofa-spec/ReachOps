@@ -283,8 +283,11 @@ function Write-AcceptanceSummary {
         }
         live_preflight = [ordered]@{
             status = $preflightStatus
+            no_submit = if ($preflight) { [bool]$preflight.no_submit } else { $true }
+            preflight_only = if ($preflight) { [bool]$preflight.preflight_only } else { $true }
             preflight_action_statuses = if ($preflight) { $preflight.preflight_action_statuses } else { @{} }
             missing_preflight_action_types = if ($preflight) { @($preflight.missing_preflight_action_types) } else { Empty-JsonArray }
+            evidence_file_details = if ($preflight) { $preflight.evidence_file_details } else { @{} }
             json_path = if (Test-Path $PreflightJsonPath) { $PreflightJsonPath } else { "" }
         }
         live_validation = [ordered]@{

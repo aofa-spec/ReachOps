@@ -13,6 +13,16 @@ STATUS_READY_FOR_EXTERNAL_VALIDATION = "ready_for_external_validation"
 STATUS_FAILED = "failed"
 
 
+def as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
 def load_summary(path: str | Path) -> dict[str, Any]:
     summary_path = Path(path)
     if not summary_path.exists():
@@ -114,6 +124,11 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
             if isinstance(live_preflight.get("missing_preflight_action_types"), list)
             else []
         )
+        preflight_evidence_details = (
+            live_preflight.get("evidence_file_details")
+            if isinstance(live_preflight.get("evidence_file_details"), dict)
+            else {}
+        )
         preflight_statuses = (
             live_preflight.get("preflight_action_statuses")
             if isinstance(live_preflight.get("preflight_action_statuses"), dict)
@@ -126,7 +141,21 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
             if isinstance(rows, list) and any(str(row.get("status") or "") == "success" for row in rows if isinstance(row, dict))
         }
         if missing_preflight or sorted(required_action_types - present_success):
-            failures.append("live_preflight_action_missing")
+            preflight_has_failure_evidence = any(
+                isinstance(rows, list)
+                and any(
+                    isinstance(row, dict)
+                    and int(row.get("size") or 0) > 0
+                    and len(str(row.get("sha256") or "")) == 64
+                    and str(row.get("path") or "")
+                    for row in rows
+                )
+                for rows in preflight_evidence_details.values()
+            )
+            if allow_external_pending and bool(live_preflight.get("no_submit", True)) and preflight_has_failure_evidence:
+                pending.append("live_preflight_environment_validation")
+            else:
+                failures.append("live_preflight_action_missing")
 
     if str(live_submit.get("status") or "") == "failed":
         failures.append("live_submit_failed")
@@ -278,13 +307,23 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
         "live_preflight": {
             "status": str(live_preflight.get("status") or ""),
             "missing_preflight_action_types": list(live_preflight.get("missing_preflight_action_types") or []),
+            "no_submit": bool(live_preflight.get("no_submit", True)),
+            "evidence_file_detail_action_types": sorted(
+                key
+                for key, value in (
+                    live_preflight.get("evidence_file_details")
+                    if isinstance(live_preflight.get("evidence_file_details"), dict)
+                    else {}
+                ).items()
+                if value
+            ),
         },
         "live_validation": {
             "status": str(live_validation.get("status") or ""),
             "no_browser_started": bool(live_validation.get("no_browser_started", True)),
             "no_submit": bool(live_validation.get("no_submit", True)),
-            "missing_inputs": list(live_validation.get("missing_inputs") or []),
-            "selected_profile_ids": list(live_validation.get("selected_profile_ids") or []),
+            "missing_inputs": as_list(live_validation.get("missing_inputs")),
+            "selected_profile_ids": as_list(live_validation.get("selected_profile_ids")),
         },
         "live_readiness": {
             "status": str(live_readiness.get("status") or ""),
@@ -303,8 +342,8 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
             "success": int(((live_submit.get("summary") or {}) if isinstance(live_submit.get("summary"), dict) else {}).get("success") or 0),
             "failed": int(((live_submit.get("summary") or {}) if isinstance(live_submit.get("summary"), dict) else {}).get("failed") or 0),
             "skipped": int(((live_submit.get("summary") or {}) if isinstance(live_submit.get("summary"), dict) else {}).get("skipped") or 0),
-            "missing_evidence_action_types": list(missing_evidence_action_types),
-            "missing_local_evidence_file_action_types": list(missing_local_evidence_file_action_types),
+            "missing_evidence_action_types": as_list(missing_evidence_action_types),
+            "missing_local_evidence_file_action_types": as_list(missing_local_evidence_file_action_types),
             "evidence_file_detail_action_types": sorted(evidence_file_details.keys()),
         },
         "goal_status": {
@@ -312,7 +351,7 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
             "stages_passed": int(goal_summary.get("stages_passed") or 0),
             "stages_pending_external_validation": int(goal_summary.get("stages_pending_external_validation") or 0),
             "stages_failed": int(goal_summary.get("stages_failed") or 0),
-            "pending_external_validation": list(goal_pending),
+            "pending_external_validation": as_list(goal_pending),
         },
     }
 

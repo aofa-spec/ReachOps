@@ -757,6 +757,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("真实 TikTok 平台提交", allowed["goal_status"]["pending_external_validation"])
         self.assertEqual(allowed["operator_pressure"]["campaign_count"], 3)
 
+        string_missing_input_summary = json.loads(json.dumps(base_summary))
+        string_missing_input_summary["live_validation"]["missing_inputs"] = "有效激活状态文件"
+        string_missing_input = verify_reachops_acceptance_summary(string_missing_input_summary, allow_external_pending=True)
+        self.assertEqual(string_missing_input["live_validation"]["missing_inputs"], ["有效激活状态文件"])
+
         failed_pressure_summary = json.loads(json.dumps(base_summary))
         failed_pressure_summary["operator_pressure"]["account_switched"] = 0
         failed_pressure = verify_reachops_acceptance_summary(failed_pressure_summary, allow_external_pending=True)
@@ -941,6 +946,27 @@ class ReachOpsCampaignTests(unittest.TestCase):
         failed_preflight = verify_reachops_acceptance_summary(failed_preflight_summary, allow_external_pending=True)
         self.assertFalse(failed_preflight["passed"])
         self.assertIn("live_preflight_action_missing", failed_preflight["failures"])
+
+        evidenced_preflight_summary = json.loads(json.dumps(failed_preflight_summary))
+        evidenced_preflight_summary["live_preflight"]["no_submit"] = True
+        evidenced_preflight_summary["live_preflight"]["evidence_file_details"] = {
+            "dm_review": [
+                {
+                    "path": "reports/reachops_live_preflight/evidence/dm.json",
+                    "size": 123,
+                    "sha256": hashlib.sha256(b"preflight failure").hexdigest(),
+                    "action_type": "dm_review",
+                    "profile_id": "27273",
+                    "status": "failed",
+                    "error_code": "PROFILE_START_FAILED",
+                    "screenshot_available": False,
+                }
+            ]
+        }
+        evidenced_preflight = verify_reachops_acceptance_summary(evidenced_preflight_summary, allow_external_pending=True)
+        self.assertTrue(evidenced_preflight["passed"])
+        self.assertIn("live_preflight_environment_validation", evidenced_preflight["pending"])
+        self.assertIn("dm_review", evidenced_preflight["live_preflight"]["evidence_file_detail_action_types"])
 
         stale_goal_summary = json.loads(json.dumps(passed_summary))
         stale_goal_summary["goal_status"]["status"] = "ready_for_external_validation"
@@ -2376,7 +2402,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("live_preflight_payload.json", live_acceptance_runbook)
         self.assertIn("live_submit_payload.json", live_acceptance_runbook)
         self.assertIn("v0.4.0-mvp", handoff)
-        self.assertIn("20260625_092516", handoff)
+        self.assertIn("20260626_123159", handoff)
+        self.assertIn("live_preflight_environment_validation", handoff)
         self.assertIn("effective_pending_external_validation=2", handoff)
         self.assertIn("27273", handoff)
         self.assertIn("reachops_acceptance_inputs.local.ps1", handoff)
