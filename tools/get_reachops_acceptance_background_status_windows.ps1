@@ -65,10 +65,10 @@ if (-not $RunDir) {
 
 $recordPath = Join-Path $RunDir "acceptance_background_run.json"
 $record = Read-JsonObject $recordPath
-$pid = if ($record) { [int]$record.pid } else { 0 }
+$processId = if ($record) { [int]$record.pid } else { 0 }
 $running = $false
-if ($pid -gt 0) {
-    $running = [bool](Get-Process -Id $pid -ErrorAction SilentlyContinue)
+if ($processId -gt 0) {
+    $running = [bool](Get-Process -Id $processId -ErrorAction SilentlyContinue)
 }
 
 $stdoutPath = if ($record -and $record.stdout_path) { [string]$record.stdout_path } else { Join-Path $RunDir "acceptance_stdout.log" }
@@ -114,7 +114,7 @@ if (-not $running) {
 $result = [ordered]@{
     status = $status
     running = $running
-    pid = $pid
+    pid = $processId
     run_dir = $RunDir
     record_path = $recordPath
     stdout_path = $stdoutPath
@@ -131,7 +131,7 @@ if ($Json) {
 } else {
     Write-Host "ReachOps background acceptance status: $status"
     Write-Host "RUN_DIR=$RunDir"
-    Write-Host "PID=$pid"
+    Write-Host "PID=$processId"
     Write-Host "RUNNING=$running"
     if ($acceptanceSummaryPath) {
         Write-Host "ACCEPTANCE_SUMMARY_JSON=$acceptanceSummaryPath"
