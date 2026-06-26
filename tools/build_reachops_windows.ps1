@@ -32,7 +32,15 @@ function Resolve-VersionInfoBuild {
     param([string]$BuildValue)
     $digits = @([regex]::Matches([string]$BuildValue, "\d+") | ForEach-Object { $_.Value })
     if ($digits.Count -gt 0) {
-        return [string]([int]$digits[$digits.Count - 1])
+        $number = [int64]$digits[$digits.Count - 1]
+        if ($number -le 65535) {
+            return [string]$number
+        }
+        $normalized = $number % 65535
+        if ($normalized -eq 0) {
+            return "65535"
+        }
+        return [string]$normalized
     }
     return "0"
 }

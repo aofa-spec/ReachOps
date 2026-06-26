@@ -33,11 +33,6 @@ ReachOps 是独立增长获客客户端工程。
 
 ```bash
 python -m ReachOps
-```
-
-正式脚本入口：
-
-```bash
 python ReachOpsApp.py
 ```
 
@@ -47,13 +42,7 @@ python ReachOpsApp.py
 python GrowthIntelligenceApp.py
 ```
 
-## 测试
-
-```bash
-python -m unittest tests.test_reachops_campaign
-```
-
-本地 MVP 基线验收：
+## 本地验收
 
 ```bash
 python3 -m unittest tests.test_reachops_campaign
@@ -62,7 +51,7 @@ python3 tools/reachops_delivery_audit.py --json
 python3 tools/reachops_goal_status_report.py --json
 ```
 
-本地通过标准：
+通过标准：
 
 - 单测通过。
 - operator pressure 返回 `status=ok`。
@@ -70,15 +59,7 @@ python3 tools/reachops_goal_status_report.py --json
 - goal status 可到 `ready_for_external_validation`；真实平台提交前不应宣称 `passed`。
 - `tools/reachops_delivery_package_check.py` 需要 Windows 产物和 acceptance reports；本机没有这些产物时返回缺失是预期状态。
 
-已完成的 Windows 中间态验收：
-
-- Windows build 已生成 `dist\ReachOps\ReachOps.exe`。
-- Inno Setup 已生成 `dist\installer\ReachOps-Setup-0.4.0.exe`。
-- `dist\installer\reachops-update-manifest.json` hash 校验通过。
-- installer smoke 返回 `status=ok`，安装目录未写入运行数据。
-- `reports\reachops_acceptance\20260625_092516\acceptance_summary.json` 当前为 `ready_for_external_validation`，并包含 blocked/no-submit 的 live acceptance status、activation status、readiness 与 preflight 报告；仅剩真实平台外部验收 pending。
-
-## Windows
+## Windows 客户端
 
 启动 UI：
 
@@ -86,16 +67,22 @@ python3 tools/reachops_goal_status_report.py --json
 powershell -ExecutionPolicy Bypass -File tools\start_reachops_ui_windows.ps1
 ```
 
-交付验收：
+UI 启动 smoke：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_reachops_ui_startup_smoke_windows.ps1
 ```
 
 构建：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1
+```
+
+非真实提交验收：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.ps1
 ```
 
 Windows 真实交付验收请先阅读：
@@ -105,6 +92,8 @@ ReachOps/docs/REACHOPS_OPERATOR_ACCEPTANCE_MATRIX.md
 ReachOps/docs/REACHOPS_DELIVERY_EXECUTION_PLAN.md
 ReachOps/docs/REACHOPS_WINDOWS_LIVE_ACCEPTANCE_RUNBOOK.md
 ```
+
+## 真实账号 readiness / preflight
 
 实机参数模板：
 
@@ -126,15 +115,11 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_readiness_windo
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windows.ps1
 ```
 
-`reachops_live_acceptance_status.py` 只读状态，不打开浏览器、不提交动作，用来汇总当前还缺本地输入、有效授权、目标 URL 还是真实提交证据。
+`tools\reachops_activation_status_template.py` 只生成授权状态模板；模板文件带有 `template_only=true`，不能作为真实授权通过。
 
-完整 Windows 验收顺序：
+`tools\reachops_live_acceptance_status.py` 只读状态，不打开浏览器、不提交动作，用来汇总当前还缺本地输入、有效授权、目标 URL 还是真实提交证据。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\run_reachops_ui_startup_smoke_windows.ps1
-powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1
-powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.ps1
-```
+## 受控真实提交
 
 真实提交只允许在 readiness/preflight 通过、目标被授权、激活文件有效后执行：
 
@@ -154,7 +139,7 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.p
 
 - `dist\ReachOps\ReachOps.exe` 存在。
 - `dist\installer\ReachOps-Setup-0.4.0.exe` 存在。
-- `reachops-update-manifest.json` hash 校验通过。
+- `dist\installer\reachops-update-manifest.json` hash 校验通过。
 - `reports\reachops_acceptance\<timestamp>\acceptance_summary.json` 中 `status=passed`。
 - `effective_pending_external_validation=0`。
 - 真实 comment/follow/DM 尝试都有执行记录、错误码或截图证据。
@@ -173,11 +158,12 @@ python tools\reachops_delivery_package_check.py --allow-external-pending --json
 
 中间态 package check 也要求 `live_readiness_payload.json` 和 `live_preflight_payload.json` 存在；缺真实参数时它们应为 blocked/no-submit 报告。
 
-## 独立边界
+## 运行边界
 
 - 配置目录、数据目录、授权状态使用 `ReachOps/runtime_paths.py` 管理。
 - 客户端源码、启动、验收、构建都在本仓库内闭环。
 - 不提交运行数据库、报告、证据截图、日志或授权状态文件。
-- 真实提交必须经过授权门、证据 sidecar、限频和可追溯报告。
 - 默认行为不得真实提交评论、关注或私信。
+- 真实提交必须经过授权门、证据 sidecar、限频和可追溯报告。
 - 启动 ixBrowser Profile 后如果 TikTok 出现登录/注册弹窗或强制登录页，系统必须立即记录 `LOGIN_REQUIRED`，停止该账号的获客采集流程，并进入账号不可用处理。
+- 登录/注册弹窗（Login/signup dialogs）属于账号未登录状态，不应关闭配置列表后继续执行获客流程。

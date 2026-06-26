@@ -2174,6 +2174,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("PrivilegesRequired=lowest", iss)
         self.assertIn("requirements-reachops.txt", build_script)
         self.assertIn("Resolve-VersionInfoBuild", build_script)
+        self.assertIn("$number -le 65535", build_script)
+        self.assertIn("$number % 65535", build_script)
         self.assertIn("/DMyVersionInfoBuild=$VersionInfoBuild", build_script)
         self.assertIn("ReachOpsApp.py", build_script)
         self.assertIn("Assert-LastExitCode \"ReachOps PyInstaller build\"", build_script)
