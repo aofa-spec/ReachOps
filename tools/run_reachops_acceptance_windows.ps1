@@ -288,6 +288,7 @@ function Write-AcceptanceSummary {
             preflight_action_statuses = if ($preflight) { $preflight.preflight_action_statuses } else { @{} }
             missing_preflight_action_types = if ($preflight) { @($preflight.missing_preflight_action_types) } else { Empty-JsonArray }
             evidence_file_details = if ($preflight) { $preflight.evidence_file_details } else { @{} }
+            environment_diagnostics = if ($preflight) { $preflight.environment_diagnostics } else { @{} }
             json_path = if (Test-Path $PreflightJsonPath) { $PreflightJsonPath } else { "" }
         }
         live_validation = [ordered]@{

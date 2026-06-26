@@ -166,6 +166,127 @@ def write_preflight_evidence_files(base_dir: Path, results: list[dict], target_u
     return evidence_by_action
 
 
+def classify_environment_issue(error_code: str, error_message: str) -> list[str]:
+    code = str(error_code or "").upper()
+    message = str(error_message or "").lower()
+    classifications: list[str] = []
+    if code == "PROFILE_START_FAILED":
+        classifications.append("profile_start_failed")
+    if "proxy detection failed" in message:
+        classifications.append("proxy_detection_failed")
+    if "socks5 authentication failed" in message or "socks authentication failed" in message:
+        classifications.append("socks5_auth_failed")
+    if "no module named 'modules'" in message or 'no module named "modules"' in message:
+        classifications.append("legacy_adapter_missing")
+    if code == "PROXY_FAILED" or "err_proxy" in message or "tunnel connection failed" in message:
+        classifications.append("proxy_failed")
+    if code == "LOGIN_REQUIRED":
+        classifications.append("login_required")
+    if code == "CAPTCHA_DETECTED":
+        classifications.append("captcha_detected")
+    return classifications
+
+
+def build_environment_diagnostics(results: list[dict], profiles: list[dict], no_browser_started: bool = False) -> dict:
+    attempted_profile_ids = sorted(
+        {
+            str(row.get("profile_id") or "")
+            for row in results
+            if str(row.get("profile_id") or "")
+        }
+    )
+    configured_profile_ids = [
+        str(profile.get("profile_id") or profile.get("id") or "")
+        for profile in profiles
+        if str(profile.get("profile_id") or profile.get("id") or "")
+    ]
+    ready_profile_ids = sorted(
+        {
+            str(row.get("profile_id") or "")
+            for row in results
+            if str(row.get("status") or "") == "success" and str(row.get("profile_id") or "")
+        }
+    )
+    profile_failures: dict[str, dict] = {}
+    error_counts: dict[str, int] = {}
+    classification_counts: dict[str, int] = {}
+    for row in results:
+        profile_id = str(row.get("profile_id") or "")
+        status = str(row.get("status") or "")
+        error_code = str(row.get("error_code") or "")
+        error_message = str(row.get("error_message") or "")
+        if error_code:
+            error_counts[error_code] = error_counts.get(error_code, 0) + 1
+        classes = classify_environment_issue(error_code, error_message)
+        for item in classes:
+            classification_counts[item] = classification_counts.get(item, 0) + 1
+        if status == "success" or not profile_id:
+            continue
+        entry = profile_failures.setdefault(
+            profile_id,
+            {
+                "profile_id": profile_id,
+                "attempts": 0,
+                "error_codes": [],
+                "classifications": [],
+                "last_error_code": "",
+                "last_error_message": "",
+            },
+        )
+        entry["attempts"] += 1
+        if error_code and error_code not in entry["error_codes"]:
+            entry["error_codes"].append(error_code)
+        for item in classes:
+            if item not in entry["classifications"]:
+                entry["classifications"].append(item)
+        if error_code:
+            entry["last_error_code"] = error_code
+        if error_message:
+            entry["last_error_message"] = error_message
+
+    failed_profile_ids = sorted(profile_failures.keys())
+    blocking_stage = ""
+    if classification_counts.get("profile_start_failed"):
+        blocking_stage = "ixbrowser_open_profile"
+    elif classification_counts.get("proxy_failed") or classification_counts.get("proxy_detection_failed"):
+        blocking_stage = "network_proxy"
+    elif classification_counts.get("login_required"):
+        blocking_stage = "tiktok_login"
+    elif classification_counts.get("captcha_detected"):
+        blocking_stage = "tiktok_captcha"
+    elif no_browser_started:
+        blocking_stage = "input_validation"
+
+    next_required_actions: list[str] = []
+    if classification_counts.get("socks5_auth_failed") or classification_counts.get("proxy_detection_failed"):
+        next_required_actions.append("Fix ixBrowser profile proxy credentials and pass ixBrowser proxy detection.")
+    if classification_counts.get("legacy_adapter_missing"):
+        next_required_actions.append("Install or repair the legacy ixBrowser adapter module used by fallback startup.")
+    if classification_counts.get("profile_start_failed"):
+        next_required_actions.append("Open each selected numeric profile in ixBrowser before rerunning live preflight.")
+    if classification_counts.get("login_required"):
+        next_required_actions.append("Log in to TikTok for the selected profiles.")
+    if classification_counts.get("captcha_detected"):
+        next_required_actions.append("Resolve TikTok captcha for the selected profiles.")
+    if no_browser_started:
+        next_required_actions.append("Provide complete live preflight inputs before starting browser validation.")
+
+    return {
+        "status": "ready" if ready_profile_ids else ("blocked" if failed_profile_ids or no_browser_started else "unknown"),
+        "blocking_stage": blocking_stage,
+        "configured_profile_ids": configured_profile_ids,
+        "attempted_profile_ids": attempted_profile_ids,
+        "ready_profile_ids": ready_profile_ids,
+        "failed_profile_ids": failed_profile_ids,
+        "error_counts": dict(sorted(error_counts.items())),
+        "classification_counts": dict(sorted(classification_counts.items())),
+        "profile_failures": [profile_failures[key] for key in failed_profile_ids],
+        "next_required_actions": next_required_actions,
+        "no_browser_started": bool(no_browser_started),
+        "no_submit": True,
+    }
+
+
 def build_platform_executor(args):
     return TikTokSeleniumActionExecutor(
         TikTokActionExecutorConfig(
@@ -181,7 +302,13 @@ def build_platform_executor(args):
 def run_preflight(args, platform_executor=None) -> dict:
     input_errors = validate_preflight_inputs(args)
     if input_errors:
-        return blocked_preflight_result(args, input_errors)
+        result = blocked_preflight_result(args, input_errors)
+        result["environment_diagnostics"] = build_environment_diagnostics(
+            [],
+            result.get("profiles") or [],
+            no_browser_started=True,
+        )
+        return result
 
     base_dir = Path(args.base_dir)
     service = GrowthIntelligenceService(base_dir=str(base_dir))
@@ -216,6 +343,7 @@ def run_preflight(args, platform_executor=None) -> dict:
         "dm_review": dm_profile_url(args),
     }
     evidence_file_details = write_preflight_evidence_files(base_dir, results, target_urls)
+    environment_diagnostics = build_environment_diagnostics(results, profiles)
     required_types = {"comment_reply", "follow_review", "dm_review"}
     preflight_action_statuses = {}
     for action_type in sorted(required_types):
@@ -247,6 +375,7 @@ def run_preflight(args, platform_executor=None) -> dict:
         "missing_preflight_action_types": missing_preflight_action_types,
         "target_urls": target_urls,
         "evidence_file_details": evidence_file_details,
+        "environment_diagnostics": environment_diagnostics,
         "no_submit": True,
         "preflight_only": True,
     }

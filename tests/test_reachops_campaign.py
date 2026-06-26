@@ -963,10 +963,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 }
             ]
         }
+        evidenced_preflight_summary["live_preflight"]["environment_diagnostics"] = {
+            "status": "blocked",
+            "blocking_stage": "ixbrowser_open_profile",
+            "configured_profile_ids": ["27273", "27240"],
+            "attempted_profile_ids": ["27273", "27240"],
+            "ready_profile_ids": [],
+            "failed_profile_ids": ["27273", "27240"],
+            "classification_counts": {"socks5_auth_failed": 2, "proxy_detection_failed": 2},
+            "next_required_actions": ["Fix ixBrowser profile proxy credentials and pass ixBrowser proxy detection."],
+        }
         evidenced_preflight = verify_reachops_acceptance_summary(evidenced_preflight_summary, allow_external_pending=True)
         self.assertTrue(evidenced_preflight["passed"])
         self.assertIn("live_preflight_environment_validation", evidenced_preflight["pending"])
         self.assertIn("dm_review", evidenced_preflight["live_preflight"]["evidence_file_detail_action_types"])
+        self.assertEqual(evidenced_preflight["live_preflight"]["environment"]["blocking_stage"], "ixbrowser_open_profile")
+        self.assertEqual(evidenced_preflight["live_preflight"]["environment"]["classification_counts"]["socks5_auth_failed"], 2)
 
         stale_goal_summary = json.loads(json.dumps(passed_summary))
         stale_goal_summary["goal_status"]["status"] = "ready_for_external_validation"
@@ -1224,6 +1236,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["preflight_action_statuses"]["dm_review"])
             self.assertEqual(result["target_urls"]["follow_review"], "https://www.tiktok.com/@buyer_one")
             self.assertEqual(result["target_urls"]["dm_review"], "https://www.tiktok.com/@buyer_one/inbox")
+            self.assertEqual(result["environment_diagnostics"]["status"], "ready")
             comment_evidence = result["preflight_action_statuses"]["comment_reply"][0]["evidence_file_path"]
             self.assertTrue(Path(comment_evidence).is_file())
             sidecar = json.loads(Path(comment_evidence).read_text(encoding="utf-8"))
@@ -1263,7 +1276,50 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("--video-url is required", result["errors"])
             self.assertIn("--profile-url is required", result["errors"])
             self.assertIn("--dm-profile-url is required", result["errors"])
-            self.assertEqual(result["preflight_action_statuses"]["comment_reply"], [])
+            self.assertEqual(result["environment_diagnostics"]["blocking_stage"], "input_validation")
+
+    def test_reachops_live_preflight_classifies_ixbrowser_proxy_environment_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            class Args:
+                base_dir = tmp
+                profile_ids = "27273,27240"
+                group_name = "BR"
+                video_url = "https://www.tiktok.com/@creator/video/123"
+                profile_url = "https://www.tiktok.com/@target_user"
+                dm_profile_url = "https://www.tiktok.com/@target_user"
+                target_username = "target_user"
+                workers = 2
+                per_profile_limit = 3
+                switch_attempts = 2
+                per_profile_hour_limit = 20
+                per_profile_video_hour_limit = 5
+                page_timeout = 1
+                element_timeout = 1
+
+            result = run_reachops_live_preflight(
+                Args(),
+                platform_executor=FixtureActionExecutor(
+                    [
+                        {
+                            "status": "failed",
+                            "error_code": "PROFILE_START_FAILED",
+                            "error_message": "ixBrowser open_profile failed: code=1003 message=Proxy detection failed:Connection Error: Socks5 Authentication failed; legacy fallback failed: No module named 'modules'",
+                        }
+                    ]
+                ),
+            )
+
+            diagnostics = result["environment_diagnostics"]
+            failure_count = sum(int(row["attempts"]) for row in diagnostics["profile_failures"])
+            self.assertEqual(diagnostics["status"], "blocked")
+            self.assertEqual(diagnostics["blocking_stage"], "ixbrowser_open_profile")
+            self.assertGreaterEqual(failure_count, 1)
+            self.assertEqual(diagnostics["classification_counts"]["profile_start_failed"], failure_count)
+            self.assertEqual(diagnostics["classification_counts"]["proxy_detection_failed"], failure_count)
+            self.assertEqual(diagnostics["classification_counts"]["socks5_auth_failed"], failure_count)
+            self.assertEqual(diagnostics["classification_counts"]["legacy_adapter_missing"], failure_count)
+            self.assertTrue(set(diagnostics["failed_profile_ids"]).issubset({"27273", "27240"}))
+            self.assertIn("Fix ixBrowser profile proxy credentials and pass ixBrowser proxy detection.", diagnostics["next_required_actions"])
             self.assertEqual(set(result["missing_preflight_action_types"]), {"comment_reply", "follow_review", "dm_review"})
 
     def test_reachops_live_submit_acceptance_blocks_without_explicit_confirmation(self):

@@ -44,6 +44,11 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
     live_preflight = summary.get("live_preflight") or {}
     live_submit = summary.get("live_submit") or {}
     goal_status = summary.get("goal_status") or {}
+    preflight_environment = (
+        live_preflight.get("environment_diagnostics")
+        if isinstance(live_preflight.get("environment_diagnostics"), dict)
+        else {}
+    )
 
     failures: list[str] = []
     pending: list[str] = []
@@ -317,6 +322,20 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
                 ).items()
                 if value
             ),
+            "environment": {
+                "status": str(preflight_environment.get("status") or ""),
+                "blocking_stage": str(preflight_environment.get("blocking_stage") or ""),
+                "configured_profile_ids": as_list(preflight_environment.get("configured_profile_ids")),
+                "attempted_profile_ids": as_list(preflight_environment.get("attempted_profile_ids")),
+                "ready_profile_ids": as_list(preflight_environment.get("ready_profile_ids")),
+                "failed_profile_ids": as_list(preflight_environment.get("failed_profile_ids")),
+                "classification_counts": (
+                    preflight_environment.get("classification_counts")
+                    if isinstance(preflight_environment.get("classification_counts"), dict)
+                    else {}
+                ),
+                "next_required_actions": as_list(preflight_environment.get("next_required_actions")),
+            },
         },
         "live_validation": {
             "status": str(live_validation.get("status") or ""),
