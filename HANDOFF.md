@@ -41,14 +41,17 @@ Current delivery boundary:
 - Stage 5 standalone packaging is implemented and passing for the non-live path.
 - Stage 3 is implemented locally for authorization gates, rate/cooldown behavior, account switch, fallback comment, and evidence enforcement, but real TikTok platform submission remains pending external validation.
 - Windows client delivery validation is complete for the non-live path: build, `ReachOps.exe`, installer, update manifest, installer smoke, UI startup smoke, and package check have passed in the Windows VM.
+- The latest Windows rebuild completed on 2026-06-26 with build `m2-current-20260626`; `dist\ReachOps\ReachOps.exe`, `dist\installer\ReachOps-Setup-0.4.0.exe`, and `dist\installer\reachops-update-manifest.json` exist, and installer smoke returned `status=ok`, `hash_ok=true`, `data_in_install_dir=false`.
 - The latest non-live Windows acceptance report is `reports\reachops_acceptance\20260625_092516\acceptance_summary.json` on the Windows VM.
 - The latest package check is `reports\reachops_acceptance\20260625_092516\delivery_package_check.json`, with `passed=true`, `status=ready_for_external_validation`, and `effective_pending_external_validation=2`.
 - The latest acceptance package includes `live_acceptance_status_payload.json`, `activation_status_payload.json`, `live_validation_manifest.json`, `live_readiness_payload.json`, and `live_preflight_payload.json` as blocked/no-submit reports.
 - The skincare/beauty keyword-list customer promotion target has been validated through the non-live client flow; beauty-social terms such as `skintok`, `glassskin`, and `skinbarrier` now resolve to the beauty acquisition strategy instead of the generic strategy.
 - Windows live validation can currently scan ixBrowser and select numeric profile IDs `27273`, `27240`, and `27230`.
 - Live validation now checks activation readiness through the same activation gate used by readiness; `template_only` activation files are reported as blocked, not ready.
-- Windows `tools\reachops_acceptance_inputs.local.ps1` has been prepared with Profile IDs `27273,27240,27230` and the skincare/beauty keyword-list target. `CommentVideoUrl`, `FollowProfileUrl`, `DmProfileUrl`, and `TargetUsername` are still placeholders.
+- Windows `tools\reachops_acceptance_inputs.local.ps1` has been prepared with Profile IDs `27273,27240,27230` and the skincare/beauty keyword-list target. `CommentVideoUrl`, `FollowProfileUrl`, `DmProfileUrl`, and `TargetUsername` currently contain sample placeholder targets (`creator/video/123`, `target_user`) and must be replaced with authorized real targets before final validation.
 - Windows activation template exists at `C:\Users\aofa\AppData\Local\ReachOps\config\reachops_activation_status.template.json` for device `1d3a691ec71f6a3356d1414ad8540f3e`. It is intentionally `template_only=true` and `active=false`; live submit remains blocked until a real activation status JSON replaces it.
+- The latest no-browser readiness report is `reports\reachops_live_readiness\20260626_122513\live_readiness_payload.json`; it is blocked only by the template activation file, with `LIVE_SUBMIT_NOT_AUTHORIZED`, `no_browser_started=true`, and `no_submit=true`.
+- The latest no-submit live preflight report is `reports\reachops_live_preflight\20260626_122524\live_preflight_payload.json`; it reached real ixBrowser profile startup for `27273`, `27240`, and `27230`, submitted nothing, and all profiles failed with `PROFILE_START_FAILED` because ixBrowser returned `Proxy detection failed: Connection Error: Socks5 Authentication failed`. Account switch evidence was generated for the failed attempts.
 - Default client behavior must not submit real platform actions.
 - If TikTok shows a login/signup dialog or forced login page after an ixBrowser Profile opens, treat that account as `LOGIN_REQUIRED` immediately. Do not continue discovery, collection, comment scan, or customer acquisition with that Profile.
 - GUI is mandatory for client delivery. If the local environment lacks Tkinter, continue headless core development and validate GUI in Windows VM or another Tkinter-capable environment.
@@ -61,6 +64,7 @@ Remaining external inputs before live readiness can pass:
 - Authorized TikTok profile URL or message entry for DM.
 - Target username matching the authorized profile URLs.
 - Activation status JSON with `active=true`, current device binding, and `live_submit`, `comment_reply`, `follow_review`, `dm_review` enabled.
+- Working proxy/SOCKS5 credentials on the selected ixBrowser profiles; current profiles fail before page checks with `PROFILE_START_FAILED`.
 - Explicit operator confirmation: `-ConfirmAuthorizedTargets`; for final submit also `-RunLiveSubmit`.
 
 Safe Windows next command pattern:

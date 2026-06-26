@@ -119,6 +119,13 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windo
 
 `tools\reachops_live_acceptance_status.py` 只读状态，不打开浏览器、不提交动作，用来汇总当前还缺本地输入、有效授权、目标 URL 还是真实提交证据。
 
+当前 Windows VM 最新实机状态：
+
+- 已识别数字 Profile ID：`27273`、`27240`、`27230`。
+- readiness 报告：`reports\reachops_live_readiness\20260626_122513\live_readiness_payload.json`，状态 blocked，原因是授权文件仍为 template，错误码 `LIVE_SUBMIT_NOT_AUTHORIZED`，并确认 `no_browser_started=true`、`no_submit=true`。
+- preflight 报告：`reports\reachops_live_preflight\20260626_122524\live_preflight_payload.json`，状态 completed/no-submit，但 3 个 Profile 均在 ixBrowser `open_profile` 阶段失败，错误码 `PROFILE_START_FAILED`，原因是 `Socks5 Authentication failed`。报告包含账号切换记录和错误证据 URI。
+- 在代理认证修复、目标 URL 替换为授权真实目标、激活文件变为有效状态前，不应运行 `-RunLiveSubmit`。
+
 ## 受控真实提交
 
 真实提交只允许在 readiness/preflight 通过、目标被授权、激活文件有效后执行：
