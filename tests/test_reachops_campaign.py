@@ -1319,6 +1319,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(diagnostics["classification_counts"]["socks5_auth_failed"], failure_count)
             self.assertEqual(diagnostics["classification_counts"]["legacy_adapter_missing"], failure_count)
             self.assertTrue(set(diagnostics["failed_profile_ids"]).issubset({"27273", "27240"}))
+            self.assertEqual(diagnostics["error_counts"]["PROFILE_START_FAILED"], failure_count)
+            self.assertTrue(diagnostics["account_switches"])
+            self.assertTrue(all(row["error_code"] == "PROFILE_START_FAILED" for row in diagnostics["account_switches"]))
             self.assertIn("Fix ixBrowser profile proxy credentials and pass ixBrowser proxy detection.", diagnostics["next_required_actions"])
             self.assertEqual(set(result["missing_preflight_action_types"]), {"comment_reply", "follow_review", "dm_review"})
 

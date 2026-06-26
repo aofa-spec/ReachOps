@@ -124,7 +124,8 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windo
 - 已识别数字 Profile ID：`27273`、`27240`、`27230`。
 - readiness 报告：`reports\reachops_live_readiness\20260626_122513\live_readiness_payload.json`，状态 blocked，原因是授权文件仍为 template，错误码 `LIVE_SUBMIT_NOT_AUTHORIZED`，并确认 `no_browser_started=true`、`no_submit=true`。
 - 最新 acceptance summary：`reports\reachops_acceptance\20260626_123159\acceptance_summary.json`，package check 为 `ready_for_external_validation`，pending 包含 `external_platform_validation` 和 `live_preflight_environment_validation`。
-- preflight 报告：`reports\reachops_acceptance\20260626_123159\live_preflight_payload.json`，状态 completed/no-submit，但 3 个 Profile 均在 ixBrowser `open_profile` 阶段失败，错误码 `PROFILE_START_FAILED`，原因是 `Socks5 Authentication failed`。报告包含账号切换记录、错误证据 URI 和本地 JSON evidence sidecar；后续 preflight/acceptance summary 会额外写入 `environment_diagnostics`，按 Profile 聚合 `ixbrowser_open_profile`、`socks5_auth_failed`、`proxy_detection_failed` 等环境 blocker。
+- acceptance preflight 报告：`reports\reachops_acceptance\20260626_123159\live_preflight_payload.json`，状态 completed/no-submit，但 3 个 Profile 均在 ixBrowser `open_profile` 阶段失败，错误码 `PROFILE_START_FAILED`，原因是 `Socks5 Authentication failed`。
+- 最新 standalone preflight 报告：`reports\reachops_live_preflight\20260626_124345\live_preflight_payload.json`，已包含 `environment_diagnostics`：`blocking_stage=ixbrowser_open_profile`，`failed_profile_ids=["27230","27240","27273"]`，真实 `open_profile` 失败 4 次，账号切换 2 次，分类为 `socks5_auth_failed`、`proxy_detection_failed`、`legacy_adapter_missing`。该报告确认 `no_submit=true`、`preflight_only=true`，并生成本地 JSON evidence sidecar。
 - 在代理认证修复、目标 URL 替换为授权真实目标、激活文件变为有效状态前，不应运行 `-RunLiveSubmit`。
 
 ## 受控真实提交

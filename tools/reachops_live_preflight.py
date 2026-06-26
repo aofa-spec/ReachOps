@@ -210,18 +210,29 @@ def build_environment_diagnostics(results: list[dict], profiles: list[dict], no_
     profile_failures: dict[str, dict] = {}
     error_counts: dict[str, int] = {}
     classification_counts: dict[str, int] = {}
+    account_switches: list[dict] = []
     for row in results:
         profile_id = str(row.get("profile_id") or "")
         status = str(row.get("status") or "")
         error_code = str(row.get("error_code") or "")
         error_message = str(row.get("error_message") or "")
+        if status == "account_switched":
+            account_switches.append(
+                {
+                    "profile_id": profile_id,
+                    "next_profile_id": str(row.get("next_profile_id") or ""),
+                    "error_code": error_code,
+                    "error_message": error_message,
+                }
+            )
+            continue
+        if status == "success" or not profile_id:
+            continue
         if error_code:
             error_counts[error_code] = error_counts.get(error_code, 0) + 1
         classes = classify_environment_issue(error_code, error_message)
         for item in classes:
             classification_counts[item] = classification_counts.get(item, 0) + 1
-        if status == "success" or not profile_id:
-            continue
         entry = profile_failures.setdefault(
             profile_id,
             {
@@ -281,6 +292,7 @@ def build_environment_diagnostics(results: list[dict], profiles: list[dict], no_
         "error_counts": dict(sorted(error_counts.items())),
         "classification_counts": dict(sorted(classification_counts.items())),
         "profile_failures": [profile_failures[key] for key in failed_profile_ids],
+        "account_switches": account_switches,
         "next_required_actions": next_required_actions,
         "no_browser_started": bool(no_browser_started),
         "no_submit": True,
