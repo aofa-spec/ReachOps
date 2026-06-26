@@ -121,6 +121,7 @@ $stdoutPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPa
 $stderrPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath (Join-Path $runRoot "acceptance_stderr.log")))
 $recordPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath (Join-Path $runRoot "acceptance_background_run.json")))
 $commandScriptPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath (Join-Path $runRoot "acceptance_command.ps1")))
+$taskName = "ReachOpsAcceptance_$stamp"
 
 $argsList = @(
     "-NoProfile",
@@ -138,6 +139,7 @@ if ($TargetUsername) { $argsList += @("-TargetUsername", $TargetUsername) }
 if ($ActivationStatusPath) { $argsList += @("-ActivationStatusPath", $ActivationStatusPath) }
 if ($AllowPressureSubmit) { $argsList += @("-AllowPressureSubmit", $AllowPressureSubmit) }
 if ($AllowMissingInstaller) { $argsList += @("-AllowMissingInstaller") }
+$argsList += @("-ReuseExistingUiStartup")
 if ($RunLiveSubmit) { $argsList += @("-RunLiveSubmit") }
 if ($ConfirmAuthorizedTargets) { $argsList += @("-ConfirmAuthorizedTargets") }
 $argumentLine = ($argsList | ForEach-Object { Quote-ProcessArgument $_ }) -join " "
@@ -155,6 +157,7 @@ if ($TargetUsername) { $commandLine += ' -TargetUsername ' + (Quote-PowerShellLi
 if ($ActivationStatusPath) { $commandLine += ' -ActivationStatusPath ' + (Quote-PowerShellLiteral $ActivationStatusPath) }
 if ($AllowPressureSubmit) { $commandLine += ' -AllowPressureSubmit ' + (Quote-PowerShellLiteral $AllowPressureSubmit) }
 if ($AllowMissingInstaller) { $commandLine += ' -AllowMissingInstaller' }
+$commandLine += ' -ReuseExistingUiStartup'
 if ($RunLiveSubmit) { $commandLine += ' -RunLiveSubmit' }
 if ($ConfirmAuthorizedTargets) { $commandLine += ' -ConfirmAuthorizedTargets' }
 $commandLine += ' > ' + (Quote-PowerShellLiteral $stdoutPath) + ' 2> ' + (Quote-PowerShellLiteral $stderrPath)
@@ -167,16 +170,27 @@ $scriptLines = @(
 )
 Write-Utf8NoBom -Path $commandScriptPath -Content ($scriptLines -join [Environment]::NewLine)
 
-$process = Start-Process `
-    -FilePath "powershell.exe" `
-    -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $commandScriptPath) `
-    -WorkingDirectory (Get-Location).ProviderPath `
-    -PassThru
+Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+$taskAction = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $commandScriptPath + '"') `
+    -WorkingDirectory (Get-Location).ProviderPath
+$taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5)
+Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $taskTrigger -User $env:USERNAME -RunLevel Limited -Force | Out-Null
+Start-ScheduledTask -TaskName $taskName
+Start-Sleep -Seconds 2
+$process = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { [string]$_.CommandLine -like "*$commandScriptPath*" } |
+    Sort-Object CreationDate -Descending |
+    Select-Object -First 1
+$processId = if ($process) { [int]$process.ProcessId } else { 0 }
 
 $record = [ordered]@{
     status = "running"
     started_at = (Get-Date).ToUniversalTime().ToString("o")
-    pid = [int]$process.Id
+    pid = $processId
+    task_name = $taskName
+    launch_method = "scheduled_task"
     run_dir = $runRoot
     stdout_path = $stdoutPath
     stderr_path = $stderrPath
@@ -191,4 +205,5 @@ Write-Utf8NoBom -Path $recordPath -Content ($record | ConvertTo-Json -Depth 6 -C
 
 Write-Host "REACHOPS_ACCEPTANCE_BACKGROUND_RUN=$runRoot"
 Write-Host "ACCEPTANCE_BACKGROUND_RECORD=$recordPath"
-Write-Host "ACCEPTANCE_BACKGROUND_PID=$($process.Id)"
+Write-Host "ACCEPTANCE_BACKGROUND_TASK=$taskName"
+Write-Host "ACCEPTANCE_BACKGROUND_PID=$processId"

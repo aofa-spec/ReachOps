@@ -66,9 +66,25 @@ if (-not $RunDir) {
 $recordPath = Join-Path $RunDir "acceptance_background_run.json"
 $record = Read-JsonObject $recordPath
 $processId = if ($record) { [int]$record.pid } else { 0 }
+$taskName = if ($record -and $record.task_name) { [string]$record.task_name } else { "" }
+$taskState = ""
+$taskLastResult = $null
 $running = $false
 if ($processId -gt 0) {
     $running = [bool](Get-Process -Id $processId -ErrorAction SilentlyContinue)
+}
+if ($taskName) {
+    $taskInfo = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($taskInfo) {
+        $taskState = [string]$taskInfo.State
+        $taskDetails = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($taskDetails) {
+            $taskLastResult = $taskDetails.LastTaskResult
+        }
+        if ($taskState -eq "Running") {
+            $running = $true
+        }
+    }
 }
 
 $stdoutPath = if ($record -and $record.stdout_path) { [string]$record.stdout_path } else { Join-Path $RunDir "acceptance_stdout.log" }
@@ -104,6 +120,8 @@ $status = "running"
 if (-not $running) {
     if ($acceptanceSummary) {
         $status = [string]$acceptanceSummary.status
+    } elseif ($null -ne $taskLastResult -and [int]$taskLastResult -ne 0) {
+        $status = "failed"
     } elseif ($stderrTail) {
         $status = "failed"
     } else {
@@ -115,6 +133,9 @@ $result = [ordered]@{
     status = $status
     running = $running
     pid = $processId
+    task_name = $taskName
+    task_state = $taskState
+    task_last_result = $taskLastResult
     run_dir = $RunDir
     record_path = $recordPath
     stdout_path = $stdoutPath
@@ -132,6 +153,11 @@ if ($Json) {
     Write-Host "ReachOps background acceptance status: $status"
     Write-Host "RUN_DIR=$RunDir"
     Write-Host "PID=$processId"
+    if ($taskName) {
+        Write-Host "TASK_NAME=$taskName"
+        Write-Host "TASK_STATE=$taskState"
+        Write-Host "TASK_LAST_RESULT=$taskLastResult"
+    }
     Write-Host "RUNNING=$running"
     if ($acceptanceSummaryPath) {
         Write-Host "ACCEPTANCE_SUMMARY_JSON=$acceptanceSummaryPath"

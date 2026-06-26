@@ -10,6 +10,7 @@ param(
     [int]$Limit = 3,
     [string]$AllowPressureSubmit = "",
     [switch]$AllowMissingInstaller,
+    [switch]$ReuseExistingUiStartup,
     [switch]$RunLiveSubmit,
     [switch]$ConfirmAuthorizedTargets
 )
@@ -393,7 +394,33 @@ if ((Test-Path $installerSmokeScript) -and (Test-Path $installerPath)) {
 }
 
 $uiStartupSmokeScript = "tools\run_reachops_ui_startup_smoke_windows.ps1"
-if (Test-Path $uiStartupSmokeScript) {
+if ($ReuseExistingUiStartup) {
+    $existingUiStatePath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath "reports\growth_ops_smoke\growth_ui_startup_state.json"))
+    $existingUiState = Read-JsonObject $existingUiStatePath
+    $existingUiPid = if ($existingUiState -and $existingUiState.pid) { [int]$existingUiState.pid } else { 0 }
+    $existingUiProcess = if ($existingUiPid -gt 0) { Get-Process -Id $existingUiPid -ErrorAction SilentlyContinue } else { $null }
+    if ($existingUiState -and $existingUiProcess) {
+        Write-Step "Reusing existing ReachOps UI startup smoke"
+        $uiStartupPayload = [ordered]@{
+            status = "ok"
+            launcher = if ($existingUiState.launcher) { [string]$existingUiState.launcher } else { "start_reachops_ui_windows.ps1" }
+            state_path = $existingUiStatePath
+            pid = $existingUiPid
+            process_running = $true
+            interactive_task = if ($existingUiState.interactive_task) { [bool]$existingUiState.interactive_task } else { $false }
+            task_name = if ($existingUiState.task_name) { [string]$existingUiState.task_name } else { "" }
+            stdout = "reused_existing_ui_startup_state"
+        }
+        $uiStartupPayloadJson = $uiStartupPayload | ConvertTo-Json -Depth 8 -Compress
+        Write-Host $uiStartupPayloadJson
+        Write-Utf8NoBom -Path $uiStartupStdout -Content $uiStartupPayloadJson
+        Write-Utf8NoBom -Path $uiStartupJson -Content $uiStartupPayloadJson
+    } else {
+        Write-Step "Existing UI startup smoke unavailable; running ReachOps UI startup smoke"
+        Invoke-PowerShellCapture -StepName "ReachOps UI startup smoke" -StdoutPath $uiStartupStdout -Arguments @("-File", $uiStartupSmokeScript, "-Root", (Get-Location).ProviderPath, "-KeepRunning")
+        Convert-StdoutJson -StdoutPath $uiStartupStdout -OutputPath $uiStartupJson | Out-Null
+    }
+} elseif (Test-Path $uiStartupSmokeScript) {
     Write-Step "ReachOps UI startup smoke"
     Invoke-PowerShellCapture -StepName "ReachOps UI startup smoke" -StdoutPath $uiStartupStdout -Arguments @("-File", $uiStartupSmokeScript, "-Root", (Get-Location).ProviderPath, "-KeepRunning")
     Convert-StdoutJson -StdoutPath $uiStartupStdout -OutputPath $uiStartupJson | Out-Null
