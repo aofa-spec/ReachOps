@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -103,6 +105,67 @@ def seed_preflight_actions(service: GrowthIntelligenceService, video_url: str, p
     return action_ids
 
 
+def safe_name(value: str) -> str:
+    text = str(value or "").strip()
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in text)
+    return cleaned[:80] or "unknown"
+
+
+def write_preflight_evidence_files(base_dir: Path, results: list[dict], target_urls: dict[str, str]) -> dict[str, list[dict]]:
+    evidence_dir = base_dir / "evidence" / "preflight"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    evidence_by_action: dict[str, list[dict]] = {"comment_reply": [], "follow_review": [], "dm_review": []}
+    for index, row in enumerate(results, start=1):
+        action_type = str(row.get("action_type") or "")
+        action_id = str(row.get("action_id") or "")
+        execution_id = str(row.get("execution_id") or "")
+        profile_id = str(row.get("profile_id") or "")
+        status = str(row.get("status") or "")
+        error_code = str(row.get("error_code") or "")
+        file_name = "_".join(
+            [
+                f"{index:03d}",
+                safe_name(action_type),
+                safe_name(profile_id),
+                safe_name(execution_id or action_id),
+            ]
+        )
+        path = evidence_dir / f"{file_name}.json"
+        payload = {
+            "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "kind": "reachops_live_preflight_evidence",
+            "preflight_only": True,
+            "no_submit": True,
+            "action_type": action_type,
+            "action_id": action_id,
+            "execution_id": execution_id,
+            "profile_id": profile_id,
+            "status": status,
+            "error_code": error_code,
+            "error_message": str(row.get("error_message") or ""),
+            "target_url": str(target_urls.get(action_type) or ""),
+            "evidence_path": str(row.get("evidence_path") or ""),
+            "screenshot_available": False,
+            "screenshot_unavailable_reason": "browser_driver_not_available" if error_code == "PROFILE_START_FAILED" else "preflight_sidecar_only",
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        payload["payload_sha256"] = hashlib.sha256(encoded).hexdigest()
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        detail = {
+            "path": str(path),
+            "size": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "action_type": action_type,
+            "profile_id": profile_id,
+            "status": status,
+            "error_code": error_code,
+            "screenshot_available": False,
+        }
+        row["evidence_file_path"] = str(path)
+        evidence_by_action.setdefault(action_type, []).append(detail)
+    return evidence_by_action
+
+
 def build_platform_executor(args):
     return TikTokSeleniumActionExecutor(
         TikTokActionExecutorConfig(
@@ -147,6 +210,12 @@ def run_preflight(args, platform_executor=None) -> dict:
         export_report=True,
     )
     results = list(summary.get("results") or [])
+    target_urls = {
+        "comment_reply": str(args.video_url or ""),
+        "follow_review": str(args.profile_url or ""),
+        "dm_review": dm_profile_url(args),
+    }
+    evidence_file_details = write_preflight_evidence_files(base_dir, results, target_urls)
     required_types = {"comment_reply", "follow_review", "dm_review"}
     preflight_action_statuses = {}
     for action_type in sorted(required_types):
@@ -157,6 +226,7 @@ def run_preflight(args, platform_executor=None) -> dict:
                 "profile_id": str(row.get("profile_id") or ""),
                 "error_code": str(row.get("error_code") or ""),
                 "evidence_path": str(row.get("evidence_path") or ""),
+                "evidence_file_path": str(row.get("evidence_file_path") or ""),
             }
             for row in rows
         ]
@@ -175,11 +245,8 @@ def run_preflight(args, platform_executor=None) -> dict:
         "summary": summary,
         "preflight_action_statuses": preflight_action_statuses,
         "missing_preflight_action_types": missing_preflight_action_types,
-        "target_urls": {
-            "comment_reply": str(args.video_url or ""),
-            "follow_review": str(args.profile_url or ""),
-            "dm_review": dm_profile_url(args),
-        },
+        "target_urls": target_urls,
+        "evidence_file_details": evidence_file_details,
         "no_submit": True,
         "preflight_only": True,
     }

@@ -1198,6 +1198,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["preflight_action_statuses"]["dm_review"])
             self.assertEqual(result["target_urls"]["follow_review"], "https://www.tiktok.com/@buyer_one")
             self.assertEqual(result["target_urls"]["dm_review"], "https://www.tiktok.com/@buyer_one/inbox")
+            comment_evidence = result["preflight_action_statuses"]["comment_reply"][0]["evidence_file_path"]
+            self.assertTrue(Path(comment_evidence).is_file())
+            sidecar = json.loads(Path(comment_evidence).read_text(encoding="utf-8"))
+            self.assertTrue(sidecar["no_submit"])
+            self.assertTrue(sidecar["preflight_only"])
+            self.assertEqual(sidecar["action_type"], "comment_reply")
+            self.assertEqual(sidecar["target_url"], "https://www.tiktok.com/@creator/video/123")
+            self.assertEqual(result["evidence_file_details"]["comment_reply"][0]["path"], comment_evidence)
             self.assertTrue(result["summary"].get("report", {}).get("json_path"))
 
     def test_reachops_live_preflight_reports_missing_inputs_without_browser_or_submit(self):
