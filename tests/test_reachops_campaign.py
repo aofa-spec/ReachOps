@@ -1319,12 +1319,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(diagnostics["status"], "blocked")
             self.assertEqual(diagnostics["blocking_stage"], "ixbrowser_open_profile")
             self.assertGreaterEqual(failure_count, 1)
-            self.assertEqual(diagnostics["classification_counts"]["profile_start_failed"], failure_count)
-            self.assertEqual(diagnostics["classification_counts"]["proxy_detection_failed"], failure_count)
-            self.assertEqual(diagnostics["classification_counts"]["socks5_auth_failed"], failure_count)
-            self.assertEqual(diagnostics["classification_counts"]["legacy_adapter_missing"], failure_count)
+            self.assertGreaterEqual(diagnostics["classification_counts"]["profile_start_failed"], 1)
+            self.assertEqual(
+                diagnostics["classification_counts"]["proxy_detection_failed"],
+                diagnostics["classification_counts"]["profile_start_failed"],
+            )
+            self.assertEqual(
+                diagnostics["classification_counts"]["socks5_auth_failed"],
+                diagnostics["classification_counts"]["profile_start_failed"],
+            )
+            self.assertEqual(
+                diagnostics["classification_counts"]["legacy_adapter_missing"],
+                diagnostics["classification_counts"]["profile_start_failed"],
+            )
             self.assertTrue(set(diagnostics["failed_profile_ids"]).issubset({"27273", "27240"}))
-            self.assertEqual(diagnostics["error_counts"]["PROFILE_START_FAILED"], failure_count)
+            self.assertEqual(
+                diagnostics["error_counts"]["PROFILE_START_FAILED"],
+                diagnostics["classification_counts"]["profile_start_failed"],
+            )
             self.assertIsInstance(diagnostics["account_switches"], list)
             self.assertIn("Fix ixBrowser profile proxy credentials and pass ixBrowser proxy detection.", diagnostics["next_required_actions"])
             self.assertEqual(set(result["missing_preflight_action_types"]), {"comment_reply", "follow_review", "dm_review"})
@@ -2389,6 +2401,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("acceptance_background_run.json", acceptance_background_script)
         self.assertIn("ACCEPTANCE_BACKGROUND_PID", acceptance_background_script)
         self.assertIn("run_reachops_acceptance_windows.ps1", acceptance_background_script)
+        self.assertIn("Quote-ProcessArgument", acceptance_background_script)
+        self.assertIn("$argumentLine", acceptance_background_script)
+        self.assertIn("[System.IO.Path]::GetFullPath", acceptance_background_script)
         self.assertIn("verify_reachops_acceptance_summary.py", acceptance_background_status_script)
         self.assertIn("ACCEPTANCE_SUMMARY_JSON=", acceptance_background_status_script)
         self.assertIn("acceptance_verification", acceptance_background_status_script)

@@ -37,12 +37,21 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($fullPath, $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Quote-ProcessArgument {
+    param([string]$Value)
+    $text = [string]$Value
+    if ($text -notmatch '[\s"]') {
+        return $text
+    }
+    return '"' + ($text -replace '"', '\"') + '"'
+}
+
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $runRoot = "reports\reachops_acceptance_background\$stamp"
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
-$stdoutPath = Join-Path $runRoot "acceptance_stdout.log"
-$stderrPath = Join-Path $runRoot "acceptance_stderr.log"
-$recordPath = Join-Path $runRoot "acceptance_background_run.json"
+$stdoutPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath (Join-Path $runRoot "acceptance_stdout.log")))
+$stderrPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath (Join-Path $runRoot "acceptance_stderr.log")))
+$recordPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath (Join-Path $runRoot "acceptance_background_run.json")))
 
 $argsList = @(
     "-NoProfile",
@@ -62,10 +71,11 @@ if ($AllowPressureSubmit) { $argsList += @("-AllowPressureSubmit", $AllowPressur
 if ($AllowMissingInstaller) { $argsList += @("-AllowMissingInstaller") }
 if ($RunLiveSubmit) { $argsList += @("-RunLiveSubmit") }
 if ($ConfirmAuthorizedTargets) { $argsList += @("-ConfirmAuthorizedTargets") }
+$argumentLine = ($argsList | ForEach-Object { Quote-ProcessArgument $_ }) -join " "
 
 $process = Start-Process `
     -FilePath "powershell" `
-    -ArgumentList $argsList `
+    -ArgumentList $argumentLine `
     -WorkingDirectory (Get-Location).ProviderPath `
     -RedirectStandardOutput $stdoutPath `
     -RedirectStandardError $stderrPath `
@@ -81,7 +91,7 @@ $record = [ordered]@{
     no_submit = (-not [bool]$RunLiveSubmit)
     run_live_submit = [bool]$RunLiveSubmit
     confirm_authorized_targets = [bool]$ConfirmAuthorizedTargets
-    command = "powershell " + (($argsList | ForEach-Object { if ($_ -match "\s") { '"' + $_ + '"' } else { $_ } }) -join " ")
+    command = "powershell " + $argumentLine
 }
 Write-Utf8NoBom -Path $recordPath -Content ($record | ConvertTo-Json -Depth 6 -Compress)
 
