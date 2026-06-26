@@ -51,6 +51,8 @@ from tools.reachops_live_preflight import build_environment_diagnostics as build
 from tools.reachops_live_preflight import run_preflight as run_reachops_live_preflight
 from tools.reachops_live_readiness import run_readiness as run_reachops_live_readiness
 from tools.reachops_live_submit_acceptance import run_acceptance as run_reachops_live_submit_acceptance
+from tools.reachops_live_environment_blocker_report import build_report as build_reachops_live_environment_blocker_report
+from tools.reachops_live_environment_blocker_report import main as reachops_live_environment_blocker_main
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.write_reachops_update_manifest import build_manifest
@@ -981,6 +983,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(evidenced_preflight["live_preflight"]["environment"]["blocking_stage"], "ixbrowser_open_profile")
         self.assertEqual(evidenced_preflight["live_preflight"]["environment"]["classification_counts"]["socks5_auth_failed"], 2)
 
+        blocker_report = build_reachops_live_environment_blocker_report(evidenced_preflight_summary, "reports/reachops_acceptance/current/acceptance_summary.json")
+        self.assertEqual(blocker_report["status"], "blocked")
+        self.assertEqual(blocker_report["milestone3_status"], "blocked")
+        self.assertEqual(blocker_report["milestone4_status"], "blocked")
+        self.assertEqual(blocker_report["blocking_stage"], "ixbrowser_open_profile")
+        self.assertEqual(blocker_report["classification_counts"]["socks5_auth_failed"], 2)
+        self.assertEqual(blocker_report["failed_profile_ids"], ["27273", "27240"])
+        self.assertTrue(blocker_report["no_submit"])
+        self.assertIn("background_acceptance_no_submit", blocker_report["safe_rerun_commands"])
+        self.assertIn("ixbrowser_profile_environment", {row["scope"] for row in blocker_report["blockers"]})
+
         stale_goal_summary = json.loads(json.dumps(passed_summary))
         stale_goal_summary["goal_status"]["status"] = "ready_for_external_validation"
         stale_goal_summary["goal_status"]["pending_external_validation"] = ["真实 TikTok 平台提交"]
@@ -988,6 +1001,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(stale_goal["passed"])
         self.assertIn("goal_status_not_passed", stale_goal["failures"])
         self.assertIn("goal_status_has_stale_pending", stale_goal["failures"])
+
+    def test_reachops_live_environment_blocker_report_missing_summary_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_path = Path(tmp) / "missing" / "acceptance_summary.json"
+            with patch("builtins.print") as fake_print:
+                code = reachops_live_environment_blocker_main(["--acceptance-summary", str(missing_path), "--json"])
+            self.assertEqual(code, 2)
+            payload = json.loads(fake_print.call_args[0][0])
+            self.assertEqual(payload["status"], "missing")
 
     def test_reachops_delivery_package_check_validates_artifacts_manifest_and_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2282,6 +2304,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         acceptance_script = (root / "tools" / "run_reachops_acceptance_windows.ps1").read_text(encoding="utf-8")
         acceptance_background_script = (root / "tools" / "start_reachops_acceptance_background_windows.ps1").read_text(encoding="utf-8")
         acceptance_background_status_script = (root / "tools" / "get_reachops_acceptance_background_status_windows.ps1").read_text(encoding="utf-8")
+        live_environment_blocker_script = (root / "tools" / "reachops_live_environment_blocker_report.py").read_text(encoding="utf-8")
         live_readiness_windows_script = (root / "tools" / "run_reachops_live_readiness_windows.ps1").read_text(encoding="utf-8")
         live_validation_windows_script = (root / "tools" / "run_reachops_live_validation_manifest_windows.ps1").read_text(encoding="utf-8")
         live_preflight_windows_script = (root / "tools" / "run_reachops_live_preflight_windows.ps1").read_text(encoding="utf-8")
@@ -2429,6 +2452,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("stderr_tail", acceptance_background_status_script)
         self.assertNotIn("$pid =", acceptance_background_status_script)
         self.assertIn("$processId =", acceptance_background_status_script)
+        self.assertIn("milestone3_status", live_environment_blocker_script)
+        self.assertIn("background_acceptance_no_submit", live_environment_blocker_script)
+        self.assertIn("ixbrowser_profile_environment", live_environment_blocker_script)
         self.assertIn("tools\\reachops_live_readiness.py", live_readiness_windows_script)
         self.assertIn("No browser will be opened", live_readiness_windows_script)
         self.assertIn("No comment/follow/dm will be submitted", live_readiness_windows_script)
@@ -2488,6 +2514,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("capture_windows_desktop_hidden.ps1", sync_script)
         self.assertIn("reachops_live_validation_manifest.py", sync_script)
         self.assertIn("reachops_live_acceptance_status.py", sync_script)
+        self.assertIn("reachops_live_environment_blocker_report.py", sync_script)
         self.assertIn("run_reachops_live_validation_manifest_windows.ps1", sync_script)
         self.assertIn("run_reachops_live_readiness_windows.ps1", sync_script)
         self.assertIn("run_reachops_live_preflight_windows.ps1", sync_script)
