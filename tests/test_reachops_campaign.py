@@ -53,6 +53,7 @@ from tools.reachops_live_readiness import run_readiness as run_reachops_live_rea
 from tools.reachops_live_submit_acceptance import run_acceptance as run_reachops_live_submit_acceptance
 from tools.reachops_live_environment_blocker_report import build_report as build_reachops_live_environment_blocker_report
 from tools.reachops_live_environment_blocker_report import main as reachops_live_environment_blocker_main
+from tools.reachops_ixbrowser_profile_metadata_report import build_report as build_ixbrowser_profile_metadata_report
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.write_reachops_update_manifest import build_manifest
@@ -1010,6 +1011,84 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(code, 2)
             payload = json.loads(fake_print.call_args[0][0])
             self.assertEqual(payload["status"], "missing")
+
+    def test_ixbrowser_profile_metadata_report_is_readonly_and_redacts_proxy_secrets(self):
+        class FakeIXClient:
+            def __init__(self):
+                self.open_profile_called = False
+
+            def get_group_list(self, page=1, limit=100):
+                if page > 1:
+                    return []
+                return [{"id": 286343, "title": "BR"}, {"id": 281726, "title": "Canada"}]
+
+            def get_profile_list(self, page=1, limit=100, profile_id=0):
+                if page > 1:
+                    return []
+                rows = [
+                    {
+                        "profile_id": 27273,
+                        "name": "acct@example.com",
+                        "site_url": "https://www.tiktok.com/",
+                        "group_id": 286343,
+                        "group_name": "BR",
+                        "proxy_mode": 2,
+                        "proxy_id": 33604959,
+                        "proxy_type": "socks5",
+                        "proxy_ip": "107.151.249.39",
+                        "proxy_port": "3754",
+                        "real_ip": "179.157.219.17",
+                        "username": "hidden-user",
+                        "password": "hidden-password",
+                    },
+                    {
+                        "profile_id": 27240,
+                        "name": "other@example.com",
+                        "group_id": 281726,
+                        "group_name": "Canada",
+                        "proxy_id": 123,
+                        "proxy_type": "http",
+                    },
+                ]
+                if profile_id:
+                    return [row for row in rows if int(row["profile_id"]) == int(profile_id)]
+                return rows
+
+            def get_proxy_list(self, page=1, limit=100, id=0):
+                if page > 1:
+                    return []
+                rows = [
+                    {
+                        "id": 33604959,
+                        "proxy_type": "socks5",
+                        "proxy_ip": "107.151.249.39",
+                        "proxy_port": "3754",
+                        "proxy_user": "secret-user",
+                        "proxy_password": "secret-password",
+                        "country": "BR",
+                    }
+                ]
+                if id:
+                    return [row for row in rows if int(row["id"]) == int(id)]
+                return rows
+
+            def open_profile(self, *_args, **_kwargs):
+                self.open_profile_called = True
+                raise AssertionError("metadata report must not open profiles")
+
+        client = FakeIXClient()
+        report = build_ixbrowser_profile_metadata_report(client=client, profile_ids=["27273", "missing"])
+        self.assertEqual(report["status"], "ok")
+        self.assertTrue(report["safe_read_only"])
+        self.assertFalse(report["open_profile_called"])
+        self.assertFalse(client.open_profile_called)
+        self.assertEqual(report["missing_profile_ids"], ["missing"])
+        self.assertEqual(report["selected_profile_count"], 1)
+        self.assertEqual(report["selected_profiles"][0]["profile"]["profile_id"], 27273)
+        self.assertEqual(report["selected_profiles"][0]["proxy"]["proxy_user"], "***redacted***")
+        self.assertEqual(report["selected_profiles"][0]["proxy"]["proxy_password"], "***redacted***")
+        self.assertNotIn("secret-user", json.dumps(report))
+        self.assertEqual(report["proxy_type_counts"]["socks5"], 1)
 
     def test_reachops_delivery_package_check_validates_artifacts_manifest_and_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2515,6 +2594,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_live_validation_manifest.py", sync_script)
         self.assertIn("reachops_live_acceptance_status.py", sync_script)
         self.assertIn("reachops_live_environment_blocker_report.py", sync_script)
+        self.assertIn("reachops_ixbrowser_profile_metadata_report.py", sync_script)
         self.assertIn("run_reachops_live_validation_manifest_windows.ps1", sync_script)
         self.assertIn("run_reachops_live_readiness_windows.ps1", sync_script)
         self.assertIn("run_reachops_live_preflight_windows.ps1", sync_script)
