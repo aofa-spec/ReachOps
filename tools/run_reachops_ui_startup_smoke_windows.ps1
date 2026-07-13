@@ -41,6 +41,9 @@ $result = [ordered]@{
     state_path = $statePath
     pid = $pidValue
     process_running = ($null -ne $process)
+    client_surface = if ($state) { [string]$state.client_surface } else { "" }
+    display_name = if ($state) { [string]$state.display_name } else { "" }
+    loopback_host = if ($state) { [string]$state.loopback_host } else { "" }
     interactive_task = if ($state) { [bool]$state.interactive_task } else { $false }
     task_name = if ($state) { [string]$state.task_name } else { "" }
     stdout = $outputText
@@ -51,6 +54,8 @@ if (!$state) { $failures += "startup_state_missing" }
 if ($pidValue -le 0) { $failures += "pid_missing" }
 if ($null -eq $process) { $failures += "process_not_running" }
 if ($state -and -not [bool]$state.interactive_task) { $failures += "interactive_task_not_used" }
+if ($state -and [string]$state.client_surface -ne "local_client_console") { $failures += "client_surface_not_local_console" }
+if ($state -and [string]$state.loopback_host -ne "127.0.0.1") { $failures += "loopback_host_not_local" }
 
 if ($failures.Count -gt 0) {
     $result.status = "failed"

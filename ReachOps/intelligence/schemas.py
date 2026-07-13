@@ -10,6 +10,9 @@ from typing import Any, Dict, List, Optional
 
 ERROR_CODES = {
     "PROFILE_START_FAILED",
+    "IXBROWSER_KERNEL_MISMATCH",
+    "IXBROWSER_SERVER_BUSY",
+    "IXBROWSER_NETWORK_ERROR",
     "CREATOR_PAGE_OPEN_FAILED",
     "LOGIN_REQUIRED",
     "CAPTCHA_DETECTED",
@@ -19,6 +22,7 @@ ERROR_CODES = {
     "COMMENT_SCAN_FAILED",
     "COMMENT_SCAN_EMPTY",
     "EMPTY_RESULT_RETRY",
+    "COMMENT_USERS_EMPTY_RETRY",
     "CHECKPOINT_WRITE_FAILED",
     "REPORT_EXPORT_FAILED",
     "TOPIC_CONTENT_SCAN_FAILED",
@@ -29,6 +33,8 @@ ERROR_CODES = {
     "PAGE_OPEN_FAILED",
     "BROWSER_CRASHED",
     "COMMENT_BOX_NOT_FOUND",
+    "COMMENT_BOX_MISSING",
+    "SUBMIT_BUTTON_MISSING",
     "COMMENT_SUBMIT_FAILED",
     "COMMENT_BLOCKED",
     "FOLLOW_BUTTON_MISSING",
@@ -37,6 +43,10 @@ ERROR_CODES = {
     "DM_NOT_ALLOWED",
     "DM_RATE_LIMITED",
     "RATE_LIMITED",
+    "PAGE_TIMEOUT",
+    "DOM_STALLED",
+    "MODAL_BLOCKED",
+    "UNKNOWN_PAGE_STATE",
     "ACCOUNT_RESTRICTED",
     "DAILY_QUOTA_EXCEEDED",
     "LIVE_SUBMIT_EVIDENCE_MISSING",
@@ -523,12 +533,26 @@ class GrowthTaskConfig:
     enable_comment_queue: bool = True
     enable_follow_queue: bool = True
     enable_dm_queue: bool = True
+    min_lead_score_for_action: int = 50
+    min_lead_score_for_live_comment: int = 60
+    enable_standard_outreach_policy: bool = True
+    accept_low_intent_actions: bool = False
     task_delay_min_seconds: int = 30
     task_delay_max_seconds: int = 90
     comment_retry_attempts: int = 2
+    max_comment_url_mismatch_retries_per_video: int = 1
+    accept_same_creator_video_comments: bool = True
+    allow_content_url_creator_fallback: bool = False
+    max_empty_comment_videos_per_source: int = 2
+    max_source_runtime_seconds: int = 180
     failure_cooldown_threshold: int = 3
+    account_queue_enabled: bool = True
+    max_sources_per_profile: int = 100
+    retain_profile_sessions_after_collection: bool = False
+    requested_concurrency: int = 1
     profile_group: str = ""
     campaign_id: str = ""
+    active_batch_id: str = ""
     intent_keywords: List[str] = field(default_factory=list)
     exclude_keywords: List[str] = field(default_factory=list)
     test_mode: bool = False
@@ -542,4 +566,5 @@ class GrowthTaskResult:
     report_csv_path: str = ""
     report_markdown_path: str = ""
     processed_sources: int = 0
+    failed_sources: int = 0
     errors: Dict[str, int] = field(default_factory=dict)

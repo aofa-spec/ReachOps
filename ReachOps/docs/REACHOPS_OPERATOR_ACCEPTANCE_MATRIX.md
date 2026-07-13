@@ -44,6 +44,8 @@
 - 选择 Canada 时，只能执行 Canada 的 Profile。
 - 空响应不得覆盖上一次成功读取的分组。
 - 未登录、验证码、代理失败、Profile 启动失败账号必须标记为不可用或冷却。
+- `blocked_by_accounts` 且 `profile_available=0` 时，Web 面板必须显示“隔离坏账号”入口；命令行必须提供 `执行ReachOps账号修复.command`，先预览 `tools/reachops_apply_account_repair_plan.py --json`，确认后才把硬阻断账号移入 `封禁账号`。
+- 账号修复后必须重新刷新分组并复跑 `tools/reachops_client_delivery_check.py --json`；只生成账号修复计划不算验收通过。
 - 触达必须优先使用通过预检的登录账号。
 
 必须记录的错误码：
@@ -91,7 +93,8 @@
 - 目标链接和账号由操作者确认授权。
 - Readiness 通过。
 - Preflight 通过。
-- 成功动作必须有截图证据和 sidecar 元数据。
+- 成功动作必须有本地截图证据和 sidecar 元数据；`evidence://...` 只能用于预检/fixture 记录，不能作为真实提交成功证据。
+- sidecar 必须包含匹配截图文件的 `screenshot_sha256`、`action_type`、`profile_id`、`action_id` 和 `current_url`；评论提交还必须包含匹配话术的 `submitted_text` 且 `comment_visible_confirmed=true`。
 
 私信或关注失败时，系统可以按策略降级评论；账号失败时必须自动换号或冷却，不得继续使用异常账号高频执行。
 
@@ -147,4 +150,18 @@ JSON 报告必须包含：
 - Stage 5 非真实提交打包链路已有 Windows 中间态验证。
 - Stage 3 真实平台提交仍需 Windows VM、真实 ixBrowser Profile、真实 TikTok 账号和授权目标证明。
 
-最终交付必须以 `tools/reachops_goal_status_report.py --json` 返回 `passed` 为准，并且 `effective_pending_external_validation = 0`。
+运营和 PM 复核必须先看目标模式总报告：
+
+- 执行入口：`tools/reachops_goal_delivery_runner.py --json`。
+- `delivery_boundary.local_mvp_scope_ready=true` 只在当前 Mac 本地门禁实时通过时表示可验收；账号阻断时必须为 false。
+- `delivery_boundary.overall_final_delivery_scope_ready=false` 表示整项目不能宣称最终交付。
+- `deliverable_index.web_operator_panel.ready`、`deliverable_index.local_mvp_acceptance.ready` 必须跟随当前实时门禁，不能用历史 ready 快照覆盖；`deliverable_index.windows_build_inputs.ready=true` 表示 Windows 构建输入已具备交付条件。
+- `deliverable_index.windows_final_package.ready=false`、`deliverable_index.authorized_live_submit.ready=false`、`deliverable_index.final_acceptance_gate.ready=false` 表示 Windows 最终包、授权真实提交和最终门禁仍未闭环。
+
+最终交付不能只看 goal status。必须同时满足：
+
+- `tools/reachops_goal_delivery_runner.py --json` 返回 `final_delivery_ready=true`，且 `delivery_boundary.overall_final_delivery_scope_ready=true`。
+- `tools/reachops_goal_status_report.py --json` 返回 `passed`，且 `effective_pending_external_validation = 0`。
+- `tools/reachops_client_delivery_check.py --json` 返回 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`。
+- `tools/reachops_delivery_package_check.py --json` 返回 `status=passed`，并验证 Windows exe、installer、update manifest、acceptance summary、`repository_cleanliness_payload.json`、`windows_package_preflight.json` 和 `final_acceptance_gate.json`。
+- `tools/reachops_final_acceptance_gate.py --json` 返回 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`。

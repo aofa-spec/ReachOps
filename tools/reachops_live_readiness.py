@@ -73,13 +73,16 @@ def check_authorization(args, status_path: str) -> list[dict[str, Any]]:
 def execution_evidence_policy() -> dict[str, Any]:
     return {
         "require_execution_evidence": True,
-        "accept_fixture_uri": True,
+        "accept_fixture_uri": False,
         "local_file_requirements": [
             "screenshot_file_exists",
             "screenshot_file_non_empty",
             "sidecar_json_exists",
             "sidecar_screenshot_sha256_matches_file",
             "sidecar_action_type_matches_action",
+            "sidecar_profile_id_present",
+            "sidecar_action_id_present",
+            "sidecar_current_url_present",
         ],
         "failure_error_code": "LIVE_SUBMIT_EVIDENCE_MISSING",
     }
@@ -109,9 +112,16 @@ def run_readiness(args) -> dict[str, Any]:
 
     status_path = activation_status_path(args)
     status_file = Path(status_path)
-    add("activation_status_file_exists", status_file.exists() and status_file.is_file(), activation_status_path=str(status_file))
+    activation_required = LiveSubmitAuthorizationGate.activation_required()
+    add(
+        "activation_status_file_exists_or_not_required",
+        (status_file.exists() and status_file.is_file()) or not activation_required,
+        activation_status_path=str(status_file),
+        activation_required=activation_required,
+        runtime_mode=LiveSubmitAuthorizationGate.runtime_mode(),
+    )
 
-    authorization_decisions = check_authorization(args, str(status_file)) if status_file.exists() else []
+    authorization_decisions = check_authorization(args, str(status_file)) if status_file.exists() or not activation_required else []
     if authorization_decisions:
         add("activation_allows_live_submit_actions", all(item["allowed"] for item in authorization_decisions), decisions=authorization_decisions)
     else:
@@ -132,6 +142,9 @@ def run_readiness(args) -> dict[str, Any]:
         "no_submit": True,
         "profile_ids": profile_ids,
         "activation_status_path": str(status_file),
+        "runtime_mode": LiveSubmitAuthorizationGate.runtime_mode(),
+        "activation_required": activation_required,
+        "development_bypass": not activation_required,
         "execution_evidence_policy": evidence_policy,
         "checks": checks,
     }

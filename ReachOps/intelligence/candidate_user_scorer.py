@@ -8,6 +8,7 @@ from typing import Optional
 from .storage import GrowthStorage
 from ReachOps.collectors.normalizer import normalize_language_text
 from .comment_intent import CommentIntentClassifier, RuleBasedCommentIntentClassifier
+from .lead_quality import looks_like_seller_promo
 
 
 class CandidateUserScorer:
@@ -35,6 +36,8 @@ class CandidateUserScorer:
     def score_candidate(self, row: dict, repeat_counts: Counter, custom_intent_keywords: Optional[list[str]] = None, exclude_keywords: Optional[list[str]] = None) -> tuple[int, list[str], str]:
         tags = []
         score = 10
+        if looks_like_seller_promo(str(row.get("comment_text") or "")):
+            return 0, ["excluded_seller_promo", "intent_type:exclude", "intent_confidence:0.95"], "low_value"
 
         classifier = getattr(self, "intent_classifier", None) or RuleBasedCommentIntentClassifier()
         intent = classifier.classify(row, custom_intent_keywords, exclude_keywords)

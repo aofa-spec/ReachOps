@@ -39,8 +39,8 @@ class ExecutionMVPConfig:
     min_delay_seconds: float = 0.0
     max_delay_seconds: float = 0.0
     action_types: list[str] = field(default_factory=lambda: ["comment_reply"])
-    auto_approve: bool = True
-    auto_confirm: bool = True
+    auto_approve: bool = False
+    auto_confirm: bool = False
     dry_run: bool = True
 
 

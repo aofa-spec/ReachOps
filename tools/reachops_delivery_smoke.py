@@ -50,8 +50,8 @@ class SmokeVideoCollector:
         max_videos = max(1, min(3, int(context.get("max_videos", 3) or 3)))
         return [
             {
-                "video_id": f"{username}-smoke-{index}",
-                "video_url": f"https://www.tiktok.com/@{username}/video/{1000 + index}",
+                    "video_id": str(1000 + index),
+                    "video_url": f"https://www.tiktok.com/@{username}/video/{1000 + index}",
                 "caption": caption,
                 "views": views,
                 "likes": likes,
@@ -104,7 +104,7 @@ class SmokeTopicContentCollector:
             {
                 "content": {
                     "creator_username": "beauty_topic_creator",
-                    "video_id": f"topic-beauty-{index}",
+                    "video_id": str(2000 + index),
                     "video_url": f"https://www.tiktok.com/@beauty_topic_creator/video/{2000 + index}",
                     "caption": caption,
                     "material_type": "topic_video",

@@ -4,7 +4,10 @@ from __future__ import annotations
 import random
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Optional
+from urllib.parse import quote, unquote, urlparse
 
 from ReachOps.collectors.cdp_network_collector import CDPNetworkCollector
 from ReachOps.collectors.collector_runtime import CollectorRuntime
@@ -80,54 +83,131 @@ class GrowthTaskRouter:
         }
         self.live_room_users = LiveRoomUserCollector(self.collectors.get("live_room"))
         self.profile_failures: Dict[str, int] = {}
+        self._last_profile_start_error: Dict[str, str] = {}
+        self._profile_sessions: Dict[str, Any] = {}
 
     def run(self, sources: Iterable[dict], profiles: List[dict], config: GrowthTaskConfig) -> GrowthTaskResult:
         processed = 0
-        source_list = list(sources)
+        raw_source_list = list(sources)
+        source_list, duplicate_sources = self._dedupe_sources(raw_source_list)
         before_counts = self._snapshot_counts()
-        batch = self.storage.create_collection_batch(
-            len(source_list),
-            profile_group=getattr(config, "profile_group", "") or "",
-            config={
-                "max_videos_per_creator": config.max_videos_per_creator,
-                "max_comments_per_video": config.max_comments_per_video,
-                "min_views": config.min_views,
-                "min_comments": config.min_comments,
-                "target_mode": config.target_mode,
-                "vertical": config.vertical,
-                "campaign_id": getattr(config, "campaign_id", "") or "",
-            },
-            campaign_id=getattr(config, "campaign_id", "") or "",
-        )
-        self.storage.set_active_collection_batch(batch.id)
+        active_batch_id = str(getattr(config, "active_batch_id", "") or "").strip()
+        if active_batch_id:
+            batch_id = active_batch_id
+            self.storage.update_collection_batch(batch_id, "running")
+        else:
+            batch = self.storage.create_collection_batch(
+                len(source_list),
+                profile_group=getattr(config, "profile_group", "") or "",
+                config={
+                    "max_videos_per_creator": config.max_videos_per_creator,
+                    "max_comments_per_video": config.max_comments_per_video,
+                    "min_views": config.min_views,
+                    "min_comments": config.min_comments,
+                    "target_mode": config.target_mode,
+                    "vertical": config.vertical,
+                    "campaign_id": getattr(config, "campaign_id", "") or "",
+                },
+                campaign_id=getattr(config, "campaign_id", "") or "",
+            )
+            batch_id = batch.id
+        self.storage.set_active_collection_batch(batch_id)
+        if duplicate_sources:
+            self.storage.log_event(
+                "collection_sources_deduped",
+                batch_id,
+                {
+                    "batch_id": batch_id,
+                    "original_sources": len(raw_source_list),
+                    "deduped_sources": len(source_list),
+                    "skipped_duplicates": duplicate_sources,
+                },
+            )
         try:
-            setattr(config, "active_batch_id", batch.id)
+            setattr(config, "active_batch_id", batch_id)
         except Exception:
             pass
         if not profiles:
             self.storage.log_error("PROFILE_START_FAILED", "no profile available")
-        for index, source_input in enumerate(source_list):
-            datasource = self.datasource_manager.create(source_input["type"], source_input["value"])
-            ok, error = self._run_source_with_profile_fallback(datasource, batch.id, profiles, index, config)
-            if ok:
-                processed += 1
-                self.storage.update_collection_batch(batch.id, "running", processed_delta=1)
+        profile_usage: Dict[str, int] = {}
+        if getattr(config, "account_queue_enabled", True):
+            self._log_profile_queue_initialized(profiles, batch_id, config)
+        if self._should_reuse_profile_sessions(config):
+            self.storage.log_event(
+                "profile_session_reuse_enabled",
+                batch_id,
+                {
+                    "profile_count": len(profiles),
+                    "max_sources_per_profile": int(getattr(config, "max_sources_per_profile", 0) or 0),
+                },
+            )
+        try:
+            for index, source_input in enumerate(source_list):
+                datasource = self.datasource_manager.create(source_input["type"], source_input["value"])
+                ok, error = self._run_source_with_profile_fallback(datasource, batch_id, profiles, index, config, profile_usage)
+                if ok:
+                    processed += 1
+                    self.storage.update_collection_batch(batch_id, "running", processed_delta=1)
+                else:
+                    if not error:
+                        error = {"error_code": "UNKNOWN", "message": ""}
+                    self.storage.update_collection_batch(batch_id, "running", failed_delta=1)
+                    self.storage.log_event(
+                        "collection_source_failed",
+                        datasource.id,
+                        {
+                            "batch_id": batch_id,
+                            "source_id": datasource.id,
+                            "source_type": datasource.type,
+                            "source_value": datasource.value,
+                            "source_index": index + 1,
+                            "error_code": str(error.get("error_code") or "UNKNOWN"),
+                            "message": str(error.get("message") or ""),
+                        },
+                    )
+                if index < len(source_list) - 1:
+                    self._sleep_between_tasks(config)
+        finally:
+            if getattr(config, "retain_profile_sessions_after_collection", False):
+                self.storage.log_event(
+                    "profile_session_retained_after_collection",
+                    batch_id,
+                    {
+                        "batch_id": batch_id,
+                        "profile_ids": list(self._profile_sessions.keys()),
+                        "reason": "handoff_to_action_stage",
+                    },
+                )
             else:
-                if not error:
-                    error = {"error_code": "UNKNOWN", "message": ""}
-                self.storage.update_collection_batch(batch.id, "running", failed_delta=1)
-            self._sleep_between_tasks(config)
+                self._close_reusable_profile_sessions(batch_id)
         final_status = "completed"
         if processed < len(source_list):
             final_status = "failed" if processed == 0 and source_list else "partial_failed"
-        self.storage.update_collection_batch(batch.id, final_status)
+        self.storage.update_collection_batch(batch_id, final_status)
         self.scorer.score_all(config)
-        self.operation_leads.build_from_scored_candidates(config)
+        lead_stats = self.operation_leads.build_from_scored_candidates(config)
         report = self.reporter.build_report()
         after_counts = self._snapshot_counts()
+        self.storage.log_event(
+            "lead_pipeline_completed",
+            batch_id,
+            {
+                "batch_id": batch_id,
+                "candidate_users": after_counts["candidates"] - before_counts["candidates"],
+                "high_value_candidates": after_counts["high_value"] - before_counts["high_value"],
+                "operation_leads": after_counts["operation_leads"] - before_counts["operation_leads"],
+                "action_queue": after_counts["action_queue"] - before_counts["action_queue"],
+                "intents_created": int((lead_stats or {}).get("intents") or 0),
+                "leads_created": int((lead_stats or {}).get("leads") or 0),
+                "actions_created": int((lead_stats or {}).get("actions") or 0),
+            },
+        )
         report.summary.update(
             {
                 "datasource_count": len(source_list),
+                "original_datasource_count": len(raw_source_list),
+                "deduped_datasource_count": len(source_list),
+                "skipped_duplicate_source_count": duplicate_sources,
                 "new_creator_count": after_counts["creators"] - before_counts["creators"],
                 "new_content_count": after_counts["contents"] - before_counts["contents"],
                 "candidate_user_count": after_counts["candidates"] - before_counts["candidates"],
@@ -153,33 +233,68 @@ class GrowthTaskRouter:
             report_csv_path=csv_path,
             report_markdown_path=markdown_path,
             processed_sources=processed,
+            failed_sources=max(0, len(source_list) - processed),
             errors=self.storage.error_counts(),
         )
 
-    def _run_source_with_profile_fallback(self, datasource, batch_id: str, profiles: List[dict], index: int, config: GrowthTaskConfig):
+    def _run_source_with_profile_fallback(self, datasource, batch_id: str, profiles: List[dict], index: int, config: GrowthTaskConfig, profile_usage: Optional[Dict[str, int]] = None):
         last_error = {}
         attempted_profile_ids = set()
-        for profile in self._profile_candidates_for_index(profiles, index):
+        profile_usage = profile_usage if profile_usage is not None else {}
+        for profile in self._profile_candidates_for_index(profiles, index, config, profile_usage):
             profile_id = str(profile.get("profile_id") or profile.get("id") or "").strip()
             if profile_id in attempted_profile_ids:
                 continue
             attempted_profile_ids.add(profile_id)
             if self._is_profile_in_cooldown(profile_id, config):
                 self.storage.log_event("profile_runtime_retry_skipped", datasource.id, {"profile_id": profile_id, "reason": "cooldown"})
+                self._log_profile_queue_event(
+                    "profile_queue_skipped",
+                    profile_id,
+                    batch_id,
+                    config,
+                    datasource=datasource,
+                    status="skipped",
+                    reason="cooldown",
+                    usage=profile_usage.get(profile_id, 0),
+                )
                 continue
+            self._log_profile_queue_event(
+                "profile_queue_started",
+                profile_id,
+                batch_id,
+                config,
+                datasource=datasource,
+                status="running",
+                usage=profile_usage.get(profile_id, 0),
+            )
             task = self.storage.create_collection_task(batch_id, datasource.id, datasource.type, datasource.value, profile_id)
-            browser = self._open_browser(profile_id, datasource.id)
+            self.storage.update_collection_task(task.id, "running")
+            browser = self._open_browser_for_source(profile_id, datasource.id, batch_id, config)
             if not browser:
+                start_error = dict(getattr(self, "_last_profile_start_error", {}) or {})
+                error_code = str(start_error.get("error_code") or "PROFILE_START_FAILED")
+                error_message = str(start_error.get("message") or "profile start failed")
                 self._record_profile_failure(profile_id)
                 self._record_blocking_profile_state(
                     profile_id,
                     str(profile.get("group_name") or getattr(config, "profile_group", "") or ""),
-                    "PROFILE_START_FAILED",
-                    "profile start failed",
+                    error_code,
+                    error_message,
                 )
-                self.storage.update_collection_task(task.id, "failed", "PROFILE_START_FAILED", "profile start failed")
-                last_error = {"error_code": "PROFILE_START_FAILED", "message": "profile start failed"}
-                self.storage.log_event("profile_start_failed_retry", datasource.id, {"profile_id": profile_id, "reason": "start_failed"})
+                self.storage.update_collection_task(task.id, "failed", error_code, error_message)
+                last_error = {"error_code": error_code, "message": error_message}
+                self.storage.log_event("profile_start_failed_retry", datasource.id, {"profile_id": profile_id, "reason": error_code})
+                self._log_profile_queue_event(
+                    "profile_queue_skipped",
+                    profile_id,
+                    batch_id,
+                    config,
+                    datasource=datasource,
+                    status="skipped",
+                    reason=error_code,
+                    usage=profile_usage.get(profile_id, 0),
+                )
                 continue
             driver = getattr(browser, "driver", browser)
             self.storage.record_profile_health(
@@ -187,28 +302,75 @@ class GrowthTaskRouter:
                 group_name=str(profile.get("group_name") or getattr(config, "profile_group", "") or ""),
                 ok=True,
             )
-            self.storage.update_collection_task(task.id, "running")
             try:
                 attempt_before_counts = self._snapshot_counts()
                 ok = self._run_datasource(datasource, driver, config, profile_id)
                 if ok:
-                    if self._should_retry_empty_profile_result(attempt_before_counts, config):
-                        self.storage.update_collection_task(task.id, "failed", "EMPTY_RESULT_RETRY", "no content or comment users collected; trying next profile")
+                    empty_retry = self._empty_profile_result_retry(attempt_before_counts, config)
+                    if empty_retry:
+                        self.storage.update_collection_task(
+                            task.id,
+                            "failed",
+                            empty_retry["error_code"],
+                            empty_retry["message"],
+                        )
                         self.storage.log_event(
                             "profile_empty_result_retry",
                             datasource.id,
-                            {"profile_id": profile_id, "reason": "empty_content_or_comments"},
+                            {
+                                "profile_id": profile_id,
+                                "reason": empty_retry["reason"],
+                                "content_delta": empty_retry["content_delta"],
+                                "candidate_delta": empty_retry["candidate_delta"],
+                            },
                         )
-                        last_error = {"error_code": "EMPTY_RESULT_RETRY", "message": "no content or comment users collected; trying next profile"}
+                        self.storage.log_event(
+                            "profile_session_refresh_after_empty_result",
+                            datasource.id,
+                            {"profile_id": profile_id, "reason": empty_retry["error_code"]},
+                        )
+                        self._discard_reusable_profile_session(profile_id, reason=empty_retry["error_code"])
+                        self._log_profile_queue_event(
+                            "profile_queue_source_failed",
+                            profile_id,
+                            batch_id,
+                            config,
+                            datasource=datasource,
+                            status="failed",
+                            reason=empty_retry["error_code"],
+                            usage=profile_usage.get(profile_id, 0),
+                        )
+                        last_error = {"error_code": empty_retry["error_code"], "message": empty_retry["message"]}
                         continue
                     self.storage.update_collection_task(task.id, "completed")
+                    profile_usage[profile_id] = profile_usage.get(profile_id, 0) + 1
+                    self._log_profile_queue_event(
+                        "profile_queue_source_completed",
+                        profile_id,
+                        batch_id,
+                        config,
+                        datasource=datasource,
+                        status="completed",
+                        usage=profile_usage.get(profile_id, 0),
+                    )
+                    if self._profile_source_quota_reached(profile_id, config, profile_usage):
+                        self._log_profile_queue_event(
+                            "profile_queue_quota_reached",
+                            profile_id,
+                            batch_id,
+                            config,
+                            datasource=datasource,
+                            status="quota_reached",
+                            usage=profile_usage.get(profile_id, 0),
+                        )
                     if attempted_profile_ids and len(attempted_profile_ids) > 1:
                         self.storage.log_event("profile_runtime_retry_succeeded", datasource.id, {"profile_id": profile_id})
                     return True, {}
                 last_error = self._last_error_for_source(datasource.id)
                 error_code = str(last_error.get("error_code") or "UNKNOWN")
                 self.storage.update_collection_task(task.id, "failed", error_code, last_error.get("message", ""))
-                if error_code in {"LOGIN_REQUIRED", "CAPTCHA_DETECTED", "PROXY_FAILED", "COMMENT_ACCESS_GATED"}:
+                if error_code in {"LOGIN_REQUIRED", "CAPTCHA_DETECTED", "PROXY_FAILED", "COMMENT_ACCESS_GATED", "BROWSER_CRASHED"}:
+                    self._discard_reusable_profile_session(profile_id, reason=error_code)
                     self._record_profile_failure(profile_id)
                     self._record_blocking_profile_state(
                         profile_id,
@@ -217,29 +379,99 @@ class GrowthTaskRouter:
                         str(last_error.get("message") or error_code),
                     )
                     self.storage.log_event("profile_runtime_failed_retry", datasource.id, {"profile_id": profile_id, "error_code": error_code})
+                    self._log_profile_queue_event(
+                        "profile_queue_skipped",
+                        profile_id,
+                        batch_id,
+                        config,
+                        datasource=datasource,
+                        status="skipped",
+                        reason=error_code,
+                        usage=profile_usage.get(profile_id, 0),
+                    )
                     continue
+                self._log_profile_queue_event(
+                    "profile_queue_source_failed",
+                    profile_id,
+                    batch_id,
+                    config,
+                    datasource=datasource,
+                    status="failed",
+                    reason=error_code,
+                    usage=profile_usage.get(profile_id, 0),
+                )
                 return False, last_error
             finally:
-                self._close_browser(browser, profile_id)
+                if not self._is_reusable_profile_session(profile_id, browser, config):
+                    self._close_browser(browser, profile_id)
         return False, last_error or {"error_code": "PROFILE_START_FAILED", "message": "no available profile"}
 
-    def _should_retry_empty_profile_result(self, before_counts: Dict[str, int], config: GrowthTaskConfig) -> bool:
+    def _empty_profile_result_retry(self, before_counts: Dict[str, int], config: GrowthTaskConfig) -> dict:
         if getattr(config, "test_mode", False):
-            return False
+            return {}
         if not getattr(config, "retry_empty_result_with_next_profile", True):
-            return False
+            return {}
         after_counts = self._snapshot_counts()
         content_delta = int(after_counts.get("contents", 0) or 0) - int(before_counts.get("contents", 0) or 0)
-        topic_delta = int(after_counts.get("topic_contents", 0) or 0) - int(before_counts.get("topic_contents", 0) or 0)
+        topic_content_delta = int(after_counts.get("topic_contents", 0) or 0) - int(before_counts.get("topic_contents", 0) or 0)
         candidate_delta = int(after_counts.get("candidates", 0) or 0) - int(before_counts.get("candidates", 0) or 0)
-        return content_delta <= 0 and topic_delta <= 0 and candidate_delta <= 0
+        if candidate_delta > 0:
+            return {}
+        if content_delta > 0 or topic_content_delta > 0:
+            return {
+                "error_code": "COMMENT_USERS_EMPTY_RETRY",
+                "message": "content discovered but no comment users collected; trying next profile",
+                "reason": "content_found_comment_users_empty",
+                "content_delta": content_delta + topic_content_delta,
+                "candidate_delta": candidate_delta,
+            }
+        return {
+            "error_code": "EMPTY_RESULT_RETRY",
+            "message": "no content or comment users collected; trying next profile",
+            "reason": "empty_content_or_comments",
+            "content_delta": 0,
+            "candidate_delta": candidate_delta,
+        }
+
+    def _should_retry_empty_profile_result(self, before_counts: Dict[str, int], config: GrowthTaskConfig) -> bool:
+        return bool(self._empty_profile_result_retry(before_counts, config))
+
+    def _dedupe_sources(self, sources: List[dict]) -> tuple[List[dict], int]:
+        deduped: List[dict] = []
+        seen = set()
+        duplicates = 0
+        for source in sources:
+            key = self._source_dedupe_key(source)
+            if key in seen:
+                duplicates += 1
+                continue
+            seen.add(key)
+            deduped.append(source)
+        return deduped, duplicates
+
+    def _source_dedupe_key(self, source: dict) -> str:
+        source_type = str((source or {}).get("type") or "").strip().lower()
+        source_value = str((source or {}).get("value") or "").strip()
+        normalized_value = re.sub(r"#.*$", "", source_value).strip().lower()
+        normalized_value = re.sub(r"[?&](utm_[^=&]+|ref|ref_|fbclid|gclid)=[^&]+", "", normalized_value)
+        normalized_value = re.sub(r"[?&]+$", "", normalized_value)
+        return f"{source_type}:{normalized_value}"
 
     def _run_datasource(self, datasource, driver, config: GrowthTaskConfig, profile_id: str):
         if datasource.type == "creator_url":
+            if not self._is_tiktok_url(str(datasource.value or "")):
+                self.storage.log_error("NON_TIKTOK_SOURCE_BLOCKED", "creator_url must be a TikTok URL", datasource.id, profile_id=profile_id)
+                return False
             return self._run_creator_url(datasource, driver, config, profile_id)
         if datasource.type == "content_url":
+            if not self._is_tiktok_url(str(datasource.value or "")):
+                self.storage.log_error("NON_TIKTOK_SOURCE_BLOCKED", "content_url must be a TikTok URL", datasource.id, profile_id=profile_id)
+                return False
             return self._run_content_url(datasource, driver, config, profile_id)
         if datasource.type == "live_room_url":
+            if not self._is_tiktok_url(str(datasource.value or "")):
+                self.storage.log_error("NON_TIKTOK_SOURCE_BLOCKED", "live_room_url must be a TikTok URL", datasource.id, profile_id=profile_id)
+                return False
             return self._run_live_room_url(datasource, driver, config, profile_id)
         return self._run_topic_source(datasource, driver, config, profile_id)
 
@@ -285,17 +517,21 @@ class GrowthTaskRouter:
             if int(video_data.get("comments") or 0) < int(config.min_comments or 0):
                 continue
             video_id = str(video_data.get("video_id") or video_data.get("video_url") or "")
-            if self.checkpoints.should_skip_video(datasource.id, creator.id, video_id):
-                self.storage.log_event("video_skipped_by_checkpoint", creator.id, {"video_id": video_id})
-                continue
+            checkpoint_hit = self.checkpoints.should_skip_video(datasource.id, creator.id, video_id)
             content, created = self.content_monitor.save_content(creator.id, video_data)
-            if not created and self._content_has_candidates(content.id):
+            if checkpoint_hit and self._content_has_candidates(content.id):
                 self.storage.log_event("video_skipped_by_checkpoint", content.id, {"video_id": content.video_id})
                 continue
+            if checkpoint_hit:
+                self.storage.log_event(
+                    "video_checkpoint_reopened_without_candidates",
+                    content.id,
+                    {"video_id": content.video_id},
+                )
             handled_video_ids.append(content.video_id)
             try:
                 self._navigate(driver, content.video_url)
-                self._wait_for_page(driver, "comments", timeout=0 if config.test_mode else 25)
+                self._wait_for_page(driver, "content", timeout=0 if config.test_mode else 15)
                 comments, evidence = self._collect_comments_with_retry(
                     driver,
                     content.__dict__,
@@ -316,7 +552,10 @@ class GrowthTaskRouter:
                     diagnostics=diagnostics,
                 )
             except Exception as exc:
-                self.storage.log_error("COMMENT_SCAN_FAILED", str(exc), datasource.id, creator.id, profile_id)
+                error_code = "BROWSER_CRASHED" if self._is_browser_session_error(exc) else "COMMENT_SCAN_FAILED"
+                self.storage.log_error(error_code, str(exc), datasource.id, creator.id, profile_id)
+                if error_code == "BROWSER_CRASHED":
+                    return False
         if handled_video_ids:
             if self._recent_comment_access_blocked(datasource.id, profile_id):
                 self.storage.log_event(
@@ -335,7 +574,7 @@ class GrowthTaskRouter:
         url = datasource.value
         try:
             self._navigate(driver, url)
-            self._wait_for_page(driver, "comments", timeout=0 if config.test_mode else 25)
+            self._wait_for_page(driver, "content", timeout=0 if config.test_mode else 15)
             self.storage.log_event("creator_profile_opened", datasource.id, {"url": url, "profile_id": profile_id, "source_type": datasource.type})
         except Exception as exc:
             self.storage.log_error("CREATOR_PAGE_OPEN_FAILED", str(exc), datasource.id, profile_id=profile_id)
@@ -383,6 +622,23 @@ class GrowthTaskRouter:
                 comments[: min(int(config.max_comments_per_video or 50), 50)],
                 diagnostics=diagnostics,
             )
+            if not comments and str(diagnostics.get("error_code") or "") == "URL_MISMATCH_DISCARDED":
+                if not getattr(config, "allow_content_url_creator_fallback", False):
+                    self.storage.log_event(
+                        "content_url_creator_fallback_skipped",
+                        datasource.id,
+                        {
+                            "profile_id": profile_id,
+                            "target_url": str(getattr(datasource, "value", "") or ""),
+                            "reason": "direct_content_url_scope",
+                            "expected_video_id": str(diagnostics.get("expected_video_id") or ""),
+                            "final_url_before_discard": str(
+                                diagnostics.get("final_url_before_discard") or diagnostics.get("final_url") or ""
+                            ),
+                        },
+                    )
+                    return False
+                return self._run_creator_fallback_from_content_url(datasource, driver, config, profile_id, diagnostics)
             if not comments and self._is_comment_access_error(diagnostics.get("error_code", "")):
                 self.storage.log_event(
                     "profile_comment_access_retry",
@@ -394,6 +650,44 @@ class GrowthTaskRouter:
         except Exception as exc:
             self.storage.log_error("COMMENT_SCAN_FAILED", str(exc), datasource.id, creator.id, profile_id)
             return False
+
+    def _run_creator_fallback_from_content_url(self, datasource, driver, config: GrowthTaskConfig, profile_id: str, diagnostics: dict):
+        creator_username = self._extract_creator_from_url(str(getattr(datasource, "value", "") or ""))
+        if not creator_username:
+            return False
+        creator_url = f"https://www.tiktok.com/@{creator_username}"
+        self.storage.log_event(
+            "content_url_creator_fallback_started",
+            datasource.id,
+            {
+                "profile_id": profile_id,
+                "target_url": str(getattr(datasource, "value", "") or ""),
+                "creator_url": creator_url,
+                "reason": str(diagnostics.get("error_code") or "URL_MISMATCH_DISCARDED"),
+                "expected_video_id": str(diagnostics.get("expected_video_id") or ""),
+                "final_url_before_discard": str(diagnostics.get("final_url_before_discard") or diagnostics.get("final_url") or ""),
+            },
+        )
+        fallback_source = SimpleNamespace(
+            **{
+                key: getattr(datasource, key)
+                for key in ("id", "label", "priority", "created_at", "updated_at")
+                if hasattr(datasource, key)
+            }
+        )
+        fallback_source.type = "creator_url"
+        fallback_source.value = creator_url
+        ok = self._run_creator_url(fallback_source, driver, config, profile_id)
+        self.storage.log_event(
+            "content_url_creator_fallback_completed",
+            datasource.id,
+            {
+                "profile_id": profile_id,
+                "creator_url": creator_url,
+                "success": bool(ok),
+            },
+        )
+        return ok
 
     def _run_live_room_url(self, datasource, driver, config: GrowthTaskConfig, profile_id: str):
         url = datasource.value
@@ -468,6 +762,10 @@ class GrowthTaskRouter:
                     {"url": url, "profile_id": profile_id, "source_type": datasource.type, "candidate_index": index},
                 )
             except Exception as exc:
+                if self._is_browser_session_error(exc):
+                    last_error = "BROWSER_CRASHED"
+                    self.storage.log_error("BROWSER_CRASHED", str(exc), datasource.id, profile_id=profile_id)
+                    return False
                 last_error = str(exc)
                 self.storage.log_error("TOPIC_CONTENT_SCAN_FAILED", str(exc), datasource.id, profile_id=profile_id)
                 continue
@@ -503,20 +801,41 @@ class GrowthTaskRouter:
                     return False
                 return True
             except Exception as exc:
+                if self._is_browser_session_error(exc):
+                    last_error = "BROWSER_CRASHED"
+                    self.storage.log_error("BROWSER_CRASHED", str(exc), datasource.id, profile_id=profile_id)
+                    return False
                 last_error = str(exc)
                 self.storage.log_error("TOPIC_CONTENT_SCAN_FAILED", str(exc), datasource.id, profile_id=profile_id)
                 continue
         if last_error:
-            self.storage.log_error("TOPIC_CONTENT_SCAN_FAILED", last_error, datasource.id, profile_id=profile_id)
+            code = "BROWSER_CRASHED" if str(last_error or "") == "BROWSER_CRASHED" else "TOPIC_CONTENT_SCAN_FAILED"
+            self.storage.log_error(code, last_error, datasource.id, profile_id=profile_id)
         return False
 
     def _scan_topic_material_comments(self, datasource, driver, config: GrowthTaskConfig, profile_id: str, materials: list[dict]):
         max_videos = min(int(config.max_videos_per_creator or 20), 20)
+        max_source_seconds = max(30, int(getattr(config, "max_source_runtime_seconds", 180) or 180))
+        source_deadline = time.monotonic() + max_source_seconds
         handled_video_ids: List[str] = []
         scanned = 0
         access_blocked = False
         access_error_code = ""
+        empty_comment_videos = 0
         for material in materials or []:
+            if time.monotonic() >= source_deadline:
+                self.storage.log_event(
+                    "topic_source_runtime_limit_reached",
+                    datasource.id,
+                    {
+                        "profile_id": profile_id,
+                        "source_value": datasource.value,
+                        "max_source_runtime_seconds": max_source_seconds,
+                        "scanned": scanned,
+                        "handled_video_count": len(handled_video_ids),
+                    },
+                )
+                break
             content_data = dict(material.get("content") or material)
             video_url = str(content_data.get("video_url") or "").strip()
             if not video_url:
@@ -561,9 +880,7 @@ class GrowthTaskRouter:
                 },
             )
             video_id = str(content_data.get("video_id") or self._extract_video_id_from_url(video_url) or video_url)
-            if self.checkpoints.should_skip_video(datasource.id, creator.id, video_id):
-                self.storage.log_event("video_skipped_by_checkpoint", creator.id, {"video_id": video_id, "source_type": datasource.type})
-                continue
+            checkpoint_hit = self.checkpoints.should_skip_video(datasource.id, creator.id, video_id)
             content_data.update(
                 {
                     "video_id": video_id,
@@ -574,9 +891,15 @@ class GrowthTaskRouter:
                 }
             )
             content, created = self.content_monitor.save_content(creator.id, content_data)
-            if not created and self._content_has_candidates(content.id):
+            if checkpoint_hit and self._content_has_candidates(content.id):
                 self.storage.log_event("video_skipped_by_checkpoint", content.id, {"video_id": content.video_id, "source_type": datasource.type})
                 continue
+            if checkpoint_hit:
+                self.storage.log_event(
+                    "video_checkpoint_reopened_without_candidates",
+                    content.id,
+                    {"video_id": content.video_id, "source_type": datasource.type},
+                )
             scanned += 1
             handled_video_ids.append(content.video_id)
             try:
@@ -586,7 +909,7 @@ class GrowthTaskRouter:
                     {"video_url": content.video_url, "profile_id": profile_id, "source_value": datasource.value},
                 )
                 self._navigate(driver, content.video_url)
-                self._wait_for_page(driver, "comments", timeout=0 if config.test_mode else 25)
+                self._wait_for_page(driver, "content", timeout=0 if config.test_mode else 15)
                 comments, evidence = self._collect_comments_with_retry(
                     driver,
                     content.__dict__,
@@ -609,8 +932,41 @@ class GrowthTaskRouter:
                 if not comments and self._is_comment_access_error(diagnostics.get("error_code", "")):
                     access_blocked = True
                     access_error_code = str(diagnostics.get("error_code") or "COMMENT_ACCESS_GATED")
+                elif not comments:
+                    empty_comment_videos += 1
+                    max_empty_videos = max(1, int(getattr(config, "max_empty_comment_videos_per_source", 2) or 2))
+                    self.storage.log_event(
+                        "topic_comment_scan_empty_video",
+                        content.id,
+                        {
+                            "profile_id": profile_id,
+                            "source_value": datasource.value,
+                            "empty_comment_videos": empty_comment_videos,
+                            "max_empty_comment_videos": max_empty_videos,
+                            "error_code": diagnostics.get("error_code", "COMMENT_SCAN_EMPTY"),
+                        },
+                    )
+                    if empty_comment_videos >= max_empty_videos:
+                        self.storage.log_event(
+                            "topic_comment_scan_empty_limit_reached",
+                            datasource.id,
+                            {
+                                "profile_id": profile_id,
+                                "source_value": datasource.value,
+                                "scanned": scanned,
+                                "handled_video_count": len(handled_video_ids),
+                            },
+                        )
+                        break
+                else:
+                    empty_comment_videos = 0
             except Exception as exc:
-                self.storage.log_error("COMMENT_SCAN_FAILED", str(exc), datasource.id, creator.id, profile_id)
+                error_code = "BROWSER_CRASHED" if self._is_browser_session_error(exc) else "COMMENT_SCAN_FAILED"
+                self.storage.log_error(error_code, str(exc), datasource.id, creator.id, profile_id)
+                if error_code == "BROWSER_CRASHED":
+                    access_blocked = True
+                    access_error_code = error_code
+                    break
             if scanned >= max_videos:
                 break
         if handled_video_ids:
@@ -706,15 +1062,30 @@ class GrowthTaskRouter:
     def _is_comment_access_error(self, error_code: str) -> bool:
         return str(error_code or "") in {"LOGIN_REQUIRED", "CAPTCHA_DETECTED", "PROXY_FAILED", "COMMENT_ACCESS_GATED"}
 
+    def _is_browser_session_error(self, exc: Exception) -> bool:
+        text = f"{type(exc).__name__}: {exc}".lower()
+        return any(
+            token in text
+            for token in [
+                "invalid session id",
+                "session deleted",
+                "chrome not reachable",
+                "disconnected",
+                "no such window",
+                "target window already closed",
+            ]
+        )
+
     def _record_blocking_profile_state(self, profile_id: str, group_name: str, error_code: str, message: str = ""):
-        if error_code in {"LOGIN_REQUIRED", "CAPTCHA_DETECTED", "PROXY_FAILED", "COMMENT_ACCESS_GATED", "PROFILE_START_FAILED"}:
+        if error_code in {"LOGIN_REQUIRED", "CAPTCHA_DETECTED", "PROXY_FAILED", "COMMENT_ACCESS_GATED", "IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
             self.storage.force_profile_cooldown(
                 profile_id,
                 group_name=group_name,
                 error_code=error_code,
                 error_message=message or f"page state detected: {error_code}",
             )
-            self._move_profile_to_quarantine(profile_id, error_code, message or f"page state detected: {error_code}")
+            if error_code not in {"IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
+                self._move_profile_to_quarantine(profile_id, error_code, message or f"page state detected: {error_code}")
             return
         self.storage.record_profile_health(
             profile_id,
@@ -844,7 +1215,9 @@ class GrowthTaskRouter:
     def _topic_url_candidates(self, source_type: str, value: str) -> list[str]:
         value = (value or "").strip()
         if value.startswith("http://") or value.startswith("https://"):
-            return [value]
+            if self._is_tiktok_url(value):
+                return [value]
+            value = self._external_url_to_search_query(value)
         if source_type in {"hashtag", "tag"}:
             tag = value.lstrip("#")
             return [
@@ -852,12 +1225,43 @@ class GrowthTaskRouter:
                 f"https://www.tiktok.com/search/video?q=%23{tag}",
                 f"https://www.tiktok.com/search?q=%23{tag}",
             ]
-        keyword = value.replace(" ", "%20")
+        keyword = quote(value, safe="")
         return [
             f"https://www.tiktok.com/search/video?q={keyword}",
             f"https://www.tiktok.com/search?q={keyword}",
             f"https://www.tiktok.com/tag/{value.replace(' ', '').lstrip('#')}",
         ]
+
+    def _is_tiktok_url(self, value: str) -> bool:
+        try:
+            host = (urlparse(str(value or "")).netloc or "").lower()
+        except Exception:
+            return False
+        return host == "tiktok.com" or host.endswith(".tiktok.com")
+
+    def _external_url_to_search_query(self, value: str) -> str:
+        try:
+            parsed = urlparse(str(value or "").strip())
+        except Exception:
+            return "product review"
+        candidates: list[str] = []
+        for key in ("title", "name", "product_name", "product", "q", "keyword"):
+            match = re.search(rf"(?:^|[?&]){re.escape(key)}=([^&#]+)", parsed.query or "", flags=re.I)
+            if match:
+                candidates.append(unquote(match.group(1)).replace("+", " "))
+        path_parts = [
+            unquote(part)
+            for part in (parsed.path or "").split("/")
+            if part and part.lower() not in {"dp", "gp", "product", "products", "itm", "item", "ip", "listing", "p", "goods"}
+        ]
+        candidates.extend(path_parts[:3])
+        text = " ".join(candidates)
+        text = re.sub(r"\b[A-Z0-9]{8,}\b", " ", text, flags=re.I)
+        text = re.sub(r"[-_]+", " ", text)
+        text = re.sub(r"[^A-Za-z0-9\u4e00-\u9fff ]+", " ", text)
+        words = [word for word in re.split(r"\s+", text.strip()) if len(word) > 1]
+        query = " ".join(words[:8]).strip()
+        return query or "product review"
 
     def _wait_for_page(self, driver, page_kind: str, timeout: int = 25):
         if timeout <= 0:
@@ -872,6 +1276,7 @@ class GrowthTaskRouter:
                 elif page_kind == "live":
                     found = driver.execute_script("return document.body ? document.body.innerText.length : 0")
                 elif page_kind == "comments":
+                    self._ensure_comment_panel_open(driver)
                     found = driver.execute_script(
                         "return document.querySelectorAll(\"[data-e2e*='comment'], div[class*='comment'], a[href*='/@']\").length"
                     )
@@ -879,6 +1284,9 @@ class GrowthTaskRouter:
                     found = driver.execute_script("return document.body ? document.body.innerText.length : 0")
                 if ready and int(found or 0) > 0:
                     return True
+                if page_kind == "comments":
+                    time.sleep(1)
+                    continue
                 try:
                     driver.execute_script("window.scrollBy(0, Math.max(300, window.innerHeight || 600));")
                 except Exception:
@@ -891,21 +1299,60 @@ class GrowthTaskRouter:
     def _navigate(self, driver, url: str):
         try:
             try:
-                driver.set_page_load_timeout(45)
+                driver.set_page_load_timeout(25)
             except Exception:
                 pass
             driver.get(url)
+            self._close_non_tiktok_tabs(driver, source_id=url)
             self._dismiss_blocking_overlays(driver)
         except Exception as exc:
             message = str(exc).lower()
             if "timeout" in message or "timed out receiving message" in message:
                 try:
                     driver.execute_script("window.stop();")
+                    self._close_non_tiktok_tabs(driver, source_id=url)
                     self._dismiss_blocking_overlays(driver)
                 except Exception:
                     pass
                 return
             raise
+
+    def _close_non_tiktok_tabs(self, driver, source_id: str = "", profile_id: str = "") -> int:
+        try:
+            handles = list(getattr(driver, "window_handles", []) or [])
+        except Exception:
+            return 0
+        if len(handles) <= 1:
+            return 0
+        try:
+            original = getattr(driver, "current_window_handle", "") or handles[0]
+        except Exception:
+            original = handles[0]
+        closed = 0
+        remaining: list[str] = []
+        for handle in handles:
+            try:
+                driver.switch_to.window(handle)
+                current_url = str(getattr(driver, "current_url", "") or "")
+                if handle != original and current_url and not self._is_tiktok_url(current_url):
+                    driver.close()
+                    closed += 1
+                    self.storage.log_event(
+                        "non_tiktok_tab_closed",
+                        source_id,
+                        {"profile_id": profile_id, "url": current_url},
+                    )
+                    continue
+                remaining.append(handle)
+            except Exception:
+                continue
+        try:
+            target = original if original in remaining else (remaining[0] if remaining else "")
+            if target:
+                driver.switch_to.window(target)
+        except Exception:
+            pass
+        return closed
 
     def _dismiss_blocking_overlays(self, driver) -> dict:
         if not driver:
@@ -924,6 +1371,7 @@ class GrowthTaskRouter:
                     ];
                     const unsafeLabels = [
                       'log in', 'login', 'sign up', 'sign in', 'follow', 'following', 'message',
+                      'go to tiktok', 'for you feed', 'tiktok-logo',
                       'entrar', 'inscrever', 'criar conta', 'seguir', 'mensagem',
                       '登录', '注册', '关注', '私信'
                     ];
@@ -955,7 +1403,8 @@ class GrowthTaskRouter:
                       .map(el => ({el, label: labelOf(el), rect: el.getBoundingClientRect()}))
                       .filter(item => item.label && !unsafeLabels.some(token => item.label.includes(token)));
                     const exact = nodes.find(item => dismissLabels.includes(item.label));
-                    const fuzzy = nodes.find(item => dismissLabels.some(token => item.label.includes(token)) && item.label.length <= 80);
+                    const fuzzyTokens = dismissLabels.filter(token => token.length > 3);
+                    const fuzzy = nodes.find(item => fuzzyTokens.some(token => item.label.includes(token)) && item.label.length <= 80);
                     const topRightClose = nodes.find(item => {
                       const symbol = ['×', 'x', '✕'].includes(item.label);
                       return symbol && item.rect.top < window.innerHeight * 0.35 && item.rect.left > window.innerWidth * 0.55;
@@ -993,23 +1442,154 @@ class GrowthTaskRouter:
     def _collect_comments_with_retry(self, driver, content: dict, config: GrowthTaskConfig, evidence_name: str):
         limit = min(int(config.max_comments_per_video or 50), 50)
         configured_attempts = max(1, int(getattr(config, "comment_retry_attempts", 2) or 1))
+        target_url = str(content.get("video_url") or "")
+        url_video_id = self._extract_video_id_from_url(target_url)
+        content_video_id = str(content.get("video_id") or "").strip()
+        # URL anchoring must use the id visible in the target URL. Some collectors
+        # persist a platform/internal video id that does not appear in /video/<id>.
+        expected_video_id = str(url_video_id or content_video_id or "")
+        max_url_mismatch_retries = max(
+            0,
+            int(getattr(config, "max_comment_url_mismatch_retries_per_video", 1) or 0),
+        )
+        if expected_video_id and target_url and not config.test_mode:
+            max_url_mismatch_retries = max(max_url_mismatch_retries, 4)
         attempts = configured_attempts if not config.test_mode else max(1, min(configured_attempts, 2))
+        if expected_video_id and target_url and not config.test_mode:
+            attempts = max(attempts, max_url_mismatch_retries + 1)
+        url_mismatch_count = 0
         last_comments = []
         last_evidence = None
         for attempt in range(1, attempts + 1):
+            current_url = str(getattr(driver, "current_url", "") or "")
+            if target_url and expected_video_id and expected_video_id not in current_url:
+                self.storage.log_event(
+                    "comment_scan_target_reanchor",
+                    str(content.get("id") or ""),
+                    {
+                        "attempt": attempt,
+                        "expected_video_id": expected_video_id,
+                        "current_url": current_url,
+                        "target_url": target_url,
+                    },
+                )
+                try:
+                    self._navigate(driver, target_url)
+                    self._wait_for_page(driver, "content", timeout=0 if config.test_mode else 8)
+                except Exception:
+                    pass
+            self._ensure_comment_panel_open(driver)
             comments, evidence = self._collect_with_evidence(
                 driver,
                 self._collector_chain("comment"),
                 {"content": content},
-                {"config": config, "limit": limit, "attempt": attempt},
+                {
+                    "config": config,
+                    "limit": limit,
+                    "attempt": attempt,
+                    "expected_video_id": "",
+                },
                 evidence_name if attempt == 1 else f"{evidence_name}_retry_{attempt}",
                 fallback_on_empty=True,
             )
             last_comments = comments
             last_evidence = evidence
-            if comments and not self._comments_match_expected_content_url(content, evidence):
-                expected_video_id = str(content.get("video_id") or self._extract_video_id_from_url(str(content.get("video_url") or "")) or "")
-                final_url = str(getattr(evidence, "final_url", "") or getattr(driver, "current_url", "") or "")
+            diagnostics = getattr(evidence, "diagnostics", None)
+            evidence_final_url = str(getattr(evidence, "final_url", "") or getattr(driver, "current_url", "") or "")
+            diagnostics_final_url = str((diagnostics or {}).get("final_url") or "")
+            final_url = evidence_final_url or diagnostics_final_url
+            same_creator_video = self._same_creator_video_url(str(content.get("video_url") or ""), final_url)
+            url_mismatch_detected = bool(
+                expected_video_id
+                and final_url
+                and expected_video_id not in final_url
+                and not same_creator_video
+                and (
+                    comments
+                    or str((diagnostics or {}).get("stop_reason") or "") == "url_mismatch"
+                    or "/video/" in final_url
+                )
+            )
+            if same_creator_video and expected_video_id and final_url and expected_video_id not in final_url:
+                url_mismatch_count += 1
+                if comments and getattr(config, "accept_same_creator_video_comments", True):
+                    self.storage.log_event(
+                        "comment_scan_same_creator_fallback_accepted",
+                        str(content.get("id") or ""),
+                        {
+                            "attempt": attempt,
+                            "expected_video_id": expected_video_id,
+                            "expected_url": str(content.get("video_url") or ""),
+                            "final_url": final_url,
+                            "comment_count": len(comments),
+                            "reason": "same_creator_video_with_comments",
+                        },
+                    )
+                    try:
+                        if isinstance(diagnostics, dict):
+                            diagnostics["same_creator_video_fallback"] = True
+                            diagnostics["expected_video_id"] = expected_video_id
+                            diagnostics["final_url_before_accept"] = final_url
+                            diagnostics["stop_reason"] = "same_creator_video_accepted"
+                            diagnostics["error_code"] = ""
+                    except Exception:
+                        pass
+                    break
+                self.storage.log_event(
+                    "comment_scan_followed_same_creator_video",
+                    str(content.get("id") or ""),
+                    {
+                        "attempt": attempt,
+                        "expected_video_id": expected_video_id,
+                        "expected_url": str(content.get("video_url") or ""),
+                        "final_url": final_url,
+                        "comment_count": len(comments),
+                    },
+                )
+                comments = []
+                last_comments = []
+                try:
+                    if isinstance(diagnostics, dict):
+                        diagnostics["url_mismatch_discarded"] = True
+                        diagnostics["error_code"] = diagnostics.get("error_code") or "URL_MISMATCH_DISCARDED"
+                        diagnostics["expected_video_id"] = expected_video_id
+                        diagnostics["final_url_before_discard"] = final_url
+                        diagnostics["stop_reason"] = "same_creator_other_video"
+                except Exception:
+                    pass
+                if url_mismatch_count > max_url_mismatch_retries or attempt >= attempts:
+                    self.storage.log_event(
+                        "comment_scan_url_mismatch_limit_reached",
+                        str(content.get("id") or ""),
+                        {
+                            "attempt": attempt,
+                            "expected_video_id": expected_video_id,
+                            "final_url": final_url,
+                            "max_url_mismatch_retries": max_url_mismatch_retries,
+                            "reason": "same_creator_other_video",
+                        },
+                    )
+                    break
+                if target_url:
+                    self.storage.log_event(
+                        "comment_scan_url_mismatch_retry",
+                        str(content.get("id") or ""),
+                        {
+                            "next_attempt": attempt + 1,
+                            "expected_video_id": expected_video_id,
+                            "final_url": final_url,
+                            "target_url": target_url,
+                            "reason": "same_creator_other_video",
+                        },
+                    )
+                    try:
+                        self._navigate(driver, target_url)
+                        self._wait_for_page(driver, "content", timeout=0 if config.test_mode else 8)
+                    except Exception:
+                        pass
+                continue
+            if url_mismatch_detected:
+                url_mismatch_count += 1
                 self.storage.log_event(
                     "comment_scan_discarded_url_mismatch",
                     str(content.get("id") or ""),
@@ -1019,27 +1599,56 @@ class GrowthTaskRouter:
                         "expected_url": str(content.get("video_url") or ""),
                         "final_url": final_url,
                         "discarded_comment_count": len(comments),
+                        "error_code": "URL_MISMATCH_DISCARDED",
                     },
                 )
                 comments = []
                 last_comments = []
                 try:
-                    diagnostics = getattr(evidence, "diagnostics", None)
                     if isinstance(diagnostics, dict):
                         diagnostics["url_mismatch_discarded"] = True
+                        diagnostics["error_code"] = diagnostics.get("error_code") or "URL_MISMATCH_DISCARDED"
                         diagnostics["expected_video_id"] = expected_video_id
                         diagnostics["final_url_before_discard"] = final_url
                 except Exception:
                     pass
+                if url_mismatch_count > max_url_mismatch_retries or attempt >= attempts:
+                    self.storage.log_event(
+                        "comment_scan_url_mismatch_limit_reached",
+                        str(content.get("id") or ""),
+                        {
+                            "attempt": attempt,
+                            "expected_video_id": expected_video_id,
+                            "final_url": final_url,
+                            "max_url_mismatch_retries": max_url_mismatch_retries,
+                        },
+                    )
+                    break
+                if target_url:
+                    self.storage.log_event(
+                        "comment_scan_url_mismatch_retry",
+                        str(content.get("id") or ""),
+                        {
+                            "next_attempt": attempt + 1,
+                            "expected_video_id": expected_video_id,
+                            "final_url": final_url,
+                            "target_url": target_url,
+                        },
+                    )
+                    try:
+                        self._navigate(driver, target_url)
+                        self._wait_for_page(driver, "content", timeout=0 if config.test_mode else 8)
+                    except Exception:
+                        pass
+                continue
             if comments:
                 if attempt > 1:
                     self.storage.log_event(
                         "comment_scan_retry_succeeded",
                         str(content.get("id") or ""),
                         {"attempt": attempt, "comment_count": len(comments)},
-                    )
+                )
                 break
-            diagnostics = getattr(evidence, "diagnostics", None)
             page_state = str((diagnostics or {}).get("page_state") or "")
             error_code = str(getattr(evidence, "error_code", "") or (diagnostics or {}).get("error_code") or "")
             if page_state in {"login_required", "captcha", "proxy_failed"} or error_code in {
@@ -1056,18 +1665,112 @@ class GrowthTaskRouter:
                 )
                 if not comments:
                     try:
-                        target_url = str(content.get("video_url") or "")
                         if target_url:
                             self._navigate(driver, target_url)
                     except Exception:
                         pass
-                try:
-                    driver.execute_script("window.scrollBy(0, Math.max(700, window.innerHeight || 700));")
-                except Exception:
-                    pass
+                if str(content.get("video_url") or "") and "/video/" not in str(getattr(driver, "current_url", "") or ""):
+                    try:
+                        self._navigate(driver, str(content.get("video_url") or ""))
+                    except Exception:
+                        pass
+                self._ensure_comment_panel_open(driver)
                 time.sleep(0 if config.test_mode else 3)
-                self._wait_for_page(driver, "comments", timeout=0 if config.test_mode else 8)
+                self._wait_for_page(driver, "content", timeout=0 if config.test_mode else 8)
         return last_comments, last_evidence
+
+    def _ensure_comment_panel_open(self, driver) -> dict:
+        if not driver:
+            return {"clicked": False, "reason": "no_driver"}
+        try:
+            result = driver.execute_script(
+                """
+                const visible = el => {
+                  if (!el || !el.getBoundingClientRect) return false;
+                  const rect = el.getBoundingClientRect();
+                  const style = window.getComputedStyle(el);
+                  return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' &&
+                    style.display !== 'none' && rect.bottom > 0 && rect.right > 0 &&
+                    rect.top < (window.innerHeight || 900);
+                };
+                const norm = value => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                const labelOf = el => norm([
+                  el.innerText,
+                  el.textContent,
+                  el.getAttribute('aria-label'),
+                  el.getAttribute('title'),
+                  el.getAttribute('data-e2e')
+                ].filter(Boolean).join(' '));
+                const click = el => {
+                  const rect = el.getBoundingClientRect();
+                  const x = rect.left + rect.width / 2;
+                  const y = rect.top + rect.height / 2;
+                  const target = document.elementFromPoint(x, y) || el;
+                  for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                    target.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window, clientX:x, clientY:y}));
+                  }
+                };
+                const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span, [aria-label], [data-e2e]'))
+                  .filter(visible)
+                  .map(el => ({el, label: labelOf(el), rect: el.getBoundingClientRect()}));
+                const panelSeen = nodes.some(item =>
+                  item.label.includes('add comment') ||
+                  item.label.includes('view more comments') ||
+                  item.label.includes('reply')
+                );
+                const recommendationActive = nodes.some(item =>
+                  /you may like|related videos|recommended/.test(item.label) &&
+                  item.rect.left > (window.innerWidth || 1200) * 0.55 &&
+                  item.rect.top < (window.innerHeight || 900) * 0.55
+                );
+                const clickPoint = (x, y) => {
+                  const target = document.elementFromPoint(x, y);
+                  if (!target) return false;
+                  for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                    target.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window, clientX:x, clientY:y}));
+                  }
+                  return true;
+                };
+                if (panelSeen) {
+                  return {clicked: false, reason: 'comments_already_visible', panelSeen, recommendationActive};
+                }
+                if (recommendationActive) {
+                  const x = Math.round((window.innerWidth || 1200) * 0.76);
+                  const y = Math.round((window.innerHeight || 900) * 0.30);
+                  if (clickPoint(x, y)) {
+                    return {clicked: true, reason: 'comments_tab_coordinate', x, y, recommendationActive};
+                  }
+                }
+                const commentTab = nodes.find(item =>
+                  /^(comments?|commentaires|comentarios|comentários|评论)$/.test(item.label) &&
+                  item.rect.left > (window.innerWidth || 1200) * 0.55
+                );
+                if (commentTab) {
+                  click(commentTab.el);
+                  return {clicked: true, reason: 'comments_tab', label: commentTab.label, recommendationActive};
+                }
+                const commentButton = nodes.find(item =>
+                  /comment/.test(item.label) &&
+                  !/add comment|view more comments/.test(item.label) &&
+                  item.rect.left > (window.innerWidth || 1200) * 0.45
+                );
+                if (commentButton) {
+                  click(commentButton.el);
+                  return {clicked: true, reason: 'comment_button', label: commentButton.label};
+                }
+                return {clicked: false, reason: 'comment_control_not_found', panelSeen};
+                """
+            )
+        except Exception as exc:
+            return {"clicked": False, "reason": "exception", "error": str(exc)}
+        if isinstance(result, dict) and (result.get("clicked") or result.get("reason") != "comments_already_visible"):
+            try:
+                self.storage.log_event("comment_panel_open_attempt", "", result)
+            except Exception:
+                pass
+        if isinstance(result, dict) and result.get("clicked"):
+            time.sleep(0.8)
+        return result if isinstance(result, dict) else {"clicked": False, "reason": "invalid_result"}
 
     def _comments_match_expected_content_url(self, content: dict, evidence) -> bool:
         expected_ids = []
@@ -1187,6 +1890,16 @@ class GrowthTaskRouter:
         value = str(url or "").split("?")[0].rstrip("/")
         return value.split("/")[-1] if value else ""
 
+    def _same_creator_video_url(self, expected_url: str, final_url: str) -> bool:
+        expected_creator = normalize_tiktok_username(self._extract_creator_from_url(expected_url) or "")
+        final_creator = normalize_tiktok_username(self._extract_creator_from_url(final_url) or "")
+        return bool(
+            expected_creator
+            and final_creator
+            and expected_creator.lower() == final_creator.lower()
+            and "/video/" in str(final_url or "")
+        )
+
     def _read_page_caption(self, driver) -> str:
         try:
             text = driver.execute_script(
@@ -1210,19 +1923,94 @@ class GrowthTaskRouter:
             return ""
 
     def _open_browser(self, profile_id: str, source_id: str):
+        self._last_profile_start_error = {}
         if not profile_id:
             self.storage.log_error("PROFILE_START_FAILED", "empty profile_id", source_id)
+            self._last_profile_start_error = {"error_code": "PROFILE_START_FAILED", "message": "empty profile_id"}
             return None
+        timeout_seconds = 45
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(self._open_browser_inner, profile_id, source_id)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError:
+            message = f"profile start timed out after {timeout_seconds}s"
+            self._last_profile_start_error = {"error_code": "PROFILE_START_TIMEOUT", "message": message}
+            self.storage.log_error("PROFILE_START_TIMEOUT", message, source_id, profile_id=profile_id)
+            self.storage.log_event("profile_start_timeout", source_id, {"profile_id": profile_id, "timeout_seconds": timeout_seconds})
+            return None
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    def _open_browser_for_source(self, profile_id: str, source_id: str, batch_id: str, config: GrowthTaskConfig):
+        if self._should_reuse_profile_sessions(config):
+            cached = self._profile_sessions.get(profile_id)
+            if cached:
+                self.storage.log_event(
+                    "profile_session_reused",
+                    source_id,
+                    {"profile_id": profile_id, "batch_id": batch_id},
+                )
+                return cached
+        browser = self._open_browser(profile_id, source_id)
+        if browser:
+            self._close_non_tiktok_tabs(getattr(browser, "driver", browser), source_id=source_id, profile_id=profile_id)
+        if browser and self._should_reuse_profile_sessions(config):
+            self._profile_sessions[profile_id] = browser
+            self.storage.log_event(
+                "profile_session_retained",
+                source_id,
+                {"profile_id": profile_id, "batch_id": batch_id},
+            )
+        return browser
+
+    def _should_reuse_profile_sessions(self, config: GrowthTaskConfig) -> bool:
+        if getattr(config, "test_mode", False):
+            return False
+        if not getattr(config, "account_queue_enabled", True):
+            return False
+        return int(getattr(config, "max_sources_per_profile", 0) or 0) > 1
+
+    def _is_reusable_profile_session(self, profile_id: str, browser: Any, config: GrowthTaskConfig) -> bool:
+        if not self._should_reuse_profile_sessions(config):
+            return False
+        return bool(profile_id and browser and self._profile_sessions.get(profile_id) is browser)
+
+    def _discard_reusable_profile_session(self, profile_id: str, reason: str = ""):
+        browser = self._profile_sessions.pop(profile_id, None)
+        if not browser:
+            return
+        self.storage.log_event(
+            "profile_session_discarded",
+            profile_id,
+            {"profile_id": profile_id, "reason": reason or "discarded"},
+        )
+        self._close_browser(browser, profile_id)
+
+    def _close_reusable_profile_sessions(self, batch_id: str = ""):
+        sessions = list(self._profile_sessions.items())
+        self._profile_sessions.clear()
+        for profile_id, browser in sessions:
+            self.storage.log_event(
+                "profile_session_closed",
+                batch_id,
+                {"profile_id": profile_id, "batch_id": batch_id},
+            )
+            self._close_browser(browser, profile_id)
+
+    def _open_browser_inner(self, profile_id: str, source_id: str):
         try:
             if self.browser_factory:
                 browser = self.browser_factory(profile_id)
                 if browser:
+                    self._configure_driver_timeouts(getattr(browser, "driver", browser))
                     return browser
             from ReachOps.adapters.browser_manager import get_workbench_browser_adapter
 
             manager = get_workbench_browser_adapter()
             inst = manager.acquire(profile_id=profile_id, account_id=f"growth-{profile_id}", trace_id=source_id, max_instances=3)
             if inst and inst.driver:
+                self._configure_driver_timeouts(inst.driver)
                 return inst
             last_error = ""
             try:
@@ -1231,12 +2019,25 @@ class GrowthTaskRouter:
                 last_error = ""
             if last_error:
                 self.storage.log_error("PROFILE_START_FAILED", last_error, source_id, profile_id=profile_id)
+                self._last_profile_start_error = {"error_code": "PROFILE_START_FAILED", "message": last_error}
                 return None
         except Exception as exc:
             self.storage.log_error("PROFILE_START_FAILED", str(exc), source_id, profile_id=profile_id)
+            self._last_profile_start_error = {"error_code": "PROFILE_START_FAILED", "message": str(exc)}
             return None
         self.storage.log_error("PROFILE_START_FAILED", "browser factory returned empty", source_id, profile_id=profile_id)
+        self._last_profile_start_error = {"error_code": "PROFILE_START_FAILED", "message": "browser factory returned empty"}
         return None
+
+    def _configure_driver_timeouts(self, driver: Any):
+        try:
+            driver.set_page_load_timeout(25)
+        except Exception:
+            pass
+        try:
+            driver.set_script_timeout(20)
+        except Exception:
+            pass
 
     def _close_browser(self, browser: Any, profile_id: str):
         try:
@@ -1299,13 +2100,17 @@ class GrowthTaskRouter:
                 const combined = [text, title, labels.join(' '), dialogTexts.join(' ')].join(' ');
                 const exactLoginButton = labels.some(v => /^(log in|login|sign in|sign up|entrar|inscrever-se|criar conta|iniciar sesión|registrarse)$/.test(v));
                 const forcedLoginText = /(log in to|login to|sign up for|sign up \\| tiktok|log in to follow creators|log in to like videos|log in to comment|log in to view comments|登录后即可|登入後即可|entrar para|faça login|inicia sesión)/.test(combined);
+                const onboardingLoginGate =
+                  /what would you like to watch on tiktok/.test(combined) &&
+                  labels.some(v => /^(log in|login|sign in)$/.test(v));
                 const accountSetupGate =
                   (/login=1/.test(pumbaaCtx) || loginStaticAsset) &&
                   /(got it|how face or voice data is used|important things to know|location services|allow cookies from tiktok|privacy policy|terms of service)/.test(combined);
                 const loginPage = /\\/login|\\/signup|login\\?/.test(url) || /(^|\\|\\s*)(sign up|log in|login)(\\s*\\||$)/.test(title);
                 const captcha = /captcha|verify to continue|verification|security check|验证码|验证/.test(text);
                 const proxy = /proxy|tunnel connection failed|err_tunnel|err_proxy|dns_probe|site can't be reached|无法访问/.test(text);
-                return {url, text, title, videoLinks, profileLinks, loginDialog, exactLoginButton, forcedLoginText, accountSetupGate, loginPage, captcha, proxy};
+                const platformTemporaryError = /something went wrong|sorry about that|please try again later/.test(combined);
+                return {url, text, title, videoLinks, profileLinks, loginDialog, exactLoginButton, forcedLoginText, onboardingLoginGate, accountSetupGate, loginPage, captcha, proxy, platformTemporaryError};
                 """
             ) or {}
             text = str(state.get("text") or "").lower()
@@ -1316,10 +2121,13 @@ class GrowthTaskRouter:
             return "PROXY_FAILED"
         if bool(state.get("captcha")):
             return "CAPTCHA_DETECTED"
-        has_page_entities = int(state.get("videoLinks") or 0) > 0 or int(state.get("profileLinks") or 0) > 0
-        if bool(state.get("loginPage")) or bool(state.get("loginDialog")) or bool(state.get("forcedLoginText")) or bool(state.get("accountSetupGate")):
+        if bool(state.get("platformTemporaryError")):
+            return "PLATFORM_TEMPORARY_ERROR"
+        if bool(state.get("loginPage")) or bool(state.get("loginDialog")) or bool(state.get("forcedLoginText")) or bool(state.get("onboardingLoginGate")) or bool(state.get("accountSetupGate")):
             return "LOGIN_REQUIRED"
-        if bool(state.get("exactLoginButton")) and not has_page_entities:
+        if bool(state.get("exactLoginButton")) and not (
+            int(state.get("videoLinks") or 0) > 0 or int(state.get("profileLinks") or 0) > 0
+        ):
             return "LOGIN_REQUIRED"
         return ""
 
@@ -1333,16 +2141,95 @@ class GrowthTaskRouter:
             return False
         return self.profile_failures.get(profile_id, 0) >= int(config.failure_cooldown_threshold or 3)
 
-    def _profile_candidates_for_index(self, profiles: List[dict], index: int) -> List[dict]:
+    def _profile_candidates_for_index(self, profiles: List[dict], index: int, config: Optional[GrowthTaskConfig] = None, profile_usage: Optional[Dict[str, int]] = None) -> List[dict]:
         rows = list(profiles or [])
         if not rows:
             return [{}]
-        start = index % len(rows)
-        return rows[start:] + rows[:start]
+        if not config or not getattr(config, "account_queue_enabled", True):
+            start = index % len(rows)
+            ordered = rows[start:] + rows[:start]
+            return ordered
+        usage = profile_usage or {}
+        if int(getattr(config, "max_sources_per_profile", 1) or 1) <= 1:
+            start = index % len(rows)
+            ordered = rows[start:] + rows[:start]
+            available = [profile for profile in ordered if not self._profile_source_quota_reached(str(profile.get("profile_id") or profile.get("id") or ""), config, usage)]
+            return available or ordered
+        available = [
+            profile
+            for profile in rows
+            if not self._profile_source_quota_reached(str(profile.get("profile_id") or profile.get("id") or ""), config, usage)
+        ]
+        return available or rows
 
-    def _open_browser_with_fallback(self, profiles: List[dict], index: int, config: GrowthTaskConfig, source_id: str):
+    def _profile_source_quota_reached(self, profile_id: str, config: GrowthTaskConfig, profile_usage: Dict[str, int]) -> bool:
+        if not profile_id or not getattr(config, "account_queue_enabled", True):
+            return False
+        limit = max(1, int(getattr(config, "max_sources_per_profile", 1) or 1))
+        return int(profile_usage.get(profile_id, 0) or 0) >= limit
+
+    def _log_profile_queue_initialized(self, profiles: List[dict], batch_id: str, config: GrowthTaskConfig):
+        limit = max(1, int(getattr(config, "max_sources_per_profile", 1) or 1))
+        requested = max(1, int(getattr(config, "requested_concurrency", 1) or 1))
+        for index, profile in enumerate(profiles or []):
+            profile_id = str(profile.get("profile_id") or profile.get("id") or "").strip()
+            if not profile_id:
+                continue
+            self.storage.log_event(
+                "profile_queue_enqueued",
+                profile_id,
+                {
+                    "batch_id": batch_id,
+                    "profile_id": profile_id,
+                    "queue_index": index + 1,
+                    "status": "waiting",
+                    "group_name": str(profile.get("group_name") or getattr(config, "profile_group", "") or ""),
+                    "max_sources_per_profile": limit,
+                    "requested_concurrency": requested,
+                },
+            )
+
+    def _log_profile_queue_event(
+        self,
+        event: str,
+        profile_id: str,
+        batch_id: str,
+        config: GrowthTaskConfig,
+        datasource=None,
+        status: str = "",
+        reason: str = "",
+        usage: int = 0,
+    ):
+        if not profile_id or not getattr(config, "account_queue_enabled", True):
+            return
+        self.storage.log_event(
+            event,
+            profile_id,
+            {
+                "batch_id": batch_id,
+                "profile_id": profile_id,
+                "status": status or event.replace("profile_queue_", ""),
+                "reason": reason,
+                "sources_done": int(usage or 0),
+                "max_sources_per_profile": max(1, int(getattr(config, "max_sources_per_profile", 1) or 1)),
+                "requested_concurrency": max(1, int(getattr(config, "requested_concurrency", 1) or 1)),
+                "source_id": str(getattr(datasource, "id", "") or ""),
+                "source_type": str(getattr(datasource, "type", "") or ""),
+                "source_value": str(getattr(datasource, "value", "") or ""),
+            },
+        )
+
+    def _open_browser_with_fallback(
+        self,
+        profiles: List[dict],
+        index: int,
+        config: GrowthTaskConfig,
+        source_id: str,
+        profile_usage: Optional[Dict[str, int]] = None,
+    ):
         last_profile = {}
-        for profile in self._profile_candidates_for_index(profiles, index):
+        usage = profile_usage if profile_usage is not None else {}
+        for profile in self._profile_candidates_for_index(profiles, index, config, usage):
             profile_id = str(profile.get("profile_id") or profile.get("id") or "").strip()
             last_profile = profile
             if self._is_profile_in_cooldown(profile_id, config):

@@ -43,10 +43,34 @@
 3. 配置、数据、授权、日志、报告必须使用独立运行目录。
 4. 新增增长获客能力优先写入本目录下的 `ReachOps/workbench`、`ReachOps/intelligence`、`ReachOps/collectors` 或 `ReachOps/adapters`。
 
+PM/运营验收先看 `docs/REACHOPS_GOAL_MODE_EXECUTION.md` 和 `docs/REACHOPS_PM_DELIVERY_BASELINE.md`。目标模式总控入口是：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_goal_delivery_runner.py --json
+```
+
 ## 启动方式
+
+默认客户端入口为原生 UI；以下命令会启动本地原生客户端窗口：
 
 ```bash
 python -m ReachOps
+python ReachOpsApp.py
+```
+
+Mac 桌面入口 `启动ReachOps本地客户端.command` 和 `启动ReachOps原生MacUI.command` 会启动原生客户端 UI。
+
+Web 控制台仅作为备用入口，需要时显式开启：
+
+```bash
+python ReachOpsApp.py --web
+./启动ReachOps统一WebUI.command
+```
+
+Web 控制台也可用开发命令直接启动，用于调试本机后端执行链路：
+
+```bash
+python tools/reachops_web_ui.py --web --host 127.0.0.1 --port 8769
 ```
 
 ## Windows 独立打包
@@ -106,4 +130,4 @@ ReachOps/docs/REACHOPS_DELIVERY_EXECUTION_PLAN.md
 ReachOps/docs/REACHOPS_WINDOWS_LIVE_ACCEPTANCE_RUNBOOK.md
 ```
 
-完整交付前，acceptance summary 必须达到 `passed`，且 `effective_pending_external_validation` 必须为 `0`。
+完整交付前，acceptance summary 必须达到 `passed`，`effective_pending_external_validation` 必须为 `0`，客户端交付门禁必须达到 `final_delivery_ready=true`，Windows 交付包检查必须返回 `status=passed` 且包含 `repository_cleanliness` 报告证据，并且 `tools/reachops_final_acceptance_gate.py --json` 必须返回 `status=passed`、`failed_checks=[]`。

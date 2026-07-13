@@ -4,6 +4,7 @@ from __future__ import annotations
 from .schemas import ActionQueueItem, utc_now_iso
 from .storage import GrowthStorage, new_id
 from ReachOps.collectors.normalizer import normalize_language_text
+from .lead_quality import looks_like_seller_promo
 from .outreach_copy import OutreachCopyRecommender, RuleBasedOutreachCopyRecommender
 
 
@@ -59,7 +60,7 @@ class OperationLeadManager:
                 if created:
                     stats["intents"] += 1
                     self.storage.log_event("audience_intent_created", row["id"], {"intent_type": intent_type, "confidence": confidence})
-            if score < 40 and confidence < 50:
+            if score < 40 and confidence < 50 and not bool(getattr(config, "accept_low_intent_actions", False)):
                 continue
             priority = "high" if score >= 70 or confidence >= 80 else "normal"
             lead_type = intent_type or "engaged_commenter"
@@ -81,7 +82,10 @@ class OperationLeadManager:
         return stats
 
     def detect_intent(self, row: dict, config=None) -> tuple[str, int, str]:
-        text = normalize_language_text(str(row.get("comment_text") or "").lower())
+        raw_text = str(row.get("comment_text") or "")
+        if looks_like_seller_promo(raw_text):
+            return "", 0, "排除卖家/品牌自促评论"
+        text = normalize_language_text(raw_text.lower())
         matched = []
         for keyword, intent in PURCHASE_INTENT.items():
             normalized_keyword = normalize_language_text(keyword)
@@ -102,6 +106,24 @@ class OperationLeadManager:
 
     def _create_actions(self, lead_id: str, row: dict, lead_type: str, priority: str, config) -> int:
         created_count = 0
+        score = int(row.get("qualify_score") or 0)
+        raw_min_action_score = getattr(config, "min_lead_score_for_action", 50)
+        min_action_score = max(0, int(50 if raw_min_action_score is None else raw_min_action_score))
+        standard_policy = bool(getattr(config, "enable_standard_outreach_policy", True))
+        explicit_intent = bool(lead_type and lead_type != "engaged_commenter")
+        if standard_policy and priority != "high" and not explicit_intent and score < min_action_score:
+            self.storage.log_event(
+                "action_queue_skipped_low_intent",
+                str(lead_id or ""),
+                {
+                    "username": row.get("username"),
+                    "score": score,
+                    "min_score": min_action_score,
+                    "lead_type": lead_type,
+                    "explicit_intent": explicit_intent,
+                },
+            )
+            return 0
         username = str(row.get("username") or "")
         profile_url = str(row.get("profile_url") or "")
         comment_target_url = str(row.get("source_path") or row.get("video_url") or profile_url)
@@ -109,11 +131,11 @@ class OperationLeadManager:
         if getattr(config, "enable_comment_queue", True):
             suggestion = self.copy_recommender.recommend("comment_reply", row, lead_type, priority, config)
             actions.append(("comment_reply", comment_target_url, suggestion.text, "medium", suggestion))
-        if getattr(config, "enable_follow_queue", True):
+        if getattr(config, "enable_follow_queue", True) and (not standard_policy or priority == "high"):
             follow_risk = "medium" if priority == "high" else "low"
             suggestion = self.copy_recommender.recommend("follow_review", row, lead_type, priority, config)
             actions.append(("follow_review", profile_url, suggestion.text, follow_risk, suggestion))
-        if getattr(config, "enable_dm_queue", True):
+        if getattr(config, "enable_dm_queue", True) and (not standard_policy or priority == "high"):
             dm_risk = "high" if priority == "high" else "medium"
             suggestion = self.copy_recommender.recommend("dm_review", row, lead_type, priority, config)
             actions.append(("dm_review", profile_url, suggestion.text, dm_risk, suggestion))
@@ -139,6 +161,16 @@ class OperationLeadManager:
                 created_at=utc_now_iso(),
             )
             _, created = self.storage.upsert_action_queue_item(item)
+            batch_id = str(getattr(config, "active_batch_id", "") or "").strip()
+            if batch_id:
+                try:
+                    with self.storage.connect() as conn:
+                        conn.execute(
+                            "UPDATE action_queue SET batch_id=COALESCE(NULLIF(batch_id, ''), ?) WHERE id=?",
+                            (batch_id, item.id),
+                        )
+                except Exception:
+                    pass
             if created:
                 created_count += 1
                 self.storage.log_event("action_queue_created", item.id, {"action_type": action_type, "username": username})

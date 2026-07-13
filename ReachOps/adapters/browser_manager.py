@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import threading
+import time
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -47,6 +49,7 @@ class IxBrowserLocalAdapter:
         profile_key = None
         try:
             self.last_error = ""
+            self._configure_localhost_proxy_bypass()
             from ixbrowser_local_api import IXBrowserClient
 
             client = IXBrowserClient()
@@ -57,10 +60,13 @@ class IxBrowserLocalAdapter:
                 load_profile_info_page=False,
             )
             if result is None:
+                result = self._recover_timed_out_open_profile(profile_id, client)
+            if result is None:
                 self.last_error = (
                     f"ixBrowser open_profile failed: "
                     f"code={getattr(client, 'code', '')} message={getattr(client, 'message', '')}"
                 )
+                self.close_profile(client, profile_id)
                 return None, client
 
             from selenium import webdriver
@@ -83,6 +89,7 @@ class IxBrowserLocalAdapter:
                 return None, None
             options.debugger_address = f"127.0.0.1:{debug_port}"
             driver = webdriver.Chrome(service=Service(result["webdriver"]), options=options)
+            self._close_startup_noise_tabs(driver)
             client.profile_id = profile_id
             return driver, client
         except Exception as exc:
@@ -99,6 +106,17 @@ class IxBrowserLocalAdapter:
             pass
 
     @staticmethod
+    def _configure_localhost_proxy_bypass():
+        existing = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+        entries = [item.strip() for item in existing.split(",") if item.strip()]
+        for item in ["127.0.0.1", "localhost", "::1"]:
+            if item not in entries:
+                entries.append(item)
+        value = ",".join(entries)
+        os.environ["NO_PROXY"] = value
+        os.environ["no_proxy"] = value
+
+    @staticmethod
     def _normalize_profile_id(profile_id):
         value = str(profile_id or "").strip()
         if value.isdigit():
@@ -108,12 +126,6 @@ class IxBrowserLocalAdapter:
     @classmethod
     def _resolve_debug_port(cls, client: Any, result: dict) -> int | None:
         ports: list[int] = []
-        try:
-            port = client.get_remote_debug_port()
-            if port:
-                ports.append(int(port))
-        except Exception:
-            pass
         for key in ("debugging_port", "debug_port"):
             try:
                 port = result.get(key)
@@ -124,6 +136,13 @@ class IxBrowserLocalAdapter:
         match = re.search(r"127\.0\.0\.1:(\d+)", str(result.get("ws", "")))
         if match:
             ports.append(int(match.group(1)))
+        if not ports:
+            try:
+                port = client.get_remote_debug_port()
+                if port:
+                    ports.append(int(port))
+            except Exception:
+                pass
         seen = set()
         for port in ports:
             if port in seen:
@@ -133,6 +152,52 @@ class IxBrowserLocalAdapter:
                 return port
         return ports[-1] if ports else None
 
+    def _recover_timed_out_open_profile(self, profile_id: str, client: Any) -> dict | None:
+        message = str(getattr(client, "message", "") or "").lower()
+        if "read timed out" not in message and "timed out" not in message:
+            return None
+        deadline = time.time() + max(1, int(os.environ.get("REACHOPS_IX_RECOVER_SECONDS", "20") or "20"))
+        while time.time() < deadline:
+            result = self._profile_process_result(profile_id)
+            if result and self._debug_port_reachable(int(result["debugging_port"])):
+                return result
+            time.sleep(1)
+        return None
+
+    @staticmethod
+    def _profile_process_result(profile_id: str) -> dict | None:
+        profile_id = str(profile_id or "").strip()
+        if not profile_id:
+            return None
+        try:
+            output = subprocess.run(
+                ["ps", "-axo", "command="],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+            ).stdout
+        except Exception:
+            return None
+        for line in output.splitlines():
+            if f"--protected-userid={profile_id}" not in line or "--remote-debugging-port=" not in line:
+                continue
+            port_match = re.search(r"--remote-debugging-port=(\d+)", line)
+            chrome_match = re.search(r"(/Users/.+?/ixBrowser-Resources/chrome/[^/]+)/Chromium\.app/", line)
+            if not port_match or not chrome_match:
+                continue
+            webdriver = os.path.join(chrome_match.group(1), "chromedriver.app", "Contents", "MacOS", "chromedriver")
+            if not os.path.exists(webdriver):
+                continue
+            return {
+                "debugging_port": int(port_match.group(1)),
+                "webdriver": webdriver,
+                "recovered_from_process": True,
+            }
+        return None
+
     @staticmethod
     def _debug_port_reachable(port: int) -> bool:
         try:
@@ -140,6 +205,59 @@ class IxBrowserLocalAdapter:
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def _close_startup_noise_tabs(driver: Any) -> int:
+        """Remove restored product/store tabs before ReachOps starts navigation."""
+        try:
+            handles = list(getattr(driver, "window_handles", []) or [])
+        except Exception:
+            return 0
+        if len(handles) <= 1:
+            return 0
+        try:
+            original = getattr(driver, "current_window_handle", "") or handles[0]
+        except Exception:
+            original = handles[0]
+        tab_rows: list[tuple[str, str]] = []
+        for handle in handles:
+            try:
+                driver.switch_to.window(handle)
+                tab_rows.append((handle, str(getattr(driver, "current_url", "") or "")))
+            except Exception:
+                tab_rows.append((handle, ""))
+
+        def keep_url(url: str) -> bool:
+            value = str(url or "").lower()
+            return (
+                not value
+                or value.startswith("about:")
+                or value.startswith("chrome:")
+                or value.startswith("devtools:")
+                or "tiktok.com" in value
+            )
+
+        keep_handles = [handle for handle, url in tab_rows if keep_url(url)]
+        if not keep_handles:
+            keep_handles = [original if original in handles else handles[0]]
+        closed = 0
+        for handle, url in tab_rows:
+            if handle in keep_handles:
+                continue
+            try:
+                driver.switch_to.window(handle)
+                driver.close()
+                closed += 1
+            except Exception:
+                pass
+        try:
+            remaining = list(getattr(driver, "window_handles", []) or [])
+            target = original if original in remaining else (keep_handles[0] if keep_handles[0] in remaining else (remaining[0] if remaining else ""))
+            if target:
+                driver.switch_to.window(target)
+        except Exception:
+            pass
+        return closed
 
 
 class WorkbenchBrowserAdapter:
@@ -211,6 +329,15 @@ class WorkbenchBrowserAdapter:
         except Exception:
             pass
         self.driver_adapter.close_profile(session.client, session.profile_id)
+
+    def release_profile(self, profile_id: str, reason: str):
+        profile_id = str(profile_id or "").strip()
+        if not profile_id:
+            return
+        with self._lock:
+            instance_id = self._profile_to_instance.get(profile_id, "")
+        if instance_id:
+            self.release(instance_id, reason)
 
     def last_error(self) -> str:
         return self._last_error

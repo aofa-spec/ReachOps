@@ -242,6 +242,7 @@ class GrowthWorkflowService:
         operation_leads = self.storage.list_operation_leads(limit=1000, batch_id=batch_filter)
         action_queue = self.storage.list_action_queue(limit=1000, batch_id=batch_filter)
         outreach_executions = self.storage.list_outreach_executions(limit=1000, batch_id=batch_filter)
+        outreach_executions = [self._enrich_exported_execution(row) for row in outreach_executions]
         execution_status_counts = self.storage.outreach_execution_status_counts(batch_filter)
         execution_error_counts: dict[str, int] = {}
         for row in outreach_executions:
@@ -338,6 +339,9 @@ class GrowthWorkflowService:
                 "evidence_path",
                 "error_code",
                 "error_message",
+                "risk_gate_reason_code",
+                "risk_gate_summary",
+                "risk_gate_next_step",
                 "created_at",
             ]
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
@@ -366,6 +370,55 @@ class GrowthWorkflowService:
             "executions_csv_path": executions_csv_path,
             "csv_path": customers_csv_path,
         }
+
+    def _enrich_exported_execution(self, row: dict) -> dict:
+        item = dict(row)
+        risk_gate = item.get("risk_gate") if isinstance(item.get("risk_gate"), dict) else {}
+        item["risk_gate_reason_code"] = str(risk_gate.get("reason_code") or item.get("error_code") or "")
+        item["risk_gate_summary"] = self._risk_gate_summary_for_export(risk_gate)
+        item["risk_gate_next_step"] = self._risk_gate_next_step_for_export(risk_gate)
+        return item
+
+    def _risk_gate_summary_for_export(self, risk_gate: dict) -> str:
+        if not isinstance(risk_gate, dict) or not risk_gate:
+            return ""
+        if bool(risk_gate.get("allowed")):
+            return "风险门禁通过"
+        parts = ["风险门禁阻断"]
+        reason_code = str(risk_gate.get("reason_code") or "").strip()
+        category = str(risk_gate.get("risk_category") or "").strip()
+        outcome = str(risk_gate.get("terminal_outcome") or "").strip()
+        reason = str(risk_gate.get("reason") or "").strip()
+        if reason_code:
+            parts.append(reason_code)
+        if category:
+            parts.append(f"类别：{category}")
+        if outcome:
+            parts.append(f"结果：{outcome}")
+        if reason and reason != reason_code:
+            parts.append(reason)
+        return " / ".join(parts)
+
+    def _risk_gate_next_step_for_export(self, risk_gate: dict) -> str:
+        if not isinstance(risk_gate, dict) or not risk_gate:
+            return ""
+        actions = risk_gate.get("risk_actions") if isinstance(risk_gate.get("risk_actions"), list) else []
+        steps = [
+            str(action.get("step") or "").strip()
+            for action in actions
+            if isinstance(action, dict) and str(action.get("step") or "").strip()
+        ]
+        if "rewrite_or_rotate_message" in steps:
+            return "改写或轮换话术后重试"
+        if "request_operator_authorization" in steps:
+            return "等待人工授权后再执行"
+        if "wait_or_switch_profile" in steps or "cooldown_scope" in steps:
+            return "等待冷却或切换账号"
+        if "refresh_profile_groups" in steps or "reselect_profile_group" in steps:
+            return "刷新账号分组并重新选择"
+        if "block_execution" in steps:
+            return "保持阻断，等待处理"
+        return ""
 
     def _build_export_strategy(self, campaign: dict, persona: dict, sources: list[dict]) -> dict:
         try:

@@ -92,7 +92,7 @@ function Import-AcceptanceInputFile {
         throw "InputFile does not exist: $inputPath"
     }
     foreach ($line in Get-Content -Path $inputPath -Encoding UTF8) {
-        if ($line -match '^\s*\$(ProfileGroup|ProfileIds|Target|CommentVideoUrl|FollowProfileUrl|DmProfileUrl|TargetUsername|ActivationStatusPath|Limit|AllowPressureSubmit|RunControlledLiveSubmit)\s*=\s*(.+?)\s*$') {
+        if ($line -match '^\s*\$(ProfileGroup|ProfileIds|Target|CommentVideoUrl|FollowProfileUrl|DmProfileUrl|TargetUsername|ActivationStatusPath|Limit|AllowPressureSubmit|ConfirmAuthorizedTargets|RunControlledLiveSubmit)\s*=\s*(.+?)\s*$') {
             $name = $Matches[1]
             $value = Convert-AcceptanceInputLiteral $Matches[2]
             switch ($name) {
@@ -106,6 +106,7 @@ function Import-AcceptanceInputFile {
                 "ActivationStatusPath" { $script:ActivationStatusPath = [string]$value }
                 "Limit" { $script:Limit = [int]$value }
                 "AllowPressureSubmit" { $script:AllowPressureSubmit = [string]$value }
+                "ConfirmAuthorizedTargets" { $script:ConfirmAuthorizedTargets = [bool]$value }
                 "RunControlledLiveSubmit" { $script:RunLiveSubmit = [bool]$value }
             }
         }
@@ -139,6 +140,7 @@ if ($TargetUsername) { $argsList += @("-TargetUsername", $TargetUsername) }
 if ($ActivationStatusPath) { $argsList += @("-ActivationStatusPath", $ActivationStatusPath) }
 if ($AllowPressureSubmit) { $argsList += @("-AllowPressureSubmit", $AllowPressureSubmit) }
 if ($AllowMissingInstaller) { $argsList += @("-AllowMissingInstaller") }
+if ($InputFile) { $argsList += @("-InputFile", $InputFile) }
 $argsList += @("-ReuseExistingUiStartup")
 if ($RunLiveSubmit) { $argsList += @("-RunLiveSubmit") }
 if ($ConfirmAuthorizedTargets) { $argsList += @("-ConfirmAuthorizedTargets") }
@@ -157,6 +159,7 @@ if ($TargetUsername) { $commandLine += ' -TargetUsername ' + (Quote-PowerShellLi
 if ($ActivationStatusPath) { $commandLine += ' -ActivationStatusPath ' + (Quote-PowerShellLiteral $ActivationStatusPath) }
 if ($AllowPressureSubmit) { $commandLine += ' -AllowPressureSubmit ' + (Quote-PowerShellLiteral $AllowPressureSubmit) }
 if ($AllowMissingInstaller) { $commandLine += ' -AllowMissingInstaller' }
+if ($InputFile) { $commandLine += ' -InputFile ' + (Quote-PowerShellLiteral $InputFile) }
 $commandLine += ' -ReuseExistingUiStartup'
 if ($RunLiveSubmit) { $commandLine += ' -RunLiveSubmit' }
 if ($ConfirmAuthorizedTargets) { $commandLine += ' -ConfirmAuthorizedTargets' }

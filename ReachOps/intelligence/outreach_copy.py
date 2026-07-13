@@ -40,16 +40,16 @@ class RuleBasedOutreachCopyRecommender:
         tags = " ".join(self._tags(row)).lower()
         comment = str(row.get("comment_text") or "").lower()
         if "intent_type:purchase" in tags or lead_type in {"找链接/入口", "购买意图"}:
-            text = "可以先看视频说明里的入口，具体款式/链接我整理后再补充。"
+            text = "You can check the current product page first; details and price may change."
             angle = "answer purchase path"
         elif "price" in comment or lead_type in {"问价格", "优惠券", "折扣"}:
-            text = "价格和优惠会随活动变化，建议先看当前商品页活动价。"
+            text = "Price and promos can change, so the product page is the safest source."
             angle = "answer price concern"
         elif any(token in comment for token in ["app", "download", "watch", "episode", "name"]):
-            text = "你问的是名称/入口问题，我先确认准确来源后补充，避免发错。"
+            text = "I would verify the exact source first so I do not point you to the wrong place."
             angle = "answer source lookup"
         else:
-            text = "这个问题很典型，我整理一下关键信息再补充。"
+            text = "Good question. I would check the latest product details before deciding."
             angle = "neutral helpful reply"
         return OutreachCopySuggestion(action_type="comment_reply", text=text, angle=angle, provider=self.name, risk_note="avoid spam wording")
 

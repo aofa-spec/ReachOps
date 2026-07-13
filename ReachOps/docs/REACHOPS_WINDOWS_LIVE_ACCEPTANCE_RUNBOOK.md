@@ -14,7 +14,8 @@ This document is intentionally operational. It tells the Windows operator what t
   - valid activation status
   - real profile IDs
   - explicit target URLs
-- A claimed live success without screenshot evidence or sidecar metadata is a failure.
+- A claimed live success without local screenshot evidence and sidecar metadata is a failure; `evidence://...` is not valid evidence for real live-submit success.
+- Live-submit sidecars must include `screenshot_sha256`, `action_type`, `profile_id`, `action_id`, and `current_url`. Comment sidecars must also include the submitted text and `comment_visible_confirmed=true`.
 
 ## Required Inputs
 
@@ -34,7 +35,7 @@ $ActivationStatusPath = "C:\path\to\reachops_activation_status.json"
 Recommended workflow:
 
 ```powershell
-Copy-Item tools\reachops_acceptance_inputs.example.ps1 tools\reachops_acceptance_inputs.local.ps1
+powershell -ExecutionPolicy Bypass -File tools\init_reachops_acceptance_inputs_windows.ps1
 notepad tools\reachops_acceptance_inputs.local.ps1
 powershell -ExecutionPolicy Bypass -File tools\reachops_acceptance_inputs.local.ps1
 ```
@@ -102,6 +103,8 @@ Expected result:
 - JSON contains `ready = true` before controlled live submit.
 - Validation manifests must show `activation_ready = true`; template-only or inactive activation files are blocked even when the file exists.
 - Live acceptance status lists remaining gaps in `next_required_actions`; it is final proof only when `final_delivery_ready = true`.
+- When an intermediate acceptance summary has pending items, `next_required_actions` expands them into concrete work: run readiness/preflight plus controlled live submit, complete `platform_selenium` live submit on authorized TikTok targets, and rerun the client delivery gate until `acceptance_ready=true` and `readiness=pass`.
+- The client delivery gate can be rerun with `python tools\reachops_client_delivery_check.py --json`; final client acceptance requires `contract_ok=true`, `acceptance_ready=true`, `readiness=pass`, `failed_checks=[]`, and a persisted `latest_delivery_check.json` path in `delivery_check_path`.
 - If blocked, fix `active`, `device_id`, `expires_at`, or the `live_submit/comment_reply/follow_review/dm_review` capabilities before continuing.
 
 ## Milestone 2: Windows Client Validation
@@ -146,6 +149,7 @@ Run full acceptance without live submit:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.ps1 `
+  -InputFile .\tools\reachops_acceptance_inputs.local.ps1 `
   -ProfileGroup $ProfileGroup `
   -Target $Target `
   -AllowMissingInstaller
@@ -211,14 +215,7 @@ Only run this after Milestone 3 passes and the target is approved.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.ps1 `
-  -ProfileGroup $ProfileGroup `
-  -ProfileIds $ProfileIds `
-  -Target $Target `
-  -CommentVideoUrl $CommentVideoUrl `
-  -FollowProfileUrl $FollowProfileUrl `
-  -DmProfileUrl $DmProfileUrl `
-  -TargetUsername $TargetUsername `
-  -ActivationStatusPath $ActivationStatusPath `
+  -InputFile .\tools\reachops_acceptance_inputs.local.ps1 `
   -RunLiveSubmit `
   -ConfirmAuthorizedTargets
 ```
@@ -249,6 +246,24 @@ Expected result:
 - Manifest installer `sha256` matches the installer file.
 - Acceptance summary verification passes.
 - Required acceptance report JSON files exist.
+
+Run the strict final acceptance gate:
+
+```powershell
+python tools\reachops_final_acceptance_gate.py --json
+```
+
+Expected result:
+
+- Final gate status is `passed`.
+- `final_delivery_ready` is `true`.
+- `failed_checks` is empty.
+- Client gate evidence includes `delivery_check_path`.
+- Package gate evidence includes `artifacts` and `report_files`.
+
+`tools\run_reachops_acceptance_windows.ps1` performs this as a strict sequence: bootstrap package check, final gate, write `final_acceptance_gate` back to `acceptance_summary.json`, package final evidence check, then final gate final evidence check. The bootstrap check is the only place that may use `--allow-missing-final-gate`; that interim package JSON is `bootstrap_only=true` and `final_delivery_ready=false`. The final evidence check must validate `final_acceptance_gate.json` before final delivery is accepted.
+
+When recovering a background acceptance run, `tools\get_reachops_acceptance_background_status_windows.ps1 -Json` must show `final_delivery_ready=true` and an empty `final_delivery_blockers` list before the run can be treated as final delivery.
 
 For an intermediate package before live submit, use:
 
@@ -295,10 +310,14 @@ reports\reachops_acceptance\<timestamp>\delivery_audit_payload.json
 reports\reachops_acceptance\<timestamp>\operator_pressure_payload.json
 reports\reachops_acceptance\<timestamp>\activation_status_payload.json
 reports\reachops_acceptance\<timestamp>\live_validation_manifest.json
+reports\reachops_acceptance\<timestamp>\repository_cleanliness_payload.json
+reports\reachops_acceptance\<timestamp>\windows_package_preflight.json
 reports\reachops_acceptance\<timestamp>\live_readiness_payload.json
 reports\reachops_acceptance\<timestamp>\live_preflight_payload.json
 reports\reachops_acceptance\<timestamp>\live_submit_payload.json
 reports\reachops_acceptance\<timestamp>\delivery_package_check.json
+reports\reachops_acceptance\<timestamp>\final_acceptance_gate.json
+reports\acceptance_remediation\latest_delivery_check.json
 ```
 
-The project is fully delivered only when `acceptance_summary.json` says `passed`, the effective pending external validation count is zero, and `tools\reachops_delivery_package_check.py --json` returns `passed`.
+The project is fully delivered only when `acceptance_summary.json` says `passed`, the effective pending external validation count is zero, `tools\reachops_delivery_package_check.py --json` returns `passed`, the package `report_files` include `repository_cleanliness` and `windows_package_preflight`, and `tools\reachops_final_acceptance_gate.py --json` returns `passed` with `final_delivery_ready=true`.

@@ -18,7 +18,8 @@ from .normalizer import (
 class TikTokCommentCollector(CollectorAdapter):
     def collect(self, driver, task, context):
         limit = int(context.get("limit") or 50)
-        warm_stats = self._warm_comments(driver, limit)
+        expected_video_id = str(context.get("expected_video_id") or "").strip()
+        warm_stats = self._warm_comments(driver, limit, expected_video_id=expected_video_id)
         page_state = self._inspect_comment_state(driver, warm_stats)
         self.last_diagnostics = page_state
         try:
@@ -199,6 +200,7 @@ class TikTokCommentCollector(CollectorAdapter):
                         "target_limit": limit,
                         "language": language,
                         "profile_completed": profile_completed,
+                        "expected_video_id": expected_video_id,
                     },
                 }
             )
@@ -246,6 +248,21 @@ class TikTokCommentCollector(CollectorAdapter):
                       /(log in to|sign up for|登录后|登入後|entrar para|iniciar sesión para)/.test(value);
                   } catch (e) { return false; }
                 });
+                const visible = el => {
+                  try {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' &&
+                      style.display !== 'none' && rect.bottom > 0 && rect.right > 0 &&
+                      rect.top < (window.innerHeight || 900);
+                  } catch (e) { return false; }
+                };
+                const visibleLoginButton = Array.from(document.querySelectorAll('button, a, [role="button"]'))
+                  .filter(visible)
+                  .some((node) => /^(log in|login|sign in|登录|登入|entrar|iniciar sesión)$/.test(
+                    String([node.innerText, node.textContent, node.getAttribute('aria-label'), node.getAttribute('title')]
+                      .filter(Boolean).join(' ')).replace(/\\s+/g, ' ').trim().toLowerCase()
+                  ));
                 const captcha = /captcha|verify|verification|验证|验证码|security check/.test(text);
                 const proxy = /proxy|network error|no internet|err_tunnel|err_proxy|dns_probe|site can't be reached|无法访问/.test(text);
                 const emptyHint = /no comments|be the first to comment|comments are turned off|暂无评论|sem comentários/.test(text);
@@ -256,7 +273,7 @@ class TikTokCommentCollector(CollectorAdapter):
                       (nodeText.includes('comment') || nodeText.includes('coment') || node.querySelector("[data-e2e*='comment']"));
                   } catch (e) { return false; }
                 }).length;
-                return {url, title, commentNodes, loginPrompt, loginPage, accountSetupGate, loginDialog, captcha, proxy, emptyHint, containers};
+                return {url, title, commentNodes, loginPrompt, loginPage, accountSetupGate, loginDialog, visibleLoginButton, captcha, proxy, emptyHint, containers};
                 """
             ) or {}
             diagnostics.update(
@@ -265,7 +282,7 @@ class TikTokCommentCollector(CollectorAdapter):
                     "page_title": str(state.get("title") or getattr(driver, "title", "") or "")[:160],
                     "visible_node_count": int(state.get("commentNodes") or 0),
                     "comment_container_count": int(state.get("containers") or 0),
-                    "login_prompt_detected": bool(state.get("loginPrompt") or state.get("loginPage") or state.get("accountSetupGate")),
+                    "login_prompt_detected": bool(state.get("loginPrompt") or state.get("loginPage") or state.get("accountSetupGate") or state.get("visibleLoginButton")),
                     "account_setup_gate_detected": bool(state.get("accountSetupGate")),
                     "login_dialog_detected": bool(state.get("loginDialog")),
                     "captcha_detected": bool(state.get("captcha")),
@@ -289,7 +306,7 @@ class TikTokCommentCollector(CollectorAdapter):
             diagnostics["error_code"] = "COMMENT_SCAN_EMPTY"
         return diagnostics
 
-    def _warm_comments(self, driver, limit: int):
+    def _warm_comments(self, driver, limit: int, expected_video_id: str = ""):
         rounds = min(12, max(4, limit // 6 + 2))
         stable_rounds = 0
         previous_count = -1
@@ -300,11 +317,32 @@ class TikTokCommentCollector(CollectorAdapter):
         max_comment_open_attempts = 0
         max_comment_open_clicks = 0
         comment_panel_seen = False
+        expected_video_id = str(expected_video_id or "").strip()
         for index in range(rounds):
             executed_rounds = index + 1
             try:
+                current_url = str(getattr(driver, "current_url", "") or "")
+                if expected_video_id and current_url and expected_video_id not in current_url:
+                    return {
+                        "scroll_rounds": executed_rounds,
+                        "stable_rounds": stable_rounds,
+                        "max_visible_nodes": max_visible_nodes,
+                        "visible_node_history": visible_node_history,
+                        "growth_rounds": growth_rounds,
+                        "comment_open_attempts": max_comment_open_attempts,
+                        "comment_open_clicks": max_comment_open_clicks,
+                        "comment_panel_seen": comment_panel_seen,
+                        "stop_reason": "url_mismatch",
+                        "expected_video_id": expected_video_id,
+                        "final_url": current_url,
+                    }
+            except Exception:
+                pass
+            try:
                 open_stats = driver.execute_script(
                     """
+                    const expectedVideoId = String(arguments[0] || '').trim();
+                    const strictTargetMode = expectedVideoId.length > 0;
                     function visible(node) {
                       try {
                         const rect = node.getBoundingClientRect();
@@ -348,31 +386,61 @@ class TikTokCommentCollector(CollectorAdapter):
                       const text = (document.body && document.body.innerText || '').toLowerCase();
                       return /(add comment|write a comment|view replies|reply|replies|responder|ver respostas|no comments|be the first to comment)/.test(text);
                     }
-                    function clickableAncestor(node) {
-                      let item = node;
-                      for (let depth = 0; item && depth < 6; depth++) {
-                        const role = String(item.getAttribute && item.getAttribute('role') || '').toLowerCase();
-                        const tag = String(item.tagName || '').toLowerCase();
-                        if (tag === 'button' || tag === 'a' || role === 'button') return item;
-                        item = item.parentElement;
-                      }
-                      return node;
+	                    function clickableAncestor(node) {
+	                      let item = node;
+	                      for (let depth = 0; item && depth < 6; depth++) {
+	                        const role = String(item.getAttribute && item.getAttribute('role') || '').toLowerCase();
+	                        const tag = String(item.tagName || '').toLowerCase();
+	                        if (tag === 'button' || tag === 'a' || role === 'button') return item;
+	                        item = item.parentElement;
+	                      }
+	                      return node;
+	                    }
+	                    function unsafeClickTarget(node) {
+	                      let item = node;
+	                      const parts = [];
+	                      for (let depth = 0; item && depth < 4; depth++) {
+	                        try {
+	                          parts.push(item.innerText || '', item.textContent || '');
+	                          parts.push(item.getAttribute && item.getAttribute('aria-label') || '');
+	                          parts.push(item.getAttribute && item.getAttribute('title') || '');
+	                          parts.push(item.getAttribute && item.getAttribute('href') || '');
+	                          parts.push(item.getAttribute && item.getAttribute('data-e2e') || '');
+	                        } catch (e) {}
+	                        item = item.parentElement;
+	                      }
+	                      const label = parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+	                      if (!label) return false;
+	                      return /(facebook|google|apple|twitter|x\.com|instagram|line|kakao|wechat|whatsapp)/.test(label) ||
+	                        /(continue with|log in with|login with|sign in with|sign up with)/.test(label) ||
+	                        /^(log in|login|sign in|sign up|登录|注册|登入)$/.test(label);
+	                    }
+	                    let attempted = 0;
+	                    let clicked = 0;
+                    if (commentPanelVisible()) {
+                      return {
+                        attempted,
+                        clicked,
+                        direct_target_count: 0,
+                        rail_candidate_count: 0,
+                        panel_visible: true,
+                        skipped_clicks: true
+                      };
                     }
-                    let attempted = 0;
-                    let clicked = 0;
                     const directTargets = Array.from(document.querySelectorAll(
                       '[data-e2e*="comment"], button[aria-label*="comment" i], [role="button"][aria-label*="comment" i], [aria-label*="comment" i], button[aria-label*="coment" i], [role="button"][aria-label*="coment" i], [aria-label*="coment" i]'
                     )).filter(visible);
                     for (const node of directTargets.slice(0, 20)) {
-                      const text = (node.innerText || node.getAttribute('aria-label') || node.getAttribute('data-e2e') || '').toLowerCase();
-                      if (text.includes('comment') || text.includes('coment')) {
-                        attempted += 1;
-                        if (clickNode(clickableAncestor(node))) clicked += 1;
-                      }
-                    }
+	                      const text = (node.innerText || node.getAttribute('aria-label') || node.getAttribute('data-e2e') || '').toLowerCase();
+	                      if ((text.includes('comment') || text.includes('coment')) && !unsafeClickTarget(node)) {
+	                        attempted += 1;
+	                        const target = clickableAncestor(node);
+	                        if (!unsafeClickTarget(target) && clickNode(target)) clicked += 1;
+	                      }
+	                    }
                     const width = window.innerWidth || 1400;
                     const height = window.innerHeight || 900;
-                    const railCandidates = Array.from(document.querySelectorAll('button, [role="button"], div'))
+                    const railCandidates = strictTargetMode ? [] : Array.from(document.querySelectorAll('button, [role="button"], div'))
                       .filter(visible)
                       .map((node) => {
                         const rect = node.getBoundingClientRect();
@@ -389,24 +457,29 @@ class TikTokCommentCollector(CollectorAdapter):
                         const targetY = height * 0.66;
                         return Math.abs((a.rect.top + a.rect.bottom) / 2 - targetY) - Math.abs((b.rect.top + b.rect.bottom) / 2 - targetY);
                       });
-                    for (const item of railCandidates.slice(0, 2)) {
-                      attempted += 1;
-                      if (clickNode(clickableAncestor(item.node))) clicked += 1;
-                    }
-                    const coordinateAttempts = [
-                      [0.795, 0.675],
-                      [0.80, 0.66],
-                      [0.80, 0.62],
-                      [0.82, 0.68],
-                      [0.78, 0.66],
-                      [0.86, 0.66]
-                    ];
-                    for (const [xRatio, yRatio] of coordinateAttempts) {
-                      const target = document.elementFromPoint(width * xRatio, height * yRatio);
-                      if (target) {
-                        const node = clickableAncestor(target);
-                        attempted += 1;
-                        if (clickNode(node)) clicked += 1;
+	                    for (const item of railCandidates.slice(0, 2)) {
+	                      if (unsafeClickTarget(item.node)) continue;
+	                      attempted += 1;
+	                      const target = clickableAncestor(item.node);
+	                      if (!unsafeClickTarget(target) && clickNode(target)) clicked += 1;
+	                    }
+                    if (!strictTargetMode) {
+                      const coordinateAttempts = [
+                        [0.795, 0.675],
+                        [0.80, 0.66],
+                        [0.80, 0.62],
+                        [0.82, 0.68],
+                        [0.78, 0.66],
+                        [0.86, 0.66]
+                      ];
+                      for (const [xRatio, yRatio] of coordinateAttempts) {
+                        const target = document.elementFromPoint(width * xRatio, height * yRatio);
+	                        if (target) {
+	                          const node = clickableAncestor(target);
+	                          if (unsafeClickTarget(node)) continue;
+	                          attempted += 1;
+	                          if (clickNode(node)) clicked += 1;
+                        }
                       }
                     }
                     return {
@@ -416,7 +489,8 @@ class TikTokCommentCollector(CollectorAdapter):
                       rail_candidate_count: railCandidates.length,
                       panel_visible: commentPanelVisible()
                     };
-                    """
+                    """,
+                    expected_video_id,
                 ) or {}
                 if isinstance(open_stats, dict):
                     max_comment_open_attempts = max(max_comment_open_attempts, int(open_stats.get("attempted") or 0))
@@ -428,6 +502,24 @@ class TikTokCommentCollector(CollectorAdapter):
                     )
                     or 0
                 )
+                try:
+                    current_url = str(getattr(driver, "current_url", "") or "")
+                    if expected_video_id and current_url and expected_video_id not in current_url:
+                        return {
+                            "scroll_rounds": executed_rounds,
+                            "stable_rounds": stable_rounds,
+                            "max_visible_nodes": max_visible_nodes,
+                            "visible_node_history": visible_node_history,
+                            "growth_rounds": growth_rounds,
+                            "comment_open_attempts": max_comment_open_attempts,
+                            "comment_open_clicks": max_comment_open_clicks,
+                            "comment_panel_seen": comment_panel_seen,
+                            "stop_reason": "url_mismatch",
+                            "expected_video_id": expected_video_id,
+                            "final_url": current_url,
+                        }
+                except Exception:
+                    pass
                 visible_node_history.append(count)
                 if previous_count >= 0 and count > previous_count:
                     growth_rounds += 1
@@ -451,7 +543,6 @@ class TikTokCommentCollector(CollectorAdapter):
                 previous_count = count
                 driver.execute_script(
                     """
-                    window.scrollBy(0, Math.max(500, window.innerHeight || 600));
                     const containers = Array.from(document.querySelectorAll('div, section, aside, main')).slice(0, 260)
                       .filter((node) => {
                         try {
@@ -467,7 +558,6 @@ class TikTokCommentCollector(CollectorAdapter):
                         }
                       } catch (e) {}
                     }
-                    try { window.dispatchEvent(new KeyboardEvent('keydown', {key: 'PageDown'})); } catch (e) {}
                     """
                 )
                 if stable_rounds >= 2 and count > 0:

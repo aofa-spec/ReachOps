@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .schemas import AcquisitionCampaign, AcquisitionSource, AcquisitionStrategy, AudiencePersona
 from .storage import GrowthStorage, new_id
@@ -26,6 +26,19 @@ def split_operator_keywords(value: str, limit: int = 12) -> list[str]:
         if len(keywords) >= limit:
             break
     return keywords
+
+
+def looks_like_url(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if re.search(r"^https?://", text, flags=re.IGNORECASE):
+        return True
+    try:
+        parsed = urlparse(text if "://" in text else f"https://{text}")
+    except Exception:
+        return False
+    return bool(parsed.netloc and "." in parsed.netloc)
 
 
 class CampaignAnalyzer:
@@ -62,21 +75,41 @@ class CampaignAnalyzer:
         "glowup",
     }
     SHOP_TERMS = {"shop", "store", "tiktokshop", "buy", "sale", "coupon", "product"}
-    MARKETPLACE_DOMAINS = {"amazon.", "amzn.", "walmart.", "etsy.", "ebay.", "shopify.", "temu.", "aliexpress."}
+    MARKETPLACE_DOMAINS = {
+        "amazon.",
+        "amzn.",
+        "walmart.",
+        "etsy.",
+        "ebay.",
+        "shopify.",
+        "myshopify.",
+        "shop.app",
+        "temu.",
+        "aliexpress.",
+        "shopee.",
+        "lazada.",
+        "target.",
+        "bestbuy.",
+        "costco.",
+        "sephora.",
+        "ulta.",
+        "iherb.",
+        "wayfair.",
+        "shein.",
+    }
+    PRODUCT_PATH_MARKERS = {"dp", "gp", "product", "products", "itm", "item", "ip", "listing", "p", "goods"}
 
     def detect_input_type(self, value: str) -> str:
         text = str(value or "").strip()
         lower = text.lower()
         if self._is_url(text):
-            if self._is_marketplace_url(text):
-                return "product_url"
             if "live" in lower and "tiktok.com" in lower:
                 return "live_room_url"
             if "tiktok.com" in lower and "/@" in lower and "/video/" not in lower:
                 return "creator_url"
             if "tiktok.com" in lower and "/video/" in lower:
                 return "content_url"
-            if any(term in lower for term in ["shop", "product", "item", "store"]):
+            if self._is_marketplace_url(text) or self._has_product_path_hint(text):
                 return "product_url"
             return "product_url"
         if text.startswith("@"):
@@ -130,7 +163,10 @@ class CampaignAnalyzer:
             interests = ["product review", "shopping", "tips", "recommendations"]
             pain_points = ["price", "availability", "trust", "how to use"]
             triggers = ["where to buy", "link", "price", "need this", "product name"]
-            searches = [*split_operator_keywords(campaign.input_value), campaign.product_name, str(campaign.input_value or ""), "review", "best product"]
+            if campaign.input_type in {"product_url", "shop_url"}:
+                searches = [campaign.product_name, f"{campaign.product_name} review" if campaign.product_name else ""]
+            else:
+                searches = [*split_operator_keywords(campaign.input_value), campaign.product_name, str(campaign.input_value or ""), "review", "best product"]
             hashtags = ["review", "shopping", "tiktokshop", "fyp"]
         merged_intent = self._dedupe(base_keywords + consult_keywords + triggers + ai_intent_keywords + (extra_intent or []))
         merged_exclude = self._dedupe(exclude + ai_exclude_keywords + (extra_exclude or []))
@@ -169,11 +205,8 @@ class CampaignAnalyzer:
         text = str(value or "").strip()
         if self._is_url(text):
             parsed = urlparse(text if "://" in text else f"https://{text}")
-            slug = self._marketplace_product_slug(parsed)
-            if not slug:
-                path = parsed.path
-                slug = re.sub(r"[-_/]+", " ", path).strip()
-            return (slug or parsed.netloc)[:80]
+            name = self._query_product_name(parsed) or self._marketplace_product_slug(parsed) or self._domain_product_name(parsed)
+            return (name or parsed.netloc)[:80]
         keyword_list = split_operator_keywords(text, limit=1)
         if keyword_list:
             return keyword_list[0]
@@ -197,25 +230,89 @@ class CampaignAnalyzer:
         host = parsed.netloc.lower()
         return any(domain in host for domain in self.MARKETPLACE_DOMAINS)
 
+    def _has_product_path_hint(self, value: str) -> bool:
+        try:
+            parsed = urlparse(value if "://" in value else f"https://{value}")
+        except Exception:
+            return False
+        parts = [part.lower() for part in parsed.path.split("/") if part]
+        return any(part in self.PRODUCT_PATH_MARKERS for part in parts)
+
+    def _query_product_name(self, parsed) -> str:
+        query = parse_qs(parsed.query)
+        for key in ["title", "name", "product_name", "product", "q"]:
+            values = query.get(key) or []
+            for value in values:
+                name = self._clean_product_slug(value)
+                if name and not self._looks_like_identifier(name):
+                    return name
+        return ""
+
     def _marketplace_product_slug(self, parsed) -> str:
         parts = [part for part in parsed.path.split("/") if part]
         if not parts:
             return ""
-        technical_markers = {"dp", "gp", "product", "itm", "item", "ip", "p"}
-        usable = []
+        for index, part in enumerate(parts):
+            marker = part.lower()
+            if marker in {"product", "products", "ip", "itm", "item", "listing", "p", "goods"}:
+                name = self._first_named_segment(parts[index + 1 :])
+                if name:
+                    return name
+            if marker in {"dp", "gp"}:
+                name = self._first_named_segment(parts[:index])
+                if name:
+                    return name
+        return self._first_named_segment(parts)
+
+    def _domain_product_name(self, parsed) -> str:
+        return self._first_named_segment([part for part in parsed.path.split("/") if part])
+
+    def _first_named_segment(self, parts: list[str]) -> str:
+        candidates = []
         for part in parts:
             lower = part.lower()
-            if lower in technical_markers:
-                break
-            if re.fullmatch(r"[A-Z0-9]{8,16}", part, flags=re.IGNORECASE):
-                break
-            usable.append(part)
-        if not usable:
-            usable = [part for part in parts if not re.fullmatch(r"[A-Z0-9]{8,16}", part, flags=re.IGNORECASE)][:1]
-        slug = " ".join(usable)
+            if lower in self.PRODUCT_PATH_MARKERS or lower in {"gp", "buy", "store", "collections", "category"}:
+                continue
+            name = self._clean_product_slug(part)
+            if not name or self._looks_like_identifier(name):
+                continue
+            candidates.append(name)
+        if not candidates:
+            return ""
+        return max(candidates, key=len)
+
+    def _clean_product_slug(self, value: str) -> str:
+        slug = unquote(str(value or ""))
+        slug = re.sub(r"\.html?$", "", slug, flags=re.IGNORECASE)
         slug = re.sub(r"[-_+]+", " ", slug)
         slug = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff ]+", " ", slug)
-        return " ".join(slug.split())
+        slug = re.sub(r"\s+\d{5,}$", "", slug).strip()
+        return self._humanize_product_name(" ".join(slug.split()))
+
+    def _humanize_product_name(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if re.search(r"[A-Z]", text):
+            return text
+        return " ".join(word.capitalize() if re.search(r"[A-Za-z]", word) else word for word in text.split())
+
+    def _looks_like_identifier(self, value: str) -> bool:
+        text = str(value or "").strip()
+        compact = re.sub(r"\s+", "", text)
+        if not compact:
+            return True
+        if len(text.split()) >= 3:
+            return False
+        if compact.isdigit():
+            return True
+        if re.search(r"\d", compact) and re.fullmatch(r"[A-Z0-9]{8,18}", compact, flags=re.IGNORECASE):
+            return True
+        return bool(
+            re.search(r"\d", compact)
+            and len(compact) > 18
+            and re.fullmatch(r"[A-Z0-9]+", compact, flags=re.IGNORECASE)
+        )
 
     def _dedupe(self, rows: list[str]) -> list[str]:
         seen = set()
@@ -239,10 +336,13 @@ class SourcePlanner:
         sources: list[AcquisitionSource] = []
         value = str(campaign.input_value or "").strip()
         intelligence_sources = self._intelligence_sources(campaign.id, intelligence or {})
-        if self._should_prioritize_intelligence_sources(intelligence or {}):
-            sources.extend(intelligence_sources[:max_sources])
-        if len(sources) < max_sources and campaign.input_type in {"creator_url", "content_url", "live_room_url", "hashtag"}:
+        direct_source_types = {"creator_url", "content_url", "live_room_url", "hashtag"}
+        if campaign.input_type in direct_source_types and value:
             sources.append(self._source(campaign.id, campaign.input_type, self._normalize_direct_value(campaign.input_type, value), "运营输入的直接获客目标", 100))
+        if self._should_prioritize_intelligence_sources(intelligence or {}) and campaign.input_type not in direct_source_types:
+            sources.extend(intelligence_sources[:max_sources])
+        if campaign.input_type in direct_source_types:
+            pass
         elif len(sources) < max_sources and campaign.input_type in {"product_url", "keyword"}:
             sources.extend(self._rule_based_acquisition_sources(campaign, persona, max_sources - len(sources)))
         elif len(sources) < max_sources:
@@ -285,6 +385,8 @@ class SourcePlanner:
             source_type = str(row.get("source_type") or "").strip()
             source_value = str(row.get("source_value") or "").strip()
             if not source_type or not source_value:
+                continue
+            if source_type == "keyword" and looks_like_url(source_value):
                 continue
             sources.append(
                 self._source(
@@ -339,9 +441,31 @@ class SourcePlanner:
         rows = []
         for item in [*split_operator_keywords(campaign.input_value), product, *list(persona.search_keywords or [])]:
             text = str(item or "").strip()
+            if not text:
+                continue
+            if looks_like_url(text):
+                continue
+            if campaign.input_type in {"product_url", "shop_url"} and text.lower() in {"review", "best product"}:
+                continue
+            if campaign.input_type in {"product_url", "shop_url"} and not self._is_useful_product_keyword(text):
+                continue
             if text:
                 rows.append(text)
         return self._dedupe(rows)
+
+    def _is_useful_product_keyword(self, value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        words = [word for word in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", text) if word]
+        if len(words) >= 2:
+            return True
+        lowered = text.lower()
+        if lowered in {"count", "pcs", "pc", "pack", "set", "best", "review", "buy", "link", "price", "shop"}:
+            return False
+        if re.search(r"\d", text):
+            return False
+        return len(text) >= 8
 
     def _compact_hashtag(self, value: str) -> str:
         words = re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", str(value or ""))

@@ -10,6 +10,13 @@ $env:PYTHONIOENCODING = "utf-8"
 $OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
+$FinalVerificationCommands = @(
+    "python tools\reachops_client_delivery_check.py --json",
+    "python tools\reachops_goal_delivery_runner.py --json",
+    "python tools\reachops_delivery_package_check.py --json",
+    "python tools\reachops_final_acceptance_gate.py --json"
+)
+
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 
@@ -99,6 +106,9 @@ if (Test-Path $stderrPath) {
 }
 
 $acceptanceSummaryPath = ""
+$finalAcceptanceGatePath = ""
+$deliveryPackageCheckPath = ""
+$windowsPackagePreflightPath = ""
 if (Test-Path $stdoutPath) {
     $summaryLine = Get-Content -Path $stdoutPath -Encoding UTF8 |
         Where-Object { $_ -like "ACCEPTANCE_SUMMARY_JSON=*" } |
@@ -106,14 +116,112 @@ if (Test-Path $stdoutPath) {
     if ($summaryLine) {
         $acceptanceSummaryPath = [string]$summaryLine.Substring("ACCEPTANCE_SUMMARY_JSON=".Length)
     }
+    $finalGateLine = Get-Content -Path $stdoutPath -Encoding UTF8 |
+        Where-Object { $_ -like "FINAL_ACCEPTANCE_GATE_JSON=*" } |
+        Select-Object -Last 1
+    if ($finalGateLine) {
+        $finalAcceptanceGatePath = [string]$finalGateLine.Substring("FINAL_ACCEPTANCE_GATE_JSON=".Length)
+    }
+    $windowsPreflightLine = Get-Content -Path $stdoutPath -Encoding UTF8 |
+        Where-Object { $_ -like "WINDOWS_PACKAGE_PREFLIGHT_JSON=*" } |
+        Select-Object -Last 1
+    if ($windowsPreflightLine) {
+        $windowsPackagePreflightPath = [string]$windowsPreflightLine.Substring("WINDOWS_PACKAGE_PREFLIGHT_JSON=".Length)
+    }
+}
+if ($acceptanceSummaryPath) {
+    $deliveryPackageCheckPath = Join-Path (Split-Path -Parent $acceptanceSummaryPath) "delivery_package_check.json"
+    if (-not $windowsPackagePreflightPath) {
+        $windowsPackagePreflightPath = Join-Path (Split-Path -Parent $acceptanceSummaryPath) "windows_package_preflight.json"
+    }
 }
 
 $acceptanceSummary = $null
 $acceptanceVerification = $null
+$finalAcceptanceGate = $null
+$deliveryPackageCheck = $null
+$windowsPackagePreflight = $null
 if ($acceptanceSummaryPath -and (Test-Path $acceptanceSummaryPath)) {
     $acceptanceSummary = Read-JsonObject $acceptanceSummaryPath
     $verifyOutput = & python tools\verify_reachops_acceptance_summary.py $acceptanceSummaryPath --allow-external-pending --json 2>&1
     $acceptanceVerification = Convert-StdoutJson (($verifyOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+}
+if ($finalAcceptanceGatePath -and (Test-Path $finalAcceptanceGatePath)) {
+    $finalAcceptanceGate = Read-JsonObject $finalAcceptanceGatePath
+}
+if ($deliveryPackageCheckPath -and (Test-Path $deliveryPackageCheckPath)) {
+    $deliveryPackageCheck = Read-JsonObject $deliveryPackageCheckPath
+}
+if ($windowsPackagePreflightPath -and (Test-Path $windowsPackagePreflightPath)) {
+    $windowsPackagePreflight = Read-JsonObject $windowsPackagePreflightPath
+}
+
+$finalGateFailedChecks = @()
+if ($finalAcceptanceGate -and $finalAcceptanceGate.failed_checks) {
+    $finalGateFailedChecks = @($finalAcceptanceGate.failed_checks)
+}
+$acceptanceFinalPassed = [bool](
+    $acceptanceSummary `
+    -and [string]$acceptanceSummary.status -eq "passed" `
+    -and $acceptanceVerification `
+    -and [bool]$acceptanceVerification.passed
+)
+$finalGateReady = [bool](
+    $finalAcceptanceGate `
+    -and [string]$finalAcceptanceGate.status -eq "passed" `
+    -and [bool]$finalAcceptanceGate.final_delivery_ready `
+    -and $finalGateFailedChecks.Count -eq 0
+)
+$deliveryPackageReady = [bool](
+    $deliveryPackageCheck `
+    -and [string]$deliveryPackageCheck.status -eq "passed" `
+    -and [bool]$deliveryPackageCheck.passed `
+    -and [bool]$deliveryPackageCheck.final_delivery_ready `
+    -and (-not [bool]$deliveryPackageCheck.bootstrap_only) `
+    -and $deliveryPackageCheck.final_gate_report `
+    -and [string]$deliveryPackageCheck.final_gate_report.status -eq "passed" `
+    -and [bool]$deliveryPackageCheck.final_gate_report.final_delivery_ready `
+    -and (-not $deliveryPackageCheck.final_gate_report.failed_checks -or @($deliveryPackageCheck.final_gate_report.failed_checks).Count -eq 0) `
+    -and (-not $deliveryPackageCheck.final_gate_report.missing_required_checks -or @($deliveryPackageCheck.final_gate_report.missing_required_checks).Count -eq 0) `
+    -and (-not $deliveryPackageCheck.final_gate_report.failed_required_checks -or @($deliveryPackageCheck.final_gate_report.failed_required_checks).Count -eq 0) `
+    -and $deliveryPackageCheck.final_gate_report.checks_by_name `
+    -and $deliveryPackageCheck.report_files `
+    -and $deliveryPackageCheck.report_files.windows_package_preflight `
+    -and [bool]$deliveryPackageCheck.report_files.windows_package_preflight.exists `
+    -and [int]$deliveryPackageCheck.report_files.windows_package_preflight.size -gt 0 `
+    -and $deliveryPackageCheck.report_files.client_delivery `
+    -and [bool]$deliveryPackageCheck.report_files.client_delivery.exists `
+    -and [int]$deliveryPackageCheck.report_files.client_delivery.size -gt 0
+)
+$finalDeliveryReady = [bool]($acceptanceFinalPassed -and $deliveryPackageReady -and $finalGateReady)
+$finalDeliveryBlockers = @()
+if (-not $acceptanceSummary) {
+    $finalDeliveryBlockers += "acceptance_summary_missing"
+} elseif ([string]$acceptanceSummary.status -ne "passed") {
+    $finalDeliveryBlockers += "acceptance_summary_not_passed"
+}
+if (-not $acceptanceVerification) {
+    $finalDeliveryBlockers += "acceptance_verification_missing"
+} elseif (-not [bool]$acceptanceVerification.passed) {
+    $finalDeliveryBlockers += "acceptance_verification_not_passed"
+}
+if (-not $finalAcceptanceGate) {
+    $finalDeliveryBlockers += "final_acceptance_gate_missing"
+} elseif (-not $finalGateReady) {
+    $finalDeliveryBlockers += "final_acceptance_gate_not_ready"
+}
+if (-not $deliveryPackageCheck) {
+    $finalDeliveryBlockers += "delivery_package_check_missing"
+} elseif (-not $deliveryPackageReady) {
+    $finalDeliveryBlockers += "delivery_package_check_not_final_ready"
+}
+if (-not $windowsPackagePreflight) {
+    $finalDeliveryBlockers += "windows_package_preflight_missing"
+} elseif ([string]$windowsPackagePreflight.status -ne "ready_for_windows_build" -or -not [bool]$windowsPackagePreflight.ready_for_windows_build) {
+    $finalDeliveryBlockers += "windows_package_preflight_not_ready"
+}
+if (-not ($deliveryPackageCheck -and $deliveryPackageCheck.report_files -and $deliveryPackageCheck.report_files.client_delivery -and [bool]$deliveryPackageCheck.report_files.client_delivery.exists -and [int]$deliveryPackageCheck.report_files.client_delivery.size -gt 0)) {
+    $finalDeliveryBlockers += "client_delivery_report_missing"
 }
 
 $status = "running"
@@ -143,6 +251,18 @@ $result = [ordered]@{
     acceptance_summary_path = $acceptanceSummaryPath
     acceptance_summary_exists = [bool]($acceptanceSummaryPath -and (Test-Path $acceptanceSummaryPath))
     acceptance_verification = $acceptanceVerification
+    delivery_package_check_path = $deliveryPackageCheckPath
+    delivery_package_check_exists = [bool]($deliveryPackageCheckPath -and (Test-Path $deliveryPackageCheckPath))
+    delivery_package_check = $deliveryPackageCheck
+    windows_package_preflight_path = $windowsPackagePreflightPath
+    windows_package_preflight_exists = [bool]($windowsPackagePreflightPath -and (Test-Path $windowsPackagePreflightPath))
+    windows_package_preflight = $windowsPackagePreflight
+    final_acceptance_gate_path = $finalAcceptanceGatePath
+    final_acceptance_gate_exists = [bool]($finalAcceptanceGatePath -and (Test-Path $finalAcceptanceGatePath))
+    final_acceptance_gate = $finalAcceptanceGate
+    final_delivery_ready = $finalDeliveryReady
+    final_delivery_blockers = $finalDeliveryBlockers
+    verification_commands = $FinalVerificationCommands
     stdout_tail = $stdoutTail
     stderr_tail = $stderrTail
 }
@@ -162,4 +282,15 @@ if ($Json) {
     if ($acceptanceSummaryPath) {
         Write-Host "ACCEPTANCE_SUMMARY_JSON=$acceptanceSummaryPath"
     }
+    if ($finalAcceptanceGatePath) {
+        Write-Host "FINAL_ACCEPTANCE_GATE_JSON=$finalAcceptanceGatePath"
+    }
+    if ($windowsPackagePreflightPath) {
+        Write-Host "WINDOWS_PACKAGE_PREFLIGHT_JSON=$windowsPackagePreflightPath"
+    }
+    Write-Host "FINAL_DELIVERY_READY=$finalDeliveryReady"
+    if ($finalDeliveryBlockers.Count -gt 0) {
+        Write-Host ("FINAL_DELIVERY_BLOCKERS=" + ($finalDeliveryBlockers -join ","))
+    }
+    Write-Host ("VERIFICATION_COMMANDS=" + ($FinalVerificationCommands -join " ; "))
 }

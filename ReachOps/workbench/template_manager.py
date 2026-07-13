@@ -57,8 +57,8 @@ class TemplateManager:
         normalized = self.normalize_action_type(str(action.get("action_type") or ""))
         fallback = str(action.get("suggested_text") or "")
         profile = profile or {}
-        template = self._select_template(normalized, action, profile)
-        body = str(template.get("body") or "") if template else self.storage.get_action_template_body(normalized, fallback=fallback)
+        template = {} if fallback.strip() else self._select_template(normalized, action, profile)
+        body = fallback if fallback.strip() else str(template.get("body") or "") if template else self.storage.get_action_template_body(normalized, fallback=fallback)
         variants = [item.strip() for item in str(body or fallback or "").split("||") if item.strip()]
         selected = self.random.choice(variants) if variants else fallback
         values = {

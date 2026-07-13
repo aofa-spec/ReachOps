@@ -38,6 +38,21 @@ def run_preflight(args) -> dict:
     campaign_id = str(args.campaign_id or campaign.get("id") or "")
     batch = service.storage.latest_collection_batch_for_campaign(campaign_id) if campaign_id else {}
     batch_id = str(args.batch_id or batch.get("id") or "")
+    if batch_id:
+        selected = next(
+            (row for row in service.storage.list_collection_batches(limit=1000) if str(row.get("id") or "") == batch_id),
+            {},
+        )
+        if selected:
+            batch = selected
+            campaign_id = str(batch.get("campaign_id") or campaign_id)
+            try:
+                with service.storage.connect() as conn:
+                    row = conn.execute("SELECT * FROM acquisition_campaigns WHERE id=?", (campaign_id,)).fetchone()
+                    if row:
+                        campaign = dict(row)
+            except Exception:
+                pass
     profiles = [
         {"profile_id": profile_id, "group_name": str(args.profile_group or "")}
         for profile_id in split_csv(args.profile_ids)

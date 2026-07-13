@@ -13,6 +13,10 @@ from .execution_guard import ExecutionGuard
 from .execution_reporter import ExecutionReport
 from .outreach_executor import OutreachExecutor
 from .outreach_policy import OutreachPolicy
+from .offline_learning_ledger import OfflineLearningLedger
+from .page_state_detector import PageStateDetector
+from .repair_policy_engine import RepairPolicyEngine
+from .risk_gate import RiskGate
 from .task_scheduler import GrowthTaskScheduler
 from .template_manager import TemplateManager
 from .view_models import GrowthOpsSnapshot
@@ -63,7 +67,11 @@ __all__ = [
     "LiveSubmitAuthorizationGate",
     "OutreachExecutor",
     "OutreachPolicy",
+    "OfflineLearningLedger",
+    "PageStateDetector",
     "profile_matches_group",
+    "RepairPolicyEngine",
+    "RiskGate",
     "summarize_profile_groups",
     "TemplateManager",
 ]

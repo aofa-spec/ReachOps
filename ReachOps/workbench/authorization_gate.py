@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -52,7 +53,11 @@ class LiveSubmitAuthorizationGate:
             "profile_id": profile_id,
             "license_tier": str(status.get("license_tier") or ""),
             "current_device_id": self.device_identity.current_device_id(),
+            "runtime_mode": self.runtime_mode(),
+            "activation_required": self.activation_required(),
         }
+        if not self.activation_required() and not status:
+            return AuthorizationDecision(True, evidence={**evidence, "development_bypass": True})
         if not status:
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status not found", evidence)
         if bool(status.get("template_only")):
@@ -84,6 +89,23 @@ class LiveSubmitAuthorizationGate:
             return payload if isinstance(payload, dict) else {}
         except Exception:
             return {}
+
+    @classmethod
+    def is_packaged_runtime(cls) -> bool:
+        return bool(getattr(sys, "frozen", False))
+
+    @classmethod
+    def activation_required(cls) -> bool:
+        explicit = str(os.environ.get("REACHOPS_REQUIRE_ACTIVATION") or "").strip().lower()
+        if explicit in {"1", "true", "yes", "on"}:
+            return True
+        if explicit in {"0", "false", "no", "off"}:
+            return False
+        return cls.is_packaged_runtime()
+
+    @classmethod
+    def runtime_mode(cls) -> str:
+        return "packaged" if cls.is_packaged_runtime() else "development"
 
     def _is_expired(self, expires_at: str) -> bool:
         value = expires_at.replace("Z", "+00:00")

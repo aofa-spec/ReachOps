@@ -1,6 +1,12 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+htmlcov/
+.coverage
 .venv/
 venv/
 build/

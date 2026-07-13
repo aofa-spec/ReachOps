@@ -47,8 +47,13 @@ class GrowthStorage:
 
     @contextmanager
     def connect(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            pass
         try:
             yield conn
             conn.commit()
@@ -391,6 +396,7 @@ class GrowthStorage:
                     evidence_path TEXT DEFAULT '',
                     error_code TEXT DEFAULT '',
                     error_message TEXT DEFAULT '',
+                    risk_gate_json TEXT DEFAULT '',
                     batch_id TEXT DEFAULT '',
                     started_at TEXT,
                     completed_at TEXT,
@@ -495,7 +501,7 @@ class GrowthStorage:
                     "updated_at": "TEXT DEFAULT ''",
                 },
             )
-            self._ensure_columns(conn, "outreach_executions", {"batch_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "outreach_executions", {"batch_id": "TEXT DEFAULT ''", "risk_gate_json": "TEXT DEFAULT ''"})
             self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''"})
             self._seed_default_action_templates(conn)
 
@@ -1299,17 +1305,19 @@ class GrowthStorage:
         evidence_path: str = "",
         error_code: str = "",
         error_message: str = "",
+        risk_gate: Optional[Dict[str, Any]] = None,
     ) -> str:
         now = utc_now_iso()
         item_id = new_id("oe")
         evidence_path = evidence_path or self._execution_evidence_uri(action_id, profile_id, error_code or status or "recorded")
+        risk_gate_json = json.dumps(risk_gate or {}, ensure_ascii=False) if isinstance(risk_gate, dict) else ""
         with self.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO outreach_executions
                 (id, action_id, action_type, target_username, status, profile_id, evidence_path,
-                 error_code, error_message, batch_id, started_at, completed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 error_code, error_message, risk_gate_json, batch_id, started_at, completed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -1321,6 +1329,7 @@ class GrowthStorage:
                     evidence_path,
                     error_code,
                     error_message,
+                    risk_gate_json,
                     self._active_batch_id(),
                     now if status in {"running", "completed", "success", "failed", "skipped", "account_switched"} else None,
                     now if status in {"completed", "success", "failed", "skipped", "account_switched"} else None,
@@ -1336,15 +1345,24 @@ class GrowthStorage:
         safe_marker = "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in safe_marker)
         return f"evidence://growth_ops/{safe_profile}/{safe_action}/{safe_marker}"
 
-    def create_collection_batch(self, total_sources: int, profile_group: str = "", config: Optional[Dict[str, Any]] = None, campaign_id: str = "") -> CollectionBatch:
+    def create_collection_batch(
+        self,
+        total_sources: int,
+        profile_group: str = "",
+        config: Optional[Dict[str, Any]] = None,
+        campaign_id: str = "",
+        initial_status: str = "running",
+    ) -> CollectionBatch:
         now = utc_now_iso()
         config = dict(config or {})
         if campaign_id:
             config.setdefault("campaign_id", campaign_id)
+        if initial_status not in {"pending", "running"}:
+            initial_status = "running"
         item = CollectionBatch(
             id=new_id("gb"),
             campaign_id=campaign_id or "",
-            status="running",
+            status=initial_status,
             total_sources=int(total_sources or 0),
             processed_sources=0,
             failed_sources=0,
@@ -1396,6 +1414,18 @@ class GrowthStorage:
                 WHERE id=?
                 """,
                 (status, processed, failed, completed_at, now, batch_id),
+            )
+
+    def update_collection_batch_total_sources(self, batch_id: str, total_sources: int):
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE collection_batches
+                SET total_sources=?, updated_at=?
+                WHERE id=?
+                """,
+                (max(0, int(total_sources or 0)), now, batch_id),
             )
 
     def create_collection_task(self, batch_id: str, source_id: str, source_type: str, source_value: str, profile_id: str = "") -> CollectionTask:
@@ -1474,11 +1504,30 @@ class GrowthStorage:
                 (profile_id, group_name or "", now, now),
             )
             row = conn.execute("SELECT * FROM profile_health WHERE profile_id=?", (profile_id,)).fetchone()
-            failures = 0 if ok else int(row["consecutive_failures"] or 0) + 1
+            transient_error_codes = {
+                "PAGE_OPEN_FAILED",
+                "PROFILE_PREFLIGHT_TIMEOUT",
+                "PROFILE_START_TIMEOUT",
+                "IXBROWSER_NETWORK_ERROR",
+                "IXBROWSER_SERVER_BUSY",
+            }
+            hard_error_codes = {
+                "LOGIN_REQUIRED",
+                "IXBROWSER_KERNEL_MISMATCH",
+                "CAPTCHA_DETECTED",
+                "PROXY_FAILED",
+                "ACCOUNT_RESTRICTED",
+                "COMMENT_ACCESS_GATED",
+            }
+            old_status = str(row["status"] or "")
+            old_failures = int(row["consecutive_failures"] or 0)
+            error_code = str(error_code or "")
+            transient_failure = (not ok) and error_code in transient_error_codes and old_failures <= 1 and old_status in {"healthy", "degraded"}
+            failures = 0 if ok else (old_failures if transient_failure else old_failures + 1)
             score = int(row["health_score"] or 100)
-            score = max(75, min(100, score + 25)) if ok else max(0, score - 20)
+            score = max(75, min(100, score + 25)) if ok else max(0, score - (5 if transient_failure else 20))
             status = "healthy"
-            if failures >= 3 or score < 40:
+            if (failures >= 3 or score < 40) and error_code in hard_error_codes:
                 status = "cooldown"
             elif not ok or score < 70:
                 status = "degraded"
@@ -2155,7 +2204,17 @@ class GrowthStorage:
                     "SELECT * FROM outreach_executions ORDER BY created_at DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
-            return [dict(row) for row in rows]
+            items = [dict(row) for row in rows]
+            for item in items:
+                raw_gate = str(item.get("risk_gate_json") or "").strip()
+                if raw_gate:
+                    try:
+                        parsed = json.loads(raw_gate)
+                    except Exception:
+                        parsed = {}
+                    if isinstance(parsed, dict):
+                        item["risk_gate"] = parsed
+            return items
 
     def outreach_execution_status_counts(self, batch_id: str = "") -> Dict[str, int]:
         batch_id = str(batch_id or "").strip()

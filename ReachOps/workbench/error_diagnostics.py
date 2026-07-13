@@ -53,6 +53,36 @@ DIAGNOSTIC_RULES = {
         "cause": "视频页可打开，但本轮评论区为空或没有可解析评论。",
         "action": "确认视频是否关闭评论、是否需要登录/地区权限；保留截图证据，必要时改用评论接口/CDP 采集。",
     },
+    "PAGE_TIMEOUT": {
+        "severity": "medium",
+        "cause": "页面加载超时、网络无响应或页面没有进入可操作状态。",
+        "action": "自动刷新并退避重试；仍失败则换账号或降级为只采集，并保留页面状态证据。",
+    },
+    "DOM_STALLED": {
+        "severity": "medium",
+        "cause": "URL 和 DOM 摘要长时间无变化，疑似页面卡住。",
+        "action": "刷新页面、重新定位目标元素；连续失败后换账号或阻断当前目标。",
+    },
+    "MODAL_BLOCKED": {
+        "severity": "medium",
+        "cause": "页面出现阻断性弹窗，目标按钮或输入框不可操作。",
+        "action": "尝试关闭已知安全弹窗；登录、注册、验证码类弹窗必须阻断，不绕过。",
+    },
+    "COMMENT_BOX_MISSING": {
+        "severity": "medium",
+        "cause": "评论输入框不可见或不可用。",
+        "action": "重新打开评论区并检测登录/权限状态；仍不可用则跳过或降级为只采集。",
+    },
+    "SUBMIT_BUTTON_MISSING": {
+        "severity": "medium",
+        "cause": "评论提交按钮不可见或不可用。",
+        "action": "重新聚焦输入框并复测；仍不可用则阻断真实提交并保留截图证据。",
+    },
+    "UNKNOWN_PAGE_STATE": {
+        "severity": "medium",
+        "cause": "页面状态未命中已知规则。",
+        "action": "保存截图、DOM 摘要和 URL，生成未知状态错误包，供离线规则升级。",
+    },
     "COMMENT_ACCESS_GATED": {
         "severity": "high",
         "cause": "视频能打开，但评论区被登录页、注册弹窗或评论权限挡住。",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tkinter as tk
 import webbrowser
 from pathlib import Path
@@ -50,7 +51,7 @@ RISK_FILTER_LABELS = {"all": "全部风险", "low": "低风险", "medium": "中�
 REVIEW_FILTER_LABELS = {"all": "全部审核", "pending": "待审核", "approved": "已批准", "rejected": "已拒绝"}
 TEMPLATE_STATUS_LABELS = {"active": "启用", "paused": "暂停"}
 
-OPERATOR_VIEW_NAMES = ["获客任务", "线索分析", "触达执行", "账号诊断", "报告中心"]
+OPERATOR_VIEW_NAMES = ["获客任务", "信息沙漏", "线索分析", "触达执行", "账号诊断", "报告中心"]
 
 
 def safe_tk_option(value: str) -> str:
@@ -70,6 +71,8 @@ def group_name_from_display(value: str) -> str:
         text = text.split("] ", 1)[1].strip()
     if " 个账号 | " in text or text.startswith("待读取账号数 | "):
         text = text.split(" | ", 1)[1].strip()
+    if " · " in text:
+        return text.split(" · ", 1)[0].strip()
     if text.endswith(")") and "(ID:" in text:
         text = text.rsplit("(ID:", 1)[0].strip()
         return text
@@ -80,23 +83,39 @@ def group_name_from_display(value: str) -> str:
     return text
 
 UI_COLORS = {
-    "bg": "#f0f0f0",
-    "surface": "#ffffff",
-    "surface_alt": "#f0f0f0",
-    "border": "#d9d9d9",
-    "text": "#000000",
-    "muted": "#666666",
-    "nav": "#f0f0f0",
-    "nav_text": "#000000",
-    "nav_muted": "#666666",
-    "accent": "#000000",
-    "accent_soft": "#e6e6e6",
-    "warning_bg": "#f0f0f0",
-    "warning": "#000000",
+    "bg": "#1f2327",
+    "surface": "#2b3036",
+    "surface_alt": "#343a40",
+    "border": "#59616a",
+    "text": "#ffffff",
+    "muted": "#d1d5db",
+    "nav": "#2b3036",
+    "nav_text": "#ffffff",
+    "nav_muted": "#d1d5db",
+    "accent": "#ffffff",
+    "accent_soft": "#4b5563",
+    "warning_bg": "#3f3f46",
+    "warning": "#f8fafc",
+    "terminal_bg": "#0c0d0e",
+    "terminal_text": "#d1d5db",
+    "terminal_muted": "#9ca3af",
+    "terminal_info": "#60a5fa",
+    "terminal_success": "#22c55e",
+    "terminal_warning": "#fbbf24",
+    "terminal_error": "#f87171",
+    "fullscreen_bg": "#1f2327",
 }
+
+
+def ui_font(size: int = 10, weight: str = "normal"):
+    family = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei UI"
+    if weight and weight != "normal":
+        return (family, size, weight)
+    return (family, size)
 
 PAGE_SUBTITLES = {
     "获客任务": "输入产品、关键词、达人、视频或直播间，系统自动规划来源、采集互动用户并沉淀客户线索。",
+    "信息沙漏": "用上中下三层展示输入、判断和沉淀结果，快速判断任务卡在采集、风控还是触达。",
     "潜在客户池": "按分数、语言、关键词筛选高意向用户，支持导出和排除。",
     "意图分析": "查看购买、咨询、兴趣和低质量评论分布，判断下一轮采集方向。",
     "待执行动作": "动作进入复核和执行前预检；当前版本不会误提交评论、关注或私信。",
@@ -161,6 +180,10 @@ SOURCE_TYPE_ALIASES = {
     "达人主页链接": "creator_url",
     "竞品达人": "creator_url",
     "视频链接": "content_url",
+    "video": "content_url",
+    "video_url": "content_url",
+    "content": "content_url",
+    "content_url": "content_url",
     "视频评论": "content_url",
     "单条视频": "content_url",
     "单条视频/内容链接": "content_url",
@@ -175,6 +198,13 @@ SOURCE_TYPE_ALIASES = {
     "产品/关键词": "auto",
 }
 
+QUICK_SEND_MODE_LABELS = ["只采集", "采集 + 触达预检", "采集 + 真实评论"]
+QUICK_SEND_VOLUME_PRESETS = {
+    "快速": {"max_videos": 3, "max_comments": 20, "profile_limit": 3, "workers": 2, "task_interval": 3},
+    "标准": {"max_videos": 10, "max_comments": 50, "profile_limit": 6, "workers": 4, "task_interval": 8},
+    "压测": {"max_videos": 20, "max_comments": 100, "profile_limit": 10, "workers": 6, "task_interval": 1},
+}
+
 
 def normalize_source_type(source_type: str, default: str = "creator_url") -> str:
     value = str(source_type or "").strip()
@@ -187,6 +217,20 @@ def display_source_type(source_type: str) -> str:
 
 def display_action_type(action_type: str) -> str:
     return ACTION_TYPE_LABELS.get(str(action_type or "").strip(), str(action_type or ""))
+
+
+def quick_send_preset(label: str) -> dict:
+    value = str(label or "").strip()
+    return dict(QUICK_SEND_VOLUME_PRESETS.get(value) or QUICK_SEND_VOLUME_PRESETS["快速"])
+
+
+def quick_send_mode_key(label: str) -> str:
+    value = str(label or "").strip()
+    if value == "只采集":
+        return "collect_only"
+    if value == "采集 + 真实评论":
+        return "live_comment"
+    return "preflight"
 
 
 def display_risk_level(risk_level: str) -> str:
@@ -393,12 +437,23 @@ class GrowthOpsConsole(ttk.Frame):
         self.scan_profile_group_var = tk.StringVar(value="")
         self.scan_profile_group_display_var = tk.StringVar(value="")
         self.scan_profile_group_detail_var = tk.StringVar(value="当前账号分组：请刷新账号分组")
-        self.scan_interval_var = tk.IntVar(value=60)
-        self.scan_max_videos_var = tk.IntVar(value=5)
-        self.scan_max_comments_var = tk.IntVar(value=10)
+        self.quick_send_mode_var = tk.StringVar(value="采集 + 触达预检")
+        self.quick_send_volume_var = tk.StringVar(value="快速")
+        default_quick_send = quick_send_preset(self.quick_send_volume_var.get())
+        self.scan_interval_var = tk.IntVar(value=int(default_quick_send["task_interval"]))
+        self.scan_max_videos_var = tk.IntVar(value=int(default_quick_send["max_videos"]))
+        self.scan_max_comments_var = tk.IntVar(value=int(default_quick_send["max_comments"]))
         self.scan_profile_limit_var = tk.IntVar(value=3)
         self.scan_intent_keywords_var = tk.StringVar(value="price, buy, link, download, app, coupon")
         self.scan_exclude_keywords_var = tk.StringVar(value="haha, lol, spam")
+        self.quick_comment_text_var = tk.StringVar(value="")
+        self.comment_reply_strategy_var = tk.StringVar(value="规则模板（默认）")
+        self.comment_reply_ai_endpoint_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_ENDPOINT", ""))
+        self.comment_reply_ai_model_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_MODEL", "reachops-default"))
+        self.comment_reply_ai_key_var = tk.StringVar(value="")
+        self.comment_reply_ai_status_var = tk.StringVar(
+            value="AI Key 已配置" if os.environ.get("REACHOPS_AI_API_KEY") else "AI Key 未配置"
+        )
         self.recommended_source_value_var = tk.StringVar(value="")
         self.template_action_type_var = tk.StringVar(value=display_action_type("comment_reply"))
         self.template_name_var = tk.StringVar(value="")
@@ -415,7 +470,13 @@ class GrowthOpsConsole(ttk.Frame):
         self.runtime_fullscreen_funnel_text = None
         self.funnel_terminal_text = None
         self.campaign_plan_text = None
+        self.report_text = None
         self.funnel_result_vars = {}
+        self.hourglass_canvas = None
+        self.hourglass_metric_vars = {}
+        self.hourglass_layer_vars = {}
+        self.hourglass_decision_var = tk.StringVar(value="等待开始获客。")
+        self.hourglass_state_var = tk.StringVar(value="待执行")
         self.start_group_combobox = None
         self.start_group_listbox = None
         self.start_refresh_groups_button = None
@@ -438,8 +499,10 @@ class GrowthOpsConsole(ttk.Frame):
         nav.columnconfigure(0, weight=1)
 
         tabs = tk.Frame(nav, bg=UI_COLORS["nav"])
-        tabs.grid(row=0, column=0, sticky="w", padx=(8, 0), pady=4)
+        tabs.grid(row=0, column=0, sticky="ew", padx=(8, 8), pady=4)
         view_names = list(OPERATOR_VIEW_NAMES)
+        for idx in range(len(view_names)):
+            tabs.columnconfigure(idx, weight=1, uniform="nav")
         for idx, name in enumerate(view_names):
             button = tk.Radiobutton(
                 tabs,
@@ -458,33 +521,61 @@ class GrowthOpsConsole(ttk.Frame):
                 activebackground=UI_COLORS["accent_soft"],
                 activeforeground=UI_COLORS["accent"],
                 selectcolor=UI_COLORS["accent_soft"],
-                font=("Microsoft YaHei UI", 10),
+                font=ui_font(10),
             )
-            button.grid(row=0, column=idx, sticky="ew", padx=(0, 4))
+            button.grid(row=0, column=idx, sticky="ew", padx=(0 if idx == 0 else 4, 0))
             self._nav_buttons[name] = button
-        tk.Label(
-            nav,
-            text="预检模式",
-            bg=UI_COLORS["nav"],
-            fg=UI_COLORS["nav_muted"],
-            font=("Microsoft YaHei UI", 9),
-            anchor="e",
-        ).grid(row=0, column=1, sticky="e", padx=(12, 12))
-
-        content = ttk.Frame(self, style="Content.TFrame", padding=(8, 4, 8, 8))
+        content = tk.Frame(
+            self,
+            bg=UI_COLORS["bg"],
+            highlightthickness=0,
+            padx=8,
+            pady=6,
+        )
         content.grid(row=1, column=0, sticky="nsew")
         content.columnconfigure(0, weight=1)
-        content.rowconfigure(0, weight=1)
+        content.rowconfigure(1, weight=1)
 
-        self.stack = ttk.Frame(content, style="Content.TFrame")
-        self.stack.grid(row=0, column=0, sticky="nsew")
+        page_header = tk.Frame(
+            content,
+            bg=UI_COLORS["surface"],
+            highlightthickness=1,
+            highlightbackground=UI_COLORS["border"],
+            padx=12,
+            pady=8,
+        )
+        page_header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        page_header.columnconfigure(0, weight=1)
+        tk.Label(
+            page_header,
+            textvariable=self.page_title_var,
+            bg=UI_COLORS["surface"],
+            fg=UI_COLORS["text"],
+            font=ui_font(14, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            page_header,
+            textvariable=self.operator_status_var,
+            bg=UI_COLORS["accent_soft"],
+            fg=UI_COLORS["accent"],
+            font=ui_font(9, "bold"),
+            padx=10,
+            pady=4,
+            anchor="e",
+        ).grid(row=0, column=1, sticky="e", padx=(16, 0))
+
+        self.stack = tk.Frame(content, bg=UI_COLORS["bg"], highlightthickness=0)
+        self.stack.grid(row=1, column=0, sticky="nsew")
         self.stack.columnconfigure(0, weight=1)
         self.stack.rowconfigure(0, weight=1)
         self.views = {}
         hidden_view_names = ["数据源", "定时扫描", "采集批次", "采集任务", "执行计划", "执行记录", "设置/风控"]
         for name in view_names + hidden_view_names:
-            frame = ttk.Frame(self.stack, style="Content.TFrame")
+            frame = tk.Frame(self.stack, bg=UI_COLORS["bg"], highlightthickness=0)
             frame.grid(row=0, column=0, sticky="nsew")
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(0, weight=1)
             self.views[name] = frame
         self._build_nested_tab_view(
             "线索分析",
@@ -519,6 +610,8 @@ class GrowthOpsConsole(ttk.Frame):
         self.views["动作队列"] = self.views["待执行动作"]
         self.views["报告"] = self.views["报告中心"]
         self._build_start_collection_page(self.views["获客任务"])
+        self._build_hourglass_page(self.views["信息沙漏"])
+        self._switch_view()
         self._build_table_view("数据源", ["type", "value", "status", "updated_at"])
         self._build_table_view("定时扫描", ["id", "source_type", "source_value", "profile_group", "schedule_interval_minutes", "next_run_at", "status", "last_batch_id"])
         self._hide_tree_column("定时扫描", "id")
@@ -587,7 +680,7 @@ class GrowthOpsConsole(ttk.Frame):
 
     def _build_nested_tab_view(self, parent_name: str, tabs: list[tuple[str, str]]):
         parent = self.views[parent_name]
-        parent.configure(style="Content.TFrame")
+        self._configure_content_container(parent)
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(0, weight=1)
         notebook = ttk.Notebook(parent)
@@ -600,9 +693,18 @@ class GrowthOpsConsole(ttk.Frame):
             self.views[view_name] = frame
             self._nested_views[view_name] = (parent_name, notebook, index)
 
+    def _configure_content_container(self, frame):
+        try:
+            frame.configure(style="Content.TFrame")
+        except tk.TclError:
+            try:
+                frame.configure(bg=UI_COLORS["bg"])
+            except Exception:
+                pass
+
     def _configure_style(self):
         style = ttk.Style(self)
-        font = ("Microsoft YaHei UI", 10)
+        font = ui_font(10)
         style.configure(".", font=font)
         style.configure("App.TFrame", background=UI_COLORS["bg"])
         style.configure("Content.TFrame", background=UI_COLORS["bg"])
@@ -610,14 +712,14 @@ class GrowthOpsConsole(ttk.Frame):
         style.configure("Metric.TFrame", background=UI_COLORS["bg"])
         style.configure("TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["text"])
         style.configure("Muted.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["muted"])
-        style.configure("PageTitle.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["text"], font=("Microsoft YaHei UI", 14, "bold"))
-        style.configure("PageSubtitle.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["muted"], font=("Microsoft YaHei UI", 9))
+        style.configure("PageTitle.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["text"], font=ui_font(14, "bold"))
+        style.configure("PageSubtitle.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["muted"], font=ui_font(9))
         style.configure(
             "Badge.TLabel",
             background=UI_COLORS["accent_soft"],
             foreground=UI_COLORS["accent"],
             padding=(10, 4),
-            font=("Microsoft YaHei UI", 9, "bold"),
+            font=ui_font(9, "bold"),
         )
         style.configure(
             "Panel.TLabelframe",
@@ -628,12 +730,12 @@ class GrowthOpsConsole(ttk.Frame):
             "Panel.TLabelframe.Label",
             background=UI_COLORS["bg"],
             foreground=UI_COLORS["text"],
-            font=("Microsoft YaHei UI", 10, "bold"),
+            font=ui_font(10, "bold"),
         )
-        style.configure("TButton", padding=(10, 5), font=("Microsoft YaHei UI", 10))
-        style.configure("Primary.TButton", padding=(12, 6), font=("Microsoft YaHei UI", 10, "bold"))
-        style.configure("Treeview", rowheight=25, font=("Microsoft YaHei UI", 10))
-        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("TButton", padding=(10, 5), font=ui_font(10))
+        style.configure("Primary.TButton", padding=(12, 6), font=ui_font(10, "bold"))
+        style.configure("Treeview", rowheight=25, font=ui_font(10))
+        style.configure("Treeview.Heading", font=ui_font(10, "bold"))
 
     def _style_nav_buttons(self):
         selected = self.nav_var.get()
@@ -642,14 +744,14 @@ class GrowthOpsConsole(ttk.Frame):
             button.configure(
                 bg=UI_COLORS["accent_soft"] if is_selected else UI_COLORS["nav"],
                 fg=UI_COLORS["accent"] if is_selected else UI_COLORS["nav_text"],
-                font=("Microsoft YaHei UI", 10, "bold" if is_selected else "normal"),
+                font=ui_font(10, "bold" if is_selected else "normal"),
             )
 
     def _build_overview(self, frame):
         frame.columnconfigure(0, weight=1)
         toolbar = ttk.Frame(frame)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ttk.Button(toolbar, text="开始情报采集", command=self._start_collection).pack(side=tk.LEFT)
+        ttk.Button(toolbar, text="开始获客", command=self._start_collection).pack(side=tk.LEFT)
         ttk.Button(toolbar, text="刷新工作台", command=self.refresh).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(toolbar, text="导出报告", command=self._export_report).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(toolbar, text="执行到期扫描", command=self._run_due_scans).pack(side=tk.LEFT, padx=(8, 0))
@@ -659,7 +761,7 @@ class GrowthOpsConsole(ttk.Frame):
         for idx, key in enumerate(["data_sources", "scheduled_scans", "collection_batches", "collection_tasks", "profile_health", "error_diagnostics", "creators", "contents", "topic_contents", "candidates", "operation_leads", "action_queue", "execution_plans", "outreach_executions", "exclusions", "daily_quota", "rate_limits", "filter_presets"]):
             box = ttk.Frame(self.summary_frame)
             box.grid(row=idx // 4, column=idx % 4, sticky="ew", padx=8, pady=4)
-            ttk.Label(box, text=self._label(key), foreground="#5B6B8C").pack(anchor="w")
+            ttk.Label(box, text=self._label(key), foreground=UI_COLORS["muted"]).pack(anchor="w")
             var = tk.StringVar(value="0")
             self.summary_vars[key] = var
             ttk.Label(box, textvariable=var, font=("", 14, "bold")).pack(anchor="w")
@@ -679,7 +781,7 @@ class GrowthOpsConsole(ttk.Frame):
         ):
             box = ttk.Frame(self.operational_status_frame)
             box.grid(row=idx // 4, column=idx % 4, sticky="ew", padx=8, pady=4)
-            ttk.Label(box, text=self._label(key), foreground="#5B6B8C").pack(anchor="w")
+            ttk.Label(box, text=self._label(key), foreground=UI_COLORS["muted"]).pack(anchor="w")
             var = tk.StringVar(value="")
             self.operational_status_vars[key] = var
             ttk.Label(box, textvariable=var, font=("", 12, "bold"), wraplength=260, justify="left").pack(anchor="w")
@@ -709,7 +811,7 @@ class GrowthOpsConsole(ttk.Frame):
         self._trees["下一轮采集源"] = tree
 
     def _build_start_collection_page(self, frame):
-        frame.configure(style="Content.TFrame")
+        self._configure_content_container(frame)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=0)
         frame.rowconfigure(1, weight=1)
@@ -719,101 +821,117 @@ class GrowthOpsConsole(ttk.Frame):
         controls.columnconfigure(0, weight=1, uniform="control")
         controls.columnconfigure(1, weight=1, uniform="control")
 
-        task_box = ttk.LabelFrame(controls, text="获客任务", padding=6, style="Panel.TLabelframe")
+        task_box = ttk.LabelFrame(controls, text="任务启动", padding=6, style="Panel.TLabelframe")
         task_box.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        task_box.columnconfigure(3, weight=1)
+        task_box.columnconfigure(1, weight=3)
+        task_box.columnconfigure(3, weight=2)
         self.scan_source_type_var.set("自动识别")
         ttk.Label(task_box, text="推广目标").grid(row=0, column=0, sticky="w")
-        ttk.Entry(task_box, textvariable=self.scan_source_value_var).grid(row=0, column=1, columnspan=3, sticky="ew", padx=(6, 12))
-        ttk.Label(task_box, text="账号分组").grid(row=0, column=4, sticky="w")
+        ttk.Entry(task_box, textvariable=self.scan_source_value_var).grid(row=0, column=1, sticky="ew", padx=(6, 12))
+        ttk.Label(task_box, text="账号分组").grid(row=0, column=2, sticky="w")
         group_row = ttk.Frame(task_box, style="Panel.TFrame")
-        group_row.grid(row=0, column=5, sticky="ew", padx=(6, 0))
+        group_row.grid(row=0, column=3, sticky="ew", padx=(6, 8))
         group_row.columnconfigure(0, weight=1)
         self.start_group_combobox = ttk.Combobox(
             group_row,
             textvariable=self.scan_profile_group_display_var,
             values=["请刷新账号分组"],
             state="readonly",
-            width=46,
+            width=34,
         )
         self.start_group_combobox.grid(row=0, column=0, sticky="ew")
         self.start_group_combobox.bind("<<ComboboxSelected>>", self._on_start_group_selected)
         self.start_refresh_groups_button = ttk.Button(group_row, text="刷新", command=self._refresh_profile_groups)
         self.start_refresh_groups_button.grid(row=0, column=1, sticky="e", padx=(6, 0))
-        ttk.Label(task_box, text="账号分组列表").grid(row=1, column=4, sticky="nw", pady=(6, 0))
-        group_list_frame = ttk.Frame(task_box, style="Panel.TFrame")
-        group_list_frame.grid(row=1, column=5, sticky="ew", padx=(6, 0), pady=(6, 0))
-        group_list_frame.columnconfigure(0, weight=1)
         self.start_group_listbox = tk.Listbox(
-            group_list_frame,
-            height=4,
+            task_box,
+            height=1,
             exportselection=False,
             activestyle="dotbox",
-            font=("Microsoft YaHei UI", 9),
+            font=ui_font(9),
         )
-        self.start_group_listbox.grid(row=0, column=0, sticky="ew")
         self.start_group_listbox.bind("<<ListboxSelect>>", self._on_start_group_list_selected)
-        group_scroll = ttk.Scrollbar(group_list_frame, orient=tk.VERTICAL, command=self.start_group_listbox.yview)
-        group_scroll.grid(row=0, column=1, sticky="ns")
-        self.start_group_listbox.configure(yscrollcommand=group_scroll.set)
-        ttk.Label(
-            task_box,
-            text="系统自动识别产品链接、关键词、达人主页、视频链接、话题或直播间。",
-            foreground=UI_COLORS["muted"],
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        task_actions = ttk.Frame(task_box, style="Panel.TFrame")
+        task_actions.grid(row=0, column=4, sticky="e")
+        ttk.Button(task_actions, text="开始获客", command=self._start_collection, style="Primary.TButton").pack(side=tk.LEFT)
+        ttk.Button(task_actions, text="导出报告", command=self._export_report).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Label(
             task_box,
             textvariable=self.scan_profile_group_detail_var,
             foreground=UI_COLORS["muted"],
-            wraplength=760,
-        ).grid(row=2, column=0, columnspan=6, sticky="ew", pady=(6, 0))
+            wraplength=620,
+        ).grid(row=1, column=0, columnspan=4, sticky="ew", pady=(6, 0))
 
-        task_actions = ttk.Frame(task_box, style="Panel.TFrame")
-        task_actions.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(6, 0))
-        ttk.Button(task_actions, text="开始获客", command=self._start_collection, style="Primary.TButton").pack(side=tk.LEFT)
-        ttk.Button(task_actions, text="导出报告", command=self._export_report).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Label(task_box, textvariable=self.operator_status_var, foreground=UI_COLORS["muted"]).grid(
-            row=4,
+        left_stack = ttk.Frame(controls, style="Content.TFrame")
+        left_stack.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+        left_stack.columnconfigure(0, weight=1)
+
+        right_stack = ttk.Frame(controls, style="Content.TFrame")
+        right_stack.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
+        right_stack.columnconfigure(0, weight=1)
+
+        rule_box = ttk.LabelFrame(left_stack, text="运营设置", padding=6, style="Panel.TLabelframe")
+        rule_box.grid(row=0, column=0, sticky="ew")
+        for idx in range(6):
+            rule_box.columnconfigure(idx, weight=1)
+        ttk.Label(rule_box, text="执行模式").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(
+            rule_box,
+            textvariable=self.quick_send_mode_var,
+            values=QUICK_SEND_MODE_LABELS,
+            state="readonly",
+            width=14,
+        ).grid(row=0, column=1, sticky="w")
+        ttk.Label(rule_box, text="目标数量").grid(row=0, column=2, sticky="w")
+        ttk.Combobox(
+            rule_box,
+            textvariable=self.quick_send_volume_var,
+            values=list(QUICK_SEND_VOLUME_PRESETS.keys()),
+            state="readonly",
+            width=8,
+        ).grid(row=0, column=3, sticky="w")
+        ttk.Button(rule_box, text="应用预设", command=self.apply_quick_send_preset).grid(row=0, column=4, columnspan=2, sticky="w")
+        ttk.Label(rule_box, text="参与账号").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Spinbox(rule_box, from_=1, to=50, width=5, textvariable=self.scan_profile_limit_var).grid(row=1, column=1, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="评论回复").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Combobox(
+            rule_box,
+            textvariable=self.comment_reply_strategy_var,
+            values=("规则模板（默认）", "外部AI生成建议", "固定文案"),
+            state="readonly",
+            width=16,
+        ).grid(row=1, column=3, columnspan=3, sticky="ew", pady=(6, 0))
+        ttk.Label(rule_box, text="固定文案").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(rule_box, textvariable=self.quick_comment_text_var).grid(row=2, column=1, columnspan=5, sticky="ew", pady=(6, 0))
+        ai_box = ttk.LabelFrame(left_stack, text="评论回复 AI 接入点", padding=6, style="Panel.TLabelframe")
+        ai_box.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        for idx in range(6):
+            ai_box.columnconfigure(idx, weight=1)
+        ttk.Label(ai_box, text="Endpoint").grid(row=0, column=0, sticky="w")
+        ttk.Entry(ai_box, textvariable=self.comment_reply_ai_endpoint_var).grid(row=0, column=1, columnspan=5, sticky="ew")
+        ttk.Label(ai_box, text="模型").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(ai_box, textvariable=self.comment_reply_ai_model_var).grid(row=1, column=1, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(ai_box, text="API Key").grid(row=1, column=3, sticky="w", pady=(6, 0))
+        ttk.Entry(ai_box, textvariable=self.comment_reply_ai_key_var, show="*").grid(row=1, column=4, sticky="ew", pady=(6, 0))
+        ttk.Button(ai_box, text="应用AI设置", command=self.apply_comment_reply_ai_settings).grid(row=1, column=5, sticky="e", pady=(6, 0))
+        ttk.Label(ai_box, textvariable=self.comment_reply_ai_status_var, foreground=UI_COLORS["muted"]).grid(
+            row=2,
             column=0,
             columnspan=6,
             sticky="w",
-            pady=(4, 0),
+            pady=(6, 0),
         )
-
-        rule_box = ttk.LabelFrame(controls, text="采集范围", padding=6, style="Panel.TLabelframe")
-        rule_box.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
-        for idx in range(6):
-            rule_box.columnconfigure(idx, weight=1)
-        ttk.Label(rule_box, text="每个目标最多视频").grid(row=0, column=0, sticky="w")
-        ttk.Spinbox(rule_box, from_=1, to=20, width=5, textvariable=self.scan_max_videos_var).grid(row=0, column=1, sticky="w")
-        ttk.Label(rule_box, text="每条视频最多评论").grid(row=0, column=2, sticky="w")
-        ttk.Spinbox(rule_box, from_=1, to=50, width=5, textvariable=self.scan_max_comments_var).grid(row=0, column=3, sticky="w")
-        ttk.Label(rule_box, text="参与账号数").grid(row=0, column=4, sticky="w")
-        ttk.Spinbox(rule_box, from_=1, to=20, width=5, textvariable=self.scan_profile_limit_var).grid(row=0, column=5, sticky="w")
-        ttk.Label(rule_box, text="任务间隔秒").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        ttk.Spinbox(rule_box, from_=30, to=300, width=5, textvariable=self.scan_interval_var).grid(row=1, column=1, sticky="w", pady=(6, 0))
-        ttk.Label(rule_box, text="意向词").grid(row=1, column=2, sticky="w", pady=(6, 0))
-        ttk.Entry(rule_box, textvariable=self.scan_intent_keywords_var).grid(row=1, column=3, columnspan=3, sticky="ew", pady=(6, 0))
-        ttk.Label(rule_box, text="排除词").grid(row=2, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(rule_box, textvariable=self.scan_exclude_keywords_var).grid(row=2, column=1, columnspan=5, sticky="ew", pady=(6, 0))
-        ttk.Label(
-            rule_box,
-            text="这些设置会直接进入采集任务：控制扫描深度、评论数量、参与账号和意向识别规则。触达并发在“触达执行”页设置。",
-            foreground=UI_COLORS["muted"],
-            wraplength=560,
-        ).grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
-
-        result_box = ttk.LabelFrame(controls, text="执行 / 结果", padding=6, style="Panel.TLabelframe")
-        result_box.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
+        result_box = ttk.LabelFrame(right_stack, text="执行 / 结果", padding=6, style="Panel.TLabelframe")
+        result_box.grid(row=0, column=0, sticky="nsew")
+        result_box.rowconfigure(1, weight=1)
         for idx in range(6):
             result_box.columnconfigure(idx, weight=1, uniform="result")
-        ttk.Label(result_box, text="预检模式，不提交评论/关注/私信。", foreground=UI_COLORS["muted"]).grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 4))
 
         self.summary_vars = {}
         summary_keys = ["data_sources", "contents", "candidates", "operation_leads", "action_queue", "error_diagnostics"]
         for idx, key in enumerate(summary_keys):
             box = ttk.Frame(result_box, style="Metric.TFrame")
-            box.grid(row=1, column=idx, sticky="ew", padx=(0 if idx == 0 else 6, 0), pady=(2, 0))
+            box.grid(row=0, column=idx, sticky="ew", padx=(0 if idx == 0 else 6, 0), pady=(2, 0))
             ttk.Label(box, text=self._label(key), foreground=UI_COLORS["muted"]).pack(anchor="w")
             var = tk.StringVar(value="0")
             self.summary_vars[key] = var
@@ -821,11 +939,12 @@ class GrowthOpsConsole(ttk.Frame):
         self.operational_status_vars = {}
 
         plan_box = ttk.LabelFrame(result_box, text="自动采集方案", padding=6, style="Panel.TLabelframe")
-        plan_box.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(6, 0))
+        plan_box.grid(row=1, column=0, columnspan=6, sticky="nsew", pady=(6, 0))
         plan_box.columnconfigure(0, weight=1)
+        plan_box.rowconfigure(0, weight=1)
         self.campaign_plan_text = tk.Text(
             plan_box,
-            height=5,
+            height=8,
             wrap="word",
             bg=UI_COLORS["surface"],
             fg=UI_COLORS["text"],
@@ -833,9 +952,9 @@ class GrowthOpsConsole(ttk.Frame):
             bd=1,
             padx=6,
             pady=5,
-            font=("Microsoft YaHei UI", 9),
+            font=ui_font(9),
         )
-        self.campaign_plan_text.grid(row=0, column=0, sticky="ew")
+        self.campaign_plan_text.grid(row=0, column=0, sticky="nsew")
         self.show_campaign_plan({})
 
         terminal = ttk.LabelFrame(frame, text="量化执行终端", padding=8, style="Panel.TLabelframe")
@@ -846,14 +965,6 @@ class GrowthOpsConsole(ttk.Frame):
         runtime_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         ttk.Button(runtime_toolbar, text="清空日志", command=self.clear_runtime_log).pack(side=tk.LEFT)
         ttk.Button(runtime_toolbar, text="复制日志", command=self.copy_runtime_log).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(runtime_toolbar, text="执行记录", command=lambda: self.nav_var.set("触达执行") or self._switch_view()).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(runtime_toolbar, text="账号状态", command=lambda: self.nav_var.set("账号诊断") or self._switch_view()).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Label(
-            runtime_toolbar,
-            text="左侧是本轮漏斗结果，右侧是各执行通道实时日志。",
-            foreground=UI_COLORS["muted"],
-        ).pack(side=tk.LEFT, padx=(12, 0))
-
         funnel_body = ttk.Frame(terminal, style="Panel.TFrame")
         funnel_body.grid(row=1, column=0, sticky="nsew")
         funnel_body.columnconfigure(0, weight=0, minsize=230)
@@ -881,15 +992,16 @@ class GrowthOpsConsole(ttk.Frame):
             height=20,
             width=28,
             wrap="none",
-            bg="#050505",
-            fg="#A8FF60",
-            insertbackground="#DCDCDC",
+            bg=UI_COLORS["terminal_bg"],
+            fg=UI_COLORS["terminal_text"],
+            insertbackground=UI_COLORS["terminal_muted"],
             relief="sunken",
             bd=1,
             padx=8,
             pady=8,
             font=("Consolas", 9),
         )
+        self._configure_terminal_tags(self.funnel_terminal_text)
         self.funnel_terminal_text.grid(row=1, column=0, sticky="nsew")
 
         stage_frame = ttk.Frame(funnel_body, style="Panel.TFrame")
@@ -917,21 +1029,169 @@ class GrowthOpsConsole(ttk.Frame):
                 height=20,
                 width=18,
                 wrap="none",
-                bg="#050505",
-                fg="#45D96B" if key != "error" else "#FF6B6B",
-                insertbackground="#DCDCDC",
+                bg=UI_COLORS["terminal_bg"],
+                fg=UI_COLORS["terminal_text"],
+                insertbackground=UI_COLORS["terminal_muted"],
                 relief="sunken",
                 bd=1,
                 padx=5,
                 pady=5,
                 font=("Consolas", 8),
             )
+            self._configure_terminal_tags(text)
             text.grid(row=1, column=0, sticky="nsew")
             self.runtime_stage_texts[key] = text
         self.runtime_log_text = self.runtime_stage_texts["all"]
         self._bind_runtime_fullscreen([funnel_body, result_panel, stage_frame, self.funnel_terminal_text, *self.runtime_stage_texts.values()])
         self._refresh_funnel_results(self.last_snapshot)
+        self._refresh_hourglass(self.last_snapshot)
         self.append_runtime_log("READY  等待任务。左侧显示漏斗结果，右侧显示分阶段执行日志。")
+
+    def _build_hourglass_page(self, frame):
+        self._configure_content_container(frame)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        headline = tk.Frame(frame, bg=UI_COLORS["surface"], highlightthickness=1, highlightbackground=UI_COLORS["border"], padx=14, pady=10)
+        headline.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        headline.columnconfigure(0, weight=1)
+        tk.Label(
+            headline,
+            textvariable=self.hourglass_state_var,
+            bg=UI_COLORS["surface"],
+            fg=UI_COLORS["text"],
+            font=ui_font(16, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            headline,
+            textvariable=self.hourglass_decision_var,
+            bg=UI_COLORS["surface"],
+            fg=UI_COLORS["muted"],
+            font=ui_font(10),
+            anchor="w",
+            justify="left",
+            wraplength=1160,
+        ).grid(row=1, column=0, sticky="ew", pady=(5, 0))
+
+        body = ttk.Frame(frame, style="Content.TFrame")
+        body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=0, minsize=300)
+        body.rowconfigure(0, weight=1)
+
+        flow = ttk.Frame(body, style="Content.TFrame")
+        flow.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        flow.columnconfigure(0, weight=1)
+        for row in range(3):
+            flow.rowconfigure(row, weight=1, uniform="hourglass_layer")
+
+        layer_specs = [
+            ("top", "上层：输入与采集", "来源、页面、视频、评论用户是否正在进入系统。", "#18313a"),
+            ("middle", "中层：判断与阻断", "账号、页面、风控、重试和可用性判断集中在这里。", "#3a2f18"),
+            ("bottom", "下层：线索与触达沉淀", "高意向线索、动作队列和成功触达沉淀为可交付结果。", "#183320"),
+        ]
+        self.hourglass_layer_vars = {}
+        for idx, (key, title, subtitle, color) in enumerate(layer_specs):
+            layer = tk.Frame(flow, bg=color, highlightthickness=1, highlightbackground=UI_COLORS["border"], padx=14, pady=12)
+            layer.grid(row=idx, column=0, sticky="nsew", pady=(0 if idx == 0 else 8, 0))
+            layer.columnconfigure(1, weight=1)
+            tk.Label(layer, text=title, bg=color, fg=UI_COLORS["text"], font=ui_font(13, "bold"), anchor="w").grid(row=0, column=0, columnspan=2, sticky="ew")
+            tk.Label(layer, text=subtitle, bg=color, fg=UI_COLORS["muted"], font=ui_font(9), anchor="w").grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 10))
+            value_var = tk.StringVar(value="0")
+            detail_var = tk.StringVar(value="等待执行数据。")
+            self.hourglass_layer_vars[key] = {"value": value_var, "detail": detail_var}
+            tk.Label(layer, textvariable=value_var, bg=color, fg=UI_COLORS["text"], font=ui_font(28, "bold"), width=8, anchor="w").grid(row=2, column=0, sticky="nw", padx=(0, 14))
+            tk.Label(layer, textvariable=detail_var, bg=color, fg=UI_COLORS["text"], font=ui_font(11), anchor="nw", justify="left", wraplength=760).grid(row=2, column=1, sticky="nsew")
+
+        side = ttk.LabelFrame(body, text="关键指标", padding=10, style="Panel.TLabelframe")
+        side.grid(row=0, column=1, sticky="nsew")
+        side.columnconfigure(0, weight=1)
+        metrics = [
+            ("source", "来源"),
+            ("user", "用户"),
+            ("lead", "线索"),
+            ("action", "动作"),
+            ("blocked", "阻断"),
+            ("success", "成功"),
+        ]
+        self.hourglass_metric_vars = {}
+        for idx, (key, label) in enumerate(metrics):
+            box = ttk.Frame(side, style="Metric.TFrame")
+            box.grid(row=idx, column=0, sticky="ew", pady=(0, 8))
+            ttk.Label(box, text=label, foreground=UI_COLORS["muted"]).pack(anchor="w")
+            var = tk.StringVar(value="0")
+            self.hourglass_metric_vars[key] = var
+            ttk.Label(box, textvariable=var, font=ui_font(18, "bold")).pack(anchor="w")
+
+        self.hourglass_canvas = tk.Canvas(
+            side,
+            width=260,
+            height=220,
+            bg=UI_COLORS["terminal_bg"],
+            highlightthickness=1,
+            highlightbackground=UI_COLORS["border"],
+        )
+        self.hourglass_canvas.grid(row=len(metrics), column=0, sticky="ew", pady=(6, 0))
+        self.hourglass_canvas.bind("<Configure>", lambda _event: self._draw_hourglass())
+        self._refresh_hourglass(self.last_snapshot)
+
+    def apply_quick_send_preset(self):
+        preset = quick_send_preset(self.quick_send_volume_var.get())
+        self.scan_max_videos_var.set(int(preset["max_videos"]))
+        self.scan_max_comments_var.set(int(preset["max_comments"]))
+        self.scan_profile_limit_var.set(int(preset["profile_limit"]))
+        self.scan_interval_var.set(int(preset["task_interval"]))
+        self.action_execution_workers_var.set(int(preset["workers"]))
+        mode_key = quick_send_mode_key(self.quick_send_mode_var.get())
+        if mode_key == "live_comment":
+            self.action_execution_mode_var.set("真实提交")
+            self.action_execution_live_confirm_var.set(True)
+        else:
+            self.action_execution_mode_var.set("预检，不提交")
+            self.action_execution_live_confirm_var.set(False)
+
+    def apply_comment_reply_ai_settings(self):
+        endpoint = self.comment_reply_ai_endpoint_var.get().strip()
+        model = self.comment_reply_ai_model_var.get().strip()
+        key = self.comment_reply_ai_key_var.get().strip()
+
+        if endpoint:
+            os.environ["REACHOPS_AI_ENDPOINT"] = endpoint
+        else:
+            os.environ.pop("REACHOPS_AI_ENDPOINT", None)
+        if model:
+            os.environ["REACHOPS_AI_MODEL"] = model
+        else:
+            os.environ.pop("REACHOPS_AI_MODEL", None)
+        if key:
+            os.environ["REACHOPS_AI_API_KEY"] = key
+
+        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or key)
+        if endpoint:
+            status = f"外部AI已配置：model={model or '未指定'}，key={'已配置' if key_configured else '未配置'}"
+        else:
+            status = "外部AI未启用：未填写Endpoint"
+        self.comment_reply_ai_status_var.set(status)
+        self.append_runtime_log(
+            f"CONFIG comment_reply_ai strategy={self.comment_reply_strategy_var.get()} "
+            f"endpoint_configured={str(bool(endpoint)).lower()} model={model or 'none'} "
+            f"key_configured={str(key_configured).lower()} ai_suggestion_only=true"
+        )
+
+    def comment_reply_ai_settings(self) -> dict:
+        endpoint = self.comment_reply_ai_endpoint_var.get().strip()
+        model = self.comment_reply_ai_model_var.get().strip()
+        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or self.comment_reply_ai_key_var.get().strip())
+        return {
+            "strategy": self.comment_reply_strategy_var.get(),
+            "endpoint_configured": bool(endpoint),
+            "model": model,
+            "api_key_configured": key_configured,
+            "fixed_comment_text_configured": bool(self.quick_comment_text_var.get().strip()),
+            "execution_policy": "ai_suggestion_only_live_submit_requires_confirmation",
+            "no_auto_ai_submit": True,
+        }
 
     def set_profile_group_options(self, display_values: list[str], selected: str = ""):
         values = [safe_tk_option(item) for item in (display_values or [])]
@@ -1033,9 +1293,9 @@ class GrowthOpsConsole(ttk.Frame):
             height=height,
             width=width,
             wrap="none",
-            bg="#050505",
-            fg="#FF6B6B" if stage_key == "error" else "#45D96B",
-            insertbackground="#DCDCDC",
+            bg=UI_COLORS["terminal_bg"],
+            fg=UI_COLORS["terminal_text"],
+            insertbackground=UI_COLORS["terminal_muted"],
             relief="sunken",
             bd=1,
             padx=5,
@@ -1055,7 +1315,7 @@ class GrowthOpsConsole(ttk.Frame):
         self.runtime_fullscreen_window = window
         self.runtime_fullscreen_stage_texts = {}
         window.title("量化执行漏斗日志 - 全屏")
-        window.configure(bg="#111111")
+        window.configure(bg=UI_COLORS["fullscreen_bg"])
         try:
             window.state("zoomed")
         except Exception:
@@ -1071,10 +1331,10 @@ class GrowthOpsConsole(ttk.Frame):
         header = tk.Label(
             window,
             text="量化执行漏斗终端    双击主界面日志打开 | Esc 关闭",
-            bg="#111111",
-            fg="#DCDCDC",
+            bg=UI_COLORS["fullscreen_bg"],
+            fg=UI_COLORS["terminal_muted"],
             anchor="w",
-            font=("Microsoft YaHei UI", 11, "bold"),
+            font=ui_font(11, "bold"),
         )
         header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=(8, 4))
         self.runtime_fullscreen_funnel_text = tk.Text(
@@ -1082,27 +1342,29 @@ class GrowthOpsConsole(ttk.Frame):
             height=28,
             width=32,
             wrap="none",
-            bg="#050505",
-            fg="#A8FF60",
-            insertbackground="#DCDCDC",
+            bg=UI_COLORS["terminal_bg"],
+            fg=UI_COLORS["terminal_text"],
+            insertbackground=UI_COLORS["terminal_muted"],
             relief="sunken",
             bd=1,
             padx=10,
             pady=10,
             font=("Consolas", 11),
         )
+        self._configure_terminal_tags(self.runtime_fullscreen_funnel_text)
         self.runtime_fullscreen_funnel_text.grid(row=1, column=0, sticky="nsew", padx=(8, 6), pady=(0, 8))
         stages = ttk.Frame(window)
         stages.grid(row=1, column=1, sticky="nsew", padx=(0, 8), pady=(0, 8))
         stages.rowconfigure(0, weight=1)
         for idx, (key, label) in enumerate(self._runtime_stage_specs()):
             stages.columnconfigure(idx, weight=1, uniform="runtime_fullscreen_stage")
-            panel = tk.Frame(stages, bg="#111111")
+            panel = tk.Frame(stages, bg=UI_COLORS["fullscreen_bg"])
             panel.grid(row=0, column=idx, sticky="nsew", padx=(0 if idx == 0 else 5, 0))
             panel.columnconfigure(0, weight=1)
             panel.rowconfigure(1, weight=1)
-            tk.Label(panel, text=label, bg="#111111", fg="#DCDCDC", anchor="center").grid(row=0, column=0, sticky="ew")
+            tk.Label(panel, text=label, bg=UI_COLORS["fullscreen_bg"], fg=UI_COLORS["terminal_muted"], anchor="center").grid(row=0, column=0, sticky="ew")
             text = self._make_runtime_text(panel, key, height=30, width=22)
+            self._configure_terminal_tags(text)
             text.grid(row=1, column=0, sticky="nsew")
             source = self.runtime_stage_texts.get(key)
             if source:
@@ -1131,6 +1393,7 @@ class GrowthOpsConsole(ttk.Frame):
             stage = self._runtime_stage_for_message(message)
             self._insert_runtime_line(self.runtime_stage_texts, stage, line)
             self._insert_runtime_line(self.runtime_fullscreen_stage_texts, stage, line)
+            self._refresh_hourglass(getattr(self, "last_snapshot", GrowthOpsSnapshot()) or GrowthOpsSnapshot())
         except Exception:
             pass
 
@@ -1158,14 +1421,42 @@ class GrowthOpsConsole(ttk.Frame):
     def _insert_runtime_line(self, text_map: dict, stage: str, line: str):
         if not text_map:
             return
+        tag = self._runtime_line_tag(line)
         all_text = text_map.get("all")
         if all_text and self._widget_exists(all_text):
-            all_text.insert(tk.END, line)
+            all_text.insert(tk.END, line, tag)
             all_text.see(tk.END)
         stage_text = text_map.get(stage)
         if stage_text and stage_text is not all_text and self._widget_exists(stage_text):
-            stage_text.insert(tk.END, line)
+            stage_text.insert(tk.END, line, tag)
             stage_text.see(tk.END)
+
+    def _configure_terminal_tags(self, widget):
+        if not widget:
+            return
+        try:
+            widget.tag_configure("terminal_default", foreground=UI_COLORS["terminal_text"])
+            widget.tag_configure("terminal_info", foreground=UI_COLORS["terminal_info"])
+            widget.tag_configure("terminal_success", foreground=UI_COLORS["terminal_success"])
+            widget.tag_configure("terminal_warning", foreground=UI_COLORS["terminal_warning"])
+            widget.tag_configure("terminal_error", foreground=UI_COLORS["terminal_error"])
+            widget.tag_configure("terminal_muted", foreground=UI_COLORS["terminal_muted"])
+        except Exception:
+            pass
+
+    def _runtime_line_tag(self, line: str) -> str:
+        text = str(line or "").lower()
+        if any(item in text for item in ["error", "failed", "失败", "异常", "block", "captcha", "login_required", "proxy"]):
+            return "terminal_error"
+        if any(item in text for item in ["warn", "warning", "跳过", "skipped", "retry", "cooldown"]):
+            return "terminal_warning"
+        if any(item in text for item in ["done", "success", "passed", "ready", "ok", "成功", "完成", "通过"]):
+            return "terminal_success"
+        if any(item in text for item in ["plan", "start", "check", "config", "run", "touch", "video", "queue"]):
+            return "terminal_info"
+        if not text.strip():
+            return "terminal_muted"
+        return "terminal_default"
 
     def _widget_exists(self, widget) -> bool:
         try:
@@ -1240,6 +1531,117 @@ class GrowthOpsConsole(ttk.Frame):
         for key, var in self.funnel_result_vars.items():
             var.set(str(values.get(key, 0)))
         self._render_funnel_terminal(values, funnel)
+        self._refresh_hourglass(snapshot, values=values, funnel=funnel)
+
+    def _refresh_hourglass(self, snapshot: GrowthOpsSnapshot | None = None, values: dict | None = None, funnel: dict | None = None):
+        if not self.hourglass_metric_vars and not self.hourglass_canvas:
+            return
+        snapshot = snapshot or self.last_snapshot or GrowthOpsSnapshot()
+        funnel = funnel or (getattr(snapshot, "campaign_funnel", {}) or {})
+        summary = getattr(snapshot, "summary", {}) or {}
+        values = values or {
+            "data_sources": funnel.get("target_sources", summary.get("data_sources", 0)),
+            "contents": funnel.get("content_found", summary.get("contents", 0)),
+            "candidates": funnel.get("comment_users", summary.get("candidates", 0)),
+            "operation_leads": funnel.get("customer_leads", summary.get("operation_leads", 0)),
+            "action_queue": funnel.get("outreach_actions", summary.get("action_queue", 0)),
+            "error_diagnostics": funnel.get("failed", summary.get("error_diagnostics", 0)),
+        }
+        metric_values = {
+            "source": self._safe_int(values.get("data_sources")),
+            "user": self._safe_int(values.get("candidates")),
+            "lead": self._safe_int(values.get("operation_leads")),
+            "action": self._safe_int(values.get("action_queue")),
+            "blocked": self._safe_int(values.get("error_diagnostics")) + self._safe_int(funnel.get("failed")),
+            "success": self._safe_int(funnel.get("execution_success")),
+        }
+        for key, var in self.hourglass_metric_vars.items():
+            var.set(str(metric_values.get(key, 0)))
+        top_total = metric_values["source"] + metric_values["user"]
+        middle_total = metric_values["blocked"]
+        bottom_total = metric_values["lead"] + metric_values["action"] + metric_values["success"]
+        layer_values = {
+            "top": (
+                str(top_total),
+                f"来源 {metric_values['source']} / 用户 {metric_values['user']}。这一层代表输入是否进入系统，页面、视频和评论用户是否被采集到。",
+            ),
+            "middle": (
+                str(middle_total),
+                f"阻断 {metric_values['blocked']}。这一层集中展示账号登录态、页面加载、风控、重试和跳过判断。",
+            ),
+            "bottom": (
+                str(bottom_total),
+                f"线索 {metric_values['lead']} / 动作 {metric_values['action']} / 成功 {metric_values['success']}。这一层代表可沉淀、可复核、可交付的结果。",
+            ),
+        }
+        for key, payload in layer_values.items():
+            widgets = self.hourglass_layer_vars.get(key) or {}
+            if widgets.get("value"):
+                widgets["value"].set(payload[0])
+            if widgets.get("detail"):
+                widgets["detail"].set(payload[1])
+        status = status_label(str(funnel.get("batch_status") or "ready"))
+        batch_id = str(funnel.get("batch_id") or "")
+        top_error = "-"
+        error_counts = funnel.get("error_counts") or {}
+        if isinstance(error_counts, dict) and error_counts:
+            top_error = display_error_code(str(sorted(error_counts.items(), key=lambda item: int(item[1] or 0), reverse=True)[0][0] or "-"))
+        if metric_values["blocked"]:
+            state = f"阻断待处理 / {status}"
+            decision = f"中层出现阻断：{metric_values['blocked']}。首要错误：{top_error}。处理账号、页面或风控阻断后再次执行。"
+        elif metric_values["success"]:
+            state = f"执行完成 / {status}"
+            decision = f"已产生成功触达 {metric_values['success']}。可导出报告并检查执行记录。"
+        elif metric_values["action"]:
+            state = f"动作已入队 / {status}"
+            decision = f"已形成待触达动作 {metric_values['action']}，下一步进入触达预检或执行。"
+        elif metric_values["lead"]:
+            state = f"线索已沉淀 / {status}"
+            decision = f"已识别线索 {metric_values['lead']}，系统会继续生成可执行动作。"
+        elif metric_values["user"]:
+            state = f"用户采集中 / {status}"
+            decision = f"已采集用户 {metric_values['user']}，正在筛选高意向线索。"
+        elif metric_values["source"]:
+            state = f"来源已进入 / {status}"
+            decision = f"已规划来源 {metric_values['source']}，等待页面打开、内容采集和评论用户解析。"
+        else:
+            state = "待执行"
+            decision = "开始获客后，上层显示来源和用户输入；中层显示判断、重试与阻断；下层显示线索、动作和成功触达。"
+        if batch_id:
+            decision = f"批次 {batch_id[-10:]}：{decision}"
+        self.hourglass_state_var.set(state)
+        self.hourglass_decision_var.set(decision)
+        self._draw_hourglass(metric_values)
+
+    def _draw_hourglass(self, metric_values: dict | None = None):
+        canvas = self.hourglass_canvas
+        if not canvas:
+            return
+        try:
+            canvas.delete("all")
+            width = max(260, int(canvas.winfo_width() or 300))
+            height = max(200, int(canvas.winfo_height() or 220))
+            metric_values = metric_values or {key: self._safe_int(var.get()) for key, var in self.hourglass_metric_vars.items()}
+            layers = [
+                ("上层", "输入与采集", self._safe_int(metric_values.get("source")) + self._safe_int(metric_values.get("user")), "#18313a"),
+                ("中层", "判断与阻断", self._safe_int(metric_values.get("blocked")), "#3a2f18"),
+                ("下层", "线索与触达", self._safe_int(metric_values.get("lead")) + self._safe_int(metric_values.get("action")) + self._safe_int(metric_values.get("success")), "#183320"),
+            ]
+            max_value = max(1, *[value for _name, _label, value, _color in layers])
+            margin = 14
+            gap = 10
+            layer_height = max(48, int((height - margin * 2 - gap * 2) / 3))
+            for idx, (name, label, value, color) in enumerate(layers):
+                y = margin + idx * (layer_height + gap)
+                canvas.create_rectangle(margin, y, width - margin, y + layer_height, fill=color, outline=UI_COLORS["border"], width=1)
+                fill_width = int((width - margin * 2 - 12) * (value / max_value)) if value else 0
+                if fill_width:
+                    canvas.create_rectangle(margin + 6, y + layer_height - 11, margin + 6 + fill_width, y + layer_height - 6, fill=UI_COLORS["accent"], outline="")
+                canvas.create_text(margin + 10, y + 14, text=name, fill=UI_COLORS["text"], font=ui_font(10, "bold"), anchor="w")
+                canvas.create_text(margin + 10, y + 33, text=label, fill=UI_COLORS["muted"], font=ui_font(8), anchor="w")
+                canvas.create_text(width - margin - 10, y + layer_height / 2, text=str(value), fill=UI_COLORS["text"], font=ui_font(18, "bold"), anchor="e")
+        except Exception:
+            pass
 
     def _render_funnel_terminal(self, values: dict | None = None, funnel: dict | None = None):
         if values is None:
@@ -1294,8 +1696,11 @@ class GrowthOpsConsole(ttk.Frame):
         text = "\n".join(lines)
         for widget in [self.funnel_terminal_text, self.runtime_fullscreen_funnel_text]:
             if self._widget_exists(widget):
+                self._configure_terminal_tags(widget)
                 widget.delete("1.0", tk.END)
-                widget.insert(tk.END, text)
+                for line in lines:
+                    tag = "terminal_success" if line.startswith("REACHOPS") else self._runtime_line_tag(line)
+                    widget.insert(tk.END, f"{line}\n", tag)
                 widget.see(tk.END)
 
     def _safe_int(self, value) -> int:
@@ -1310,7 +1715,7 @@ class GrowthOpsConsole(ttk.Frame):
         return f"{(numerator / denominator) * 100:.1f}%"
 
     def _build_intent_analysis_view(self, frame):
-        frame.configure(style="Content.TFrame")
+        self._configure_content_container(frame)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=1)
         self.intent_summary_frame = ttk.LabelFrame(frame, text="这批用户有没有价值？", padding=14, style="Panel.TLabelframe")
@@ -1320,7 +1725,7 @@ class GrowthOpsConsole(ttk.Frame):
             self.intent_summary_frame.columnconfigure(idx % 4, weight=1, uniform="intent")
             box = ttk.Frame(self.intent_summary_frame, style="Panel.TFrame")
             box.grid(row=idx // 4, column=idx % 4, sticky="ew", padx=8, pady=4)
-            ttk.Label(box, text=self._intent_label(key), foreground="#5B6B8C").pack(anchor="w")
+            ttk.Label(box, text=self._intent_label(key), foreground=UI_COLORS["muted"]).pack(anchor="w")
             var = tk.StringVar(value="0")
             self.intent_summary_vars[key] = var
             ttk.Label(box, textvariable=var, font=("", 14, "bold")).pack(anchor="w")
@@ -1354,7 +1759,7 @@ class GrowthOpsConsole(ttk.Frame):
         self.intent_next_text.insert(tk.END, "采集后这里会显示线索价值判断和下一步建议。")
 
     def _build_account_status_view(self, frame):
-        frame.configure(style="Content.TFrame")
+        self._configure_content_container(frame)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
         top = ttk.LabelFrame(frame, text="账号为什么能跑 / 为什么不能跑", padding=14, style="Panel.TLabelframe")
@@ -1364,7 +1769,7 @@ class GrowthOpsConsole(ttk.Frame):
             top.columnconfigure(idx, weight=1, uniform="account")
             box = ttk.Frame(top, style="Panel.TFrame")
             box.grid(row=0, column=idx, sticky="ew", padx=8)
-            ttk.Label(box, text=self._label(key), foreground="#5B6B8C").pack(anchor="w")
+            ttk.Label(box, text=self._label(key), foreground=UI_COLORS["muted"]).pack(anchor="w")
             var = tk.StringVar(value="0")
             self.account_status_vars[key] = var
             ttk.Label(box, textvariable=var, font=("", 12, "bold"), wraplength=180).pack(anchor="w")
@@ -1396,7 +1801,7 @@ class GrowthOpsConsole(ttk.Frame):
 
     def _build_table_view(self, name, columns, detail: bool = False):
         frame = self.views[name]
-        frame.configure(style="Content.TFrame")
+        self._configure_content_container(frame)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=14)
@@ -1414,6 +1819,14 @@ class GrowthOpsConsole(ttk.Frame):
             detail_text.insert(tk.END, "选择一行查看详情")
             tree.bind("<<TreeviewSelect>>", lambda _event, view_name=name: self._show_selected_detail(view_name))
             self._trees[f"{name}__detail"] = detail_text
+        else:
+            frame.rowconfigure(1, weight=0)
+            ttk.Label(
+                frame,
+                text=f"{name} 暂无数据；开始获客或刷新工作台后会在这里显示结果。",
+                style="Muted.TLabel",
+                anchor="w",
+            ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self._trees[name] = tree
 
     def _hide_tree_column(self, name: str, column_name: str):
@@ -1461,7 +1874,7 @@ class GrowthOpsConsole(ttk.Frame):
         ttk.Button(bulk_frame, text="批量新增", command=self._create_scheduled_scans_bulk).pack(side=tk.LEFT)
 
     def _build_candidate_view(self, frame):
-        frame.configure(style="Content.TFrame")
+        self._configure_content_container(frame)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
         toolbar = ttk.LabelFrame(frame, text="线索筛选", padding=8, style="Panel.TLabelframe")
@@ -1515,7 +1928,7 @@ class GrowthOpsConsole(ttk.Frame):
         self._trees["线索池__detail"] = detail_text
 
     def _build_action_queue_view(self, frame):
-        frame.configure(style="Content.TFrame")
+        self._configure_content_container(frame)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(4, weight=1)
         toolbar = ttk.LabelFrame(frame, text="动作筛选与审核", padding=8, style="Panel.TLabelframe")
@@ -1586,7 +1999,7 @@ class GrowthOpsConsole(ttk.Frame):
             summary_frame.columnconfigure(idx, weight=1, uniform="review")
             box = ttk.Frame(summary_frame, style="Panel.TFrame")
             box.grid(row=0, column=idx, sticky="ew", padx=8)
-            ttk.Label(box, text=self._label(key), foreground="#5B6B8C").pack(anchor="w")
+            ttk.Label(box, text=self._label(key), foreground=UI_COLORS["muted"]).pack(anchor="w")
             var = tk.StringVar(value="0")
             self.action_review_summary_vars[key] = var
             ttk.Label(box, textvariable=var, font=("", 12, "bold")).pack(anchor="w")
@@ -1605,7 +2018,7 @@ class GrowthOpsConsole(ttk.Frame):
             readiness_frame.columnconfigure(idx, weight=1, uniform="ready")
             box = ttk.Frame(readiness_frame, style="Panel.TFrame")
             box.grid(row=0, column=idx, sticky="ew", padx=8)
-            ttk.Label(box, text=self._label(key), foreground="#5B6B8C").pack(anchor="w")
+            ttk.Label(box, text=self._label(key), foreground=UI_COLORS["muted"]).pack(anchor="w")
             var = tk.StringVar(value="0")
             self.execution_readiness_summary_vars[key] = var
             ttk.Label(box, textvariable=var, font=("", 12, "bold")).pack(anchor="w")
@@ -1615,8 +2028,8 @@ class GrowthOpsConsole(ttk.Frame):
         ttk.Combobox(
             execution_frame,
             textvariable=self.action_execution_mode_var,
-            values=["预检，不提交"],
-            width=12,
+            values=["预检，不提交", "真实提交"],
+            width=14,
             state="readonly",
         ).grid(row=0, column=1, sticky="w", padx=(4, 12))
         ttk.Label(execution_frame, text="账号分组").grid(row=0, column=2, sticky="w")
@@ -1629,12 +2042,19 @@ class GrowthOpsConsole(ttk.Frame):
         ttk.Spinbox(execution_frame, from_=1, to=200, textvariable=self.action_execution_hour_limit_var, width=6).grid(row=1, column=1, sticky="w", padx=(4, 12), pady=(6, 0))
         ttk.Label(execution_frame, text="同视频/小时").grid(row=1, column=2, sticky="w", pady=(6, 0))
         ttk.Spinbox(execution_frame, from_=1, to=20, textvariable=self.action_execution_video_hour_limit_var, width=6).grid(row=1, column=3, sticky="w", padx=(4, 12), pady=(6, 0))
-        self.action_execution_live_confirm_var.set(False)
+        self.action_execution_live_confirm_var.set(
+            quick_send_mode_key(self.quick_send_mode_var.get()) == "live_comment"
+        )
+        ttk.Checkbutton(
+            execution_frame,
+            text="确认真实提交",
+            variable=self.action_execution_live_confirm_var,
+        ).grid(row=1, column=4, sticky="w", pady=(6, 0))
         ttk.Label(
             execution_frame,
-            text="第一版只允许执行前预检：系统会打开页面、检查评论/关注/私信入口并截图，不会提交真实动作。",
+            text="真实提交会在采集后自动执行本轮评论动作。",
             foreground=UI_COLORS["warning"],
-        ).grid(row=1, column=4, columnspan=4, sticky="w", pady=(6, 0))
+        ).grid(row=1, column=5, columnspan=3, sticky="w", pady=(6, 0))
         columns = [
             "id",
             "action_type",
@@ -1735,7 +2155,7 @@ class GrowthOpsConsole(ttk.Frame):
                 self._build_exclusion_editor(sub)
 
     def _build_report_view(self, frame):
-        frame.configure(style="Content.TFrame")
+        self._configure_content_container(frame)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
         toolbar = ttk.LabelFrame(frame, text="报告文件", padding=10, style="Panel.TLabelframe")
@@ -1827,19 +2247,56 @@ class GrowthOpsConsole(ttk.Frame):
         self._fill_tree("小时限频", snapshot.rate_limits)
         self._refresh_intent_analysis(snapshot)
         self._refresh_account_status(snapshot)
-        self.report_text.delete("1.0", tk.END)
-        self.report_text.insert(tk.END, snapshot.report_brief or "暂无运营简报")
-        self.report_text.insert(tk.END, "\n\n错误统计:\n")
-        for key, value in snapshot.errors.items():
-            self.report_text.insert(tk.END, f"- {key}: {value}\n")
-        if snapshot.report_artifacts:
-            self.report_text.insert(tk.END, "\n报告文件:\n")
-            for item in snapshot.report_artifacts:
-                path = item.get("path") or "未生成"
-                self.report_text.insert(tk.END, f"- {item.get('label', item.get('kind', ''))}: {path}\n")
+        if self.report_text:
+            self.report_text.delete("1.0", tk.END)
+            self.report_text.insert(tk.END, snapshot.report_brief or "暂无运营简报")
+            self.report_text.insert(tk.END, "\n\n目标快发验收:\n")
+            for line in self._quick_send_acceptance_lines(snapshot):
+                self.report_text.insert(tk.END, f"- {line}\n")
+            self.report_text.insert(tk.END, "\n\n错误统计:\n")
+            for key, value in snapshot.errors.items():
+                self.report_text.insert(tk.END, f"- {key}: {value}\n")
+            if snapshot.report_artifacts:
+                self.report_text.insert(tk.END, "\n报告文件:\n")
+                for item in snapshot.report_artifacts:
+                    path = item.get("path") or "未生成"
+                    self.report_text.insert(tk.END, f"- {item.get('label', item.get('kind', ''))}: {path}\n")
         if hasattr(self, "overview_brief_text"):
             self.overview_brief_text.delete("1.0", tk.END)
             self.overview_brief_text.insert(tk.END, snapshot.report_brief or "暂无运营简报")
+
+    def _quick_send_acceptance_lines(self, snapshot: GrowthOpsSnapshot) -> list[str]:
+        funnel = dict(getattr(snapshot, "campaign_funnel", {}) or {})
+        executions = list(getattr(snapshot, "executions", []) or [])
+        errors = dict(getattr(snapshot, "errors", {}) or {})
+        video_ok = int(funnel.get("content_found") or 0) > 0
+        comments = int(funnel.get("comment_users") or 0)
+        leads = int(funnel.get("customer_leads") or funnel.get("high_intent") or 0)
+        actions = int(funnel.get("outreach_actions") or 0)
+        touch_ok = bool(executions) or int(funnel.get("preflight_ok") or 0) > 0
+        error_counts = dict(funnel.get("error_counts") or {})
+        clear_no_lead_reasons = [
+            code
+            for code in ("URL_MISMATCH_DISCARDED", "COMMENT_SCAN_EMPTY", "LOGIN_REQUIRED", "CAPTCHA_DETECTED", "PROXY_FAILED")
+            if int(error_counts.get(code) or errors.get(code) or 0) > 0
+        ]
+        no_leads_explained = comments == 0 and leads == 0 and bool(clear_no_lead_reasons)
+        status = "passed" if video_ok and (leads > 0 or comments > 0) and (touch_ok or actions == 0) else "pending"
+        if no_leads_explained and int(funnel.get("page_opened") or 0) > 0:
+            status = "passed"
+        elif errors and not video_ok and not no_leads_explained:
+            status = "failed"
+        reason_text = "无"
+        if no_leads_explained:
+            reason_text = "无高意向线索原因明确: " + ", ".join(clear_no_lead_reasons)
+        return [
+            f"总体状态: {status}",
+            f"目标类型: {funnel.get('campaign_type', '') or '未识别'}",
+            f"视频/内容: {funnel.get('content_found', 0)}，评论用户: {comments}，高意向/运营线索: {leads}",
+            f"触达动作: {actions}，预检/执行成功: {funnel.get('preflight_ok', 0)}，失败: {funnel.get('failed', 0)}",
+            f"无线索说明: {reason_text}",
+            "证据规则: no-submit 不计真实提交；真实评论必须页面可见同文本才算 success",
+        ]
 
     def _summary_value(self, snapshot: GrowthOpsSnapshot, key: str) -> int:
         """Return current campaign values for the start-page KPI cards."""
@@ -2312,6 +2769,11 @@ class GrowthOpsConsole(ttk.Frame):
         self.page_subtitle_var.set(PAGE_SUBTITLES.get(view_name, ""))
         self._style_nav_buttons()
         view.tkraise()
+        view.lift()
+        try:
+            self.stack.update_idletasks()
+        except Exception:
+            pass
 
     def _review_selected_action(self, action: str):
         tree = self._trees.get("动作队列")
@@ -2538,8 +3000,9 @@ class GrowthOpsConsole(ttk.Frame):
                     dry_run=False,
                     live_preflight_only=not live_mode,
                     allow_live_submit=live_mode and confirmed,
-                    auto_approve=True,
-                    auto_confirm=True,
+                    require_action_review=live_mode,
+                    auto_approve=False,
+                    auto_confirm=False,
                     min_delay_seconds=0,
                     max_delay_seconds=0,
                     profile_group=group,
@@ -2889,8 +3352,11 @@ class GrowthOpsConsole(ttk.Frame):
         return action_ids
 
     def _start_collection(self):
+        self.append_runtime_log("CLICK  start_button source=operator_console")
         if self.on_start_collection:
             self.on_start_collection()
+        else:
+            self.append_runtime_log("BLOCK  start_button_no_callback source=operator_console")
 
     def _export_report(self):
         if self.on_export_report:

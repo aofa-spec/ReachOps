@@ -35,9 +35,29 @@ def configure_stdio():
                 pass
 
 
+def configure_localhost_proxy_bypass():
+    existing = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    entries = [item.strip() for item in existing.split(",") if item.strip()]
+    required = ["127.0.0.1", "localhost", "::1"]
+    for item in required:
+        if item not in entries:
+            entries.append(item)
+    value = ",".join(entries)
+    os.environ["NO_PROXY"] = value
+    os.environ["no_proxy"] = value
+
+
 def write_json(path: Path, payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def public_profile(profile: dict) -> dict:
+    return {
+        "profile_id": str(profile.get("profile_id") or profile.get("id") or ""),
+        "group_id": str(profile.get("group_id") or ""),
+        "group_name": str(profile.get("group_name") or ""),
+    }
 
 
 class EvidenceDriver:
@@ -127,12 +147,86 @@ class VisualEvidenceBrowserFactory:
             self.errors.append({"profile_id": str(profile_id or ""), "error_code": "PROFILE_START_FAILED", "error_message": error})
             return None
         self.browser_started += 1
+        startup_cleanup = self._close_startup_noise_tabs(session.driver, str(profile_id or ""))
+        self.evidence_rows.append(startup_cleanup)
         session.driver = EvidenceDriver(session.driver, self.evidence_dir, str(profile_id or ""), self.evidence_rows)
         try:
             session.driver.capture("profile_started")
         except Exception:
             pass
         return session
+
+    def _close_startup_noise_tabs(self, driver: Any, profile_id: str) -> dict:
+        try:
+            handles = list(getattr(driver, "window_handles", []) or [])
+        except Exception:
+            return {}
+        if len(handles) <= 1:
+            return {
+                "captured_at": utc_stamp(),
+                "profile_id": str(profile_id or ""),
+                "label": "startup_tab_cleanup",
+                "startup_tab_count": len(handles),
+                "closed_tab_count": 0,
+                "closed_tabs": [],
+            }
+        try:
+            original = getattr(driver, "current_window_handle", "") or handles[0]
+        except Exception:
+            original = handles[0]
+        rows = []
+        for handle in handles:
+            try:
+                driver.switch_to.window(handle)
+                rows.append(
+                    {
+                        "handle": handle,
+                        "url": str(getattr(driver, "current_url", "") or ""),
+                        "title": str(getattr(driver, "title", "") or "")[:160],
+                    }
+                )
+            except Exception:
+                rows.append({"handle": handle, "url": "", "title": ""})
+
+        def keep_url(url: str) -> bool:
+            value = str(url or "").lower()
+            return (
+                not value
+                or value.startswith("about:")
+                or value.startswith("chrome:")
+                or value.startswith("devtools:")
+                or "tiktok.com" in value
+            )
+
+        keep_handles = [row["handle"] for row in rows if keep_url(row.get("url", ""))]
+        if not keep_handles:
+            keep_handles = [original if original in handles else handles[0]]
+        closed = []
+        for row in rows:
+            handle = row.get("handle")
+            if handle in keep_handles:
+                continue
+            try:
+                driver.switch_to.window(handle)
+                driver.close()
+                closed.append({"url": row.get("url", ""), "title": row.get("title", "")})
+            except Exception as exc:
+                closed.append({"url": row.get("url", ""), "title": row.get("title", ""), "error": f"{type(exc).__name__}: {exc}"})
+        try:
+            remaining = list(getattr(driver, "window_handles", []) or [])
+            target = original if original in remaining else (keep_handles[0] if keep_handles[0] in remaining else (remaining[0] if remaining else ""))
+            if target:
+                driver.switch_to.window(target)
+        except Exception:
+            pass
+        return {
+            "captured_at": utc_stamp(),
+            "profile_id": str(profile_id or ""),
+            "label": "startup_tab_cleanup",
+            "startup_tab_count": len(rows),
+            "closed_tab_count": len(closed),
+            "closed_tabs": closed[:20],
+        }
 
 
 def select_profiles(args) -> tuple[list[dict], dict]:
@@ -223,11 +317,29 @@ def build_operator_diagnosis(report: dict) -> dict:
     else:
         status = "no_leads"
         next_action = "查看账号矩阵和页面证据后重试"
+    browser_errors = list(report.get("browser_errors") or [])
+    browser_error_classes: dict[str, int] = {}
+    for item in browser_errors:
+        message = str(item.get("error_message") or "").lower()
+        if "142" in message and "内核" in message:
+            key = "ixbrowser_kernel_142_missing"
+        elif "socks5 authentication failed" in message or "socks authentication failed" in message:
+            key = "socks5_auth_failed"
+        elif "proxy detection failed" in message:
+            key = "proxy_detection_failed"
+        elif "read timed out" in message:
+            key = "ixbrowser_api_timeout"
+        elif "econnreset" in message or "tls connection" in message:
+            key = "network_connection_reset"
+        else:
+            key = "profile_start_failed"
+        browser_error_classes[key] = browser_error_classes.get(key, 0) + 1
     return {
         "status": status,
         "next_action": next_action,
         "attempt_count": len(attempts),
         "started_browser_count": len([row for row in attempts if row.get("started_browser")]),
+        "browser_error_classes": dict(sorted(browser_error_classes.items())),
         "profile_preflight": {
             "checked": int(profile_preflight.get("checked") or 0),
             "available": int(profile_preflight.get("available") or 0),
@@ -262,6 +374,7 @@ def run_visual_preflight(args) -> dict:
                 total_timeout_seconds=max(5, int(args.profile_preflight_timeout or 0)),
                 evidence_dir=str(evidence_dir / "profile_preflight"),
                 close_browser_after_check=True,
+                quarantine_on_failure=not bool(args.no_quarantine_failed_profiles),
             ),
         )
         executable_profiles, profile_preflight = checker.available_profiles(profiles)
@@ -292,6 +405,8 @@ def run_visual_preflight(args) -> dict:
                 test_mode=False,
                 intent_keywords=split_csv(args.intent_keywords),
                 exclude_keywords=split_csv(args.exclude_keywords),
+                min_lead_score_for_action=0 if bool(args.accept_low_intent_actions) else 50,
+                accept_low_intent_actions=bool(args.accept_low_intent_actions),
             ),
         )
     batch = service.storage.latest_collection_batch_for_campaign(campaign_id) if campaign_id else {}
@@ -308,8 +423,8 @@ def run_visual_preflight(args) -> dict:
         "target": str(args.target or ""),
         "source_type": str(args.source_type or "auto"),
         "profile_group": str(args.profile_group or ""),
-        "selected_profiles": profiles,
-        "executable_profiles": executable_profiles,
+        "selected_profiles": [public_profile(profile) for profile in profiles],
+        "executable_profiles": [public_profile(profile) for profile in executable_profiles],
         "profile_preflight": profile_preflight,
         "profile_snapshot": {
             "available": bool(profile_snapshot.get("available")),
@@ -345,6 +460,8 @@ def run_visual_preflight(args) -> dict:
         failures.append("evidence_screenshot_missing")
     if not result or int(getattr(result, "processed_sources", 0) or 0) < 1:
         failures.append("collection_not_completed")
+    if int((funnel or {}).get("comment_users") or 0) < 1 and int((funnel or {}).get("customer_leads") or 0) < 1:
+        failures.append("effective_acquisition_not_completed")
     if failures:
         report["status"] = "failed"
         report["failures"] = failures
@@ -370,12 +487,18 @@ def parse_args():
     parser.add_argument("--profile-preflight-workers", type=int, default=2)
     parser.add_argument("--profile-page-timeout", type=int, default=20)
     parser.add_argument("--profile-wait", type=float, default=2.0)
-    parser.add_argument("--profile-preflight-timeout", type=int, default=0)
+    parser.add_argument("--profile-preflight-timeout", type=int, default=25)
+    parser.add_argument("--no-quarantine-failed-profiles", action="store_true")
     parser.add_argument("--max-videos", type=int, default=1)
     parser.add_argument("--max-comments", type=int, default=5)
     parser.add_argument("--min-views", type=int, default=0)
     parser.add_argument("--min-comments", type=int, default=0)
     parser.add_argument("--task-delay-seconds", type=int, default=0)
+    parser.add_argument(
+        "--accept-low-intent-actions",
+        action="store_true",
+        help="Acceptance-only mode: create pending-review comment actions for low-intent engaged commenters without submitting.",
+    )
     parser.add_argument("--intent-keywords", default="where,link,buy,price,need,name,how,which,recommend")
     parser.add_argument("--exclude-keywords", default="spam,bot,haha,lol,giveaway")
     parser.add_argument("--allow-fail", action="store_true")
@@ -385,6 +508,7 @@ def parse_args():
 
 def main() -> int:
     configure_stdio()
+    configure_localhost_proxy_bypass()
     try:
         report = run_visual_preflight(parse_args())
         code = 0 if report.get("status") == "ok" else 2

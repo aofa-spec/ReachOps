@@ -11,6 +11,11 @@ from typing import Any
 STATUS_PASSED = "passed"
 STATUS_READY_FOR_EXTERNAL_VALIDATION = "ready_for_external_validation"
 STATUS_FAILED = "failed"
+REQUIRED_CURRENT_GOAL_PENDING = {
+    "授权允许时能真实执行",
+    "真实 TikTok 平台提交",
+    "客户端交付验收门禁不会把环境阻断当通过",
+}
 
 
 def as_list(value: Any) -> list[Any]:
@@ -33,17 +38,58 @@ def load_summary(path: str | Path) -> dict[str, Any]:
     return payload
 
 
-def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False) -> dict[str, Any]:
+def report_path_status(summary_path: str | Path | None, raw_path: str) -> dict[str, Any]:
+    path_text = str(raw_path or "").strip()
+    detail: dict[str, Any] = {"path": path_text, "exists": False, "size": 0, "inside_summary_dir": False}
+    if not path_text:
+        return detail
+    summary_parent = Path(summary_path).resolve().parent if summary_path else None
+    candidates = [Path(path_text)]
+    if summary_parent:
+        candidates.append(summary_parent / path_text)
+    for candidate in candidates:
+        if candidate.is_file():
+            resolved = candidate.resolve()
+            inside_summary_dir = False
+            if summary_parent:
+                try:
+                    resolved.relative_to(summary_parent)
+                    inside_summary_dir = True
+                except Exception:
+                    inside_summary_dir = False
+            detail.update(
+                {
+                    "path": str(resolved),
+                    "exists": True,
+                    "size": candidate.stat().st_size,
+                    "inside_summary_dir": inside_summary_dir,
+                }
+            )
+            return detail
+    return detail
+
+
+def verify_summary(
+    summary: dict[str, Any],
+    allow_external_pending: bool = False,
+    summary_path: str | Path | None = None,
+) -> dict[str, Any]:
     status = str(summary.get("status") or "").strip()
     delivery_audit = summary.get("delivery_audit") or {}
     operator_pressure = summary.get("operator_pressure") or {}
     installer_smoke = summary.get("installer_smoke") or {}
     ui_startup = summary.get("ui_startup") or {}
     live_validation = summary.get("live_validation") or {}
+    repository_cleanliness = summary.get("repository_cleanliness") or {}
+    windows_package_preflight = summary.get("windows_package_preflight") or {}
+    client_delivery = summary.get("client_delivery") or {}
     live_readiness = summary.get("live_readiness") or {}
+    live_acceptance_status = summary.get("live_acceptance_status") or {}
+    authorization_handoff = summary.get("authorization_handoff") or {}
     live_preflight = summary.get("live_preflight") or {}
     live_submit = summary.get("live_submit") or {}
     goal_status = summary.get("goal_status") or {}
+    final_acceptance_gate = summary.get("final_acceptance_gate") or {}
     preflight_environment = (
         live_preflight.get("environment_diagnostics")
         if isinstance(live_preflight.get("environment_diagnostics"), dict)
@@ -52,6 +98,18 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
 
     failures: list[str] = []
     pending: list[str] = []
+
+    def add_pending(code: str):
+        if code and code not in pending:
+            pending.append(code)
+
+    goal_status_value = str(goal_status.get("status") or "")
+    goal_pending = (
+        goal_status.get("pending_external_validation")
+        if isinstance(goal_status.get("pending_external_validation"), list)
+        else []
+    )
+    goal_summary = goal_status.get("summary") if isinstance(goal_status.get("summary"), dict) else {}
 
     if status not in {STATUS_PASSED, STATUS_READY_FOR_EXTERNAL_VALIDATION, STATUS_FAILED}:
         failures.append(f"unknown_status:{status or 'empty'}")
@@ -84,7 +142,14 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
         effective_pending_external = max(0, pending_external - resolved_external)
     final_external_resolved = status == STATUS_PASSED or effective_pending_external == 0
     if effective_pending_external > 0:
-        pending.append("external_platform_validation")
+        add_pending("external_platform_validation")
+        goal_pending_codes = {
+            "授权允许时能真实执行": "live_authorization_execution_validation",
+            "真实 TikTok 平台提交": "real_tiktok_platform_submit",
+            "客户端交付验收门禁不会把环境阻断当通过": "client_delivery_acceptance_gate",
+        }
+        for item in goal_pending:
+            add_pending(goal_pending_codes.get(str(item), ""))
 
     installer_status = str(installer_smoke.get("status") or "")
     installer_optional = bool(installer_smoke.get("optional"))
@@ -114,6 +179,96 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
         if not bool(live_validation.get("no_submit", True)):
             failures.append("live_validation_submitted_action")
 
+    repository_cleanliness_status = str(repository_cleanliness.get("status") or "")
+    repository_cleanliness_passed = bool(repository_cleanliness.get("passed"))
+    repository_cleanliness_forbidden_count = int(repository_cleanliness.get("forbidden_count") or 0)
+    repository_cleanliness_json = report_path_status(
+        summary_path,
+        str(repository_cleanliness.get("json_path") or ""),
+    )
+    if status == STATUS_PASSED and not repository_cleanliness:
+        failures.append("repository_cleanliness_missing")
+    if repository_cleanliness:
+        if repository_cleanliness_status != STATUS_PASSED:
+            failures.append("repository_cleanliness_not_passed")
+        if not repository_cleanliness_passed:
+            failures.append("repository_cleanliness_failed")
+        if repository_cleanliness_forbidden_count != 0:
+            failures.append("repository_cleanliness_forbidden_items")
+        if status == STATUS_PASSED and not str(repository_cleanliness.get("json_path") or "").strip():
+            failures.append("repository_cleanliness_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(repository_cleanliness.get("json_path") or "").strip():
+            if not repository_cleanliness_json["exists"]:
+                failures.append("repository_cleanliness_json_missing")
+            elif int(repository_cleanliness_json.get("size") or 0) <= 0:
+                failures.append("repository_cleanliness_json_empty")
+            elif not bool(repository_cleanliness_json.get("inside_summary_dir")):
+                failures.append("repository_cleanliness_json_outside_summary_dir")
+
+    windows_preflight_status = str(windows_package_preflight.get("status") or "")
+    windows_preflight_ready = bool(windows_package_preflight.get("ready_for_windows_build"))
+    windows_preflight_contract = (
+        windows_package_preflight.get("build_contract")
+        if isinstance(windows_package_preflight.get("build_contract"), dict)
+        else {}
+    )
+    windows_preflight_json = report_path_status(
+        summary_path,
+        str(windows_package_preflight.get("json_path") or ""),
+    )
+    if status == STATUS_PASSED and not windows_package_preflight:
+        failures.append("windows_package_preflight_missing")
+    if windows_package_preflight:
+        if windows_preflight_status != "ready_for_windows_build":
+            failures.append("windows_package_preflight_not_ready")
+        if not windows_preflight_ready:
+            failures.append("windows_package_preflight_failed")
+        if not bool(windows_preflight_contract.get("default_build_requires_installer")):
+            failures.append("windows_package_preflight_installer_contract_missing")
+        if not bool(windows_preflight_contract.get("skip_installer_is_non_final")):
+            failures.append("windows_package_preflight_skip_installer_contract_missing")
+        if status == STATUS_PASSED and not str(windows_package_preflight.get("json_path") or "").strip():
+            failures.append("windows_package_preflight_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(windows_package_preflight.get("json_path") or "").strip():
+            if not windows_preflight_json["exists"]:
+                failures.append("windows_package_preflight_json_missing")
+            elif int(windows_preflight_json.get("size") or 0) <= 0:
+                failures.append("windows_package_preflight_json_empty")
+            elif not bool(windows_preflight_json.get("inside_summary_dir")):
+                failures.append("windows_package_preflight_json_outside_summary_dir")
+
+    client_delivery_status = str(client_delivery.get("status") or "")
+    client_delivery_readiness = str(client_delivery.get("readiness") or "")
+    client_delivery_json = report_path_status(
+        summary_path,
+        str(client_delivery.get("json_path") or ""),
+    )
+    client_delivery_failed_checks = as_list(client_delivery.get("failed_checks"))
+    if status == STATUS_PASSED and not client_delivery:
+        failures.append("client_delivery_missing")
+    if client_delivery:
+        if client_delivery_status != STATUS_PASSED:
+            failures.append("client_delivery_not_passed")
+        if client_delivery_readiness != "pass":
+            failures.append("client_delivery_readiness_not_pass")
+        if not bool(client_delivery.get("contract_ok")):
+            failures.append("client_delivery_contract_not_ok")
+        if not bool(client_delivery.get("acceptance_ready")):
+            failures.append("client_delivery_acceptance_not_ready")
+        if not bool(client_delivery.get("final_delivery_ready")):
+            failures.append("client_delivery_final_not_ready")
+        if client_delivery_failed_checks:
+            failures.append("client_delivery_failed_checks")
+        if status == STATUS_PASSED and not str(client_delivery.get("json_path") or "").strip():
+            failures.append("client_delivery_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(client_delivery.get("json_path") or "").strip():
+            if not client_delivery_json["exists"]:
+                failures.append("client_delivery_json_missing")
+            elif int(client_delivery_json.get("size") or 0) <= 0:
+                failures.append("client_delivery_json_empty")
+            elif not bool(client_delivery_json.get("inside_summary_dir")):
+                failures.append("client_delivery_json_outside_summary_dir")
+
     if final_external_resolved:
         readiness_status = str(live_readiness.get("status") or "")
         if readiness_status not in {"ready", "completed"} or not bool(live_readiness.get("ready")):
@@ -122,6 +277,83 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
             failures.append("live_readiness_submitted_action")
         if str(live_preflight.get("status") or "") != "completed":
             failures.append("live_preflight_not_completed")
+
+    if status == STATUS_PASSED and not live_acceptance_status:
+        failures.append("live_acceptance_status_missing")
+    if live_acceptance_status:
+        live_acceptance_status_value = str(live_acceptance_status.get("status") or "")
+        live_acceptance_local_inputs = (
+            live_acceptance_status.get("local_inputs")
+            if isinstance(live_acceptance_status.get("local_inputs"), dict)
+            else {}
+        )
+        live_acceptance_activation = (
+            live_acceptance_status.get("activation")
+            if isinstance(live_acceptance_status.get("activation"), dict)
+            else {}
+        )
+        live_acceptance_validation = (
+            live_acceptance_status.get("live_validation")
+            if isinstance(live_acceptance_status.get("live_validation"), dict)
+            else {}
+        )
+        live_acceptance_missing_inputs = as_list(live_acceptance_validation.get("missing_inputs"))
+        live_acceptance_selected_profiles = as_list(live_acceptance_validation.get("selected_profile_ids"))
+        live_acceptance_failed_checks = as_list(live_acceptance_status.get("failed_checks"))
+        if status == STATUS_PASSED and live_acceptance_status_value != STATUS_PASSED:
+            failures.append("live_acceptance_status_not_passed")
+        if status == STATUS_PASSED and not bool(live_acceptance_status.get("final_delivery_ready")):
+            failures.append("live_acceptance_status_final_not_ready")
+        if status == STATUS_PASSED and not bool(live_acceptance_status.get("ready_for_live_submit")):
+            failures.append("live_acceptance_status_not_ready_for_live_submit")
+        if status == STATUS_PASSED and not bool(live_acceptance_local_inputs.get("usable")):
+            failures.append("live_acceptance_status_local_inputs_unusable")
+        if status == STATUS_PASSED and not bool(live_acceptance_activation.get("ready")):
+            failures.append("live_acceptance_status_activation_not_ready")
+        if status == STATUS_PASSED and not live_acceptance_selected_profiles:
+            failures.append("live_acceptance_status_profile_ids_missing")
+        if status == STATUS_PASSED and live_acceptance_missing_inputs:
+            failures.append("live_acceptance_status_missing_inputs")
+        if status == STATUS_PASSED and live_acceptance_failed_checks:
+            failures.append("live_acceptance_status_failed_checks")
+    else:
+        live_acceptance_status_value = ""
+        live_acceptance_local_inputs = {}
+        live_acceptance_activation = {}
+        live_acceptance_validation = {}
+        live_acceptance_missing_inputs = []
+        live_acceptance_selected_profiles = []
+        live_acceptance_failed_checks = []
+
+    authorization_handoff_json = report_path_status(
+        summary_path,
+        authorization_handoff.get("json_path") if isinstance(authorization_handoff, dict) else "",
+    )
+    if status == STATUS_PASSED and not authorization_handoff:
+        failures.append("authorization_handoff_missing")
+    if authorization_handoff:
+        authorization_handoff_status = str(authorization_handoff.get("status") or "")
+        if status == STATUS_PASSED and authorization_handoff_status not in {"created", "passed"}:
+            failures.append("authorization_handoff_not_created")
+        if status == STATUS_PASSED and not bool(authorization_handoff.get("exists")):
+            failures.append("authorization_handoff_bundle_missing")
+        if status == STATUS_PASSED and not bool(authorization_handoff.get("no_browser_started", True)):
+            failures.append("authorization_handoff_opened_browser")
+        if status == STATUS_PASSED and not bool(authorization_handoff.get("no_submit", True)):
+            failures.append("authorization_handoff_submitted_action")
+        if status == STATUS_PASSED and not str(authorization_handoff.get("bundle_path") or "").strip():
+            failures.append("authorization_handoff_bundle_path_missing")
+        if status == STATUS_PASSED and not str(authorization_handoff.get("json_path") or "").strip():
+            failures.append("authorization_handoff_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("json_path") or "").strip():
+            if not authorization_handoff_json["exists"]:
+                failures.append("authorization_handoff_json_missing")
+            elif int(authorization_handoff_json.get("size") or 0) <= 0:
+                failures.append("authorization_handoff_json_empty")
+            elif not bool(authorization_handoff_json.get("inside_summary_dir")):
+                failures.append("authorization_handoff_json_outside_summary_dir")
+    else:
+        authorization_handoff_status = ""
 
     if str(live_preflight.get("status") or "") == "completed":
         missing_preflight = (
@@ -158,7 +390,7 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
                 for rows in preflight_evidence_details.values()
             )
             if allow_external_pending and bool(live_preflight.get("no_submit", True)) and preflight_has_failure_evidence:
-                pending.append("live_preflight_environment_validation")
+                add_pending("live_preflight_environment_validation")
             else:
                 failures.append("live_preflight_action_missing")
 
@@ -205,6 +437,18 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
         ):
             failures.append("live_submit_execution_summary_invalid")
         required_action_types = {"comment_reply", "follow_review", "dm_review"}
+        successful_result_keys = {
+            (
+                str(row.get("action_type") or ""),
+                str(row.get("action_id") or ""),
+                str(row.get("profile_id") or ""),
+            )
+            for row in (live_submit_summary.get("results") or [])
+            if isinstance(row, dict)
+            and str(row.get("status") or "") == "success"
+            and str(row.get("action_id") or "")
+            and str(row.get("profile_id") or "")
+        }
         present_action_types = {key for key, value in evidence_by_action_type.items() if value}
         missing_required = sorted(required_action_types - present_action_types)
         if missing_evidence_action_types or missing_required:
@@ -223,15 +467,18 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
                     sha = str(detail.get("sha256") or "")
                     sidecar = detail.get("sidecar") if isinstance(detail.get("sidecar"), dict) else {}
                     sidecar_sha = str(sidecar.get("screenshot_sha256") or "")
+                    sidecar_action_id = str(sidecar.get("action_id") or "")
+                    sidecar_profile_id = str(sidecar.get("profile_id") or "")
                     if (
                         int(detail.get("size") or 0) > 0
                         and len(sha) == 64
                         and str(detail.get("sidecar_path") or "")
                         and sidecar_sha == sha
                         and str(sidecar.get("action_type") or "") == action_type
-                        and str(sidecar.get("profile_id") or "")
-                        and str(sidecar.get("action_id") or "")
+                        and sidecar_profile_id
+                        and sidecar_action_id
                         and str(sidecar.get("current_url") or "")
+                        and (action_type, sidecar_action_id, sidecar_profile_id) in successful_result_keys
                     ):
                         valid_detail = True
                         break
@@ -247,13 +494,6 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
         failures.append("ready_status_without_external_pending")
         passed = False
 
-    goal_status_value = str(goal_status.get("status") or "")
-    goal_pending = (
-        goal_status.get("pending_external_validation")
-        if isinstance(goal_status.get("pending_external_validation"), list)
-        else []
-    )
-    goal_summary = goal_status.get("summary") if isinstance(goal_status.get("summary"), dict) else {}
     if goal_status:
         if goal_status_value not in {STATUS_PASSED, STATUS_READY_FOR_EXTERNAL_VALIDATION, STATUS_FAILED}:
             failures.append("goal_status_unknown")
@@ -270,9 +510,53 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
         if effective_pending_external > 0 and "真实 TikTok 平台提交" not in goal_pending:
             failures.append("goal_status_missing_platform_pending")
             passed = False
+        if effective_pending_external >= len(REQUIRED_CURRENT_GOAL_PENDING):
+            missing_goal_pending = sorted(REQUIRED_CURRENT_GOAL_PENDING - set(str(item) for item in goal_pending))
+            if missing_goal_pending:
+                failures.append("goal_status_missing_current_pending")
+                passed = False
         if effective_pending_external == 0 and goal_pending:
             failures.append("goal_status_has_stale_pending")
             passed = False
+
+    if status == STATUS_PASSED and not final_acceptance_gate:
+        failures.append("final_acceptance_gate_missing")
+        passed = False
+
+    if final_acceptance_gate:
+        final_gate_status = str(final_acceptance_gate.get("status") or "")
+        final_gate_failed_checks = as_list(final_acceptance_gate.get("failed_checks"))
+        final_gate_json = report_path_status(
+            summary_path,
+            str(final_acceptance_gate.get("json_path") or ""),
+        )
+        if final_gate_status not in {STATUS_PASSED, "not_ready", STATUS_FAILED}:
+            failures.append("final_acceptance_gate_unknown")
+            passed = False
+        if status == STATUS_PASSED and final_gate_status != STATUS_PASSED:
+            failures.append("final_acceptance_gate_not_passed")
+            passed = False
+        if status == STATUS_PASSED and not bool(final_acceptance_gate.get("final_delivery_ready")):
+            failures.append("final_acceptance_gate_not_ready")
+            passed = False
+        if status == STATUS_PASSED and final_gate_failed_checks:
+            failures.append("final_acceptance_gate_failed_checks")
+            passed = False
+        if status == STATUS_PASSED and not str(final_acceptance_gate.get("json_path") or "").strip():
+            failures.append("final_acceptance_gate_json_path_missing")
+            passed = False
+        if status == STATUS_PASSED and summary_path and str(final_acceptance_gate.get("json_path") or "").strip():
+            if not final_gate_json["exists"]:
+                failures.append("final_acceptance_gate_json_missing")
+                passed = False
+            elif int(final_gate_json.get("size") or 0) <= 0:
+                failures.append("final_acceptance_gate_json_empty")
+                passed = False
+            elif not bool(final_gate_json.get("inside_summary_dir")):
+                failures.append("final_acceptance_gate_json_outside_summary_dir")
+                passed = False
+    else:
+        final_gate_json = report_path_status(summary_path, "")
 
     return {
         "passed": passed,
@@ -344,11 +628,64 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
             "missing_inputs": as_list(live_validation.get("missing_inputs")),
             "selected_profile_ids": as_list(live_validation.get("selected_profile_ids")),
         },
+        "repository_cleanliness": {
+            "status": repository_cleanliness_status,
+            "passed": repository_cleanliness_passed,
+            "forbidden_count": repository_cleanliness_forbidden_count,
+            "json_path": str(repository_cleanliness.get("json_path") or ""),
+            "json_exists": bool(repository_cleanliness_json.get("exists")),
+            "json_size": int(repository_cleanliness_json.get("size") or 0),
+            "json_inside_summary_dir": bool(repository_cleanliness_json.get("inside_summary_dir")),
+        },
+        "windows_package_preflight": {
+            "status": windows_preflight_status,
+            "ready_for_windows_build": windows_preflight_ready,
+            "default_build_requires_installer": bool(windows_preflight_contract.get("default_build_requires_installer")),
+            "skip_installer_is_non_final": bool(windows_preflight_contract.get("skip_installer_is_non_final")),
+            "json_path": str(windows_package_preflight.get("json_path") or ""),
+            "json_exists": bool(windows_preflight_json.get("exists")),
+            "json_size": int(windows_preflight_json.get("size") or 0),
+            "json_inside_summary_dir": bool(windows_preflight_json.get("inside_summary_dir")),
+        },
+        "client_delivery": {
+            "status": client_delivery_status,
+            "readiness": client_delivery_readiness,
+            "contract_ok": bool(client_delivery.get("contract_ok")),
+            "acceptance_ready": bool(client_delivery.get("acceptance_ready")),
+            "final_delivery_ready": bool(client_delivery.get("final_delivery_ready")),
+            "failed_checks": client_delivery_failed_checks,
+            "json_path": str(client_delivery.get("json_path") or ""),
+            "json_exists": bool(client_delivery_json.get("exists")),
+            "json_size": int(client_delivery_json.get("size") or 0),
+            "json_inside_summary_dir": bool(client_delivery_json.get("inside_summary_dir")),
+        },
         "live_readiness": {
             "status": str(live_readiness.get("status") or ""),
             "ready": bool(live_readiness.get("ready")),
             "no_browser_started": bool(live_readiness.get("no_browser_started", True)),
             "no_submit": bool(live_readiness.get("no_submit", True)),
+        },
+        "live_acceptance_status": {
+            "status": live_acceptance_status_value,
+            "final_delivery_ready": bool(live_acceptance_status.get("final_delivery_ready")),
+            "ready_for_live_submit": bool(live_acceptance_status.get("ready_for_live_submit")),
+            "failed_checks": live_acceptance_failed_checks,
+            "local_inputs_usable": bool(live_acceptance_local_inputs.get("usable")),
+            "activation_ready": bool(live_acceptance_activation.get("ready")),
+            "selected_profile_ids": live_acceptance_selected_profiles,
+            "missing_inputs": live_acceptance_missing_inputs,
+        },
+        "authorization_handoff": {
+            "status": authorization_handoff_status,
+            "exists": bool(authorization_handoff.get("exists")),
+            "no_browser_started": bool(authorization_handoff.get("no_browser_started", True)),
+            "no_submit": bool(authorization_handoff.get("no_submit", True)),
+            "bundle_path": str(authorization_handoff.get("bundle_path") or ""),
+            "readiness_status": str(authorization_handoff.get("readiness_status") or ""),
+            "json_path": str(authorization_handoff.get("json_path") or ""),
+            "json_exists": bool(authorization_handoff_json.get("exists")),
+            "json_size": int(authorization_handoff_json.get("size") or 0),
+            "json_inside_summary_dir": bool(authorization_handoff_json.get("inside_summary_dir")),
         },
         "live_submit": {
             "status": str(live_submit.get("status") or ""),
@@ -372,6 +709,15 @@ def verify_summary(summary: dict[str, Any], allow_external_pending: bool = False
             "stages_failed": int(goal_summary.get("stages_failed") or 0),
             "pending_external_validation": as_list(goal_pending),
         },
+        "final_acceptance_gate": {
+            "status": str(final_acceptance_gate.get("status") or ""),
+            "final_delivery_ready": bool(final_acceptance_gate.get("final_delivery_ready")),
+            "failed_checks": as_list(final_acceptance_gate.get("failed_checks")),
+            "json_path": str(final_acceptance_gate.get("json_path") or ""),
+            "json_exists": bool(final_gate_json.get("exists")),
+            "json_size": int(final_gate_json.get("size") or 0),
+            "json_inside_summary_dir": bool(final_gate_json.get("inside_summary_dir")),
+        },
     }
 
 
@@ -386,7 +732,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        result = verify_summary(load_summary(args.summary), allow_external_pending=args.allow_external_pending)
+        result = verify_summary(
+            load_summary(args.summary),
+            allow_external_pending=args.allow_external_pending,
+            summary_path=args.summary,
+        )
     except Exception as exc:
         result = {
             "passed": False,

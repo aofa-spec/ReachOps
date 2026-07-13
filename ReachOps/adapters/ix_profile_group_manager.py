@@ -30,6 +30,8 @@ class IxProfileGroupManager:
         self.logger = logger or (lambda _message: None)
         self._lock = threading.Lock()
         self._group_id = ""
+        self._last_error_code = ""
+        self._last_error_message = ""
 
     def move_profile_to_quarantine(self, profile_id: str, reason: str = "") -> ProfileGroupMoveResult:
         profile_id = str(profile_id or "").strip()
@@ -41,9 +43,16 @@ class IxProfileGroupManager:
             client = self.client_factory()
         except Exception as exc:
             return ProfileGroupMoveResult(False, profile_id, error_code="IX_CLIENT_UNAVAILABLE", error_message=str(exc))
+        self._last_error_code = ""
+        self._last_error_message = ""
         group_id = self.ensure_group(client)
         if not group_id:
-            return ProfileGroupMoveResult(False, profile_id, error_code="IX_GROUP_UNAVAILABLE", error_message=f"group not found: {self.group_name}")
+            return ProfileGroupMoveResult(
+                False,
+                profile_id,
+                error_code=self._last_error_code or "IX_GROUP_UNAVAILABLE",
+                error_message=self._last_error_message or f"group not found: {self.group_name}",
+            )
         try:
             result = client.update_profile_groups_in_batches(int(profile_id), int(group_id))
         except Exception as exc:
@@ -74,10 +83,14 @@ class IxProfileGroupManager:
     def _find_group(self, client: Any) -> tuple[str, str]:
         prefix_match: tuple[str, str] = ("", "")
         for page in range(1, 101):
-            rows = client.get_group_list(page=page, limit=100) or []
+            response = client.get_group_list(page=page, limit=100) or []
+            if response == [] and getattr(client, "code", None) is not None:
+                self._record_client_error(client, "IX_GROUP_LIST_UNAVAILABLE")
+                break
+            rows = self._extract_group_rows(response)
             for row in rows:
-                title = str(row.get("title") or row.get("group_name") or row.get("name") or "").strip()
-                group_id = str(row.get("id") or row.get("group_id") or "").strip()
+                title = str(row.get("title") or row.get("group_name") or row.get("groupName") or row.get("name") or "").strip()
+                group_id = str(row.get("id") or row.get("group_id") or row.get("groupId") or "").strip()
                 if not group_id:
                     continue
                 if title == self.group_name:
@@ -91,13 +104,41 @@ class IxProfileGroupManager:
                 break
         return prefix_match
 
+    @staticmethod
+    def _extract_group_rows(response: Any) -> list[dict]:
+        rows = response
+        if isinstance(response, dict):
+            data = response.get("data")
+            if isinstance(data, list):
+                rows = data
+            elif isinstance(data, dict):
+                rows = []
+                for key in ("records", "list", "rows", "items", "data"):
+                    value = data.get(key)
+                    if isinstance(value, list):
+                        rows = value
+                        break
+            else:
+                rows = []
+                for key in ("records", "list", "rows", "items"):
+                    value = response.get(key)
+                    if isinstance(value, list):
+                        rows = value
+                        break
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict)]
+
     def _create_group(self, client: Any) -> str:
         response = client.create_group(self.group_name, sort=0)
+        if response is None and getattr(client, "code", None) is not None:
+            self._record_client_error(client, "IX_GROUP_CREATE_FAILED")
+            return ""
         if isinstance(response, dict):
-            for key in ("id", "group_id", "data"):
+            for key in ("id", "group_id", "groupId", "data"):
                 value = response.get(key)
                 if isinstance(value, dict):
-                    value = value.get("id") or value.get("group_id")
+                    value = value.get("id") or value.get("group_id") or value.get("groupId")
                 if value:
                     return str(value)
             error_code = int((response.get("error") or {}).get("code") or 0)
@@ -108,6 +149,12 @@ class IxProfileGroupManager:
             return str(response)
         group_id, _name = self._find_group(client)
         return group_id
+
+    def _record_client_error(self, client: Any, fallback_code: str) -> None:
+        code = getattr(client, "code", None)
+        message = str(getattr(client, "message", "") or "")
+        self._last_error_code = fallback_code
+        self._last_error_message = f"ixBrowser local API error code={code} message={message}".strip()
 
     @staticmethod
     def _default_client_factory():

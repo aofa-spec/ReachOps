@@ -47,11 +47,49 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
         "activation_status_path": str(status_path),
         "activation_status_exists": status_path.exists() and status_path.is_file(),
         "current_device_id": current_device_id,
+        "runtime_mode": LiveSubmitAuthorizationGate.runtime_mode(),
+        "activation_required": LiveSubmitAuthorizationGate.activation_required(),
+        "development_bypass": not LiveSubmitAuthorizationGate.activation_required(),
         "checks": [],
     }
 
     def add(name: str, passed: bool, **evidence):
         result["checks"].append({"name": name, "passed": bool(passed), "evidence": evidence})
+
+    if not LiveSubmitAuthorizationGate.activation_required() and not result["activation_status_exists"]:
+        profile = {"profile_id": "activation-check", "group_name": "ACTIVATION_CHECK"}
+        decisions = []
+        for action_type in ["comment_reply", "follow_review", "dm_review"]:
+            decision = LiveSubmitAuthorizationGate(str(status_path)).authorize_live_submit(
+                action_probe(action_type),
+                profile,
+                feature="live_submit",
+            )
+            decisions.append(
+                {
+                    "action_type": action_type,
+                    "allowed": bool(decision.allowed),
+                    "error_code": decision.error_code,
+                    "error_message": decision.error_message,
+                    "evidence": decision.evidence,
+                }
+            )
+        add(
+            "development_runtime_activation_not_required",
+            all(item["allowed"] for item in decisions),
+            decisions=decisions,
+        )
+        result["ready"] = all(item["passed"] for item in result["checks"])
+        result["status"] = "ready" if result["ready"] else "blocked"
+        result["license_tier"] = "development"
+        result["expires_at"] = ""
+        result["capabilities"] = {
+            "live_submit": True,
+            "comment_reply": True,
+            "follow_review": True,
+            "dm_review": True,
+        }
+        return result
 
     if not result["activation_status_exists"]:
         add("activation_status_file_exists", False, activation_status_path=str(status_path))

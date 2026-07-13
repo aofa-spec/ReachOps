@@ -1,9 +1,9 @@
 # ReachOps Windows live acceptance input template.
 #
-# Copy this file to a local, untracked path before filling real values.
+# Copy this file to tools\reachops_acceptance_inputs.local.ps1 before filling real values.
 # Do not commit real profile IDs, target URLs, activation files, or customer data.
 #
-# Default behavior is safe: it runs readiness and preflight only.
+# Default behavior is safe: it blocks until required fields and explicit authorization confirmation are present.
 # Controlled live submit runs only when $RunControlledLiveSubmit is set to $true.
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +26,7 @@ $ActivationStatusPath = "C:\path\to\reachops_activation_status.json"
 # Optional safety controls.
 $Limit = 3
 $AllowPressureSubmit = ""
+$ConfirmAuthorizedTargets = $false
 $RunControlledLiveSubmit = $false
 
 function Require-Value {
@@ -50,6 +51,16 @@ Require-Value "ActivationStatusPath" $ActivationStatusPath
 
 if (-not (Test-Path $ActivationStatusPath)) {
     throw "ActivationStatusPath does not exist: $ActivationStatusPath"
+}
+if ($ActivationStatusPath -match "reachops_activation_status\.template\.json$") {
+    throw "ActivationStatusPath points to a template file. Use a real activation status file."
+}
+$ActivationStatus = Get-Content -Raw -Path $ActivationStatusPath | ConvertFrom-Json
+if ($ActivationStatus.template_only -eq $true) {
+    throw "ActivationStatusPath contains template_only=true. Use a real activation status file."
+}
+if (-not $ConfirmAuthorizedTargets) {
+    throw "ConfirmAuthorizedTargets must be `$true after the operator verifies all TikTok targets are authorized."
 }
 
 Write-Host "[ReachOpsInputs] Summarizing live acceptance state. No browser opens and no platform action submits." -ForegroundColor Cyan

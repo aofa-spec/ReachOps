@@ -144,7 +144,14 @@ def is_local_evidence_file(path: str) -> bool:
     return Path(value).exists()
 
 
-def local_evidence_file_detail(path: str, expected_action_type: str = "") -> dict[str, Any]:
+def local_evidence_file_detail(
+    path: str,
+    expected_action_type: str = "",
+    expected_comment_text: str = "",
+    expected_action_ids: set[str] | None = None,
+    expected_profile_ids: set[str] | None = None,
+    expected_target_url: str = "",
+) -> dict[str, Any]:
     value = str(path or "").strip()
     if not value or "://" in value:
         return {}
@@ -162,10 +169,41 @@ def local_evidence_file_detail(path: str, expected_action_type: str = "") -> dic
     except Exception:
         return {}
     digest = hashlib.sha256(data).hexdigest()
-    if str(sidecar.get("screenshot_sha256") or "") and str(sidecar.get("screenshot_sha256")) != digest:
+    if str(sidecar.get("screenshot_sha256") or "") != digest:
         return {}
     if expected_action_type and str(sidecar.get("action_type") or "") != str(expected_action_type):
         return {}
+    profile_id = str(sidecar.get("profile_id") or "")
+    action_id = str(sidecar.get("action_id") or "")
+    current_url = str(sidecar.get("current_url") or "")
+    if not profile_id:
+        return {}
+    if expected_profile_ids is not None and profile_id not in expected_profile_ids:
+        return {}
+    if not action_id:
+        return {}
+    if expected_action_ids is not None and action_id not in expected_action_ids:
+        return {}
+    if not current_url:
+        return {}
+    if expected_target_url:
+        normalized_current = current_url.rstrip("/")
+        normalized_expected = str(expected_target_url or "").rstrip("/")
+        normalized_sidecar_target = str(sidecar.get("target_url") or "").rstrip("/")
+        target_matches = (
+            normalized_current == normalized_expected
+            or normalized_current.startswith(f"{normalized_expected}?")
+            or normalized_sidecar_target == normalized_expected
+        )
+        if expected_action_type == "dm_review" and "/messages" in normalized_current:
+            target_matches = target_matches or normalized_sidecar_target == normalized_expected
+        if not target_matches:
+            return {}
+    if expected_action_type == "comment_reply":
+        if str(sidecar.get("submitted_text") or "") != str(expected_comment_text or ""):
+            return {}
+        if sidecar.get("comment_visible_confirmed") is not True:
+            return {}
     return {
         "path": str(file_path),
         "size": len(data),
@@ -190,7 +228,13 @@ def run_acceptance(args, platform_executor=None) -> dict[str, Any]:
     workflow = GrowthWorkflowService(service)
     activation_status_source, activation_status_loaded = resolve_activation_status_path(args, service.paths.activation_status_path)
     action_ids = seed_live_submit_actions(service, args)
+    action_ids_by_type: dict[str, set[str]] = {}
+    for row in service.storage.list_action_queue(limit=100):
+        action_id = str(row.get("id") or "")
+        if action_id in action_ids:
+            action_ids_by_type.setdefault(str(row.get("action_type") or ""), set()).add(action_id)
     profiles = [{"profile_id": profile_id, "group_name": str(args.group_name or "")} for profile_id in split_csv(args.profile_ids)]
+    expected_profile_ids = {str(row.get("profile_id") or "") for row in profiles if str(row.get("profile_id") or "")}
     executor = platform_executor or build_platform_executor(args)
     executor_mode = "fixture" if platform_executor is not None else "platform_selenium"
     summary = workflow.run_action_router(
@@ -209,6 +253,7 @@ def run_acceptance(args, platform_executor=None) -> dict[str, Any]:
             per_profile_video_hour_limit=max(1, int(args.per_profile_video_hour_limit)),
             require_authorization=True,
             require_execution_evidence=True,
+            require_local_evidence_file=platform_executor is None,
         ),
         platform_executor=executor,
         limit=max(1, int(args.limit)),
@@ -216,6 +261,12 @@ def run_acceptance(args, platform_executor=None) -> dict[str, Any]:
     )
     results = list(summary.get("results") or [])
     success_types = {str(row.get("action_type") or "") for row in results if row.get("status") == "success"}
+    successful_action_ids = {str(row.get("action_id") or "") for row in results if row.get("status") == "success"}
+    unrecovered_failures = [
+        row
+        for row in results
+        if row.get("status") == "failed" and str(row.get("action_id") or "") not in successful_action_ids
+    ]
     missing_evidence = [row for row in results if row.get("status") == "success" and not str(row.get("evidence_path") or "")]
     required_types = {"comment_reply", "follow_review", "dm_review"}
     evidence_by_type = {}
@@ -235,7 +286,21 @@ def run_acceptance(args, platform_executor=None) -> dict[str, Any]:
         for action_type in sorted(required_types):
             evidence_file_details[action_type] = [
                 detail
-                for detail in [local_evidence_file_detail(path, expected_action_type=action_type) for path in evidence_by_type.get(action_type, [])]
+                for detail in [
+                    local_evidence_file_detail(
+                        path,
+                        expected_action_type=action_type,
+                        expected_comment_text=str(args.comment_text or ""),
+                        expected_action_ids=action_ids_by_type.get(action_type, set()),
+                        expected_profile_ids=expected_profile_ids,
+                        expected_target_url={
+                            "comment_reply": str(args.video_url or ""),
+                            "follow_review": str(args.follow_profile_url or ""),
+                            "dm_review": str(args.dm_profile_url or ""),
+                        }.get(action_type, ""),
+                    )
+                    for path in evidence_by_type.get(action_type, [])
+                ]
                 if detail
             ]
         missing_local_evidence_file_types = sorted(
@@ -247,7 +312,7 @@ def run_acceptance(args, platform_executor=None) -> dict[str, Any]:
         )
     passed = (
         int(summary.get("selected_actions") or 0) >= min(3, int(args.limit))
-        and int(summary.get("failed") or 0) == 0
+        and not unrecovered_failures
         and int(summary.get("skipped") or 0) == 0
         and not missing_evidence
         and not missing_evidence_types
@@ -263,6 +328,7 @@ def run_acceptance(args, platform_executor=None) -> dict[str, Any]:
         "activation_status_path": service.paths.activation_status_path,
         "activation_status_loaded": activation_status_loaded,
         "seeded_action_ids": action_ids,
+        "seeded_action_ids_by_type": {key: sorted(value) for key, value in action_ids_by_type.items()},
         "profiles": profiles,
         "target": {
             "video_url": args.video_url,
@@ -272,6 +338,8 @@ def run_acceptance(args, platform_executor=None) -> dict[str, Any]:
         },
         "summary": summary,
         "missing_evidence_count": len(missing_evidence),
+        "unrecovered_failure_count": len(unrecovered_failures),
+        "unrecovered_failures": unrecovered_failures,
         "evidence_by_action_type": evidence_by_type,
         "evidence_file_details": evidence_file_details,
         "missing_evidence_action_types": missing_evidence_types,

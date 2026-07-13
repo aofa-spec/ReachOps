@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -28,6 +29,17 @@ def configure_stdio():
                 pass
 
 
+def configure_localhost_proxy_bypass():
+    existing = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    entries = [item.strip() for item in existing.split(",") if item.strip()]
+    for item in ["127.0.0.1", "localhost", "::1"]:
+        if item not in entries:
+            entries.append(item)
+    value = ",".join(entries)
+    os.environ["NO_PROXY"] = value
+    os.environ["no_proxy"] = value
+
+
 def split_csv(value: str) -> list[str]:
     return [item.strip() for item in str(value or "").replace("，", ",").split(",") if item.strip()]
 
@@ -43,6 +55,7 @@ def normalize_ixbrowser_profile(row: dict[str, Any]) -> dict[str, Any]:
 
 def load_profile_snapshot_direct(max_pages: int = 50, group_name: str = "", profile_limit: int = 20) -> dict[str, Any]:
     try:
+        configure_localhost_proxy_bypass()
         from ixbrowser_local_api import IXBrowserClient
 
         client = IXBrowserClient()
@@ -93,6 +106,14 @@ def load_profile_snapshot_direct(max_pages: int = 50, group_name: str = "", prof
 
 def load_profile_snapshot(max_pages: int = 50, timeout_seconds: int = 8, group_name: str = "", profile_limit: int = 20) -> dict[str, Any]:
     try:
+        env = dict(os.environ)
+        existing = env.get("NO_PROXY") or env.get("no_proxy") or ""
+        entries = [item.strip() for item in existing.split(",") if item.strip()]
+        for item in ["127.0.0.1", "localhost", "::1"]:
+            if item not in entries:
+                entries.append(item)
+        env["NO_PROXY"] = ",".join(entries)
+        env["no_proxy"] = env["NO_PROXY"]
         output = subprocess.run(
             [
                 sys.executable,
@@ -111,6 +132,7 @@ def load_profile_snapshot(max_pages: int = 50, timeout_seconds: int = 8, group_n
             encoding="utf-8",
             errors="replace",
             timeout=max(1, int(timeout_seconds or 8)),
+            env=env,
         )
         stdout = output.stdout or ""
         stderr = output.stderr or ""
@@ -380,6 +402,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     configure_stdio()
+    configure_localhost_proxy_bypass()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if "--profile-snapshot-worker" in raw_argv:
         parser = argparse.ArgumentParser()

@@ -5,12 +5,21 @@ import atexit
 import ctypes
 import os
 import tempfile
-import tkinter as tk
+import subprocess
+import sys
+import webbrowser
 from pathlib import Path
 
-from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp
-
 from . import PRODUCT_NAME_CN
+
+_LOCK_HANDLE = None
+_USAGE = """ReachOps unified client launcher.
+
+Usage:
+  python ReachOpsApp.py              Start the native Tk client.
+  python ReachOpsApp.py --web        Start the unified Web console.
+  python ReachOpsApp.py --help       Show this help without starting clients.
+"""
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -32,6 +41,28 @@ def _pid_is_running(pid: int) -> bool:
 
 def _acquire_single_instance_lock() -> bool:
     lock_path = Path(tempfile.gettempdir()) / "reachops_ui_single_instance.lock"
+    global _LOCK_HANDLE
+
+    if os.name != "nt":
+        try:
+            import fcntl
+
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = lock_path.open("a+", encoding="utf-8")
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.close()
+                return False
+            handle.seek(0)
+            handle.truncate()
+            handle.write(str(os.getpid()))
+            handle.flush()
+            _LOCK_HANDLE = handle
+            return True
+        except Exception:
+            pass
+
     try:
         if lock_path.exists():
             raw_pid = lock_path.read_text(encoding="utf-8").strip()
@@ -53,14 +84,67 @@ def _acquire_single_instance_lock() -> bool:
     return True
 
 
-def main() -> int:
-    """Start the standalone acquisition workbench.
-
-    The implementation is still backed by the existing GrowthOps services while
-    this directory becomes the product boundary for the independent client.
+def _bring_existing_native_client_to_front():
+    if sys.platform != "darwin":
+        return
+    script = """
+    tell application "System Events"
+      repeat with procName in {"python", "Python"}
+        if exists process procName then
+          set frontmost of process procName to true
+          exit repeat
+        end if
+      end repeat
+    end tell
     """
+    try:
+        subprocess.run(["osascript", "-e", script], check=False, timeout=3)
+    except Exception:
+        pass
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _launch_web_client() -> int:
+    root = _project_root()
+    self_check = root / "tools" / "reachops_mac_self_check.py"
+    if not self_check.exists():
+        print("ReachOps Web 控制台启动器不存在。", file=sys.stderr)
+        print("原生客户端不依赖该 Web 控制台；请直接运行：python ReachOpsApp.py", file=sys.stderr)
+        return 2
+    command = [sys.executable, str(self_check), "--start-web"]
+    completed = subprocess.run(command, cwd=str(root), text=True, capture_output=True, check=False)
+    if completed.stdout:
+        print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
+    if completed.stderr:
+        print(completed.stderr, end="" if completed.stderr.endswith("\n") else "\n", file=sys.stderr)
+    url_path = root / "reports" / "reachops" / "mac_gui" / "runtime" / "reachops_web_ui_url.txt"
+    url = ""
+    try:
+        url = url_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        url = ""
+    if url:
+        print(f"ReachOps 本地客户端控制台: {url}")
+        try:
+            webbrowser.open(url)
+        except Exception as exc:
+            print(f"浏览器打开失败，请手动复制地址：{url} ({exc})")
+    else:
+        print("ReachOps 本地客户端控制台未生成可用地址，请查看上方自检输出。")
+    return completed.returncode
+
+
+def _launch_legacy_tk_client() -> int:
+    import tkinter as tk
+
+    from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp
 
     if not _acquire_single_instance_lock():
+        _bring_existing_native_client_to_front()
+        print("ReachOps 客户端已在运行，已尝试切回现有窗口。")
         return 0
 
     root = tk.Tk()
@@ -74,3 +158,22 @@ def main() -> int:
     root.focus_force()
     root.mainloop()
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Start the ReachOps operator client."""
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    if any(arg in {"-h", "--help"} for arg in args):
+        print(_USAGE.strip())
+        return 0
+    allowed = {"--legacy-tk", "--web"}
+    unknown = [arg for arg in args if arg not in allowed]
+    if unknown:
+        print(f"未知启动参数: {', '.join(unknown)}", file=sys.stderr)
+        print(_USAGE.strip(), file=sys.stderr)
+        return 2
+    web_requested = "--web" in args or os.environ.get("REACHOPS_WEB_CLIENT") == "1"
+    if web_requested:
+        return _launch_web_client()
+    return _launch_legacy_tk_client()

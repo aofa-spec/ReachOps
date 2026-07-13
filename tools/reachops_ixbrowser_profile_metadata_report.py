@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-SECRET_KEYS = {"proxy_user", "proxy_password", "username", "password", "tfa_secret"}
+SECRET_KEYS = {"proxy_user", "proxy_password", "username", "password", "tfa_secret", "name"}
 PROFILE_FIELDS = (
     "profile_id",
     "name",
@@ -63,30 +64,81 @@ def copy_fields(row: dict[str, Any], fields: tuple[str, ...], reveal_secrets: bo
 
 
 def normalize_group(row: dict[str, Any]) -> dict[str, Any]:
+    count = int(row.get("count") or row.get("profile_count") or 0)
     return {
         "group_id": str(row.get("id") or row.get("group_id") or ""),
         "group_name": str(row.get("title") or row.get("group_name") or row.get("name") or ""),
-        "profile_count": int(row.get("count") or row.get("profile_count") or 0),
+        "profile_count": count,
+        "count_known": count > 0,
+        "count_source": "ixbrowser_group_list" if count > 0 else "",
     }
 
 
 def list_pages(client: Any, method_name: str, limit: int = 100, max_pages: int = 50, **kwargs: Any) -> list[dict[str, Any]]:
+    from ReachOps.workbench.standalone_app import extract_ixbrowser_rows, require_ixbrowser_response
+
     rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    total = 0
     for page in range(1, max(1, int(max_pages or 50)) + 1):
-        batch = getattr(client, method_name)(page=page, limit=max(1, int(limit or 100)), **kwargs) or []
-        if isinstance(batch, dict):
-            data = batch.get("data") or batch.get("list") or []
-            batch = data if isinstance(data, list) else []
-        batch_rows = [item for item in batch if isinstance(item, dict)]
+        response = None
+        for attempt in range(1, 4):
+            try:
+                response = require_ixbrowser_response(
+                    client,
+                    getattr(client, method_name)(page=page, limit=max(1, int(limit or 100)), **kwargs),
+                    f"ixbrowser_{method_name}",
+                )
+                break
+            except Exception:
+                if attempt >= 3:
+                    raise
+                time.sleep(0.6 * attempt)
+        batch_rows, response_total = extract_ixbrowser_rows(response)
+        try:
+            total = int(response_total or getattr(client, "total", 0) or total)
+        except Exception:
+            total = total
+        deduped = []
+        for item in batch_rows:
+            key = str(
+                item.get("profile_id")
+                or item.get("profileId")
+                or item.get("browser_id")
+                or item.get("id")
+                or f"{method_name}:{page}:{len(deduped)}"
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        batch_rows = deduped
         rows.extend(batch_rows)
+        if total and len(seen) >= total:
+            break
         if len(batch_rows) < max(1, int(limit or 100)):
             break
     return rows
 
 
-def list_profile_rows(client: Any, profile_ids: set[str], profile_limit: int, max_pages: int) -> list[dict[str, Any]]:
+def list_profile_rows(
+    client: Any,
+    profile_ids: set[str],
+    profile_limit: int,
+    max_pages: int,
+    group_id: str = "",
+) -> list[dict[str, Any]]:
     if not profile_ids:
-        return list_pages(client, "get_profile_list", limit=min(max(1, int(profile_limit or 200)), 100), max_pages=max_pages)
+        kwargs: dict[str, Any] = {}
+        if str(group_id or "").strip():
+            kwargs["group_id"] = int(str(group_id).strip())
+        return list_pages(
+            client,
+            "get_profile_list",
+            limit=min(max(1, int(profile_limit or 200)), 100),
+            max_pages=max_pages,
+            **kwargs,
+        )
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for profile_id in sorted(profile_ids):
@@ -141,12 +193,19 @@ def build_report(
 ) -> dict[str, Any]:
     try:
         if client is None:
-            from ixbrowser_local_api import IXBrowserClient
+            from ReachOps.workbench.standalone_app import create_ixbrowser_client
 
-            client = IXBrowserClient()
+            client = create_ixbrowser_client()
         wanted_ids = {str(item) for item in (profile_ids or []) if str(item).strip()}
         groups_raw = list_pages(client, "get_group_list", limit=100, max_pages=max_pages)
-        profiles_raw = list_profile_rows(client, wanted_ids, profile_limit, max_pages)
+        wanted_group = str(group_name or "").strip().lower()
+        matched_group_id = ""
+        for group in groups_raw:
+            group_label = str(group.get("title") or group.get("group_name") or group.get("name") or "").strip().lower()
+            if wanted_group and group_label == wanted_group:
+                matched_group_id = str(group.get("id") or group.get("group_id") or "").strip()
+                break
+        profiles_raw = list_profile_rows(client, wanted_ids, profile_limit, max_pages, group_id=matched_group_id)
         proxy_ids = {str(row.get("proxy_id") or "") for row in profiles_raw if str(row.get("proxy_id") or "").strip()}
         proxies_raw = list_proxy_rows(client, proxy_ids, max_pages)
     except Exception as exc:
@@ -158,9 +217,16 @@ def build_report(
             "error_message": f"{exc.__class__.__name__}: {exc}",
         }
 
-    wanted_group = str(group_name or "").strip().lower()
     profiles_by_id = {str(row.get("profile_id") or row.get("id") or ""): row for row in profiles_raw}
     proxies_by_id = {str(row.get("id") or row.get("proxy_id") or ""): row for row in proxies_raw}
+    selected_profile_total: int | None = None
+    if wanted_group and matched_group_id:
+        try:
+            from ReachOps.workbench.standalone_app import load_ixbrowser_group_profile_count
+
+            selected_profile_total = load_ixbrowser_group_profile_count(matched_group_id, max_pages=1, limit=1)
+        except Exception:
+            selected_profile_total = None
 
     selected_profiles = []
     for profile_id, row in profiles_by_id.items():
@@ -184,15 +250,74 @@ def build_report(
             }
         )
 
+    original_group_counts = {
+        str(row.get("id") or row.get("group_id") or ""): int(row.get("count") or row.get("profile_count") or 0)
+        for row in groups_raw
+        if str(row.get("id") or row.get("group_id") or "")
+    }
     groups = [normalize_group(row) for row in groups_raw]
+    try:
+        from ReachOps.workbench.standalone_app import resolve_ixbrowser_group_counts
+
+        groups = [
+            {
+                **group,
+                "count": int(group.get("profile_count") or 0),
+            }
+            for group in groups
+        ]
+        resolved_groups = resolve_ixbrowser_group_counts(groups, max_workers=1, timeout_seconds=75.0)
+        groups = [
+            {
+                **group,
+                "profile_count": int(group.get("count") or group.get("profile_count") or 0),
+                "count_known": bool(group.get("count_known")),
+                "count_source": str(group.get("count_source") or ("ixbrowser_profile_list" if group.get("count_known") else "")),
+            }
+            for group in (resolved_groups or groups)
+        ]
+    except Exception:
+        pass
+    selected_profile_count = int(selected_profile_total) if selected_profile_total is not None else len(selected_rows)
+    if matched_group_id and selected_profile_count > 0:
+        for group in groups:
+            if str(group.get("group_id") or "") == matched_group_id:
+                group["profile_count"] = selected_profile_count
+                group["count_known"] = True
+                group["count_source"] = "selected_group_profile_list"
+            elif (
+                wanted_group
+                and selected_profile_total is not None
+                and int(group.get("profile_count") or 0) == selected_profile_count
+                and int(original_group_counts.get(str(group.get("group_id") or ""), 0) or 0) == 0
+            ):
+                group["profile_count"] = 0
+                group["count_known"] = False
+                group["count_source"] = ""
+    elif not wanted_ids:
+        counts_by_id: Counter[str] = Counter(str(row.get("group_id") or "") for row in profiles_raw if str(row.get("group_id") or ""))
+        counts_by_name: Counter[str] = Counter(str(row.get("group_name") or "") for row in profiles_raw if str(row.get("group_name") or ""))
+        for group in groups:
+            group_id = str(group.get("group_id") or "")
+            group_name = str(group.get("group_name") or "")
+            count = int(counts_by_id.get(group_id) or counts_by_name.get(group_name) or group.get("profile_count") or 0)
+            if count > 0:
+                group["profile_count"] = count
+                group["count_known"] = True
+                group["count_source"] = group.get("count_source") or "profile_list_sample"
+    known_profile_total = sum(int(group.get("profile_count") or 0) for group in groups if group.get("count_known"))
     return {
         "status": "ok",
         "safe_read_only": True,
         "open_profile_called": False,
-        "profile_count": len(profiles_raw),
+        "profile_count": max(len(profiles_raw), known_profile_total),
         "group_count": len(groups_raw),
+        "known_group_count": len([group for group in groups if group.get("count_known")]),
+        "all_group_counts_known": bool(groups) and all(bool(group.get("count_known")) for group in groups),
         "proxy_count": len(proxies_raw),
-        "selected_profile_count": len(selected_rows),
+        "selected_profile_count": selected_profile_count,
+        "selected_profile_sample_count": len(selected_rows),
+        "selected_group_id": matched_group_id,
         "missing_profile_ids": missing_profile_ids,
         "profile_ids_filter": sorted(wanted_ids),
         "group_name_filter": group_name,

@@ -23,6 +23,13 @@ function Assert-LastExitCode {
     }
 }
 
+function Remove-PythonCacheArtifacts {
+    Get-ChildItem -Path $Root -Directory -Recurse -Force -Filter "__pycache__" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $Root -File -Recurse -Force -Include "*.pyc","*.pyo" -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
 function Read-ReachOpsVersion {
     $code = "from ReachOps.version import VERSION; print(VERSION)"
     return (& $Python -c $code).Trim()
@@ -71,6 +78,8 @@ $VenvDir = Join-Path $Root ".venv-reachops-build"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $ReachOpsRequirements = Join-Path $Root "ReachOps\packaging\requirements-reachops.txt"
 $FallbackRequirements = Join-Path $Root "requirements.txt"
+$AcceptanceReportDir = Join-Path $Root "reports\reachops_acceptance"
+$WindowsPreflightPath = Join-Path $AcceptanceReportDir "windows_package_preflight.json"
 
 Write-Host "ReachOps Windows build"
 Write-Host "Root: $Root"
@@ -99,12 +108,36 @@ if (Test-Path $ReachOpsRequirements) {
 }
 
 if (!$SkipTests) {
-    & $VenvPython -m py_compile ReachOpsApp.py GrowthIntelligenceApp.py ReachOps\launcher.py ReachOps\workbench\standalone_app.py ReachOps\intelligence\service.py
+    & $VenvPython -m py_compile `
+        ReachOpsApp.py `
+        GrowthIntelligenceApp.py `
+        ReachOps\launcher.py `
+        ReachOps\workbench\standalone_app.py `
+        ReachOps\intelligence\service.py `
+        tools\reachops_web_ui.py `
+        tools\reachops_mac_web_ui.py `
+        tools\reachops_mac_self_check.py `
+        tools\reachops_client_acceptance_status.py `
+        tools\reachops_client_delivery_check.py `
+        tools\reachops_web_panel_dom_smoke.py `
+        tools\reachops_web_panel_runtime_smoke.py `
+        tools\reachops_delivery_package_check.py `
+        tools\reachops_final_acceptance_gate.py `
+        tools\reachops_goal_delivery_runner.py `
+        tools\reachops_live_acceptance_status.py `
+        tools\reachops_live_environment_blocker_report.py `
+        tools\reachops_repository_cleanliness_check.py `
+        tools\reachops_windows_package_preflight.py `
+        tools\verify_reachops_acceptance_summary.py
     Assert-LastExitCode "ReachOps build py_compile"
+    Remove-PythonCacheArtifacts
     & $VenvPython tools\reachops_delivery_smoke.py --json
     Assert-LastExitCode "ReachOps delivery smoke"
     & $VenvPython tools\reachops_delivery_audit.py --json
     Assert-LastExitCode "ReachOps delivery audit"
+    New-Item -ItemType Directory -Force -Path $AcceptanceReportDir | Out-Null
+    & $VenvPython tools\reachops_windows_package_preflight.py --json | Tee-Object -FilePath $WindowsPreflightPath
+    Assert-LastExitCode "ReachOps Windows package preflight"
     & $VenvPython -m unittest tests.test_reachops_campaign
     Assert-LastExitCode "ReachOps campaign tests"
 }
@@ -122,7 +155,7 @@ Write-Host "Built: $ExePath"
 if (!$SkipInstaller) {
     $iscc = Find-InnoSetupCompiler
     if ([string]::IsNullOrWhiteSpace($iscc)) {
-        Write-Warning "ISCC.exe not found. Skipping installer. Install Inno Setup or pass -SkipInstaller."
+        throw "ISCC.exe not found. Install Inno Setup 6 or pass -SkipInstaller for a non-final EXE-only build."
     } else {
         & $iscc "ReachOps\packaging\ReachOps.iss" "/DMyAppVersion=$Version" "/DMyAppBuild=$Build" "/DMyVersionInfoBuild=$VersionInfoBuild"
         Assert-LastExitCode "ReachOps Inno Setup installer"
