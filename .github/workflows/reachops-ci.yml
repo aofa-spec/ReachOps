@@ -51,13 +51,24 @@ jobs:
       - name: Run full unit-test suite
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+          PYTHONUNBUFFERED: "1"
+        run: python tools/run_reachops_ci_unittest.py --output "reports/ci/unittest-${{ runner.os }}.log"
+
+      - name: Upload complete unit-test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reachops-unittest-${{ runner.os }}-py${{ matrix.python-version }}
+          path: reports/ci/unittest-${{ runner.os }}.log
+          if-no-files-found: error
+          retention-days: 14
 
   deterministic-audit:
     name: Deterministic delivery audits
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: offline-contract
+    if: ${{ always() }}
 
     steps:
       - name: Check out repository
