@@ -71,6 +71,7 @@ from tools.reachops_ixbrowser_profile_metadata_report import build_report as bui
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
+from tools.reachops_data_governance import build_report as build_reachops_data_governance_report
 from tools.reachops_final_acceptance_gate import build_final_acceptance_gate as build_reachops_final_acceptance_gate
 from tools.reachops_final_acceptance_gate import client_delivery_from_acceptance_summary as reachops_client_delivery_from_acceptance_summary
 from tools.reachops_final_acceptance_gate import main as reachops_final_acceptance_gate_main
@@ -2702,6 +2703,47 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("Rollback Policy", rollback_note)
             self.assertIn("previous verified ReachOps installer", rollback_note)
 
+    def test_reachops_data_governance_verifies_backup_restore_and_redaction_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "runtime" / "data" / "growth_intelligence" / "growth_intelligence.db"
+            output_dir = root / "governance"
+            report = build_reachops_data_governance_report(
+                root=root,
+                db_path=db_path,
+                output_dir=output_dir,
+                create_missing_db=True,
+                verify_backup=True,
+            )
+
+            self.assertEqual(report["schema_version"], "reachops.data_governance.v1")
+            self.assertTrue(report["passed"])
+            self.assertEqual(report["backup_restore"]["status"], "passed")
+            self.assertTrue(Path(report["backup_restore"]["backup_path"]).exists())
+            self.assertTrue(Path(report["backup_restore"]["restored_path"]).exists())
+            self.assertEqual(report["database"]["schema"]["integrity_check"], "ok")
+            self.assertEqual(report["database"]["schema"]["schema_version"], "reachops.sqlite_schema_baseline.v1")
+            self.assertGreater(report["database"]["schema"]["table_count"], 20)
+            self.assertFalse(report["database"]["migration_policy"]["final_delivery_ready"])
+            self.assertIn("raw_interaction", report["retention_classes"])
+            self.assertIn("activation_secret", report["retention_classes"])
+            pii_fields = {f"{row['table']}.{row['field']}" for row in report["data_catalog"] if row["classification"] == "pii"}
+            self.assertIn("candidate_users.username", pii_fields)
+            self.assertIn("action_queue.target_url", pii_fields)
+            support = report["support_bundle"]
+            self.assertTrue(support["default_redacted"])
+            self.assertIn("config/reachops_activation_status.json", support["exclude_patterns"])
+            self.assertIn("data/growth_intelligence/*.db", support["exclude_patterns"])
+            self.assertIn("reports/**/*.png", support["exclude_patterns"])
+            self.assertIn("candidate_users.comment_text", support["redacted_fields"])
+            self.assertIn("outreach_executions.evidence_path", support["excluded_file_fields"])
+
+            corrupt_db = root / "corrupt.db"
+            corrupt_db.write_bytes(b"not sqlite")
+            corrupt = build_reachops_data_governance_report(root=root, db_path=corrupt_db, output_dir=output_dir)
+            self.assertFalse(corrupt["passed"])
+            self.assertIn("database_integrity_failed", corrupt["failures"])
+
     def test_reachops_delivery_package_check_rejects_external_summary_and_manifest_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
@@ -5243,6 +5285,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         reachops_requirements = (root / "ReachOps" / "packaging" / "requirements-reachops.txt").read_text(encoding="utf-8")
         dependency_license_inventory = (root / "ReachOps" / "packaging" / "dependency-license-inventory.json").read_text(encoding="utf-8")
         dependency_baseline_verifier = (root / "tools" / "verify_reachops_dependency_baseline.py").read_text(encoding="utf-8")
+        data_governance = (root / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
         release_evidence = (root / "tools" / "reachops_release_evidence.py").read_text(encoding="utf-8")
         workflow = (root / ".github" / "workflows" / "reachops-ci.yml").read_text(encoding="utf-8")
         acceptance_inputs_template = (root / "tools" / "reachops_acceptance_inputs.example.ps1").read_text(encoding="utf-8")
@@ -5630,6 +5673,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops.dependency_baseline.v1", dependency_baseline_verifier)
         self.assertIn("requirements_lock_line_", dependency_baseline_verifier)
         self.assertIn("dependency_license_inventory", dependency_baseline_verifier)
+        self.assertIn("reachops.data_governance.v1", data_governance)
+        self.assertIn("backup_and_restore_verify", data_governance)
+        self.assertIn("SUPPORT_BUNDLE_EXCLUDE_PATTERNS", data_governance)
+        self.assertIn("RETENTION_CLASSES", data_governance)
+        self.assertIn("DATA_CATALOG", data_governance)
         self.assertIn("reachops.release_evidence.v1", release_evidence)
         self.assertIn("reachops-release-evidence.json", release_evidence)
         self.assertIn("reachops-rollback-note.md", release_evidence)

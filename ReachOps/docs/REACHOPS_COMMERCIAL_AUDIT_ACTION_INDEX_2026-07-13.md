@@ -110,6 +110,7 @@ python tools/reachops_delivery_audit.py --json
 python tools/reachops_web_panel_dom_smoke.py --json
 python tools/reachops_web_panel_runtime_smoke.py --json
 python tools/reachops_repository_cleanliness_check.py --json
+python tools/reachops_data_governance.py --create-missing-db --verify-backup --json
 ```
 
 真实环境门禁不能由 GitHub CI 代替：

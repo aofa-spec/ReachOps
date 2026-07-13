@@ -18,6 +18,7 @@ REQUIRED_FILES = {
     "dependency_lock": "requirements.lock",
     "dependency_baseline_verifier": "tools/verify_reachops_dependency_baseline.py",
     "dependency_license_inventory": "ReachOps/packaging/dependency-license-inventory.json",
+    "data_governance": "tools/reachops_data_governance.py",
     "windows_build_script": "tools/build_reachops_windows.ps1",
     "pyinstaller_spec": "ReachOps/packaging/reachops.spec",
     "inno_setup_script": "ReachOps/packaging/ReachOps.iss",
@@ -115,6 +116,13 @@ SCRIPT_EXPECTATIONS = {
         "reachops.dependency_baseline.v1",
         "requirements_lock_line_",
         "dependency_license_inventory",
+    ],
+    "tools/reachops_data_governance.py": [
+        "reachops.data_governance.v1",
+        "backup_and_restore_verify",
+        "SUPPORT_BUNDLE_EXCLUDE_PATTERNS",
+        "RETENTION_CLASSES",
+        "DATA_CATALOG",
     ],
     "tools/reachops_release_evidence.py": [
         "reachops.release_evidence.v1",
