@@ -35,9 +35,11 @@ class ReachOpsUpdateManager:
 
     def load_manifest(self, source: str | os.PathLike) -> dict[str, Any]:
         source_text = str(source)
-        if source_text.startswith(("http://", "https://")):
+        if source_text.startswith("https://"):
             with urllib.request.urlopen(source_text, timeout=20) as response:
                 payload = response.read().decode("utf-8")
+        elif source_text.startswith("http://"):
+            raise ValueError("remote update manifest must use https")
         else:
             payload = Path(source).read_text(encoding="utf-8")
         manifest = json.loads(payload)
