@@ -76,6 +76,7 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
 
 $VenvDir = Join-Path $Root ".venv-reachops-build"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+$DependencyBaseline = Join-Path $Root "requirements.lock"
 $ReachOpsRequirements = Join-Path $Root "ReachOps\packaging\requirements-reachops.txt"
 $FallbackRequirements = Join-Path $Root "requirements.txt"
 $AcceptanceReportDir = Join-Path $Root "reports\reachops_acceptance"
@@ -95,7 +96,14 @@ if (!(Test-Path $VenvPython)) {
 
 & $VenvPython -m pip install --upgrade pip setuptools wheel
 Assert-LastExitCode "Install build bootstrap dependencies"
-if (Test-Path $ReachOpsRequirements) {
+$DependencyBaselineVerifier = Join-Path $Root "tools\verify_reachops_dependency_baseline.py"
+& $VenvPython $DependencyBaselineVerifier --json
+Assert-LastExitCode "Verify ReachOps dependency baseline"
+if (Test-Path $DependencyBaseline) {
+    Write-Host "Installing ReachOps locked requirements: $DependencyBaseline"
+    & $VenvPython -m pip install -r $DependencyBaseline
+    Assert-LastExitCode "Install ReachOps locked requirements"
+} elseif (Test-Path $ReachOpsRequirements) {
     Write-Host "Installing ReachOps standalone requirements: $ReachOpsRequirements"
     & $VenvPython -m pip install -r $ReachOpsRequirements
     Assert-LastExitCode "Install ReachOps standalone requirements"

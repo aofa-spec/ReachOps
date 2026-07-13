@@ -15,6 +15,9 @@ from ReachOps.version import VERSION
 
 
 REQUIRED_FILES = {
+    "dependency_lock": "requirements.lock",
+    "dependency_baseline_verifier": "tools/verify_reachops_dependency_baseline.py",
+    "dependency_license_inventory": "ReachOps/packaging/dependency-license-inventory.json",
     "windows_build_script": "tools/build_reachops_windows.ps1",
     "pyinstaller_spec": "ReachOps/packaging/reachops.spec",
     "inno_setup_script": "ReachOps/packaging/ReachOps.iss",
@@ -47,6 +50,10 @@ FINAL_ARTIFACTS = {
 
 SCRIPT_EXPECTATIONS = {
     "tools/build_reachops_windows.ps1": [
+        "requirements.lock",
+        "tools\\verify_reachops_dependency_baseline.py",
+        "--json",
+        "Install ReachOps locked requirements",
         "tools\\reachops_windows_package_preflight.py",
         "windows_package_preflight.json",
         "PyInstaller --clean --noconfirm ReachOps\\packaging\\reachops.spec",
@@ -82,6 +89,33 @@ SCRIPT_EXPECTATIONS = {
         "name=\"ReachOps\"",
         "ixbrowser_local_api",
         "selenium.webdriver.chrome.webdriver",
+    ],
+    "ReachOps/packaging/requirements-reachops.txt": [
+        "-r ../../requirements.lock",
+    ],
+    "requirements.txt": [
+        "-r requirements.lock",
+    ],
+    "requirements.lock": [
+        "requests==",
+        "Pillow==",
+        "selenium==",
+        "ixbrowser-local-api==",
+        "pyinstaller==",
+    ],
+    "ReachOps/packaging/dependency-license-inventory.json": [
+        "reachops.dependency_license_inventory.v1",
+        "requirements.lock",
+        "commercial_review_required_for_unknown_license",
+    ],
+    "tools/verify_reachops_dependency_baseline.py": [
+        "reachops.dependency_baseline.v1",
+        "requirements_lock_line_",
+        "dependency_license_inventory",
+    ],
+    ".github/workflows/reachops-ci.yml": [
+        "cache-dependency-path: requirements.lock",
+        "tools/verify_reachops_dependency_baseline.py --json",
     ],
 }
 

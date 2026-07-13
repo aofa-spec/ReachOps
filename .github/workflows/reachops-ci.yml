@@ -29,13 +29,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip check
+          python tools/verify_reachops_dependency_baseline.py --json
 
       - name: Compile Python sources
         run: python -m compileall -q ReachOps tools tests
@@ -60,13 +61,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip check
+          python tools/verify_reachops_dependency_baseline.py --json
 
       - name: Compile Python sources
         run: python -m compileall -q ReachOps tools tests
@@ -109,13 +111,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip check
+          python tools/verify_reachops_dependency_baseline.py --json
 
       - name: Run fixture-based delivery audit
         env:
