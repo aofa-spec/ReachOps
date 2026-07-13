@@ -49,19 +49,32 @@ jobs:
         run: python -m compileall -q ReachOps tools tests
 
       - name: Run full unit-test suite
+        id: unit-tests
+        continue-on-error: true
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUNBUFFERED: "1"
         run: python tools/run_reachops_ci_unittest.py --output "reports/ci/unittest-${{ runner.os }}.log"
 
+      - name: Ensure a test-log artifact exists
+        if: always()
+        run: >-
+          python -c "from pathlib import Path; p=Path(r'reports/ci/unittest-${{ runner.os }}.log');
+          p.parent.mkdir(parents=True, exist_ok=True); p.touch(exist_ok=True);
+          print(f'unit_test_log={p} exists={p.exists()} bytes={p.stat().st_size}')"
+
       - name: Upload complete unit-test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: reachops-unittest-${{ runner.os }}-py${{ matrix.python-version }}
-          path: reports/ci/unittest-${{ runner.os }}.log
+          name: reachops-unittest-${{ runner.os }}
+          path: reports/ci/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Enforce unit-test result
+        if: ${{ steps.unit-tests.outcome != 'success' }}
+        run: python -c "raise SystemExit('ReachOps unit tests failed; inspect the uploaded unittest log artifact.')"
 
   deterministic-audit:
     name: Deterministic delivery audits
