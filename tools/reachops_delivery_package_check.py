@@ -255,11 +255,7 @@ def _remediation_plan(
         ),
         "missing_final_artifacts": list(missing_artifacts),
         "failure_codes": list(failures),
-        "artifact_actions": {
-            name: detail
-            for name, detail in artifact_actions.items()
-            if name in set(missing_artifacts) or f"{name}_missing" in set(failures)
-        },
+        "artifact_actions": dict(artifact_actions) if (missing_artifacts or failures) else {},
         "commands": [
             "powershell -ExecutionPolicy Bypass -File tools\\build_reachops_windows.ps1",
             "powershell -ExecutionPolicy Bypass -File tools\\init_reachops_acceptance_inputs_windows.ps1 -Json",

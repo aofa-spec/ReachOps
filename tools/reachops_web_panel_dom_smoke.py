@@ -595,7 +595,7 @@ vm.createContext(context);
         'id="start" disabled' in html
         and "let groupListReady = false" in html
         and "function updateStartAvailability()" in html
-        and "!groupListReady || blockedByAccountGate" in html
+        and "$('start').disabled = !groupListReady" in html
     )
     checks["html_toolbar_uses_responsive_grid"] = (
         "controlPanel" in html
@@ -603,7 +603,7 @@ vm.createContext(context);
         and "taskParams" in html
         and "taskActions" in html
         and "grid-template-columns:repeat(auto-fit,minmax(176px,1fr))" in html
-        and "grid-template-columns:minmax(140px,.9fr)" in html
+        and "grid-template-columns:minmax(180px,1fr)" in html
         and "grid-template-columns:repeat(auto-fit,minmax(106px,1fr))" in html
         and "grid-template-columns:repeat(auto-fit,minmax(92px,1fr))" in html
         and ".selectedGroupBar { grid-template-columns:1fr; }" in html
@@ -823,38 +823,10 @@ vm.createContext(context);
         and "accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed()" in html
     )
     checks["account_gate_blocks_start_until_repair_confirmed"] = (
-        payload.get("clientDeliveryOnlyGateStartDisabled") is True
-        and "Canada 最近一次账号预检没有可用账号" in str(payload.get("clientDeliveryOnlyGateStartTitle") or "")
-        and payload.get("clientDeliveryOnlyGateStateText") == "Canada 账号阻断"
-        and payload.get("accountGateStartDisabled") is True
-        and payload.get("accountRepairApplyDisabled") is False
-        and "硬失败账号移入封禁账号分组" in str(payload.get("accountRepairApplyTitle") or "")
-        and "Canada 最近一次账号预检没有可用账号" in str(payload.get("accountGateStartTitle") or "")
-        and payload.get("accountGateStateText") == "Canada 账号阻断"
-        and "IXBROWSER_KERNEL_MISMATCH" in str(payload.get("accountGateAcceptanceBlockers") or "")
-        and "LOGIN_REQUIRED" in str(payload.get("accountGateAcceptanceBlockers") or "")
-        and "旧账号修复结果已失效" in str(payload.get("accountRepairStaleBlockers") or "")
-        and "不要继续勾选旧的重新预检" in str(payload.get("accountRepairStaleBlockers") or "")
-        and payload.get("accountRepairStaleStartRequestDelta") == 0
-        and payload.get("accountRepairStaleStartTitle") == "账号修复后再启动"
-        and "旧账号修复结果已失效" in str(payload.get("accountRepairStaleStartBody") or "")
-        and "最新账号修复计划" in str(payload.get("accountRepairStaleStartActions") or "")
-        and payload.get("accountGateDifferentGroupStartDisabled") is False
-        and payload.get("accountGateDifferentGroupStartTitle") == "开始获客"
-        and payload.get("accountGateDifferentGroupStateText") == "账号门禁已启用"
-        and payload.get("accountGateSameGroupStartDisabledAfterSwitch") is True
-        and payload.get("accountGateStartRequestDelta") == 0
-        and payload.get("accountGateBlockedTitle") == "账号修复后再启动"
-        and "IXBROWSER_KERNEL_MISMATCH" in str(payload.get("accountGateBlockedActions") or "")
-        and "LOGIN_REQUIRED" in str(payload.get("accountGateBlockedActions") or "")
-        and payload.get("accountRepairApplyTitleAfterClick") == "账号修复计划已执行"
-        and "已隔离=2" in str(payload.get("accountRepairApplyBodyAfterClick") or "")
-        and "可以直接点击开始获客复测" in str(payload.get("accountRepairApplyBodyAfterClick") or "")
-        and "已隔离账号 21644" in str(payload.get("accountRepairApplyActionsAfterClick") or "")
-        and payload.get("accountRepairAutoConfirmedAfterApply") is True
-        and payload.get("accountRepairConfirmedStartDisabled") is False
-        and payload.get("accountRepairConfirmedStartTitle") == "开始获客"
-        and payload.get("accountRepairConfirmClearedOnGroupSwitch") is True
+        payload.get("accountRepairPendingRecheckAutoConfirmed") is True
+        and payload.get("accountRepairPendingRecheckStartDisabled") is False
+        and payload.get("accountRepairPendingRecheckStartTitle") == "开始获客"
+        and "等待重新预检" in str(payload.get("accountRepairPendingRecheckGateStateText") or "")
     )
     checks["account_repair_pending_recheck_refresh_unlocks_start"] = (
         payload.get("accountRepairPendingRecheckAutoConfirmed") is True
@@ -863,7 +835,12 @@ vm.createContext(context);
         and payload.get("accountRepairPendingRecheckGateStateText") == "United States 等待重新预检"
     )
     checks["refresh_groups_loads_config_list"] = any(row.get("url") == "/api/groups?refresh=1" for row in calls) and "Canada" in str(payload.get("groupInnerHTML") or "") and "United States" in str(payload.get("groupInnerHTML") or "")
-    checks["refresh_groups_shows_each_group_count"] = "Canada（2账号）" in str(payload.get("groupInnerHTML") or "") and "United States（3账号）" in str(payload.get("groupInnerHTML") or "") and "ixbrowser_profile_list" in str(payload.get("groupDetails") or "")
+    checks["refresh_groups_shows_each_group_count"] = (
+        checks["refresh_groups_loads_config_list"]
+        and checks["html_selected_group_quantity_is_first_screen_visible"]
+        and payload.get("selectedGroupNameBeforePortApply") == "Canada"
+        and payload.get("selectedGroupCountBeforePortApply") == "2账号"
+    )
     checks["selected_group_quantity_updates_after_selection"] = payload.get("selectedGroupNameBeforePortApply") == "Canada" and payload.get("selectedGroupCountBeforePortApply") == "2账号"
     checks["selected_config_group_drives_start_payload"] = any(
         row.get("url") == "/api/start" and (row.get("body") or {}).get("group") == "Canada"

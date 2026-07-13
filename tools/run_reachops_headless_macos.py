@@ -595,7 +595,14 @@ def main() -> int:
             existing_no_proxy.append(item)
     os.environ["NO_PROXY"] = ",".join(existing_no_proxy)
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
+    old_ixbrowser_refresh_max_pages = os.environ.get("REACHOPS_IXBROWSER_REFRESH_MAX_PAGES")
     os.environ.setdefault("REACHOPS_IXBROWSER_REFRESH_MAX_PAGES", "1")
+
+    def restore_headless_env() -> None:
+        if old_ixbrowser_refresh_max_pages is None:
+            os.environ.pop("REACHOPS_IXBROWSER_REFRESH_MAX_PAGES", None)
+        else:
+            os.environ["REACHOPS_IXBROWSER_REFRESH_MAX_PAGES"] = old_ixbrowser_refresh_max_pages
 
     from ReachOps.intelligence import GrowthIntelligenceService
     from ReachOps.runtime_paths import RuntimePaths
@@ -668,6 +675,7 @@ def main() -> int:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             print(result)
+        restore_headless_env()
         return 2
     try:
         app.refresh_profile_groups(show_message=False)
@@ -721,7 +729,9 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(result)
-    return 0 if result["status"] == "completed" else 2
+    exit_code = 0 if result["status"] == "completed" else 2
+    restore_headless_env()
+    return exit_code
 
 
 if __name__ == "__main__":

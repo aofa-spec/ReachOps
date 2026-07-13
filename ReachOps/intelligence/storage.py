@@ -1519,6 +1519,14 @@ class GrowthStorage:
                 "ACCOUNT_RESTRICTED",
                 "COMMENT_ACCESS_GATED",
             }
+            cooldown_error_codes = hard_error_codes | {
+                "COMMENT_RATE_LIMITED",
+                "FOLLOW_RATE_LIMITED",
+                "DM_RATE_LIMITED",
+                "COMMENT_BLOCKED",
+                "FOLLOW_BLOCKED",
+                "DM_NOT_ALLOWED",
+            }
             old_status = str(row["status"] or "")
             old_failures = int(row["consecutive_failures"] or 0)
             error_code = str(error_code or "")
@@ -1527,7 +1535,7 @@ class GrowthStorage:
             score = int(row["health_score"] or 100)
             score = max(75, min(100, score + 25)) if ok else max(0, score - (5 if transient_failure else 20))
             status = "healthy"
-            if (failures >= 3 or score < 40) and error_code in hard_error_codes:
+            if (failures >= 3 or score < 40) and error_code in cooldown_error_codes:
                 status = "cooldown"
             elif not ok or score < 70:
                 status = "degraded"

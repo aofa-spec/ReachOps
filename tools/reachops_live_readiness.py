@@ -114,8 +114,8 @@ def run_readiness(args) -> dict[str, Any]:
     status_file = Path(status_path)
     activation_required = LiveSubmitAuthorizationGate.activation_required()
     add(
-        "activation_status_file_exists_or_not_required",
-        (status_file.exists() and status_file.is_file()) or not activation_required,
+        "activation_status_file_exists",
+        status_file.exists() and status_file.is_file(),
         activation_status_path=str(status_file),
         activation_required=activation_required,
         runtime_mode=LiveSubmitAuthorizationGate.runtime_mode(),

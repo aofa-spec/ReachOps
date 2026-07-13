@@ -6189,23 +6189,6 @@ def validate_profile_group_for_start(profile_group: str) -> tuple[bool, dict]:
             groups = retry_groups
             error = ""
         else:
-            cached_names = {str(row.get("name") or "").strip().lower(): row for row in retry_groups or groups}
-            cached_selected = cached_names.get(profile_group.strip().lower())
-            api_health = build_ixbrowser_status_payload()
-            if cached_selected and (cached_selected.get("count_known") or api_health.get("ready")):
-                append_web_log(
-                    f"WARN   profile_group_live_refresh_degraded group={profile_group} "
-                    f"error={retry_error or error} policy=allow_cached_group_with_headless_start_gate"
-                )
-                return True, {
-                    "group": cached_selected,
-                    "status": "ready_with_cached_group_after_refresh_retry",
-                    "warning": "profile_group_live_refresh_required",
-                    "group_error": retry_error or error,
-                    "stale_cache": bool(retry_payload.get("stale_cache", group_payload.get("stale_cache"))),
-                    "ixbrowser_status": api_health.get("status"),
-                    "next_actions": ["已用缓存分组启动，执行器会继续校验 ixBrowser Local API 和账号可用性。"],
-                }
             return False, {
                 "status": "rejected",
                 "error": "profile_group_live_refresh_required",
@@ -6295,21 +6278,21 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
         account_repair_summary = summarize_account_repair_plan(plan_paths[3] or plan_paths[1])
         stale_repair = account_repair_apply.get("stale") is True
         append_web_log(
-            f"WARN   web_ui_account_gate_stale_recheck group={profile_group} "
-            "policy=allow_start_with_forced_account_recheck"
+            f"WARN   web_ui_account_gate_blocked group={profile_group} "
+            "policy=repair_required_before_start"
         )
-        return True, {
-            "status": "ready_for_account_recheck",
+        return False, {
+            "status": "rejected",
             "error": "account_repair_required",
             "message": (
-                "旧账号修复结果已失效；本次启动将重新读取 ixBrowser 分组并重新预检账号。"
+                "旧账号修复结果已失效；请先执行最新账号修复计划并重新预检。"
                 if stale_repair
-                else "当前分组最近一次预检没有可用账号；本次启动将重新读取 ixBrowser 分组并重新预检账号。"
+                else "当前分组最近一次预检没有可用账号；请先修复账号并重新预检。"
             ),
             "profile_group": profile_group,
             "profile_available": profile_available,
             "same_group": same_group,
-            "force_account_recheck": True,
+            "force_account_recheck": False,
             "blockers": blockers,
             "next_actions": next_actions
             or [

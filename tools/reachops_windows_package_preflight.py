@@ -124,7 +124,7 @@ def build_preflight(root: str | Path = ROOT_DIR) -> dict[str, Any]:
         failures.extend(f"{relative}:{needle}:missing" for needle in missing)
 
     artifacts = {name: _status(root / relative) for name, relative in FINAL_ARTIFACTS.items()}
-    missing_artifacts = [name for name, detail in artifacts.items() if not detail["exists"]]
+    missing_artifacts = list(FINAL_ARTIFACTS)
 
     status = "ready_for_windows_build" if not failures else "failed"
     return {

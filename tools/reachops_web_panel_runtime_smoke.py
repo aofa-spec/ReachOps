@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import signal
 import sys
 import tempfile
@@ -213,6 +214,7 @@ def run_runtime_smoke() -> dict:
     old_goal_build_report = reachops_goal_delivery_runner.build_report
     old_goal_out_path = reachops_goal_delivery_runner.OUT_PATH
     old_goal_summary_path = reachops_goal_delivery_runner.SUMMARY_PATH
+    old_require_activation = os.environ.get("REACHOPS_REQUIRE_ACTIVATION")
 
     server = None
     thread = None
@@ -221,8 +223,9 @@ def run_runtime_smoke() -> dict:
     checks: dict[str, bool] = {}
     diagnostics: dict[str, object] = {}
 
-    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-", ignore_cleanup_errors=True) as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-") as tmpdir:
         try:
+            os.environ["REACHOPS_REQUIRE_ACTIVATION"] = "1"
             reachops_web_ui.DATA_DIR = Path(tmpdir)
             reachops_web_ui.WEB_SETTINGS_PATH = Path(tmpdir) / "config" / "reachops_web_settings.json"
             reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
@@ -595,7 +598,7 @@ def run_runtime_smoke() -> dict:
                     "taskParams",
                     "taskActions",
                     "grid-template-columns:repeat(auto-fit,minmax(176px,1fr))",
-                    "grid-template-columns:minmax(140px,.9fr)",
+                    "grid-template-columns:minmax(180px,1fr)",
                     "grid-template-columns:repeat(auto-fit,minmax(106px,1fr))",
                     "本地服务连接失败",
                     "$('runState').textContent = 'OFFLINE'",
@@ -624,15 +627,18 @@ def run_runtime_smoke() -> dict:
             launcher_tests = (ROOT_DIR / "tests" / "test_launcher.py").read_text(encoding="utf-8")
             checks["client_launch_entrypoints_are_unified_local_console"] = (
                 "from ReachOps.launcher import main" in app_entry
+                and "return _launch_legacy_tk_client()" in launcher_source
                 and "return _launch_web_client()" in launcher_source
-                and "legacy_requested = \"--legacy-tk\" in args or os.environ.get(\"REACHOPS_LEGACY_TK\") == \"1\""
+                and "web_requested = \"--web\" in args or os.environ.get(\"REACHOPS_WEB_CLIENT\") == \"1\""
                 in launcher_source
                 and "回退到原生 Tk 客户端" not in launcher_source
-                and "exec ./启动ReachOps统一WebUI.command" in local_client_command
+                and "ReachOps 本地客户端启动中" in local_client_command
+                and "ReachOpsApp.py" in local_client_command
                 and "tools/reachops_mac_self_check.py --start-web" in unified_web_command
-                and "ReachOps 客户端入口已统一到本地客户端控制台" in native_mac_command
-                and "ReachOpsApp.py --legacy-tk" in native_mac_command
-                and "test_default_entry_starts_unified_web_client" in launcher_tests
+                and "ReachOps 原生客户端 UI" in native_mac_command
+                and "ReachOpsApp.py" in native_mac_command
+                and "test_default_entry_starts_native_tk_client" in launcher_tests
+                and "test_web_client_requires_explicit_flag" in launcher_tests
                 and "test_missing_web_launcher_does_not_silently_fallback_to_legacy_tk" in launcher_tests
             )
 
@@ -2253,6 +2259,10 @@ def run_runtime_smoke() -> dict:
             reachops_web_ui.GOAL_DELIVERY_SUMMARY_PATH = old_web_goal_summary_path
             reachops_web_ui.TWO_PHASE_MATRIX_JSON_PATH = old_web_two_phase_json_path
             reachops_web_ui.TWO_PHASE_MATRIX_MD_PATH = old_web_two_phase_md_path
+            if old_require_activation is None:
+                os.environ.pop("REACHOPS_REQUIRE_ACTIVATION", None)
+            else:
+                os.environ["REACHOPS_REQUIRE_ACTIVATION"] = old_require_activation
             if old_ixbrowser_env is None:
                 reachops_web_ui.os.environ.pop("REACHOPS_IXBROWSER_API_PORT", None)
             else:

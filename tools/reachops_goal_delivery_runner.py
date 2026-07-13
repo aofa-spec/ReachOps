@@ -304,6 +304,14 @@ def build_deliverable_index(
 ) -> dict[str, Any]:
     blocker_by_scope = {str(row.get("scope") or ""): row for row in blockers if isinstance(row, dict)}
     windows_blocker = blocker_by_scope.get("windows_final_artifacts", {})
+    windows_missing_artifacts = sorted(
+        {
+            str(item)
+            for item in list(package.get("missing_artifacts") or [])
+            + list(windows_preflight.get("missing_final_artifacts") or [])
+            if str(item or "").strip()
+        }
+    )
     pending_external = final_gate_pending_external_validation(final_gate)
     authorized_live_ready = final_gate_authorized_live_submit_ready(final_gate)
     return {
@@ -336,7 +344,7 @@ def build_deliverable_index(
             "required_for": "final_delivery",
             "ready": str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready")),
             "status": package.get("status"),
-            "missing_artifacts": package.get("missing_artifacts") or [],
+            "missing_artifacts": windows_missing_artifacts,
             "artifacts": package.get("artifacts") or {},
             "remediation_plan": windows_blocker.get("remediation_plan") or package.get("remediation_plan") or {},
             "blocking_scope": "" if str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready")) else "windows_final_artifacts",

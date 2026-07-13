@@ -51,7 +51,7 @@ RISK_FILTER_LABELS = {"all": "全部风险", "low": "低风险", "medium": "中�
 REVIEW_FILTER_LABELS = {"all": "全部审核", "pending": "待审核", "approved": "已批准", "rejected": "已拒绝"}
 TEMPLATE_STATUS_LABELS = {"active": "启用", "paused": "暂停"}
 
-OPERATOR_VIEW_NAMES = ["获客任务", "信息沙漏", "线索分析", "触达执行", "账号诊断", "报告中心"]
+OPERATOR_VIEW_NAMES = ["获客任务", "线索分析", "触达执行", "账号诊断", "报告中心"]
 
 
 def safe_tk_option(value: str) -> str:
@@ -556,6 +556,15 @@ class GrowthOpsConsole(ttk.Frame):
         ).grid(row=0, column=0, sticky="ew")
         tk.Label(
             page_header,
+            textvariable=self.page_subtitle_var,
+            bg=UI_COLORS["surface"],
+            fg=UI_COLORS["muted"],
+            font=ui_font(9),
+            anchor="w",
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", pady=(3, 0))
+        tk.Label(
+            page_header,
             textvariable=self.operator_status_var,
             bg=UI_COLORS["accent_soft"],
             fg=UI_COLORS["accent"],
@@ -570,7 +579,7 @@ class GrowthOpsConsole(ttk.Frame):
         self.stack.columnconfigure(0, weight=1)
         self.stack.rowconfigure(0, weight=1)
         self.views = {}
-        hidden_view_names = ["数据源", "定时扫描", "采集批次", "采集任务", "执行计划", "执行记录", "设置/风控"]
+        hidden_view_names = ["信息沙漏", "数据源", "定时扫描", "采集批次", "采集任务", "执行计划", "执行记录", "设置/风控"]
         for name in view_names + hidden_view_names:
             frame = tk.Frame(self.stack, bg=UI_COLORS["bg"], highlightthickness=0)
             frame.grid(row=0, column=0, sticky="nsew")

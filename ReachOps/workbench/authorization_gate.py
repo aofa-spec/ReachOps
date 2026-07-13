@@ -110,7 +110,7 @@ class LiveSubmitAuthorizationGate:
             return True
         if explicit in {"0", "false", "no", "off"}:
             return False
-        return False
+        return True
 
     @classmethod
     def runtime_mode(cls) -> str:

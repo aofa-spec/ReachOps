@@ -8293,21 +8293,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 [{"profile_id": "discovery-1", "group_name": "US"}],
                 GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
             )
-            result = GrowthWorkflowService(service).run_action_router(
-                [{"profile_id": "exec-1", "group_name": "US"}],
-                config=ActionRouterConfig(
-                    max_workers=1,
-                    per_profile_action_limit=10,
-                    action_types=["comment_reply"],
-                    dry_run=False,
-                    live_preflight_only=False,
-                    allow_live_submit=True,
-                    auto_approve=True,
-                    auto_confirm=True,
-                ),
-                fixture_outcomes=[{"action_type": "comment_reply", "status": "success"}],
-                export_report=False,
-            )
+            with patch.dict(os.environ, {"REACHOPS_REQUIRE_ACTIVATION": "1"}, clear=False):
+                result = GrowthWorkflowService(service).run_action_router(
+                    [{"profile_id": "exec-1", "group_name": "US"}],
+                    config=ActionRouterConfig(
+                        max_workers=1,
+                        per_profile_action_limit=10,
+                        action_types=["comment_reply"],
+                        dry_run=False,
+                        live_preflight_only=False,
+                        allow_live_submit=True,
+                        auto_approve=True,
+                        auto_confirm=True,
+                    ),
+                    fixture_outcomes=[{"action_type": "comment_reply", "status": "success"}],
+                    export_report=False,
+                )
 
             self.assertEqual(result["selected_actions"], 1)
             self.assertEqual(result["skipped"], 1)
@@ -10563,7 +10564,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
         counts = {row["group_name"]: row["count"] for row in snapshot["groups"]}
         self.assertEqual(counts, {"全部配置": 3, "BR": 1, "Canada": 2})
-        self.assertIn("[    2]", group_display_name(next(row for row in snapshot["groups"] if row["group_name"] == "Canada")))
+        self.assertIn("2 个账号", group_display_name(next(row for row in snapshot["groups"] if row["group_name"] == "Canada")))
         self.assertEqual([row["profile_id"] for row in registry.select_profiles("Canada", limit=10)], ["ca-1", "ca-2"])
 
     def test_ixbrowser_group_loader_pages_all_groups_until_total(self):
@@ -10689,8 +10690,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(counts, {"全部配置": 3, "Canada": 2, "United States": 1})
         self.assertNotIn("Stale Group", counts)
         labels = {row["group_name"]: group_display_name(row) for row in snapshot["groups"]}
-        self.assertIn("[    2]", labels["Canada"])
-        self.assertIn("[    3]", labels["全部配置"])
+        self.assertIn("2 个账号", labels["Canada"])
+        self.assertIn("3 个账号", labels["全部配置"])
         self.assertNotIn("待读取账号数", labels["Canada"])
 
     def test_operator_automation_paths_log_instead_of_blocking_popups(self):
