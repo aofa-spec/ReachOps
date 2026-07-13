@@ -96,12 +96,21 @@ class LiveSubmitAuthorizationGate:
 
     @classmethod
     def activation_required(cls) -> bool:
+        """Return whether activation must be enforced for this runtime.
+
+        Packaged builds are always commercial runtimes and must never allow an
+        environment variable to disable activation. Environment overrides remain
+        available only for source-based development and test runs.
+        """
+
+        if cls.is_packaged_runtime():
+            return True
         explicit = str(os.environ.get("REACHOPS_REQUIRE_ACTIVATION") or "").strip().lower()
         if explicit in {"1", "true", "yes", "on"}:
             return True
         if explicit in {"0", "false", "no", "off"}:
             return False
-        return cls.is_packaged_runtime()
+        return False
 
     @classmethod
     def runtime_mode(cls) -> str:
