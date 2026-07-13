@@ -130,6 +130,7 @@ if (!$SkipTests) {
         tools\reachops_web_panel_dom_smoke.py `
         tools\reachops_web_panel_runtime_smoke.py `
         tools\reachops_delivery_package_check.py `
+        tools\reachops_release_evidence.py `
         tools\reachops_final_acceptance_gate.py `
         tools\reachops_goal_delivery_runner.py `
         tools\reachops_live_acceptance_status.py `
@@ -176,6 +177,8 @@ if (!$SkipInstaller) {
                 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools\run_reachops_installer_smoke_windows.ps1 -Root $Root -Version $Version
                 Assert-LastExitCode "ReachOps installer smoke"
             }
+            & $VenvPython tools\reachops_release_evidence.py --version $Version --build $Build --json
+            Assert-LastExitCode "ReachOps release evidence"
         } else {
             throw "Installer output missing: $InstallerPath"
         }

@@ -52,7 +52,7 @@
 ### P0：进入付费试点前必须关闭
 
 1. `#1 Enforce CI, PR review, and deterministic release baseline`
-   - 合并 CI；开启主分支保护；依赖锁定；可重复发布。
+   - 合并 CI；开启主分支保护；依赖锁定；许可证清单；release evidence JSON；rollback note。
 2. `#2 Freeze the /api/start contract and restore a zero-failure test baseline`
    - 统一启动门禁、缓存策略和错误合同；全量测试归零。
 3. `#3 Certify a real account-readiness pool and no-submit evidence pack`
@@ -105,6 +105,7 @@
 ```bash
 python -m compileall -q ReachOps tools tests
 python -m unittest discover -s tests -p "test_*.py" -v
+python tools/verify_reachops_dependency_baseline.py --json
 python tools/reachops_delivery_audit.py --json
 python tools/reachops_web_panel_dom_smoke.py --json
 python tools/reachops_web_panel_runtime_smoke.py --json
@@ -118,9 +119,10 @@ python tools/reachops_client_delivery_check.py --json
 python tools/reachops_goal_delivery_runner.py --json
 python tools/reachops_delivery_package_check.py --json
 python tools/reachops_final_acceptance_gate.py --json
+python tools/reachops_release_evidence.py --json
 ```
 
-另外必须提交：真实账号验收表、人工标注集、无提交运行证据包、授权动作审批与结果样本、客户 outcome 与单位经济报告。
+另外必须提交：`reachops-release-evidence.json`、`reachops-rollback-note.md`、真实账号验收表、人工标注集、无提交运行证据包、授权动作审批与结果样本、客户 outcome 与单位经济报告。
 
 ## 7. 签字规则
 

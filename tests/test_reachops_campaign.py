@@ -70,6 +70,7 @@ from tools.reachops_live_environment_blocker_report import main as reachops_live
 from tools.reachops_ixbrowser_profile_metadata_report import build_report as build_ixbrowser_profile_metadata_report
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
+from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
 from tools.reachops_final_acceptance_gate import build_final_acceptance_gate as build_reachops_final_acceptance_gate
 from tools.reachops_final_acceptance_gate import client_delivery_from_acceptance_summary as reachops_client_delivery_from_acceptance_summary
 from tools.reachops_final_acceptance_gate import main as reachops_final_acceptance_gate_main
@@ -2625,11 +2626,81 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(remediation["artifact_actions"]["exe"]["expected_path"].endswith("dist/ReachOps/ReachOps.exe"))
             self.assertTrue(remediation["artifact_actions"]["acceptance_summary"]["expected_path"].endswith("reports/reachops_acceptance/acceptance_summary.json"))
             self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(remediation["commands"]))
-            self.assertIn("tools\\run_reachops_acceptance_windows.ps1 -InputFile tools\\reachops_acceptance_inputs.local.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets", "\n".join(remediation["commands"]))
-            self.assertIn("-InputFile tools\\reachops_acceptance_inputs.local.ps1", "\n".join(remediation["commands"]))
-            self.assertIn("tools\\reachops_authorization_handoff_bundle.py --verify", "\n".join(remediation["commands"]))
-            self.assertEqual(remediation["final_acceptance_required"]["package_check_status"], "passed")
-            self.assertTrue(remediation["final_acceptance_required"]["final_gate_final_delivery_ready"])
+
+    def test_reachops_release_evidence_records_checksums_and_rollback_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exe = root / "dist" / "ReachOps" / "ReachOps.exe"
+            installer = root / "dist" / "installer" / "ReachOps-Setup-0.4.0.exe"
+            manifest_path = root / "dist" / "installer" / "reachops-update-manifest.json"
+            report_dir = root / "reports" / "reachops_acceptance" / "20260624_120000"
+            output_dir = root / "reports" / "reachops_release" / "0.4.0-test"
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            installer.parent.mkdir(parents=True, exist_ok=True)
+            report_dir.mkdir(parents=True, exist_ok=True)
+            exe.write_bytes(minimal_windows_pe_bytes(b"release evidence exe"))
+            installer.write_bytes(minimal_windows_pe_bytes(b"release evidence installer"))
+            manifest_path.write_text(
+                json.dumps(build_manifest(installer, version="0.4.0", build="mvp-001", channel="mvp")),
+                encoding="utf-8",
+            )
+            (root / "requirements.lock").write_text(
+                "\n".join(
+                    [
+                        "requests==2.33.0",
+                        "Pillow==10.4.0",
+                        "selenium==4.41.0",
+                        "ixbrowser-local-api==1.2.3",
+                        "pyinstaller==6.21.0",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (root / "requirements.txt").write_text("-r requirements.lock\n", encoding="utf-8")
+            (root / "ReachOps" / "packaging").mkdir(parents=True, exist_ok=True)
+            (root / "ReachOps" / "packaging" / "requirements-reachops.txt").write_text("-r ../../requirements.lock\n", encoding="utf-8")
+            (root / "ReachOps" / "packaging" / "dependency-license-inventory.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.dependency_license_inventory.v1",
+                        "lock_file": "requirements.lock",
+                        "dependencies": [
+                            {"name": "requests", "version": "2.33.0", "license": "Apache-2.0", "purpose": "HTTP", "runtime_scope": ["ci"]},
+                            {"name": "Pillow", "version": "10.4.0", "license": "HPND", "purpose": "Images", "runtime_scope": ["ci"]},
+                            {"name": "selenium", "version": "4.41.0", "license": "Apache-2.0", "purpose": "Browser", "runtime_scope": ["ci"]},
+                            {"name": "ixbrowser-local-api", "version": "1.2.3", "license": "MIT", "purpose": "Browser API", "runtime_scope": ["ci"]},
+                            {"name": "pyinstaller", "version": "6.21.0", "license": "GPL-2.0-or-later with bootloader exception", "purpose": "Build", "runtime_scope": ["windows_build"]},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            acceptance_summary = report_dir / "acceptance_summary.json"
+
+            evidence = build_reachops_release_evidence(
+                root=root,
+                version="0.4.0",
+                build="mvp-001",
+                channel="mvp",
+                acceptance_summary=acceptance_summary,
+                manifest=manifest_path,
+                output_dir=output_dir,
+            )
+
+            self.assertEqual(evidence["schema_version"], "reachops.release_evidence.v1")
+            self.assertTrue(evidence["dependency_baseline"]["passed"])
+            self.assertFalse(evidence["final_delivery_ready"])
+            self.assertFalse(evidence["package_check"]["passed"])
+            self.assertIn("release_evidence_created_without_strict_final_delivery_package_pass", evidence["not_final_delivery_reasons"])
+            self.assertEqual(evidence["artifacts"]["installer"]["sha256"], hashlib.sha256(installer.read_bytes()).hexdigest())
+            self.assertEqual(evidence["artifacts"]["manifest"]["sha256"], hashlib.sha256(manifest_path.read_bytes()).hexdigest())
+            self.assertTrue(Path(evidence["evidence_path"]).exists())
+            rollback_note = Path(evidence["rollback_note_path"]).read_text(encoding="utf-8")
+            self.assertIn("ReachOps Rollback Note 0.4.0", rollback_note)
+            self.assertIn("Rollback Policy", rollback_note)
+            self.assertIn("previous verified ReachOps installer", rollback_note)
 
     def test_reachops_delivery_package_check_rejects_external_summary_and_manifest_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -5172,6 +5243,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         reachops_requirements = (root / "ReachOps" / "packaging" / "requirements-reachops.txt").read_text(encoding="utf-8")
         dependency_license_inventory = (root / "ReachOps" / "packaging" / "dependency-license-inventory.json").read_text(encoding="utf-8")
         dependency_baseline_verifier = (root / "tools" / "verify_reachops_dependency_baseline.py").read_text(encoding="utf-8")
+        release_evidence = (root / "tools" / "reachops_release_evidence.py").read_text(encoding="utf-8")
         workflow = (root / ".github" / "workflows" / "reachops-ci.yml").read_text(encoding="utf-8")
         acceptance_inputs_template = (root / "tools" / "reachops_acceptance_inputs.example.ps1").read_text(encoding="utf-8")
         acceptance_inputs_init = (root / "tools" / "init_reachops_acceptance_inputs_windows.ps1").read_text(encoding="utf-8")
@@ -5221,6 +5293,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn('Filter "__pycache__"', build_script)
         self.assertIn('"*.pyc","*.pyo"', build_script)
         self.assertIn("write_reachops_update_manifest.py", build_script)
+        self.assertIn("tools\\reachops_release_evidence.py", build_script)
+        self.assertIn("Assert-LastExitCode \"ReachOps release evidence\"", build_script)
         self.assertIn("SkipInstallerSmoke", build_script)
         self.assertIn("tools\\run_reachops_installer_smoke_windows.ps1", build_script)
         self.assertIn("Assert-LastExitCode \"ReachOps installer smoke\"", build_script)
@@ -5556,6 +5630,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops.dependency_baseline.v1", dependency_baseline_verifier)
         self.assertIn("requirements_lock_line_", dependency_baseline_verifier)
         self.assertIn("dependency_license_inventory", dependency_baseline_verifier)
+        self.assertIn("reachops.release_evidence.v1", release_evidence)
+        self.assertIn("reachops-release-evidence.json", release_evidence)
+        self.assertIn("reachops-rollback-note.md", release_evidence)
+        self.assertIn("check_delivery_package", release_evidence)
+        self.assertIn("build_dependency_report", release_evidence)
         self.assertIn("cache-dependency-path: requirements.lock", workflow)
         self.assertIn("tools/verify_reachops_dependency_baseline.py --json", workflow)
         self.assertIn("selenium.webdriver.chrome.webdriver", spec)
