@@ -1911,7 +1911,132 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("acceptance_summary", report["missing_final_artifacts"])
 
     def test_reachops_goal_delivery_report_summarizes_pm_boundary(self):
-        report = build_reachops_goal_delivery_report()
+        start_contract = {
+            "target_planned": True,
+            "campaign_started": True,
+            "profile_preflight_checked": True,
+            "collection_done": True,
+            "action_terminal_or_no_submit_reason": True,
+        }
+        remediation_plan = {
+            "artifact_actions": ["exe", "installer", "manifest", "acceptance_summary"],
+            "commands": [
+                r"powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1",
+                r"powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
+                r"python tools\reachops_authorization_handoff_bundle.py --verify",
+                r"python tools\reachops_final_acceptance_gate.py --json",
+            ],
+        }
+
+        def section(payload, returncode=0):
+            return {"command": "fixture", "returncode": returncode, "stderr": "", "payload": payload}
+
+        def fake_command_payload(command, timeout=120):
+            script = " ".join(command)
+            if "reachops_mvp_acceptance_summary.py" in script:
+                return section(
+                    {
+                        "status": "mvp_accepted_external_pending",
+                        "mvp_local_ready": True,
+                        "failed_checks": [],
+                        "client_delivery": {
+                            "operation_counts": {"candidates": 4, "actions": 0},
+                            "no_action_reason": {"code": "preflight_only", "message": "默认预检不提交。"},
+                        },
+                        "checks": {"start_contract_evidence_complete": True},
+                        "start_contract_evidence": start_contract,
+                        "evidence_files": {"mvp_acceptance_summary": "/tmp/latest_mvp_acceptance_summary.json"},
+                    }
+                )
+            if "reachops_mac_loop_acceptance.py" in script:
+                return section(
+                    {
+                        "status": "passed",
+                        "mac_loop_ready": True,
+                        "checks": {"start_contract_evidence_complete": True},
+                        "start_contract_evidence": start_contract,
+                        "operations": {
+                            "candidates": 4,
+                            "actions": 0,
+                            "touch_success": 0,
+                            "touch_failed": 0,
+                            "no_action_reason": {"code": "preflight_only", "message": "默认预检不提交。"},
+                        },
+                        "latest_batch": {"id": "fixture_batch", "profile_group": "United States"},
+                        "groups": {"live_all_group_counts_known": True},
+                    }
+                )
+            if "reachops_client_delivery_check.py" in script:
+                return section(
+                    {
+                        "status": "passed",
+                        "readiness": "pass",
+                        "contract_ok": True,
+                        "acceptance_ready": True,
+                        "final_delivery_ready": True,
+                        "failed_checks": [],
+                        "blockers": [],
+                        "operation_counts": {"candidates": 4, "actions": 0},
+                        "no_action_reason": {"code": "preflight_only", "message": "默认预检不提交。"},
+                        "delivery_check_path": "/tmp/latest_delivery_check.json",
+                        "start_contract_evidence": start_contract,
+                        "checks": {"start_contract_evidence_complete": True},
+                    }
+                )
+            if "reachops_windows_package_preflight.py" in script:
+                return section(
+                    {
+                        "status": "ready_for_windows_build",
+                        "ready_for_windows_build": True,
+                        "failures": [],
+                        "missing_final_artifacts": ["exe", "installer", "manifest", "acceptance_summary"],
+                        "build_contract": {"preflight_report_path": "/tmp/windows_package_preflight.json"},
+                    }
+                )
+            if "reachops_delivery_package_check.py" in script:
+                return section(
+                    {
+                        "status": "failed",
+                        "final_delivery_ready": False,
+                        "missing_artifacts": ["exe", "installer", "manifest", "acceptance_summary"],
+                        "remediation_plan": remediation_plan,
+                    },
+                    returncode=1,
+                )
+            if "reachops_final_acceptance_gate.py" in script:
+                return section(
+                    {
+                        "status": "failed",
+                        "final_delivery_ready": False,
+                        "failed_checks": ["delivery_package:passed"],
+                        "checks": [
+                            {
+                                "name": "goal_status:passed",
+                                "ok": False,
+                                "evidence": {"pending_external_validation": ["authorized_live_submit"]},
+                            }
+                        ],
+                        "final_delivery_blockers": [
+                            {
+                                "scope": "external_authorized_execution",
+                                "status": "ready_for_external_validation",
+                                "required_evidence": ["授权 TikTok 目标", "comment_visible_confirmed=true"],
+                            },
+                            {
+                                "scope": "windows_final_artifacts",
+                                "status": "failed",
+                                "required_artifacts": ["exe", "installer", "manifest", "acceptance_summary"],
+                            },
+                        ],
+                    },
+                    returncode=1,
+                )
+            if "reachops_repository_cleanliness_check.py" in script:
+                return section({"status": "passed", "passed": True, "forbidden_count": 0})
+            return section({})
+
+        with patch("tools.reachops_goal_delivery_runner.command_payload", side_effect=fake_command_payload):
+            report = build_reachops_goal_delivery_report()
 
         self.assertEqual(report["product"], "ReachOps")
         mvp = (report["sections"]["mvp_acceptance"] or {}).get("payload") or {}
