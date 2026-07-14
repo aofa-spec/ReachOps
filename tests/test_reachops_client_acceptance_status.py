@@ -4000,6 +4000,7 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked_by_accounts")
         self.assertFalse(payload["acceptance_ready"])
         self.assertTrue(payload["account_repair_apply"]["pending_recheck"])
+        self.assertEqual(payload["account_repair_apply"]["effective_status"], "pending_recheck")
         self.assertEqual(payload["account_repair_apply"]["source"], "growth_ops_runtime.log")
         self.assertIn("等待重新预检", payload["blockers"][0])
         self.assertIn("点击开始获客复测 United States 分组", payload["next_actions"][0])
@@ -4092,6 +4093,8 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(payload["stale_reason"], "newer_account_repair_plan_for_current_batch")
         self.assertFalse(payload["same_batch"])
         self.assertFalse(payload["pending_recheck"])
+        self.assertEqual(payload["effective_status"], "stale")
+        self.assertIn("旧账号修复结果已失效", payload["effective_message"])
 
     def test_delivery_check_blocks_stale_account_repair_apply_before_retest(self):
         batch = {"id": "gb_new_failed", "status": "failed", "profile_group": "United States", "config_json": "{}"}
@@ -4139,10 +4142,16 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
 
         self.assertTrue(payload["account_repair_apply"]["stale"])
         self.assertFalse(payload["account_repair_apply"]["pending_recheck"])
+        self.assertEqual(payload["account_repair_apply"]["status"], "applied")
+        self.assertEqual(payload["account_repair_apply"]["effective_status"], "stale")
         self.assertIn("旧账号修复结果已失效", payload["blockers"][0])
         self.assertIn("先执行最新账号修复计划", payload["next_actions"][0])
         self.assertIn("latest_apply_stale", payload["real_pilot_evidence"]["account_pool_remediation"])
         self.assertTrue(payload["real_pilot_evidence"]["account_pool_remediation"]["latest_apply_stale"])
+        self.assertEqual(
+            payload["real_pilot_evidence"]["account_pool_remediation"]["latest_apply_effective_status"],
+            "stale",
+        )
 
     def test_delivery_check_explains_no_applicable_account_repair_apply(self):
         batch = {"id": "gb_no_auto", "status": "failed", "profile_group": "United States", "config_json": "{}"}
@@ -4523,6 +4532,8 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(remediation["total_unique_profiles_by_error"], 25)
         self.assertEqual(remediation["operator_steps"], ["修复内核不匹配账号。", "补充已登录账号。"])
         self.assertEqual(remediation["latest_apply_status"], "applied")
+        self.assertEqual(remediation["latest_apply_effective_status"], "stale")
+        self.assertIn("旧账号修复结果已失效", remediation["latest_apply_effective_message"])
         self.assertTrue(remediation["latest_apply_stale"])
         self.assertEqual(remediation["latest_apply_stale_reason"], "newer_account_repair_plan_for_current_batch")
         self.assertFalse(remediation["latest_apply_pending_recheck"])

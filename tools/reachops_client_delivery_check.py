@@ -112,6 +112,28 @@ def delivery_status(contract_ok: bool, acceptance_ready: bool, readiness: str) -
     return "failed"
 
 
+def account_repair_apply_effective_status(repair_apply: dict) -> str:
+    raw_status = str((repair_apply if isinstance(repair_apply, dict) else {}).get("status") or "")
+    if not raw_status:
+        return ""
+    if repair_apply.get("stale"):
+        return "stale"
+    if raw_status == "applied" and repair_apply.get("pending_recheck"):
+        return "pending_recheck"
+    return raw_status
+
+
+def account_repair_apply_effective_message(repair_apply: dict) -> str:
+    effective_status = account_repair_apply_effective_status(repair_apply)
+    if effective_status == "stale":
+        return "旧账号修复结果已失效；必须执行最新账号修复计划后再复测。"
+    if effective_status == "pending_recheck":
+        return "账号修复已执行；需要重新预检当前分组后才能验收。"
+    if effective_status == "no_applicable_profiles":
+        return "最新账号修复计划没有默认可自动隔离的账号；需要人工处理账号池。"
+    return ""
+
+
 def build_real_pilot_evidence_boundary(
     acceptance: dict,
     operations: dict,
@@ -126,6 +148,7 @@ def build_real_pilot_evidence_boundary(
     counts = counts if isinstance(counts, dict) else {}
     repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
     repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
+    repair_apply_effective_status = account_repair_apply_effective_status(repair_apply)
     profile_available = int((acceptance.get("checks") or {}).get("profile_available_count") or 0)
     candidates = int(counts.get("candidates") or 0)
     actions = int(counts.get("actions") or 0)
@@ -169,6 +192,8 @@ def build_real_pilot_evidence_boundary(
             "total_unique_profiles_by_error": int(repair_summary.get("total_unique_profiles_by_error") or 0),
             "operator_steps": list(repair_summary.get("operator_steps") or [])[:5],
             "latest_apply_status": str(repair_apply.get("status") or ""),
+            "latest_apply_effective_status": repair_apply_effective_status,
+            "latest_apply_effective_message": account_repair_apply_effective_message(repair_apply),
             "latest_apply_stale": bool(repair_apply.get("stale")),
             "latest_apply_stale_reason": str(repair_apply.get("stale_reason") or ""),
             "latest_apply_pending_recheck": bool(repair_apply.get("pending_recheck")),
@@ -473,6 +498,10 @@ def latest_account_repair_apply_status(base_dir: Path, log_lines: list[str], pro
         and int(payload.get("moved_count") or 0) > 0
         and int(payload.get("failed_count") or 0) == 0
     )
+    payload["effective_status"] = account_repair_apply_effective_status(payload)
+    effective_message = account_repair_apply_effective_message(payload)
+    if effective_message:
+        payload["effective_message"] = effective_message
     return payload
 
 

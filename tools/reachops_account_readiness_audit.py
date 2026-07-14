@@ -147,6 +147,7 @@ def build_report(root_dir: str | Path | None = None) -> dict[str, Any]:
                 "requires_real_collection_evidence",
                 "account_pool_remediation",
                 "latest_apply_stale",
+                "latest_apply_effective_status",
             ],
         ),
         "live_no_submit_preflight_covers_comment_follow_dm": has_all(
