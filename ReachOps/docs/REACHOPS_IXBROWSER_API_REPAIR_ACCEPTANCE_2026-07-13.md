@@ -153,7 +153,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/run_reachops_real_flow_macos.py
 
 - `status=not_ready`
 - `final_delivery_ready=false`
-- `failed_checks=["goal_status:passed","client_delivery:final_ready","delivery_package:passed"]`
+- `failed_checks=["goal_status:passed","client_delivery:final_ready","delivery_package:passed","commercial_issue_closure:closed"]`
 
 ## 当前验收边界
 
@@ -170,6 +170,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/run_reachops_real_flow_macos.py
 - 登录成功账号已完成采集触达任务。
 - 真实 TikTok 评论/关注/私信已提交。
 - `acceptance_summary.json` 已通过。
+- Issues #1-#7 已完成商业 closure 验收。
 
 ## 下一步要求
 
@@ -181,4 +182,5 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/run_reachops_real_flow_macos.py
 - 将 `ConfirmAuthorizedTargets` 设置为 `$true` 前，必须确认目标已授权。
 - 复跑 `tools/run_reachops_real_flow_macos.py`，直到 `collection_completed=true` 且 `lead_pipeline=true`。
 - 再运行 Windows acceptance，生成通过态 `reports/reachops_acceptance/acceptance_summary.json`。
-- 最后确认 `tools/reachops_final_acceptance_gate.py --json` 返回 `status=passed` 且 `final_delivery_ready=true`。
+- 复跑 `tools/reachops_issue_closure_audit.py --json`，确认 `acceptance_criteria_external_pending=0`、`external_pending_count=0`。
+- 最后确认 `tools/reachops_final_acceptance_gate.py --json` 返回 `status=passed` 且 `final_delivery_ready=true`，并包含通过的 `commercial_issue_closure:closed`。

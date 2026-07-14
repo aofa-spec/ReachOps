@@ -213,9 +213,9 @@ python tools\reachops_client_delivery_check.py --base-dir "reports\reachops\mac_
 
 - `tools\reachops_goal_delivery_runner.py --json` 当前应以实时门禁为准；在最新 Mac 证据中客户端门禁为 `status=blocked_by_accounts`、`profile_available=0`，因此 Mac 本地 MVP 不能声明通过。Windows 最终包和授权真实提交仍然是最终交付阻断项。
 - 目标模式总报告的 `deliverable_index` 是交付物索引；当前账号门禁失败时，`web_operator_panel.ready` 和 `local_mvp_acceptance.ready` 必须跟随实时门禁显示 blocked，不能用历史 ready 快照覆盖。`windows_final_package.ready=false`、`authorized_live_submit.ready=false`、`final_acceptance_gate.ready=false` 仍然阻断最终交付。
-- 当前 `/Users/aofa/Documents/New project` 没有 Windows `dist\` 交付产物，也没有本地最终 `acceptance_summary.json`。
+- 当前 `/Users/aofa/Documents/New project` 有 Windows `dist\ReachOps\ReachOps.exe`、`dist\installer\ReachOps-Setup-0.4.0.exe` 和 `dist\installer\reachops-update-manifest.json`，但没有本地最终 `acceptance_summary.json`。
 - `tools\reachops_client_delivery_check.py --json` 当前返回 `status=blocked_by_accounts`、`readiness=blocked_by_accounts`、`acceptance_ready=false`、`profile_available=0`；最新账号预检阻断为 `IXBROWSER_KERNEL_MISMATCH`、`LOGIN_REQUIRED` 和页面打开超时。
-- `tools\reachops_delivery_package_check.py --allow-external-pending --json` 当前返回 `status=failed`、`final_delivery_ready=false`，缺失 `exe`、`installer`、`manifest`、`acceptance_summary`。
+- `tools\reachops_delivery_package_check.py --json` 当前返回 `status=failed`、`final_delivery_ready=false`，缺失 `acceptance_summary`，失败项为 `acceptance_summary_missing` 和 `acceptance_summary_not_passed`。
 - `tools\reachops_final_acceptance_gate.py --json` 当前返回 `status=not_ready`、`final_delivery_ready=false`，失败项包括 `goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed` 和 `commercial_issue_closure:closed`。
 - 旧 Windows VM 验收记录只能作为诊断参考，不能作为当前工作区最终交付通过证据。
 
@@ -245,7 +245,8 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.p
 - `dist\installer\ReachOps-Setup-0.4.0.exe` 存在。
 - `dist\installer\reachops-update-manifest.json` hash 校验通过。
 - `reports\reachops_acceptance\<timestamp>\acceptance_summary.json` 中 `status=passed`。
-- `reports\reachops_acceptance\<timestamp>\repository_cleanliness_payload.json` 和 `windows_package_preflight.json` 存在，且 package `report_files.repository_cleanliness`、`report_files.windows_package_preflight` 通过。
+- `reports\reachops_acceptance\<timestamp>\repository_cleanliness_payload.json`、`windows_package_preflight.json`、`issue_closure_payload.json` 和 `final_acceptance_gate.json` 存在，且 package `report_files.repository_cleanliness`、`report_files.windows_package_preflight`、`report_files.issue_closure`、`report_files.final_acceptance_gate` 通过。
+- `tools\reachops_issue_closure_audit.py --json` 返回 Issues #1-#7 无外部 closure pending，`acceptance_criteria_external_pending=0`、`external_pending_count=0`、`closure_requires_external_validation=false`。
 - `effective_pending_external_validation=0`。
 - 真实 comment/follow/DM 尝试都有执行记录、错误码或截图证据。
 

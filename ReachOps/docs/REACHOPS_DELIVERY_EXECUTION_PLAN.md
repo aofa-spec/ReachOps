@@ -14,7 +14,7 @@ Current status:
 - Stage 4: AI/rules strategy enhancement is implemented locally.
 - Stage 5: Standalone packaging has been validated in the Windows VM through build, installer, update manifest, installer smoke, and non-live acceptance. Final delivery still depends on real ixBrowser/TikTok external validation.
 
-The project must not be called fully delivered until the Windows acceptance summary reaches `passed` with `effective_pending_external_validation = 0`, the client delivery gate is `final_delivery_ready=true`, the delivery package check is `status=passed`, and `tools/reachops_final_acceptance_gate.py --json` returns `status=passed` with `failed_checks=[]`.
+The project must not be called fully delivered until the Windows acceptance summary reaches `passed` with `effective_pending_external_validation = 0`, the client delivery gate is `final_delivery_ready=true`, the delivery package check is `status=passed`, `tools/reachops_issue_closure_audit.py --json` reports `acceptance_criteria_external_pending=0` and `external_pending_count=0`, and `tools/reachops_final_acceptance_gate.py --json` returns `status=passed` with `failed_checks=[]`, including `commercial_issue_closure:closed`.
 
 ## Milestone 1: Freeze MVP Baseline
 
@@ -282,4 +282,4 @@ The final handoff should include:
 2. Run Windows UI, build, installer, and acceptance checks.
 3. Run real ixBrowser readiness and preflight.
 4. Run controlled live submit only after readiness passes and authorized targets are confirmed.
-5. Mark the project fully delivered only after real platform pending validation reaches zero, the client delivery gate is ready, the Windows delivery package check passes, and the final acceptance gate returns `status=passed` with `final_delivery_ready=true`.
+5. Mark the project fully delivered only after real platform pending validation reaches zero, the client delivery gate is ready, the Windows delivery package check passes, Issues #1-#7 closure audit has zero external pending items, and the final acceptance gate returns `status=passed` with `final_delivery_ready=true`.
