@@ -1039,6 +1039,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(report["summary"]["acceptance_criteria_unclassified"], 0)
         self.assertEqual(report["summary"]["acceptance_criteria_local_passed"], 36)
         self.assertEqual(report["summary"]["acceptance_criteria_external_pending"], 17)
+        self.assertEqual(report["summary"]["local_contracts_passed_percent"], 100.0)
+        self.assertEqual(report["summary"]["acceptance_criteria_local_passed_percent"], 67.9)
+        self.assertEqual(report["summary"]["acceptance_criteria_external_pending_percent"], 32.1)
+        self.assertEqual(report["summary"]["acceptance_criteria_unclassified_percent"], 0.0)
+        self.assertEqual(
+            report["summary"]["completion_basis"],
+            "local_contracts_and_issue_acceptance_criteria_not_final_delivery",
+        )
         self.assertGreaterEqual(report["summary"]["external_pending_count"], 1)
         self.assertTrue(report["summary"]["does_not_claim_all_issues_closed"])
         issues = {row["issue_number"]: row for row in report["issues"]}
@@ -3846,6 +3854,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("client_delivery:final_ready", gate["failed_checks"])
         self.assertIn("delivery_package:passed", gate["failed_checks"])
         self.assertIn("commercial_issue_closure:closed", gate["failed_checks"])
+        completion = gate["commercial_completion"]
+        self.assertEqual(completion["basis"], "local_contracts_and_issue_acceptance_criteria_not_final_delivery")
+        self.assertEqual(completion["local_contracts_passed_percent"], 100.0)
+        self.assertEqual(completion["acceptance_criteria_local_passed_percent"], 67.9)
+        self.assertEqual(completion["acceptance_criteria_external_pending_percent"], 32.1)
+        self.assertFalse(completion["commercial_issue_closure_ready"])
         checks_by_name = {row["name"]: row for row in gate["checks"]}
         self.assertNotIn("current_stage_gate:local_ready_or_external_pending", gate["failed_checks"])
         self.assertTrue(checks_by_name["current_stage_gate:local_ready_or_external_pending"]["ok"])

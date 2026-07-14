@@ -66,6 +66,12 @@ def _count_criteria(issues: list[dict[str, Any]], status: str) -> int:
     )
 
 
+def _percent(part: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((part / total) * 100, 1)
+
+
 def _run_data_governance_fixture(root: Path) -> dict[str, Any]:
     base_dir = Path(tempfile.mkdtemp(prefix="reachops-issue-governance-"))
     return build_data_governance_report(
@@ -707,12 +713,17 @@ def build_report(root: str | Path = ROOT_DIR, *, run_pip: bool = False) -> dict[
         "summary": {
             "issues_total": len(issues),
             "local_contracts_passed": local_contracts_passed,
+            "local_contracts_passed_percent": _percent(local_contracts_passed, len(issues)),
             "acceptance_criteria_total": criteria_total,
             "acceptance_criteria_local_passed": criteria_local_passed,
+            "acceptance_criteria_local_passed_percent": _percent(criteria_local_passed, criteria_total),
             "acceptance_criteria_external_pending": criteria_external_pending,
+            "acceptance_criteria_external_pending_percent": _percent(criteria_external_pending, criteria_total),
             "acceptance_criteria_unclassified": criteria_unclassified,
+            "acceptance_criteria_unclassified_percent": _percent(criteria_unclassified, criteria_total),
             "external_pending_count": len(external_pending),
             "does_not_claim_all_issues_closed": does_not_claim_all_issues_closed,
+            "completion_basis": "local_contracts_and_issue_acceptance_criteria_not_final_delivery",
         },
         "issues": issues,
         "external_acceptance_pending": external_pending,

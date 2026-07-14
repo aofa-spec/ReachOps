@@ -229,6 +229,39 @@ def _external_pending_summary(issue_closure: dict[str, Any] | None, limit: int =
     }
 
 
+def _percent(part: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((part / total) * 100, 1)
+
+
+def _commercial_completion_summary(issue_closure: dict[str, Any] | None) -> dict[str, Any]:
+    summary = issue_closure.get("summary") if isinstance((issue_closure or {}).get("summary"), dict) else {}
+    issues_total = int(summary.get("issues_total") or 0)
+    local_contracts_passed = int(summary.get("local_contracts_passed") or 0)
+    criteria_total = int(summary.get("acceptance_criteria_total") or 0)
+    criteria_local_passed = int(summary.get("acceptance_criteria_local_passed") or 0)
+    criteria_external_pending = int(summary.get("acceptance_criteria_external_pending") or 0)
+    criteria_unclassified = int(summary.get("acceptance_criteria_unclassified") or 0)
+    external_pending_count = int(summary.get("external_pending_count") or 0)
+    return {
+        "basis": "local_contracts_and_issue_acceptance_criteria_not_final_delivery",
+        "issues_total": issues_total,
+        "local_contracts_passed": local_contracts_passed,
+        "local_contracts_remaining": max(0, issues_total - local_contracts_passed),
+        "local_contracts_passed_percent": _percent(local_contracts_passed, issues_total),
+        "acceptance_criteria_total": criteria_total,
+        "acceptance_criteria_local_passed": criteria_local_passed,
+        "acceptance_criteria_local_passed_percent": _percent(criteria_local_passed, criteria_total),
+        "acceptance_criteria_external_pending": criteria_external_pending,
+        "acceptance_criteria_external_pending_percent": _percent(criteria_external_pending, criteria_total),
+        "acceptance_criteria_unclassified": criteria_unclassified,
+        "acceptance_criteria_unclassified_percent": _percent(criteria_unclassified, criteria_total),
+        "external_pending_count": external_pending_count,
+        "commercial_issue_closure_ready": bool(issue_closure) and _issue_closure_ready(issue_closure),
+    }
+
+
 def _client_evidence_ready(client_delivery: dict[str, Any]) -> bool:
     if str(client_delivery.get("source") or "") == "acceptance_summary.client_delivery":
         return (
@@ -844,6 +877,7 @@ def build_final_acceptance_gate(
         "product": "ReachOps",
         "status": status,
         "final_delivery_ready": status == PASSED,
+        "commercial_completion": _commercial_completion_summary(issue_closure),
         "checks": checks,
         "failed_checks": [row["name"] for row in failed_checks],
         "final_delivery_blockers": final_delivery_blockers,
