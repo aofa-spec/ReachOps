@@ -362,7 +362,7 @@ Web 运营面板
 
 Windows 构建合同：`tools\build_reachops_windows.ps1` 默认必须生成 EXE、安装包和 update manifest；只有显式传 `-SkipInstaller` 才允许非最终 EXE-only 构建。`-SkipInstaller` 产物不能通过最终交付门禁。
 
-最终验收包合同：Windows acceptance 必须写出 `windows_package_preflight.json` 并将 `windows_package_preflight` 写入 `acceptance_summary.json`；`delivery_package_check.py` 和 `final_acceptance_gate.py` 会把该报告作为最终 `report_files` 必备证据。
+最终验收包合同：Windows acceptance 必须写出 `windows_package_preflight.json` 和 `issue_closure_payload.json`，并将 `windows_package_preflight` 与 `issue_closure` 写入 `acceptance_summary.json`；`delivery_package_check.py` 和 `final_acceptance_gate.py` 会把这些报告作为最终 `report_files` 必备证据。最终门禁还必须通过 `commercial_issue_closure:closed`。
 
 目标模式执行合同：直接运行 `tools/reachops_goal_delivery_runner.py` 会输出 PM 可读摘要，包括执行入口、验收门、交付物、阻断项和下一步命令；加 `--json` 会输出同一份结构化报告，供 Web 面板、自动化验收和最终门禁读取。两种模式都会写出 `reports/reachops/mac_gui/runtime/reports/acceptance_remediation/latest_goal_delivery_report.json`。
 

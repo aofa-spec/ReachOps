@@ -225,6 +225,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_web_panel_runtime_smok
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_goal_delivery_runner.py --json
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_two_phase_acceptance_matrix.py --refresh --write --require-final --json
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_delivery_package_check.py --json
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_issue_closure_audit.py --json
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_final_acceptance_gate.py --json
 ```
 
