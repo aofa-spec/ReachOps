@@ -4639,6 +4639,13 @@ def html_page() -> bytes:
 	        if ('overall_final_delivery_scope_ready' in boundary) boundaryRows.push(`PM边界：本地MVP=${{boundary.local_mvp_scope_ready === true ? 'true' : 'false'}} / 客户端门禁=${{boundary.client_gate_scope_ready === true ? 'true' : 'false'}} / Windows构建输入=${{boundary.windows_build_input_scope_ready === true ? 'true' : 'false'}} / 整体最终交付=${{boundary.overall_final_delivery_scope_ready === true ? 'true' : 'false'}}`);
 	        if (boundary.client_gate_final_delivery_ready_is_not_overall_final_delivery) boundaryRows.push('边界说明：client_delivery.final_delivery_ready 只代表客户端门禁自身通过，不代表整项目最终交付完成。');
 	        if (deliverableIndex.windows_final_package) boundaryRows.push(`交付索引：本地MVP=${{deliverableIndex.local_mvp_acceptance && deliverableIndex.local_mvp_acceptance.ready === true ? 'ready' : 'blocked'}} / Windows最终包=${{deliverableIndex.windows_final_package.ready === true ? 'ready' : 'missing'}} / 最终门禁=${{deliverableIndex.final_acceptance_gate && deliverableIndex.final_acceptance_gate.ready === true ? 'ready' : 'blocked'}}`);
+	        const localMvpIndex = deliverableIndex.local_mvp_acceptance || {{}};
+	        const localMvpBlocker = localMvpIndex.blocker_summary || {{}};
+	        if (localMvpBlocker.schema_version) {{
+	          boundaryRows.push(`本地MVP账号交接：${{localMvpBlocker.status || '-'}} / ${{localMvpBlocker.priority_action || '-'}} / ${{localMvpBlocker.support_case || '-'}}`);
+	          if (localMvpIndex.account_support_handoff_path) boundaryRows.push('本地MVP账号交接文件：' + localMvpIndex.account_support_handoff_path);
+	          if (localMvpBlocker.next_required_command) boundaryRows.push('本地MVP账号复验命令：' + localMvpBlocker.next_required_command);
+	        }}
 	        const finalBlockerRows = [];
 	        (goal.final_delivery_blockers || []).forEach(blocker => {{
 	          finalBlockerRows.push(`最终阻断：${{blocker.scope || '-'}} / ${{blocker.status || '-'}}`);

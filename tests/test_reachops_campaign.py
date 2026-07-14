@@ -3090,6 +3090,38 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(
             index["local_mvp_acceptance"]["blocker_summary"]["requires_manual_account_work"]
         )
+        markdown = render_reachops_goal_delivery_summary(
+            {
+                "generated_at": "2026-07-14T00:00:00Z",
+                "status": "not_ready",
+                "local_mvp_ready": False,
+                "windows_build_ready": True,
+                "final_delivery_ready": False,
+                "delivery_boundary": {
+                    "summary": "本地 MVP 尚未达到可验收状态。",
+                    "local_mvp_scope_ready": False,
+                    "client_gate_scope_ready": True,
+                    "windows_build_input_scope_ready": True,
+                    "overall_final_delivery_scope_ready": False,
+                },
+                "deliverable_index": index,
+                "local_mvp_evidence": {
+                    "mac_loop_status": "failed",
+                    "client_delivery_status": "blocked_by_accounts",
+                    "client_delivery_readiness": "blocked_by_accounts",
+                    "operation_counts": {"candidates": 0, "actions": 0},
+                    "no_action_reason": {"code": "no_candidates", "message": "无候选。"},
+                },
+                "blockers": blockers,
+                "next_actions": ["复跑 tools\\reachops_client_delivery_check.py --json"],
+            }
+        )
+        self.assertIn("## 本地 MVP 账号支持交接", markdown)
+        self.assertIn("reports/support/account_support_handoff.json", markdown)
+        self.assertIn("account_pool_blocked", markdown)
+        self.assertIn("manually_repair_or_replace_accounts", markdown)
+        self.assertIn("python tools\\reachops_client_delivery_check.py --json", markdown)
+        self.assertIn("不声明真实账号池 ready：`true`", markdown)
         self.assertFalse(index["commercial_issue_closure"]["ready"])
         self.assertEqual(index["commercial_issue_closure"]["blocking_scope"], "commercial_issue_closure")
         self.assertFalse(boundary["external_authorized_execution_ready"])

@@ -1070,6 +1070,42 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
     ):
         item = index.get(key) if isinstance(index.get(key), dict) else {}
         lines.append(f"| `{key}` | `{_markdown_bool(item.get('ready'))}` | `{item.get('blocking_scope') or ''}` |")
+    local_index = index.get("local_mvp_acceptance") if isinstance(index.get("local_mvp_acceptance"), dict) else {}
+    local_blocker_summary = (
+        local_index.get("blocker_summary")
+        if isinstance(local_index.get("blocker_summary"), dict)
+        else {}
+    )
+    if local_blocker_summary:
+        repair_plan = (
+            local_blocker_summary.get("repair_plan")
+            if isinstance(local_blocker_summary.get("repair_plan"), dict)
+            else {}
+        )
+        lines.extend(["", "## 本地 MVP 账号支持交接", ""])
+        lines.append(f"- 支持交接：`{local_index.get('account_support_handoff_path') or '-'}`")
+        lines.append(
+            "- 阻断摘要："
+            f"`{local_blocker_summary.get('status') or '-'}` / "
+            f"`{local_blocker_summary.get('support_case') or '-'}` / "
+            f"`{local_blocker_summary.get('priority_action') or '-'}`"
+        )
+        lines.append(f"- 账号分组：`{local_blocker_summary.get('profile_group') or '-'}`")
+        lines.append(f"- 可用账号：`{local_blocker_summary.get('profile_available', '-')}`")
+        lines.append(f"- 可复测：`{_markdown_bool(local_blocker_summary.get('ready_for_retest'))}`")
+        lines.append(f"- 需要人工账号工作：`{_markdown_bool(local_blocker_summary.get('requires_manual_account_work'))}`")
+        lines.append(f"- 不声明真实账号池 ready：`{_markdown_bool(local_blocker_summary.get('does_not_claim_real_account_pool_ready'))}`")
+        if repair_plan:
+            lines.append(
+                "- 修复计划："
+                f"账号={repair_plan.get('profile_count', 0)}，"
+                f"事件={repair_plan.get('event_count', 0)}，"
+                f"自动可处理={repair_plan.get('auto_apply_profile_count', 0)}，"
+                f"非自动错误={', '.join(str(item) for item in (repair_plan.get('non_auto_error_codes') or [])) or '-'}"
+            )
+        next_required_command = local_blocker_summary.get("next_required_command")
+        if next_required_command:
+            lines.append(f"- 下一步复验命令：`{next_required_command}`")
     lines.extend(["", "## 本地 MVP 证据", ""])
     lines.append(f"- Mac 循环验收：`{local_evidence.get('mac_loop_status') or '-'}`")
     lines.append(f"- 客户端门禁：`{local_evidence.get('client_delivery_status') or '-'}` / `{local_evidence.get('client_delivery_readiness') or '-'}`")
