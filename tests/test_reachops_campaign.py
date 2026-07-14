@@ -4,6 +4,7 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
 import tempfile
 import time
 import unittest
@@ -1203,6 +1204,44 @@ class ReachOpsCampaignTests(unittest.TestCase):
             passed = scan_repository_cleanliness(root)
             self.assertEqual(passed["status"], "passed")
             self.assertEqual(passed["forbidden_count"], 0)
+            self.assertEqual(passed["git_worktree"]["status"], "not_git_repository")
+
+    def test_reachops_repository_cleanliness_check_requires_clean_git_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            (root / "ReachOps").mkdir()
+            (root / "ReachOps" / "valid.py").write_text("print('ok')\n", encoding="utf-8")
+            clean = scan_repository_cleanliness(root)
+            self.assertEqual(clean["status"], "failed")
+            self.assertEqual(clean["git_worktree"]["status"], "dirty")
+            self.assertEqual(clean["git_worktree"]["dirty_items"][0]["path"], "ReachOps/valid.py")
+
+            subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=ReachOps Test",
+                    "-c",
+                    "user.email=reachops-test@example.test",
+                    "commit",
+                    "-m",
+                    "baseline",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            clean = scan_repository_cleanliness(root)
+            self.assertEqual(clean["status"], "passed")
+            self.assertEqual(clean["git_worktree"]["status"], "clean")
+
+            (root / "scratch.txt").write_text("local scratch\n", encoding="utf-8")
+            dirty = scan_repository_cleanliness(root)
+            self.assertEqual(dirty["status"], "failed")
+            self.assertEqual(dirty["git_worktree"]["dirty_count"], 1)
+            self.assertEqual(dirty["git_worktree"]["dirty_items"][0]["path"], "scratch.txt")
 
     def test_reachops_operator_pressure_runs_multi_campaign_funnel_and_action_routing(self):
         class Args:

@@ -1767,7 +1767,7 @@ def run_audit(args) -> dict:
     issue_closure_fixture = build_issue_closure_report(ROOT_DIR, run_pip=False)
 
     repository_cleanup = clean_generated_redundant_paths(ROOT_DIR)
-    repository_cleanliness = scan_repository_cleanliness(ROOT_DIR)
+    repository_cleanliness = scan_repository_cleanliness(ROOT_DIR, require_clean_git=False)
     repository_cleanliness["cleanup"] = repository_cleanup
     action_executor_source = (ROOT_DIR / "ReachOps" / "workbench" / "tiktok_action_executor.py").read_text(encoding="utf-8")
     action_router_source = (ROOT_DIR / "ReachOps" / "workbench" / "action_router.py").read_text(encoding="utf-8")

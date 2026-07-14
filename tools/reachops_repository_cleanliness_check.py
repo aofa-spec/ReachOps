@@ -5,6 +5,7 @@ import argparse
 import fnmatch
 import json
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +54,75 @@ def _relative(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
-def scan_repository_cleanliness(root: Path, excluded_dirs: set[str] | None = None) -> dict[str, Any]:
+def _git_worktree_status(root: Path) -> dict[str, Any]:
+    git_dir = root / ".git"
+    if not git_dir.exists():
+        return {
+            "checked": False,
+            "clean": True,
+            "status": "not_git_repository",
+            "dirty_count": 0,
+            "dirty_items": [],
+        }
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=dirty",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        return {
+            "checked": False,
+            "clean": False,
+            "status": "git_status_unavailable",
+            "dirty_count": 1,
+            "dirty_items": [{"path": "", "status": "git_status_unavailable", "detail": str(exc)}],
+        }
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return {
+            "checked": False,
+            "clean": False,
+            "status": "git_status_failed",
+            "dirty_count": 1,
+            "dirty_items": [{"path": "", "status": "git_status_failed", "detail": detail}],
+        }
+    dirty_items: list[dict[str, str]] = []
+    for line in completed.stdout.splitlines():
+        if not line.strip():
+            continue
+        dirty_items.append(
+            {
+                "path": line[3:].strip() if len(line) > 3 else "",
+                "status": line[:2],
+            }
+        )
+    return {
+        "checked": True,
+        "clean": not dirty_items,
+        "status": "clean" if not dirty_items else "dirty",
+        "dirty_count": len(dirty_items),
+        "dirty_items": dirty_items,
+    }
+
+
+def scan_repository_cleanliness(
+    root: Path,
+    excluded_dirs: set[str] | None = None,
+    *,
+    require_clean_git: bool = True,
+) -> dict[str, Any]:
     root = root.resolve()
     excluded = set(DEFAULT_EXCLUDED_DIRS)
     if excluded_dirs:
@@ -110,14 +179,18 @@ def scan_repository_cleanliness(root: Path, excluded_dirs: set[str] | None = Non
                         break
 
     visit(root)
+    git_worktree = _git_worktree_status(root)
+    passed = not findings and (bool(git_worktree.get("clean")) or not require_clean_git)
     return {
-        "status": "passed" if not findings else "failed",
-        "passed": not findings,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "require_clean_git": bool(require_clean_git),
         "root": str(root),
         "scanned_files": scanned_files,
         "scanned_dirs": scanned_dirs,
         "forbidden_count": len(findings),
         "forbidden_items": findings,
+        "git_worktree": git_worktree,
         "excluded_dirs": sorted(excluded),
     }
 
