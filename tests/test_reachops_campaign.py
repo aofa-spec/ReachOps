@@ -75,6 +75,7 @@ from tools.reachops_delivery_package_check import check_delivery_package as chec
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
 from tools.reachops_ci_release_baseline_audit import build_report as build_reachops_ci_release_baseline_report
 from tools.reachops_account_readiness_audit import build_report as build_reachops_account_readiness_report
+from tools.reachops_control_plane_audit import build_report as build_reachops_control_plane_report
 from tools.reachops_data_governance import build_report as build_reachops_data_governance_report
 from tools.reachops_security_supply_chain_audit import build_report as build_reachops_security_supply_chain_report
 from tools.reachops_start_contract_audit import build_report as build_reachops_start_contract_report
@@ -863,6 +864,28 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("100_real_no_submit_runs_across_three_industries", report["external_acceptance_pending"])
         self.assertIn("page_state_accuracy_at_least_95_percent", report["external_acceptance_pending"])
 
+    def test_reachops_control_plane_audit_declares_connector_and_cloud_boundary(self):
+        report = build_reachops_control_plane_report()
+
+        self.assertEqual(report["schema_version"], "reachops.control_plane_audit.v1")
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["status"], "passed_with_external_control_plane_pending")
+        self.assertTrue(report["local_checks"]["local_control_surface_is_plan_and_session_bound"])
+        self.assertTrue(report["local_checks"]["connector_contract_exists_for_collection_with_evidence"])
+        self.assertTrue(report["local_checks"]["action_executor_contract_separates_fixture_from_tiktok"])
+        self.assertTrue(report["local_checks"]["packaged_entitlement_enforces_remote_disable"])
+        self.assertTrue(report["local_checks"]["support_bundle_policy_is_redacted_by_default"])
+        self.assertTrue(report["local_checks"]["current_code_does_not_claim_cloud_control_plane"])
+        self.assertTrue(report["connector_boundary"]["non_tiktok_connector_pending"])
+        self.assertTrue(report["control_plane_boundary"]["server_side_rbac_pending"])
+        self.assertTrue(report["module_boundary"]["monolith_split_pending"])
+        self.assertTrue(report["does_not_claim_server_side_rbac"])
+        self.assertTrue(report["does_not_claim_non_tiktok_connector_ga"])
+        self.assertTrue(report["does_not_claim_web_ui_module_split_complete"])
+        self.assertIn("server_side_rbac_enforcement_and_audit", report["external_control_plane_pending"])
+        self.assertIn("non_tiktok_connector_contract_implementation", report["external_control_plane_pending"])
+        self.assertIn("web_ui_http_api_service_connector_module_split", report["external_control_plane_pending"])
+
     def test_reachops_delivery_audit_reports_local_passes_and_external_pending(self):
         class Args:
             target = "anti aging serum"
@@ -890,6 +913,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(checks["账号 readiness 和 no-submit 证据包本地合同可审计"]["status"], "passed")
         self.assertTrue(checks["账号 readiness 和 no-submit 证据包本地合同可审计"]["evidence"]["does_not_claim_certified_30_profiles"])
         self.assertIn("certified_30_controlled_profiles", checks["账号 readiness 和 no-submit 证据包本地合同可审计"]["evidence"]["external_acceptance_pending"])
+        self.assertEqual(checks["商业控制面和 connector 解耦边界可审计"]["status"], "passed")
+        self.assertTrue(checks["商业控制面和 connector 解耦边界可审计"]["evidence"]["does_not_claim_server_side_rbac"])
+        self.assertIn("web_ui_http_api_service_connector_module_split", checks["商业控制面和 connector 解耦边界可审计"]["evidence"]["external_control_plane_pending"])
         self.assertEqual(checks["升级清单和安装校验机制可用"]["status"], "passed")
         self.assertTrue(checks["升级清单和安装校验机制可用"]["evidence"]["hash_ok"])
         self.assertEqual(checks["客户端交付验收门禁不会把环境阻断当通过"]["status"], "pending_external_validation")
@@ -1954,6 +1980,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(report["files"]["windows_build_script"]["exists"])
         self.assertTrue(report["files"]["ci_release_baseline_audit"]["exists"])
         self.assertTrue(report["files"]["account_readiness_audit"]["exists"])
+        self.assertTrue(report["files"]["control_plane_audit"]["exists"])
         self.assertTrue(report["files"]["pyinstaller_spec"]["exists"])
         self.assertTrue(report["files"]["inno_setup_script"]["exists"])
         self.assertTrue(report["files"]["acceptance_inputs_template"]["exists"])
@@ -1963,6 +1990,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(report["contract_checks"]["tools/build_reachops_windows.ps1"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/reachops_ci_release_baseline_audit.py"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/reachops_account_readiness_audit.py"]["ok"])
+        self.assertTrue(report["contract_checks"]["tools/reachops_control_plane_audit.py"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/run_reachops_acceptance_windows.ps1"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/reachops_start_contract_audit.py"]["ok"])
         self.assertTrue(report["build_contract"]["default_build_requires_installer"])
@@ -5589,6 +5617,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         dependency_baseline_verifier = (root / "tools" / "verify_reachops_dependency_baseline.py").read_text(encoding="utf-8")
         ci_release_baseline_audit = (root / "tools" / "reachops_ci_release_baseline_audit.py").read_text(encoding="utf-8")
         account_readiness_audit = (root / "tools" / "reachops_account_readiness_audit.py").read_text(encoding="utf-8")
+        control_plane_audit = (root / "tools" / "reachops_control_plane_audit.py").read_text(encoding="utf-8")
         data_governance = (root / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
         security_supply_chain_audit = (root / "tools" / "reachops_security_supply_chain_audit.py").read_text(encoding="utf-8")
         start_contract_audit = (root / "tools" / "reachops_start_contract_audit.py").read_text(encoding="utf-8")
@@ -6000,6 +6029,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("does_not_claim_100_real_no_submit_runs", account_readiness_audit)
         self.assertIn("fixture_data_excluded_by_default", account_readiness_audit)
         self.assertIn("preflight_actions_do_not_submit", account_readiness_audit)
+        self.assertIn("reachops.control_plane_audit.v1", control_plane_audit)
+        self.assertIn("passed_with_external_control_plane_pending", control_plane_audit)
+        self.assertIn("organization_workspace_member_role_seat_service", control_plane_audit)
+        self.assertIn("server_side_rbac_enforcement_and_audit", control_plane_audit)
+        self.assertIn("non_tiktok_connector_contract_implementation", control_plane_audit)
+        self.assertIn("web_ui_http_api_service_connector_module_split", control_plane_audit)
+        self.assertIn("does_not_claim_server_side_rbac", control_plane_audit)
+        self.assertIn("does_not_claim_non_tiktok_connector_ga", control_plane_audit)
         self.assertIn("reachops.data_governance.v1", data_governance)
         self.assertIn("backup_and_restore_verify", data_governance)
         self.assertIn("SUPPORT_BUNDLE_EXCLUDE_PATTERNS", data_governance)
@@ -6105,6 +6142,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_account_readiness_audit.py --json", readme)
         self.assertIn("30 个受控真实账号", readme)
         self.assertIn("100 次真实 no-submit 试点", readme)
+        self.assertIn("reachops_control_plane_audit.py --json", readme)
+        self.assertIn("server-side RBAC", readme)
+        self.assertIn("非 TikTok connector", readme)
         self.assertIn("init_reachops_acceptance_inputs.py --json", readme)
         self.assertIn("init_reachops_acceptance_inputs_windows.ps1", readme)
         self.assertIn("-InputFile .\\tools\\reachops_acceptance_inputs.local.ps1", readme)

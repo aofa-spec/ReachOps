@@ -101,6 +101,14 @@ python tools/reachops_account_readiness_audit.py --json
 
 该审计只证明账号生命周期、profile preflight、隔离/修复、no-submit 预检证据、fixture/dry-run 指标隔离和 acceptance summary 边界都能被本地重复检查。30 个受控真实账号、100 次真实 no-submit 试点、页面状态/评论采集/去重/精召回准确率和每次真实运行证据包仍是外部验收项，不能用本地审计 JSON 代替。
 
+商业控制面 / connector 解耦本地审计：
+
+```bash
+python tools/reachops_control_plane_audit.py --json
+```
+
+该审计只证明当前本地客户端已有可审计的执行计划/RunSession 控制面边界、collector/action executor contract、CSV/Webhook outcome ingestion、packaged entitlement remote disable 和 redacted support bundle 策略。organization/workspace/member/role/seat 服务端控制面、server-side RBAC、plan/seat metering、非 TikTok connector、Web UI/API/服务拆分和产品 telemetry/crash reporting 仍是外部/后续交付项，不能用本地 JSON 代替。
+
 ## Windows 客户端
 
 启动 UI：

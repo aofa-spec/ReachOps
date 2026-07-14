@@ -28,6 +28,7 @@ from ReachOps.workbench.action_router import ActionRouterConfig, FixtureActionEx
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_ci_release_baseline_audit import build_report as build_ci_release_baseline_report
 from tools.reachops_account_readiness_audit import build_report as build_account_readiness_report
+from tools.reachops_control_plane_audit import build_report as build_control_plane_report
 from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
 from tools.reachops_data_governance import build_report as build_data_governance_report
@@ -1761,6 +1762,7 @@ def run_audit(args) -> dict:
     creator_topic_inputs = run_creator_and_topic_input_fixture()
     ci_release_baseline_fixture = build_ci_release_baseline_report(ROOT_DIR)
     account_readiness_fixture = build_account_readiness_report(ROOT_DIR)
+    control_plane_fixture = build_control_plane_report(ROOT_DIR)
 
     repository_cleanup = clean_generated_redundant_paths(ROOT_DIR)
     repository_cleanliness = scan_repository_cleanliness(ROOT_DIR)
@@ -1843,6 +1845,25 @@ def run_audit(args) -> dict:
                 and "100_real_no_submit_runs_across_three_industries" in (account_readiness_fixture.get("external_acceptance_pending") or [])
             ),
             account_readiness_fixture,
+        ),
+        check(
+            "商业控制面和 connector 解耦边界可审计",
+            bool(
+                control_plane_fixture.get("passed")
+                and control_plane_fixture.get("schema_version") == "reachops.control_plane_audit.v1"
+                and control_plane_fixture.get("status") == "passed_with_external_control_plane_pending"
+                and (control_plane_fixture.get("local_checks") or {}).get("local_control_surface_is_plan_and_session_bound")
+                and (control_plane_fixture.get("local_checks") or {}).get("connector_contract_exists_for_collection_with_evidence")
+                and (control_plane_fixture.get("local_checks") or {}).get("action_executor_contract_separates_fixture_from_tiktok")
+                and (control_plane_fixture.get("local_checks") or {}).get("packaged_entitlement_enforces_remote_disable")
+                and (control_plane_fixture.get("control_plane_boundary") or {}).get("server_side_rbac_pending")
+                and (control_plane_fixture.get("connector_boundary") or {}).get("non_tiktok_connector_pending")
+                and (control_plane_fixture.get("module_boundary") or {}).get("monolith_split_pending")
+                and control_plane_fixture.get("does_not_claim_server_side_rbac") is True
+                and control_plane_fixture.get("does_not_claim_non_tiktok_connector_ga") is True
+                and "web_ui_http_api_service_connector_module_split" in (control_plane_fixture.get("external_control_plane_pending") or [])
+            ),
+            control_plane_fixture,
         ),
         check(
             "AI/规则能生成产品分析",
