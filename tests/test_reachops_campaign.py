@@ -2967,6 +2967,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
             )
 
             acceptance_summary = report_dir / "acceptance_summary.json"
+            issue_closure_payload = {
+                **final_issue_closure_payload(),
+                "json_path": str(report_dir / "issue_closure_payload.json"),
+            }
+            final_gate_payload = final_acceptance_gate_payload()
+            final_gate_payload["json_path"] = str(report_dir / "final_acceptance_gate.json")
+            (report_dir / "issue_closure_payload.json").write_text(json.dumps(issue_closure_payload), encoding="utf-8")
+            (report_dir / "final_acceptance_gate.json").write_text(json.dumps(final_gate_payload), encoding="utf-8")
+            acceptance_summary.write_text(
+                json.dumps(
+                    {
+                        "status": "passed",
+                        "issue_closure": issue_closure_payload,
+                        "final_acceptance_gate": final_gate_payload,
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             evidence = build_reachops_release_evidence(
                 root=root,
@@ -2985,11 +3003,23 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("release_evidence_created_without_strict_final_delivery_package_pass", evidence["not_final_delivery_reasons"])
             self.assertEqual(evidence["artifacts"]["installer"]["sha256"], hashlib.sha256(installer.read_bytes()).hexdigest())
             self.assertEqual(evidence["artifacts"]["manifest"]["sha256"], hashlib.sha256(manifest_path.read_bytes()).hexdigest())
+            self.assertEqual(
+                evidence["artifacts"]["issue_closure"]["sha256"],
+                hashlib.sha256((report_dir / "issue_closure_payload.json").read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                evidence["artifacts"]["final_acceptance_gate"]["sha256"],
+                hashlib.sha256((report_dir / "final_acceptance_gate.json").read_bytes()).hexdigest(),
+            )
+            self.assertEqual(evidence["acceptance"]["summary"]["issue_closure"]["schema_version"], "reachops.issue_closure_audit.v1")
+            self.assertEqual(evidence["acceptance"]["summary"]["issue_closure"]["summary"]["acceptance_criteria_total"], 53)
+            self.assertIn("python tools\\reachops_issue_closure_audit.py --json", evidence["rollback"]["verification_commands"])
             self.assertTrue(Path(evidence["evidence_path"]).exists())
             rollback_note = Path(evidence["rollback_note_path"]).read_text(encoding="utf-8")
             self.assertIn("ReachOps Rollback Note 0.4.0", rollback_note)
             self.assertIn("Rollback Policy", rollback_note)
             self.assertIn("previous verified ReachOps installer", rollback_note)
+            self.assertIn("issue_closure", rollback_note)
 
     def test_reachops_data_governance_verifies_backup_restore_and_redaction_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -6437,6 +6467,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops-rollback-note.md", release_evidence)
         self.assertIn("check_delivery_package", release_evidence)
         self.assertIn("build_dependency_report", release_evidence)
+        self.assertIn("issue_closure_payload.json", release_evidence)
+        self.assertIn("reachops_issue_closure_audit.py --json", release_evidence)
         self.assertIn("cache-dependency-path: requirements.lock", workflow)
         self.assertIn("tools/verify_reachops_dependency_baseline.py --json", workflow)
         self.assertIn("selenium.webdriver.chrome.webdriver", spec)

@@ -87,6 +87,19 @@ def _default_manifest(root: Path) -> Path:
     return root / "reachops-update-manifest.json"
 
 
+def _resolve_acceptance_report_path(acceptance_path: Path, value: Any, default_name: str) -> Path:
+    text = str(value or "").strip()
+    if text:
+        candidate = Path(text)
+        if candidate.is_absolute():
+            return candidate
+        report_dir_candidate = acceptance_path.parent / candidate
+        if report_dir_candidate.exists():
+            return report_dir_candidate
+        return acceptance_path.parent / candidate.name
+    return acceptance_path.parent / default_name
+
+
 def _default_output_dir(root: Path, version: str, build: str) -> Path:
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y%m%dT%H%M%SZ")
     safe_build = "".join(ch if ch.isalnum() or ch in {".", "-", "_"} else "-" for ch in str(build or "0"))
@@ -127,6 +140,8 @@ def _rollback_note(payload: dict[str, Any]) -> str:
             f"- Package check status: {payload['package_check'].get('status', 'unknown')}",
             f"- Package check failures: {', '.join(payload['package_check'].get('failures') or []) or 'none'}",
             f"- Missing artifacts: {', '.join(payload['package_check'].get('missing_artifacts') or []) or 'none'}",
+            f"- Issue closure evidence: {payload['artifacts']['issue_closure']['path']}",
+            f"- Issue closure status: {payload['acceptance']['summary'].get('issue_closure', {}).get('status', 'unknown')}",
             "",
         ]
     )
@@ -151,6 +166,27 @@ def build_release_evidence(
     package_check = check_delivery_package(root=root, acceptance_summary_path=acceptance_path, manifest_path=manifest_path)
     dependency_baseline = build_dependency_report(root)
     manifest_payload = _load_json(manifest_path)
+    acceptance_payload = _load_json(acceptance_path)
+    acceptance_issue_closure = (
+        acceptance_payload.get("issue_closure")
+        if isinstance(acceptance_payload.get("issue_closure"), dict)
+        else {}
+    )
+    acceptance_final_gate = (
+        acceptance_payload.get("final_acceptance_gate")
+        if isinstance(acceptance_payload.get("final_acceptance_gate"), dict)
+        else {}
+    )
+    issue_closure_path = _resolve_acceptance_report_path(
+        acceptance_path,
+        acceptance_issue_closure.get("json_path") if acceptance_issue_closure else "",
+        "issue_closure_payload.json",
+    )
+    final_gate_path = _resolve_acceptance_report_path(
+        acceptance_path,
+        acceptance_final_gate.get("json_path") if acceptance_final_gate else "",
+        "final_acceptance_gate.json",
+    )
     runtime_policy = manifest_payload.get("runtime_policy") if isinstance(manifest_payload.get("runtime_policy"), dict) else {}
     source_status = _git_status(root)
     payload: dict[str, Any] = {
@@ -175,6 +211,8 @@ def build_release_evidence(
             "installer": _artifact(installer),
             "manifest": _artifact(manifest_path),
             "acceptance_summary": _artifact(acceptance_path),
+            "issue_closure": _artifact(issue_closure_path),
+            "final_acceptance_gate": _artifact(final_gate_path),
             "requirements_lock": _artifact(root / "requirements.lock"),
             "dependency_license_inventory": _artifact(root / "ReachOps" / "packaging" / "dependency-license-inventory.json"),
         },
@@ -190,8 +228,9 @@ def build_release_evidence(
         "acceptance": {
             "path": str(acceptance_path),
             "summary": {
-                "status": _load_json(acceptance_path).get("status"),
-                "final_acceptance_gate": _load_json(acceptance_path).get("final_acceptance_gate"),
+                "status": acceptance_payload.get("status"),
+                "issue_closure": acceptance_issue_closure,
+                "final_acceptance_gate": acceptance_final_gate,
             },
         },
         "package_check": package_check,
@@ -206,6 +245,7 @@ def build_release_evidence(
                 "python tools\\reachops_activation_status_check.py --json",
                 "python tools\\reachops_client_delivery_check.py --json",
                 "python tools\\reachops_delivery_package_check.py --json",
+                "python tools\\reachops_issue_closure_audit.py --json",
                 "python tools\\reachops_final_acceptance_gate.py --json",
             ],
         },
