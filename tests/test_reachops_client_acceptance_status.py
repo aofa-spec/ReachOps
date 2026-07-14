@@ -585,9 +585,16 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
 
         errors = {row["error"]: row for row in plan["groups"]}
         self.assertEqual(errors["IXBROWSER_KERNEL_MISMATCH"]["profile_ids"], ["21632"])
+        self.assertEqual(errors["IXBROWSER_KERNEL_MISMATCH"]["profile_ids_total"], 1)
+        self.assertEqual(errors["IXBROWSER_KERNEL_MISMATCH"]["summary_only_count"], 0)
         self.assertEqual(errors["LOGIN_REQUIRED"]["count"], 13)
         self.assertEqual(errors["LOGIN_REQUIRED"]["profile_ids"], [])
+        self.assertEqual(errors["LOGIN_REQUIRED"]["profile_ids_total"], 0)
+        self.assertEqual(errors["LOGIN_REQUIRED"]["summary_only_count"], 13)
         self.assertEqual(errors["PAGE_OPEN_FAILED"]["count_source"], "profile_preflight_summary")
+        self.assertEqual(plan["total_unique_profiles_by_error"], 1)
+        self.assertEqual(plan["total_error_events_by_error"], 20)
+        self.assertEqual(plan["summary_only_error_count"], 19)
 
     def test_profile_remediation_csv_quality_rejects_duplicate_profile_ids(self):
         with TemporaryDirectory() as tmpdir:
@@ -4322,17 +4329,23 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                 "status": "ok",
                 "profile_group": "United States",
                 "total_unique_profiles_by_error": 52,
+                "total_error_events_by_error": 58,
+                "summary_only_error_count": 6,
                 "error_groups": [
                     {
                         "error": "IXBROWSER_KERNEL_MISMATCH",
                         "count": 39,
                         "profile_ids_sample": ["21644", "21647"],
+                        "profile_ids_total": 39,
+                        "summary_only_count": 0,
                         "recommended_action": "修改内核版本或移出执行分组。",
                     },
                     {
                         "error": "LOGIN_REQUIRED",
                         "count": 13,
                         "profile_ids_sample": ["23946"],
+                        "profile_ids_total": 7,
+                        "summary_only_count": 6,
                         "recommended_action": "完成 TikTok 登录。",
                     },
                 ],
@@ -4357,9 +4370,12 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         text = "\n".join(account_repair_summary_lines(payload))
 
         self.assertIn("group=United States", text)
-        self.assertIn("total=52", text)
-        self.assertIn("IXBROWSER_KERNEL_MISMATCH count=39 sample=21644,21647 action=修改内核版本或移出执行分组。", text)
-        self.assertIn("LOGIN_REQUIRED count=13 sample=23946 action=完成 TikTok 登录。", text)
+        self.assertIn("profiles=52 events=58 summary_only=6", text)
+        self.assertIn(
+            "IXBROWSER_KERNEL_MISMATCH count=39 profile_ids=39 summary_only=0 sample=21644,21647 action=修改内核版本或移出执行分组。",
+            text,
+        )
+        self.assertIn("LOGIN_REQUIRED count=13 profile_ids=7 summary_only=6 sample=23946 action=完成 TikTok 登录。", text)
         self.assertIn("after_repair_acceptance=reachops_client_delivery_check.py --json 返回 status=passed。 | profile_available>=1。", text)
         self.assertIn(
             "account_repair_safety=manual_apply_required=true operator_confirmed_apply=true hard_blocker_only=true no_browser_started=true no_submit=true no_ai_token_used=true",
@@ -4629,6 +4645,8 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                 "batch_id": "gb_current",
                 "profile_group": "United States",
                 "total_unique_profiles_by_error": 25,
+                "total_error_events_by_error": 30,
+                "summary_only_error_count": 5,
                 "operator_steps": ["修复内核不匹配账号。", "补充已登录账号。"],
             },
             account_repair_apply={
@@ -4645,6 +4663,8 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(remediation["repair_plan_batch_id"], "gb_current")
         self.assertEqual(remediation["repair_plan_profile_group"], "United States")
         self.assertEqual(remediation["total_unique_profiles_by_error"], 25)
+        self.assertEqual(remediation["total_error_events_by_error"], 30)
+        self.assertEqual(remediation["summary_only_error_count"], 5)
         self.assertEqual(remediation["operator_steps"], ["修复内核不匹配账号。", "补充已登录账号。"])
         self.assertEqual(remediation["latest_apply_status"], "applied")
         self.assertEqual(remediation["latest_apply_effective_status"], "stale")

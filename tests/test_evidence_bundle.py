@@ -395,12 +395,16 @@ class EvidenceBundleTests(unittest.TestCase):
                         "batch_status": "blocked",
                         "profile_group": "US",
                         "total_unique_profiles_by_error": 1,
+                        "total_error_events_by_error": 3,
+                        "summary_only_error_count": 2,
                         "operator_steps": ["完成 TikTok 登录后重新预检。"],
                         "groups": [
                             {
                                 "error": "LOGIN_REQUIRED",
-                                "count": 1,
+                                "count": 3,
                                 "profile_ids": ["profile-1"],
+                                "profile_ids_total": 1,
+                                "summary_only_count": 2,
                                 "recommended_action": "完成 TikTok 登录或移出执行分组。",
                             }
                         ],
@@ -528,6 +532,11 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertEqual(bundle["account_health_summary"]["consecutive_failure_cooldown_count"], 2)
             self.assertEqual(bundle["account_repair_summary"]["schema_version"], "reachops.account_repair_summary.v1")
             self.assertEqual(bundle["account_repair_summary"]["error_group_count"], 1)
+            self.assertEqual(bundle["account_repair_summary"]["total_profiles_by_error"], 1)
+            self.assertEqual(bundle["account_repair_summary"]["total_error_events_by_error"], 3)
+            self.assertEqual(bundle["account_repair_summary"]["summary_only_error_count"], 2)
+            self.assertEqual(bundle["account_repair_summary"]["error_groups"][0]["profile_ids_total"], 1)
+            self.assertEqual(bundle["account_repair_summary"]["error_groups"][0]["summary_only_count"], 2)
             self.assertEqual(bundle["account_repair_summary"]["hard_blocker_profile_count"], 1)
             self.assertTrue(bundle["account_repair_summary"]["pending_recheck"])
             self.assertEqual(

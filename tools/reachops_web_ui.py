@@ -5106,16 +5106,23 @@ def summarize_account_repair_plan(path_value: str | Path) -> dict:
         if not isinstance(row, dict):
             continue
         profile_ids = [str(item) for item in (row.get("profile_ids") or []) if str(item).strip()]
+        count = safe_int(row.get("count"), 0)
+        profile_ids_total = safe_int(row.get("profile_ids_total"), len(profile_ids))
+        summary_only_count = safe_int(row.get("summary_only_count"), max(0, count - len(profile_ids)))
         groups.append(
             {
                 "error": str(row.get("error") or ""),
-                "count": safe_int(row.get("count"), 0),
+                "count": count,
                 "profile_ids_sample": profile_ids[:12],
-                "profile_ids_total": len(profile_ids),
+                "profile_ids_total": profile_ids_total,
+                "summary_only_count": summary_only_count,
+                "count_source": str(row.get("count_source") or ""),
                 "recommended_action": str(row.get("recommended_action") or ""),
                 "sample_message": str(row.get("sample_message") or ""),
             }
         )
+    computed_total_events = sum(safe_int(row.get("count"), 0) for row in groups)
+    computed_summary_only = sum(safe_int(row.get("summary_only_count"), 0) for row in groups)
     return {
         "status": "ok",
         "path": str(path),
@@ -5123,6 +5130,11 @@ def summarize_account_repair_plan(path_value: str | Path) -> dict:
         "batch_status": str(plan.get("batch_status") or ""),
         "profile_group": str(plan.get("profile_group") or ""),
         "total_unique_profiles_by_error": safe_int(plan.get("total_unique_profiles_by_error"), 0),
+        "total_error_events_by_error": safe_int(
+            plan.get("total_error_events_by_error"),
+            computed_total_events or safe_int(plan.get("total_unique_profiles_by_error"), 0),
+        ),
+        "summary_only_error_count": safe_int(plan.get("summary_only_error_count"), computed_summary_only),
         "safety_contract": {
             "schema_version": "reachops.account_repair_safety_contract.v1",
             "manual_apply_required": True,

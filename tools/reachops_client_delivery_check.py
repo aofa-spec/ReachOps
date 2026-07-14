@@ -194,6 +194,8 @@ def build_real_pilot_evidence_boundary(
             "repair_plan_batch_id": str(repair_summary.get("batch_id") or ""),
             "repair_plan_profile_group": str(repair_summary.get("profile_group") or ""),
             "total_unique_profiles_by_error": int(repair_summary.get("total_unique_profiles_by_error") or 0),
+            "total_error_events_by_error": int(repair_summary.get("total_error_events_by_error") or 0),
+            "summary_only_error_count": int(repair_summary.get("summary_only_error_count") or 0),
             "operator_steps": list(repair_summary.get("operator_steps") or [])[:5],
             "latest_apply_status": str(repair_apply.get("status") or ""),
             "latest_apply_effective_status": repair_apply_effective_status,
@@ -896,14 +898,22 @@ def account_repair_summary_lines(payload: dict, limit: int = 4) -> list[str]:
     lines = [
         "account_repair_summary="
         f"group={summary.get('profile_group') or '-'} "
-        f"total={summary.get('total_unique_profiles_by_error') or 0}"
+        f"profiles={summary.get('total_unique_profiles_by_error') or 0} "
+        f"events={summary.get('total_error_events_by_error') or summary.get('total_unique_profiles_by_error') or 0} "
+        f"summary_only={summary.get('summary_only_error_count') or 0}"
     ]
     for row in groups[: max(1, int(limit or 1))]:
         samples = [str(item) for item in (row.get("profile_ids_sample") or []) if str(item).strip()]
         sample_text = f" sample={','.join(samples[:8])}" if samples else ""
+        profile_total = int(row.get("profile_ids_total") or len(samples))
+        summary_only_count = int(row.get("summary_only_count") or 0)
+        coverage_text = f" profile_ids={profile_total} summary_only={summary_only_count}"
         action = str(row.get("recommended_action") or "").strip()
         action_text = f" action={action}" if action else ""
-        lines.append(f"  {row.get('error') or '-'} count={row.get('count') or 0}{sample_text}{action_text}")
+        lines.append(
+            f"  {row.get('error') or '-'} count={row.get('count') or 0}"
+            f"{coverage_text}{sample_text}{action_text}"
+        )
     after_repair = [str(item).strip() for item in (summary.get("acceptance_after_repair") or []) if str(item).strip()]
     if after_repair:
         lines.append("after_repair_acceptance=" + " | ".join(after_repair[:4]))

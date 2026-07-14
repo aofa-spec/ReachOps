@@ -613,6 +613,11 @@ def build_account_repair_summary(base_dir: str | Path) -> dict[str, Any]:
     for group in repair_groups:
         if _safe_text(group.get("error")) in hard_errors:
             selected_hard_profiles.extend(str(item) for item in (group.get("profile_ids") or []) if str(item))
+    computed_error_events = sum(int(row.get("count") or 0) for row in repair_groups)
+    computed_summary_only = sum(
+        max(0, int(row.get("summary_only_count") or int(row.get("count") or 0) - len(row.get("profile_ids") or [])))
+        for row in repair_groups
+    )
     pending_recheck = bool(
         apply_result
         and _safe_text(apply_result.get("status")) == "applied"
@@ -631,6 +636,10 @@ def build_account_repair_summary(base_dir: str | Path) -> dict[str, Any]:
         "profile_group": _safe_text(plan.get("profile_group")),
         "error_group_count": len(repair_groups),
         "total_profiles_by_error": int(plan.get("total_unique_profiles_by_error") or 0),
+        "total_error_events_by_error": int(
+            plan.get("total_error_events_by_error") or computed_error_events or plan.get("total_unique_profiles_by_error") or 0
+        ),
+        "summary_only_error_count": int(plan.get("summary_only_error_count") or computed_summary_only),
         "hard_blocker_profile_count": len(list(dict.fromkeys(selected_hard_profiles))),
         "operator_steps": list(plan.get("operator_steps") or [])[:8],
         "error_groups": [
@@ -638,6 +647,8 @@ def build_account_repair_summary(base_dir: str | Path) -> dict[str, Any]:
                 "error": _safe_text(row.get("error")),
                 "count": int(row.get("count") or 0),
                 "profile_ids_sample": [str(item) for item in (row.get("profile_ids") or [])[:8]],
+                "profile_ids_total": int(row.get("profile_ids_total") or len(row.get("profile_ids") or [])),
+                "summary_only_count": int(row.get("summary_only_count") or 0),
                 "recommended_action": _safe_text(row.get("recommended_action")),
             }
             for row in repair_groups[:12]

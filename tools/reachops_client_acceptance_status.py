@@ -610,11 +610,28 @@ def build_account_repair_plan(batch: dict, details: list[dict], preflight_errors
         else:
             bucket.setdefault("count_source", "profile_preflight_detail")
     ordered = sorted(groups.values(), key=lambda row: (remediation_error_priority(row["error"]), row["error"]))
+    unique_profile_ids: list[str] = []
+    total_error_events = 0
+    summary_only_error_count = 0
+    for row in ordered:
+        profile_ids = [str(item) for item in (row.get("profile_ids") or []) if str(item).strip()]
+        profile_id_count = len(profile_ids)
+        row["profile_ids_total"] = profile_id_count
+        row_count = int(row.get("count") or 0)
+        total_error_events += row_count
+        missing_profile_id_count = max(0, row_count - profile_id_count)
+        row["summary_only_count"] = missing_profile_id_count
+        summary_only_error_count += missing_profile_id_count
+        for profile_id in profile_ids:
+            if profile_id not in unique_profile_ids:
+                unique_profile_ids.append(profile_id)
     return {
         "batch_id": str(batch.get("id") or ""),
         "batch_status": str(batch.get("status") or ""),
         "profile_group": str(batch.get("profile_group") or ""),
-        "total_unique_profiles_by_error": sum(int(row.get("count") or 0) for row in ordered),
+        "total_unique_profiles_by_error": len(unique_profile_ids),
+        "total_error_events_by_error": total_error_events,
+        "summary_only_error_count": summary_only_error_count,
         "groups": ordered,
         "operator_steps": [
             "先处理 IXBROWSER_KERNEL_MISMATCH：把对应配置内核改为 ixBrowser 当前支持版本 138，或移出执行分组。",
@@ -637,6 +654,9 @@ def render_account_repair_plan_markdown(plan: dict, json_path: Path) -> str:
         f"- 批次: `{plan.get('batch_id') or '-'}`",
         f"- 状态: `{plan.get('batch_status') or '-'}`",
         f"- 分组: `{plan.get('profile_group') or '-'}`",
+        f"- 带 profile_id 的唯一账号数: `{int(plan.get('total_unique_profiles_by_error') or 0)}`",
+        f"- 错误事件总数: `{int(plan.get('total_error_events_by_error') or plan.get('total_unique_profiles_by_error') or 0)}`",
+        f"- 仅汇总、缺少 profile_id 的错误数: `{int(plan.get('summary_only_error_count') or 0)}`",
         f"- JSON: `{json_path}`",
         "",
         "## 处理顺序",
@@ -644,11 +664,21 @@ def render_account_repair_plan_markdown(plan: dict, json_path: Path) -> str:
     ]
     for step in plan.get("operator_steps") or []:
         lines.append(f"- {step}")
-    lines.extend(["", "## 错误分组", "", "| error | count | profile_ids | 处理动作 |", "| --- | ---: | --- | --- |"])
+    lines.extend(
+        [
+            "",
+            "## 错误分组",
+            "",
+            "| error | count | profile_ids_total | summary_only | profile_ids | 处理动作 |",
+            "| --- | ---: | ---: | ---: | --- | --- |",
+        ]
+    )
     for row in plan.get("groups") or []:
         profile_ids = ", ".join(f"`{item}`" for item in (row.get("profile_ids") or []))
         lines.append(
-            f"| `{row.get('error') or ''}` | {int(row.get('count') or 0)} | {profile_ids} | {row.get('recommended_action') or ''} |"
+            f"| `{row.get('error') or ''}` | {int(row.get('count') or 0)} | "
+            f"{int(row.get('profile_ids_total') or len(row.get('profile_ids') or []))} | "
+            f"{int(row.get('summary_only_count') or 0)} | {profile_ids} | {row.get('recommended_action') or ''} |"
         )
     lines.extend(["", "## 修复后复测标准", ""])
     for item in plan.get("acceptance_after_repair") or []:
