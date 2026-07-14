@@ -207,6 +207,9 @@ $deliveryPackageReady = [bool](
     -and $deliveryPackageCheck.report_files.issue_closure `
     -and [bool]$deliveryPackageCheck.report_files.issue_closure.exists `
     -and [int]$deliveryPackageCheck.report_files.issue_closure.size -gt 0 `
+    -and $deliveryPackageCheck.report_files.authorization_handoff `
+    -and [bool]$deliveryPackageCheck.report_files.authorization_handoff.exists `
+    -and [int]$deliveryPackageCheck.report_files.authorization_handoff.size -gt 0 `
     -and $deliveryPackageCheck.report_files.client_delivery `
     -and [bool]$deliveryPackageCheck.report_files.client_delivery.exists `
     -and [int]$deliveryPackageCheck.report_files.client_delivery.size -gt 0
@@ -263,6 +266,9 @@ if (-not ($deliveryPackageCheck -and $deliveryPackageCheck.report_files -and $de
 }
 if (-not ($deliveryPackageCheck -and $deliveryPackageCheck.report_files -and $deliveryPackageCheck.report_files.issue_closure -and [bool]$deliveryPackageCheck.report_files.issue_closure.exists -and [int]$deliveryPackageCheck.report_files.issue_closure.size -gt 0)) {
     $finalDeliveryBlockers += "issue_closure_report_missing"
+}
+if (-not ($deliveryPackageCheck -and $deliveryPackageCheck.report_files -and $deliveryPackageCheck.report_files.authorization_handoff -and [bool]$deliveryPackageCheck.report_files.authorization_handoff.exists -and [int]$deliveryPackageCheck.report_files.authorization_handoff.size -gt 0)) {
+    $finalDeliveryBlockers += "authorization_handoff_report_missing"
 }
 
 $status = "running"

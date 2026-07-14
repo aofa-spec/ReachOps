@@ -30,6 +30,7 @@ REQUIRED_PACKAGE_REPORT_FILES = (
     "ui_startup",
     "activation_status",
     "live_acceptance_status",
+    "authorization_handoff",
     "live_validation",
     "repository_cleanliness",
     "windows_package_preflight",

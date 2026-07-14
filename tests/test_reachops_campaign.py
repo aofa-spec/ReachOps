@@ -3651,7 +3651,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
     def test_reachops_final_acceptance_gate_rejects_package_missing_required_report_file(self):
         package_check = final_package_check_payload()
-        package_check["report_files"].pop("issue_closure")
+        package_check["report_files"].pop("authorization_handoff")
         package_check["report_files"]["live_preflight"]["size"] = 0
         with tempfile.TemporaryDirectory() as tmp:
             client_path = Path(tmp) / "latest_delivery_check.json"
@@ -3671,7 +3671,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(gate["status"], "failed")
         self.assertIn("delivery_package:passed", gate["failed_checks"])
         package_evidence = {row["name"]: row for row in gate["checks"]}["delivery_package:passed"]["evidence"]
-        self.assertNotIn("issue_closure", package_evidence["report_files"])
+        self.assertNotIn("authorization_handoff", package_evidence["report_files"])
         self.assertEqual(package_evidence["report_files"]["live_preflight"]["size"], 0)
 
     def test_reachops_final_acceptance_gate_rejects_bootstrap_package_check(self):
@@ -6180,6 +6180,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("issue_closure_not_closed", acceptance_background_status_script)
         self.assertIn("issue_closure_report_missing", acceptance_background_status_script)
         self.assertIn("report_files.issue_closure", acceptance_background_status_script)
+        self.assertIn("authorization_handoff_report_missing", acceptance_background_status_script)
+        self.assertIn("report_files.authorization_handoff", acceptance_background_status_script)
         self.assertIn("client_delivery_report_missing", acceptance_background_status_script)
         self.assertIn("report_files.client_delivery", acceptance_background_status_script)
         self.assertIn("$deliveryPackageReady", acceptance_background_status_script)
@@ -6494,6 +6496,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("issue_closure_payload.json", release_evidence)
         self.assertIn("reachops_issue_closure_audit.py --json", release_evidence)
         self.assertIn('"issue_closure"', final_acceptance_gate_tool)
+        self.assertIn('"authorization_handoff"', final_acceptance_gate_tool)
         self.assertIn("issue_closure_payload", goal_delivery_runner_tool)
         self.assertIn("cache-dependency-path: requirements.lock", workflow)
         self.assertIn("tools/verify_reachops_dependency_baseline.py --json", workflow)
