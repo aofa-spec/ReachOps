@@ -1070,6 +1070,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(payload["client_delivery"]["failed_checks"], ["acceptance:ready"])
         self.assertEqual(payload["client_delivery"]["ixbrowser_metadata"]["status"], "ok")
         self.assertFalse(payload["client_delivery"]["ixbrowser_metadata"]["open_profile_called"])
+        self.assertEqual(payload["client_delivery"]["account_support_handoff"]["schema_version"], "reachops.account_support_handoff.v1")
+        self.assertEqual(payload["client_delivery"]["account_support_handoff"]["support_case"], "not_required")
         self.assertEqual(delivery_check_saved["ixbrowser_metadata"]["profile_count"], 0)
         self.assertTrue(delivery_check_exists)
         self.assertEqual(delivery_check_path.name, "latest_delivery_check.json")

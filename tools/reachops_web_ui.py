@@ -4643,6 +4643,14 @@ def html_page() -> bytes:
 	        (goal.final_delivery_blockers || []).forEach(blocker => {{
 	          finalBlockerRows.push(`最终阻断：${{blocker.scope || '-'}} / ${{blocker.status || '-'}}`);
 	          if (blocker.next_action) finalBlockerRows.push('  下一步：' + blocker.next_action);
+	          const handoff = blocker.account_support_handoff || {{}};
+	          if (handoff.schema_version) {{
+	            finalBlockerRows.push(`  账号支持交接：${{handoff.status || '-'}} / ${{handoff.priority_action || '-'}} / 分组=${{handoff.profile_group || '-'}}`);
+	            const repairPlan = handoff.repair_plan || {{}};
+	            if (repairPlan.available) finalBlockerRows.push(`    修复计划：账号=${{repairPlan.profile_count || 0}} 事件=${{repairPlan.event_count || 0}} 自动可处理=${{repairPlan.auto_apply_profile_count || 0}} 非自动错误=${{(repairPlan.non_auto_error_codes || []).join(', ') || '-'}}`);
+	            ((handoff.impacted_accounts || {{}}).error_groups || []).slice(0, 3).forEach(group => finalBlockerRows.push(`    账号错误：${{group.error || '-'}} count=${{group.count || 0}} sample=${{(group.profile_ids_sample || []).slice(0, 4).join(',') || '-'}}`));
+	            (handoff.retest_commands || []).slice(0, 3).forEach(cmd => finalBlockerRows.push('    账号复测命令：' + cmd));
+	          }}
 	          (blocker.required_evidence || []).forEach(item => finalBlockerRows.push('  必需证据：' + item));
 	          (blocker.required_artifacts || []).forEach(item => finalBlockerRows.push('  必需产物：' + item));
 	        }});
@@ -5334,6 +5342,8 @@ def build_acceptance_payload() -> dict:
                 "failed_checks": client_delivery.get("failed_checks") or [],
                 "blockers": client_delivery.get("blockers") or [],
                 "next_actions": client_delivery.get("next_actions") or [],
+                "account_blocker_resolution": client_delivery.get("account_blocker_resolution") or {},
+                "account_support_handoff": client_delivery.get("account_support_handoff") or {},
                 "account_repair_apply": client_delivery.get("account_repair_apply") or {},
                 "delivery_check_path": client_delivery.get("delivery_check_path", ""),
                 "ixbrowser_metadata": {
