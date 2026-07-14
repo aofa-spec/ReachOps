@@ -327,6 +327,113 @@ def build_account_blocker_resolution(
     }
 
 
+def build_account_support_handoff(
+    acceptance: dict,
+    *,
+    batch: dict | None = None,
+    remediation: dict | None = None,
+    account_repair_summary: dict | None = None,
+    account_repair_apply: dict | None = None,
+    account_blocker_resolution: dict | None = None,
+) -> dict:
+    batch = batch if isinstance(batch, dict) else {}
+    remediation = remediation if isinstance(remediation, dict) else {}
+    repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
+    repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
+    resolution = account_blocker_resolution if isinstance(account_blocker_resolution, dict) else {}
+    acceptance = acceptance if isinstance(acceptance, dict) else {}
+    readiness = str(acceptance.get("readiness") or "")
+    support_required = readiness == "blocked_by_accounts"
+    error_groups = []
+    for row in repair_summary.get("error_groups") or []:
+        if not isinstance(row, dict):
+            continue
+        error_groups.append(
+            {
+                "error": str(row.get("error") or ""),
+                "count": int(row.get("count") or 0),
+                "profile_ids_sample": [str(item) for item in (row.get("profile_ids_sample") or []) if str(item).strip()][:8],
+                "profile_ids_total": int(row.get("profile_ids_total") or 0),
+                "summary_only_count": int(row.get("summary_only_count") or 0),
+                "recommended_action": str(row.get("recommended_action") or ""),
+                "sample_message": str(row.get("sample_message") or ""),
+            }
+        )
+    support_status = str(resolution.get("status") or ("blocked_by_accounts" if support_required else "not_required"))
+    priority_action = str(resolution.get("priority_action") or "")
+    if support_required and not priority_action:
+        priority_action = "create_or_repair_real_account_pool"
+    return {
+        "schema_version": "reachops.account_support_handoff.v1",
+        "status": support_status,
+        "support_required": support_required,
+        "support_case": "account_pool_blocked" if support_required else "not_required",
+        "profile_group": str(batch.get("profile_group") or repair_summary.get("profile_group") or resolution.get("profile_group") or ""),
+        "batch_id": str(batch.get("id") or repair_summary.get("batch_id") or resolution.get("batch_id") or ""),
+        "readiness": readiness,
+        "priority_action": priority_action,
+        "ready_for_retest": bool(resolution.get("ready_for_retest")),
+        "requires_latest_repair_apply": bool(resolution.get("requires_latest_repair_apply")),
+        "requires_manual_account_work": bool(resolution.get("requires_manual_account_work")),
+        "does_not_claim_real_account_pool_ready": bool(resolution.get("does_not_claim_real_account_pool_ready") or support_required),
+        "repair_plan": {
+            "available": repair_summary.get("status") == "ok",
+            "json_path": str(
+                remediation.get("latest_account_plan_json_path")
+                or remediation.get("account_plan_json_path")
+                or repair_summary.get("path")
+                or ""
+            ),
+            "markdown_path": str(
+                remediation.get("latest_account_plan_markdown_path")
+                or remediation.get("account_plan_markdown_path")
+                or ""
+            ),
+            "profile_count": int(repair_summary.get("total_unique_profiles_by_error") or 0),
+            "event_count": int(repair_summary.get("total_error_events_by_error") or 0),
+            "summary_only_error_count": int(repair_summary.get("summary_only_error_count") or 0),
+            "auto_apply_profile_count": int(resolution.get("repair_plan_auto_apply_profile_count") or 0),
+            "non_auto_error_codes": list(resolution.get("non_auto_error_codes") or []),
+        },
+        "latest_apply": {
+            "status": str(repair_apply.get("status") or ""),
+            "effective_status": str(resolution.get("latest_apply_effective_status") or account_repair_apply_effective_status(repair_apply)),
+            "effective_message": str(
+                resolution.get("latest_apply_effective_message") or account_repair_apply_effective_message(repair_apply)
+            ),
+            "stale": bool(repair_apply.get("stale")),
+            "stale_reason": str(repair_apply.get("stale_reason") or ""),
+            "pending_recheck": bool(repair_apply.get("pending_recheck")),
+            "moved_count": int(repair_apply.get("moved_count") or 0),
+            "failed_count": int(repair_apply.get("failed_count") or 0),
+        },
+        "impacted_accounts": {
+            "error_group_count": len(error_groups),
+            "error_groups": error_groups,
+        },
+        "operator_steps": [str(item) for item in (repair_summary.get("operator_steps") or [])][:8],
+        "retest_commands": [
+            "python tools/reachops_client_delivery_check.py --json",
+            "python tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json",
+            "python tools/reachops_goal_delivery_runner.py --json",
+        ],
+        "acceptance_required": [
+            "client_delivery.status=passed",
+            "client_delivery.readiness=pass",
+            "client_delivery.profile_available>=1",
+            "client_delivery.failed_checks=[]",
+            "goal_delivery.local_mvp_ready=true",
+        ],
+        "safety_contract": {
+            "manual_apply_required": True,
+            "no_browser_started": True,
+            "no_submit": True,
+            "no_ai_token_used": True,
+            "apply_alone_is_not_acceptance": True,
+        },
+    }
+
+
 def build_autonomous_product_contract_check() -> dict:
     plan = build_execution_plan(
         target="anti aging serum",
@@ -1000,6 +1107,14 @@ def build_delivery_check(
         account_repair_summary=account_repair_summary,
         account_repair_apply=account_repair_apply,
     )
+    account_support_handoff = build_account_support_handoff(
+        acceptance,
+        batch=batch,
+        remediation=remediation,
+        account_repair_summary=account_repair_summary,
+        account_repair_apply=account_repair_apply,
+        account_blocker_resolution=account_blocker_resolution,
+    )
 
     return {
         "root_dir": str(ROOT_DIR),
@@ -1018,6 +1133,7 @@ def build_delivery_check(
         "operation_counts": (operations.get("counts") if isinstance(operations, dict) else {}) or {},
         "real_pilot_evidence": real_pilot_evidence,
         "account_blocker_resolution": account_blocker_resolution,
+        "account_support_handoff": account_support_handoff,
         "remediation_report": remediation,
         "account_repair_summary": account_repair_summary,
         "account_repair_apply": account_repair_apply,

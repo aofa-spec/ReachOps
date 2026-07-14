@@ -938,6 +938,7 @@ def build_final_acceptance_gate(
                 "failed_checks": client_delivery.get("failed_checks") or [],
                 "blockers": client_delivery.get("blockers") or [],
                 "account_blocker_resolution": client_delivery.get("account_blocker_resolution") or {},
+                "account_support_handoff": client_delivery.get("account_support_handoff") or {},
                 "next_action": "复跑 tools\\reachops_client_delivery_check.py --json，直到 status=passed、final_delivery_ready=true、failed_checks=[]。",
             }
         )

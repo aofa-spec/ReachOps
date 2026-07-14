@@ -40,6 +40,7 @@ from tools import reachops_mac_loop_acceptance
 from tools.reachops_client_delivery_check import (
     account_repair_summary_lines,
     build_account_blocker_resolution,
+    build_account_support_handoff,
     build_delivery_check,
     build_real_pilot_evidence_boundary,
     latest_account_repair_apply_status,
@@ -4002,6 +4003,20 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(resolution["repair_plan_auto_apply_profile_count"], 2)
         self.assertEqual(resolution["non_auto_error_codes"], [])
         self.assertTrue(repair_plan_exists)
+        support = payload["account_support_handoff"]
+        self.assertEqual(support["schema_version"], "reachops.account_support_handoff.v1")
+        self.assertEqual(support["support_case"], "account_pool_blocked")
+        self.assertTrue(support["support_required"])
+        self.assertEqual(support["priority_action"], "apply_latest_account_repair_plan")
+        self.assertEqual(support["repair_plan"]["profile_count"], 2)
+        self.assertEqual(support["repair_plan"]["auto_apply_profile_count"], 2)
+        self.assertEqual(support["impacted_accounts"]["error_group_count"], 2)
+        self.assertEqual(
+            support["impacted_accounts"]["error_groups"][0]["profile_ids_sample"],
+            ["21644"],
+        )
+        self.assertIn("python tools/reachops_goal_delivery_runner.py --json", support["retest_commands"])
+        self.assertTrue(support["safety_contract"]["apply_alone_is_not_acceptance"])
 
     def test_delivery_check_missing_account_repair_plan_is_not_file_error(self):
         batch = {"id": "gb_partial", "status": "failed", "profile_group": "United States", "config_json": "{}"}
@@ -4146,6 +4161,102 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertTrue(resolution["requires_manual_account_work"])
         self.assertIn("account_repair_apply_stale", resolution["blocker_codes"])
         self.assertIn("account_repair_plan_has_no_auto_applicable_profiles", resolution["blocker_codes"])
+
+    def test_account_support_handoff_explains_manual_non_auto_recovery(self):
+        resolution = build_account_blocker_resolution(
+            {
+                "readiness": "blocked_by_accounts",
+                "checks": {"profile_available_count": 0},
+            },
+            batch={"id": "gb_timeout", "profile_group": "United States"},
+            account_repair_summary={
+                "status": "ok",
+                "path": "/tmp/latest_account_repair_plan.json",
+                "profile_group": "United States",
+                "total_unique_profiles_by_error": 20,
+                "total_error_events_by_error": 25,
+                "summary_only_error_count": 5,
+                "operator_steps": ["手动打开超时账号确认代理和 TikTok 页面加载。"],
+                "error_groups": [
+                    {
+                        "error": "PROFILE_PREFLIGHT_TIMEOUT",
+                        "count": 20,
+                        "profile_ids_sample": ["5897", "18430"],
+                        "profile_ids_total": 20,
+                        "summary_only_count": 0,
+                        "recommended_action": "手动打开该配置确认页面加载速度。",
+                        "sample_message": "profile preflight exceeded 21.0s",
+                    },
+                    {
+                        "error": "PAGE_OPEN_FAILED",
+                        "count": 5,
+                        "profile_ids_sample": [],
+                        "profile_ids_total": 0,
+                        "summary_only_count": 5,
+                        "recommended_action": "确认 TikTok 可用。",
+                    },
+                ],
+            },
+            account_repair_apply={"status": "applied", "stale": True, "moved_count": 2},
+        )
+        handoff = build_account_support_handoff(
+            {
+                "readiness": "blocked_by_accounts",
+                "checks": {"profile_available_count": 0},
+            },
+            batch={"id": "gb_timeout", "profile_group": "United States"},
+            remediation={
+                "latest_account_plan_json_path": "/tmp/latest_account_repair_plan.json",
+                "latest_account_plan_markdown_path": "/tmp/latest_account_repair_plan.md",
+            },
+            account_repair_summary={
+                "status": "ok",
+                "path": "/tmp/latest_account_repair_plan.json",
+                "profile_group": "United States",
+                "total_unique_profiles_by_error": 20,
+                "total_error_events_by_error": 25,
+                "summary_only_error_count": 5,
+                "operator_steps": ["手动打开超时账号确认代理和 TikTok 页面加载。"],
+                "error_groups": [
+                    {
+                        "error": "PROFILE_PREFLIGHT_TIMEOUT",
+                        "count": 20,
+                        "profile_ids_sample": ["5897", "18430"],
+                        "profile_ids_total": 20,
+                        "summary_only_count": 0,
+                        "recommended_action": "手动打开该配置确认页面加载速度。",
+                        "sample_message": "profile preflight exceeded 21.0s",
+                    },
+                    {
+                        "error": "PAGE_OPEN_FAILED",
+                        "count": 5,
+                        "profile_ids_sample": [],
+                        "profile_ids_total": 0,
+                        "summary_only_count": 5,
+                        "recommended_action": "确认 TikTok 可用。",
+                    },
+                ],
+            },
+            account_repair_apply={"status": "applied", "stale": True, "moved_count": 2},
+            account_blocker_resolution=resolution,
+        )
+
+        self.assertEqual(handoff["schema_version"], "reachops.account_support_handoff.v1")
+        self.assertEqual(handoff["status"], "stale_repair_apply")
+        self.assertEqual(handoff["support_case"], "account_pool_blocked")
+        self.assertEqual(handoff["priority_action"], "manually_repair_or_replace_accounts")
+        self.assertTrue(handoff["requires_manual_account_work"])
+        self.assertFalse(handoff["requires_latest_repair_apply"])
+        self.assertEqual(handoff["repair_plan"]["non_auto_error_codes"], ["PROFILE_PREFLIGHT_TIMEOUT"])
+        self.assertEqual(handoff["repair_plan"]["summary_only_error_count"], 5)
+        self.assertEqual(handoff["latest_apply"]["effective_status"], "stale")
+        self.assertTrue(handoff["latest_apply"]["stale"])
+        self.assertEqual(handoff["latest_apply"]["moved_count"], 2)
+        self.assertEqual(handoff["impacted_accounts"]["error_groups"][0]["profile_ids_sample"], ["5897", "18430"])
+        self.assertEqual(handoff["impacted_accounts"]["error_groups"][1]["summary_only_count"], 5)
+        self.assertIn("client_delivery.profile_available>=1", handoff["acceptance_required"])
+        self.assertTrue(handoff["safety_contract"]["no_submit"])
+        self.assertTrue(handoff["does_not_claim_real_account_pool_ready"])
 
     def test_account_repair_apply_status_normalizes_counts_from_results(self):
         with TemporaryDirectory() as tmpdir:

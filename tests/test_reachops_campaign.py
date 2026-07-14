@@ -1179,6 +1179,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(architecture["checks"]["web_operator_copy_has_no_test_comment_prompt"])
         self.assertTrue(architecture["checks"]["client_gate_requires_selected_group_profile_list_evidence"])
         self.assertTrue(architecture["checks"]["client_gate_embeds_readonly_ixbrowser_metadata"])
+        self.assertTrue(architecture["checks"]["client_gate_exposes_account_support_handoff"])
         self.assertTrue(architecture["checks"]["headless_refreshes_profile_groups_before_start"])
         self.assertTrue(architecture["checks"]["headless_live_comment_sets_real_submit_mode"])
         self.assertTrue(architecture["checks"]["headless_collect_mode_does_not_wait_for_action_submit"])

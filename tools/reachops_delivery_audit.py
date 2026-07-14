@@ -762,6 +762,12 @@ def run_web_local_api_architecture_fixture() -> dict:
         and "open_profile_called" in client_delivery_check
         and "--collect-live-metadata" in client_delivery_check
         and "collect_metadata=bool(args.collect_live_metadata)" in client_delivery_check,
+        "client_gate_exposes_account_support_handoff": "build_account_support_handoff" in client_delivery_check
+        and "reachops.account_support_handoff.v1" in client_delivery_check
+        and '"account_support_handoff"' in client_delivery_check
+        and "retest_commands" in client_delivery_check
+        and "apply_alone_is_not_acceptance" in client_delivery_check
+        and "does_not_claim_real_account_pool_ready" in client_delivery_check,
         "client_gate_human_output_has_repair_loop": "account_repair_summary_lines" in client_delivery_check and "action=" in client_delivery_check and "after_repair_acceptance=" in client_delivery_check and "account_repair_safety=" in client_delivery_check and "no_submit" in client_delivery_check and "after_repair_commands=" in client_delivery_check and "account_repair_summary" in client_delivery_check,
         "web_activation_status_visible_to_operator": "parsed.path == \"/api/activation\"" in web_ui and "build_activation_payload" in web_ui and "activationState" in web_ui and "refreshActivation" in web_ui,
         "web_final_status_visible_to_operator": "parsed.path == \"/api/final-status\"" in web_ui and "build_final_status_payload" in web_ui and "finalStatusState" in web_ui and "finalStatusActions" in web_ui and "finalStatusCommands" in web_ui and "next_required_actions" in web_ui and "verification_commands" in web_ui and "refreshFinalStatus" in web_ui,
