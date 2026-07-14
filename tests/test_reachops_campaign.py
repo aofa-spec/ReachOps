@@ -4958,6 +4958,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 status["verification_commands"],
                 [
                     "python tools\\reachops_client_delivery_check.py --json",
+                    "python tools\\reachops_goal_delivery_runner.py --json",
                     "python tools\\reachops_delivery_package_check.py --json",
                     "python tools\\reachops_issue_closure_audit.py --json",
                     "python tools\\reachops_final_acceptance_gate.py --json",
@@ -5376,6 +5377,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(status["activation"]["next_required_actions"], [])
             self.assertTrue(status["ready_for_live_preflight"])
             self.assertEqual(status["next_required_actions"], ["运行受控真实提交并生成 live submit evidence"])
+            self.assertIn("python tools\\reachops_goal_delivery_runner.py --json", status["verification_commands"])
             self.assertIn("python tools\\reachops_issue_closure_audit.py --json", status["verification_commands"])
             self.assertIn("python tools\\reachops_final_acceptance_gate.py --json", status["verification_commands"])
 
@@ -6126,6 +6128,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         acceptance_script = (root / "tools" / "run_reachops_acceptance_windows.ps1").read_text(encoding="utf-8")
         acceptance_background_script = (root / "tools" / "start_reachops_acceptance_background_windows.ps1").read_text(encoding="utf-8")
         acceptance_background_status_script = (root / "tools" / "get_reachops_acceptance_background_status_windows.ps1").read_text(encoding="utf-8")
+        live_acceptance_status = (root / "tools" / "reachops_live_acceptance_status.py").read_text(encoding="utf-8")
         live_environment_blocker_script = (root / "tools" / "reachops_live_environment_blocker_report.py").read_text(encoding="utf-8")
         live_readiness_windows_script = (root / "tools" / "run_reachops_live_readiness_windows.ps1").read_text(encoding="utf-8")
         live_validation_windows_script = (root / "tools" / "run_reachops_live_validation_manifest_windows.ps1").read_text(encoding="utf-8")
@@ -6282,6 +6285,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("local_inputs.usable=true", acceptance_script)
         self.assertIn("ready_for_live_submit=true", acceptance_script)
         self.assertIn("verification_commands", acceptance_script)
+        self.assertIn("reachops_goal_delivery_runner.py --json", live_acceptance_status)
         self.assertIn("delivery_package_check.json", acceptance_script)
         self.assertIn("final_acceptance_gate.json", acceptance_script)
         self.assertIn("FINAL_ACCEPTANCE_GATE_JSON", acceptance_script)
