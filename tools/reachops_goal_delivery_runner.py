@@ -547,6 +547,12 @@ def build_deliverable_index(
     issue_closure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blocker_by_scope = {str(row.get("scope") or ""): row for row in blockers if isinstance(row, dict)}
+    local_mvp_blocker = blocker_by_scope.get("local_mvp", {})
+    local_mvp_blocker_summary = (
+        local_mvp_blocker.get("blocker_summary")
+        if isinstance(local_mvp_blocker.get("blocker_summary"), dict)
+        else {}
+    )
     windows_blocker = blocker_by_scope.get("windows_final_artifacts", {})
     windows_blocker_summary = (
         windows_blocker.get("blocker_summary")
@@ -590,6 +596,8 @@ def build_deliverable_index(
                 str(client.get("delivery_check_path") or ""),
             ],
             "failed_checks": list(mvp.get("failed_checks") or []) + list(client.get("failed_checks") or []),
+            "blocker_summary": local_mvp_blocker_summary,
+            "account_support_handoff_path": str(client.get("support_account_handoff_path") or ""),
             "blocking_scope": "" if local_ready else "local_mvp",
         },
         "windows_build_inputs": {

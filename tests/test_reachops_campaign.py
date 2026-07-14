@@ -3028,13 +3028,33 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(report["sections"]["mvp_acceptance"]["returncode"], 124)
 
     def test_reachops_goal_delivery_does_not_mark_live_submit_ready_without_final_gate_evidence(self):
-        blockers = [{"scope": "external_authorized_execution", "status": "missing_final_gate_evidence"}]
+        local_blocker_summary = {
+            "schema_version": "reachops.local_mvp_account_pool_blocker.v1",
+            "status": "stale_repair_apply",
+            "support_case": "account_pool_blocked",
+            "priority_action": "manually_repair_or_replace_accounts",
+            "ready_for_retest": False,
+            "requires_manual_account_work": True,
+            "does_not_claim_real_account_pool_ready": True,
+            "next_required_command": "python tools\\reachops_client_delivery_check.py --json",
+        }
+        blockers = [
+            {
+                "scope": "local_mvp",
+                "status": "blocked_by_accounts",
+                "blocker_summary": local_blocker_summary,
+            },
+            {"scope": "external_authorized_execution", "status": "missing_final_gate_evidence"},
+        ]
         index = build_reachops_deliverable_index(
             local_ready=False,
             windows_build_ready=True,
             final_ready=False,
             mvp={"status": "blocked_by_accounts", "failed_checks": ["client_delivery:acceptance:ready"]},
-            client={"failed_checks": ["acceptance:ready"]},
+            client={
+                "failed_checks": ["acceptance:ready"],
+                "support_account_handoff_path": "reports/support/account_support_handoff.json",
+            },
             windows_preflight={"status": "ready_for_windows_build", "ready_for_windows_build": True},
             package={"status": "failed", "missing_artifacts": ["exe"]},
             final_gate={},
@@ -3055,6 +3075,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
         self.assertFalse(index["authorized_live_submit"]["ready"])
         self.assertEqual(index["authorized_live_submit"]["blocking_scope"], "external_authorized_execution")
+        self.assertEqual(
+            index["local_mvp_acceptance"]["account_support_handoff_path"],
+            "reports/support/account_support_handoff.json",
+        )
+        self.assertEqual(
+            index["local_mvp_acceptance"]["blocker_summary"]["schema_version"],
+            "reachops.local_mvp_account_pool_blocker.v1",
+        )
+        self.assertEqual(
+            index["local_mvp_acceptance"]["blocker_summary"]["support_case"],
+            "account_pool_blocked",
+        )
+        self.assertTrue(
+            index["local_mvp_acceptance"]["blocker_summary"]["requires_manual_account_work"]
+        )
         self.assertFalse(index["commercial_issue_closure"]["ready"])
         self.assertEqual(index["commercial_issue_closure"]["blocking_scope"], "commercial_issue_closure")
         self.assertFalse(boundary["external_authorized_execution_ready"])

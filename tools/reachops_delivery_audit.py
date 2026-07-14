@@ -779,6 +779,8 @@ def run_web_local_api_architecture_fixture() -> dict:
         and "reachops.local_mvp_account_pool_blocker.v1" in goal_delivery_runner
         and "account_pool_external_validation" in goal_delivery_runner
         and "account_support_handoff" in goal_delivery_runner
+        and "account_support_handoff_path" in goal_delivery_runner
+        and '"local_mvp_acceptance"' in goal_delivery_runner
         and "does_not_claim_local_mvp_ready" in goal_delivery_runner
         and "does_not_claim_real_account_pool_ready" in goal_delivery_runner,
         "delivery_package_writes_windows_acceptance_handoff": "build_windows_acceptance_handoff" in delivery_package_check
