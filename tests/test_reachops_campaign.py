@@ -3173,6 +3173,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
             )
             self.assertTrue(pending["passed"])
             self.assertEqual(pending["status"], "ready_for_external_validation")
+            self.assertFalse(pending["final_delivery_ready"])
+            self.assertIn(
+                "allow_external_pending is an interim validation mode; final delivery requires pending_external_validation=[].",
+                pending["not_final_delivery_reasons"],
+            )
+            self.assertIn(
+                "external validation pending: client_delivery_acceptance_gate",
+                pending["not_final_delivery_reasons"],
+            )
             self.assertIn("client_delivery_acceptance_gate", pending["pending_external_validation"])
             self.assertIn(
                 "Rerun client delivery acceptance until acceptance_ready=true and readiness=pass.",

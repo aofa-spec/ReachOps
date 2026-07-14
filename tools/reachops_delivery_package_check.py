@@ -494,17 +494,23 @@ def check_delivery_package(
         failures.append("acceptance_summary_not_passed")
 
     bootstrap_only = bool(allow_missing_final_gate)
+    external_pending = list(acceptance_verification.get("pending") or [])
+    external_pending_only = bool(allow_external_pending and not failures and external_pending)
     not_final_delivery_reasons: list[str] = []
     if bootstrap_only:
         not_final_delivery_reasons.append("allow_missing_final_gate is bootstrap-only; rerun without it after final_acceptance_gate.json is written.")
     if allow_final_gate_convergence and bool(final_gate_report.get("convergence_only")):
         not_final_delivery_reasons.append("allow_final_gate_convergence is an intermediate convergence pass; rerun strict package check after final_acceptance_gate.json is rewritten.")
+    if external_pending_only:
+        not_final_delivery_reasons.append("allow_external_pending is an interim validation mode; final delivery requires pending_external_validation=[].")
+        for item in external_pending:
+            not_final_delivery_reasons.append(f"external validation pending: {item}")
     not_final_delivery_reasons.extend(_not_final_reason_lines(missing_artifacts, failures))
     not_final_delivery_reasons = list(dict.fromkeys(not_final_delivery_reasons))
 
     final_ready = not failures
     status = "passed" if final_ready else "failed"
-    if allow_external_pending and not failures and acceptance_verification.get("pending"):
+    if external_pending_only:
         status = "ready_for_external_validation"
 
     remediation_plan = _remediation_plan(
@@ -517,7 +523,7 @@ def check_delivery_package(
     return {
         "status": status,
         "passed": final_ready,
-        "final_delivery_ready": bool(final_ready and not bootstrap_only),
+        "final_delivery_ready": bool(final_ready and not bootstrap_only and not external_pending_only),
         "bootstrap_only": bootstrap_only,
         "not_final_delivery_reasons": not_final_delivery_reasons,
         "allow_external_pending": bool(allow_external_pending),
@@ -525,8 +531,8 @@ def check_delivery_package(
         "allow_final_gate_convergence": bool(allow_final_gate_convergence),
         "root": str(root),
         "failures": failures,
-        "pending_external_validation": list(acceptance_verification.get("pending") or []),
-        "pending_external_actions": _pending_actions(list(acceptance_verification.get("pending") or [])),
+        "pending_external_validation": external_pending,
+        "pending_external_actions": _pending_actions(external_pending),
         "missing_artifacts": missing_artifacts,
         "remediation_plan": remediation_plan,
         "artifacts": artifact_status,
