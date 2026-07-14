@@ -6467,12 +6467,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reject_untrusted_api_request(self) -> bool:
         if not is_local_api_host(self.headers.get("Host", "")):
-            self._send_json({"status": "rejected", "error": "untrusted_host"}, 403)
+            self._send_json(
+                {"status": "rejected", "error": "untrusted_host", "no_browser_started": True, "no_submit": True},
+                403,
+            )
             return True
         for header_name, error_code in (("Origin", "untrusted_origin"), ("Referer", "untrusted_referer")):
             header_value = self.headers.get(header_name, "")
             if header_value and not is_local_api_host(header_value):
-                self._send_json({"status": "rejected", "error": error_code}, 403)
+                self._send_json(
+                    {"status": "rejected", "error": error_code, "no_browser_started": True, "no_submit": True},
+                    403,
+                )
                 return True
         return False
 
@@ -6974,7 +6980,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         payload, error = self._read_json_payload()
         if error:
-            self._send_json({"status": "rejected", "error": error}, 400)
+            self._send_json({"status": "rejected", "error": error, "no_browser_started": True, "no_submit": True}, 400)
             return
         replay_execution_plan: dict = {}
         replay_source_path = ""
@@ -7005,6 +7011,8 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "rejected",
                     "error": "target_required",
                     "message": "请输入产品链接、关键词、达人主页、视频链接、话题或直播间后再开始获客。",
+                    "no_browser_started": True,
+                    "no_submit": True,
                 },
                 400,
             )
@@ -7018,6 +7026,8 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "rejected",
                     "error": "live_comment_confirmation_required",
                     "message": "选择采集 + 真实评论前必须勾选确认真实评论。",
+                    "no_browser_started": True,
+                    "no_submit": True,
                 },
                 400,
             )

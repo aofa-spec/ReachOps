@@ -30,6 +30,7 @@ from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
 from tools.reachops_data_governance import build_report as build_data_governance_report
 from tools.reachops_security_supply_chain_audit import build_report as build_security_supply_chain_report
+from tools.reachops_start_contract_audit import build_report as build_start_contract_report
 from tools.reachops_outcome_metrics import build_report as build_outcome_metrics_report
 from tools.reachops_outcome_metrics import import_outcomes_csv as import_outcomes_csv_fixture
 from tools.reachops_live_submit_acceptance import run_acceptance as run_live_submit_acceptance
@@ -1742,6 +1743,7 @@ def run_audit(args) -> dict:
     outcome_metrics_fixture = run_outcome_metrics_fixture()
     data_governance_fixture = run_data_governance_fixture()
     security_supply_chain_fixture = build_security_supply_chain_report()
+    start_contract_fixture = build_start_contract_report(ROOT_DIR)
     client_delivery_gate = run_client_delivery_gate_fixture()
     web_local_api_architecture = run_web_local_api_architecture_fixture()
     web_panel_dom_smoke = run_web_panel_dom_smoke()
@@ -1794,6 +1796,18 @@ def run_audit(args) -> dict:
                 and ("hashtag", "skincare") in creator_topic_inputs.get("topic", {}).get("source_pairs", [])
             ),
             creator_topic_inputs,
+        ),
+        check(
+            "/api/start 启动契约可审计且阻断路径不启动浏览器",
+            bool(
+                start_contract_fixture.get("passed")
+                and not start_contract_fixture.get("failed_cases")
+                and (start_contract_fixture.get("response_invariants") or {}).get("prelaunch_rejections_do_not_start_browser")
+                and (start_contract_fixture.get("response_invariants") or {}).get("prelaunch_rejections_do_not_submit")
+                and (start_contract_fixture.get("response_invariants") or {}).get("blocked_start_is_recoverable_and_supportable")
+                and len(start_contract_fixture.get("rejection_cases") or []) >= 8
+            ),
+            start_contract_fixture,
         ),
         check(
             "AI/规则能生成产品分析",

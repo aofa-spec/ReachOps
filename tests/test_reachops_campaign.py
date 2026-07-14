@@ -75,6 +75,7 @@ from tools.reachops_delivery_package_check import check_delivery_package as chec
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
 from tools.reachops_data_governance import build_report as build_reachops_data_governance_report
 from tools.reachops_security_supply_chain_audit import build_report as build_reachops_security_supply_chain_report
+from tools.reachops_start_contract_audit import build_report as build_reachops_start_contract_report
 from tools.reachops_outcome_metrics import (
     build_report as build_reachops_outcome_metrics_report,
     import_outcomes_csv as import_reachops_outcomes_csv,
@@ -1913,8 +1914,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(report["files"]["acceptance_inputs_template"]["exists"])
         self.assertTrue(report["files"]["live_acceptance_status"]["exists"])
         self.assertTrue(report["files"]["authorization_handoff_bundle"]["exists"])
+        self.assertTrue(report["files"]["start_contract_audit"]["exists"])
         self.assertTrue(report["contract_checks"]["tools/build_reachops_windows.ps1"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/run_reachops_acceptance_windows.ps1"]["ok"])
+        self.assertTrue(report["contract_checks"]["tools/reachops_start_contract_audit.py"]["ok"])
         self.assertTrue(report["build_contract"]["default_build_requires_installer"])
         self.assertTrue(report["build_contract"]["skip_installer_is_non_final"])
         self.assertTrue(report["build_contract"]["preflight_report_path"].endswith("windows_package_preflight.json"))
@@ -2960,6 +2963,35 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(update["downgrade_without_rollback_blocked"])
         self.assertTrue(update["explicit_rollback_available"])
         self.assertIn("manifest_signature", update["verified_fields"])
+
+    def test_reachops_start_contract_audit_covers_rejections_and_auditability(self):
+        report = build_reachops_start_contract_report()
+
+        self.assertEqual(report["schema_version"], "reachops.start_contract_audit.v1")
+        self.assertEqual(report["contract_version"], "reachops.api_start_contract.v1")
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["failed_cases"], [])
+        cases = {row["name"]: row for row in report["rejection_cases"]}
+        for name in [
+            "missing_target",
+            "untrusted_origin",
+            "group_list_unavailable",
+            "group_not_found",
+            "group_counts_incomplete",
+            "account_repair_required",
+            "live_comment_confirmation_required",
+            "live_submit_not_authorized",
+            "already_running",
+        ]:
+            self.assertTrue(cases[name]["passed"], name)
+            self.assertTrue(cases[name]["no_browser_started"], name)
+            self.assertTrue(cases[name]["no_submit"], name)
+            self.assertTrue(cases[name]["next_action"], name)
+        self.assertTrue(report["success_contract"]["execution_plan_persisted"])
+        self.assertTrue(report["success_contract"]["run_session_persisted"])
+        self.assertTrue(report["auditability"]["blocked_group_start_writes_execution_plan"])
+        self.assertTrue(report["auditability"]["blocked_group_start_writes_run_session"])
+        self.assertTrue(report["auditability"]["blocked_group_start_writes_page_state_sidecar"])
 
     def test_reachops_delivery_package_check_rejects_external_summary_and_manifest_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -5510,6 +5542,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         dependency_baseline_verifier = (root / "tools" / "verify_reachops_dependency_baseline.py").read_text(encoding="utf-8")
         data_governance = (root / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
         security_supply_chain_audit = (root / "tools" / "reachops_security_supply_chain_audit.py").read_text(encoding="utf-8")
+        start_contract_audit = (root / "tools" / "reachops_start_contract_audit.py").read_text(encoding="utf-8")
         data_migrations = (root / "ReachOps" / "intelligence" / "migrations.py").read_text(encoding="utf-8")
         outcome_metrics = (root / "tools" / "reachops_outcome_metrics.py").read_text(encoding="utf-8")
         storage = (root / "ReachOps" / "intelligence" / "storage.py").read_text(encoding="utf-8")
@@ -5923,6 +5956,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("REVOCATION_SLA_HOURS", security_supply_chain_audit)
         self.assertIn("LIVE_SUBMIT_ENTITLEMENT_REPLAYED", security_supply_chain_audit)
         self.assertIn("downgrade_without_rollback_blocked", security_supply_chain_audit)
+        self.assertIn("reachops.start_contract_audit.v1", start_contract_audit)
+        self.assertIn("reachops.api_start_contract.v1", start_contract_audit)
+        self.assertIn("profile_group_list_unavailable", start_contract_audit)
+        self.assertIn("profile_group_counts_incomplete", start_contract_audit)
+        self.assertIn("account_repair_required", start_contract_audit)
+        self.assertIn("LIVE_SUBMIT_NOT_AUTHORIZED", start_contract_audit)
+        self.assertIn("already_running", start_contract_audit)
         self.assertIn("SchemaMigration", data_migrations)
         self.assertIn("20260714_0001_data_privacy_audit", data_migrations)
         self.assertIn("20260714_0002_lead_outcomes", data_migrations)
@@ -6024,6 +6064,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("rollback_policy.allow_downgrade=true", reachops_readme)
         self.assertIn("entitlement_signature", reachops_readme)
         self.assertIn("reachops_security_supply_chain_audit.py --json", reachops_readme)
+        self.assertIn("reachops_start_contract_audit.py --json", reachops_readme)
         self.assertIn("replay", reachops_readme)
         self.assertIn("installer hash/size", reachops_readme)
         self.assertIn("schema_migrations", reachops_readme)

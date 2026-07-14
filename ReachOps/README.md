@@ -113,9 +113,12 @@ powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1 -SkipI
 
 ```bash
 python tools/reachops_security_supply_chain_audit.py --json
+python tools/reachops_start_contract_audit.py --json
 ```
 
 该检查会验证 packaged entitlement 的 key rotation、retired key 拒绝、revocation SLA、replay 标记拒绝、设备绑定、离线宽限、超并发设备限制和紧急禁用；同时验证 update manifest 的 HTTPS、`manifest_signature`、installer hash/size、product/channel/version 和 rollback/downgrade 策略。
+
+`reachops_start_contract_audit.py` 会验证 `/api/start` 的 JSON/loopback 请求边界、空目标、ixBrowser 分组不可用/不存在/数量不完整、账号修复未复检、真实评论未授权、重复启动和成功启动响应契约；阻断路径必须带稳定 error code、下一步动作、`no_browser_started=true`、`no_submit=true`，并保留 ExecutionPlan/RunSession/page-state 审计证据。
 
 ## 数据治理、迁移和恢复
 
