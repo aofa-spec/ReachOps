@@ -1243,6 +1243,76 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(dirty["git_worktree"]["dirty_count"], 1)
             self.assertEqual(dirty["git_worktree"]["dirty_items"][0]["path"], "scratch.txt")
 
+    def test_reachops_repository_cleanliness_ignores_gitignored_runtime_caches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            (root / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
+            (root / "ReachOps").mkdir()
+            (root / "ReachOps" / "valid.py").write_text("print('ok')\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore", "ReachOps/valid.py"], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=ReachOps Test",
+                    "-c",
+                    "user.email=reachops-test@example.test",
+                    "commit",
+                    "-m",
+                    "baseline",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            (root / "ReachOps" / "__pycache__").mkdir()
+            (root / "ReachOps" / "__pycache__" / "valid.cpython-311.pyc").write_bytes(b"bytecode")
+            clean = scan_repository_cleanliness(root)
+
+            self.assertEqual(clean["status"], "passed")
+            self.assertEqual(clean["forbidden_count"], 0)
+            self.assertGreaterEqual(clean["ignored_generated_count"], 1)
+            ignored_paths = {row["path"] for row in clean["ignored_generated_items"]}
+            self.assertIn("ReachOps/__pycache__", ignored_paths)
+
+    def test_reachops_repository_cleanliness_blocks_tracked_generated_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            (root / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
+            (root / "ReachOps" / "__pycache__").mkdir(parents=True)
+            (root / "ReachOps" / "__pycache__" / "valid.cpython-311.pyc").write_bytes(b"bytecode")
+            subprocess.run(
+                ["git", "add", ".gitignore", "-f", "ReachOps/__pycache__/valid.cpython-311.pyc"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=ReachOps Test",
+                    "-c",
+                    "user.email=reachops-test@example.test",
+                    "commit",
+                    "-m",
+                    "tracked cache",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            failed = scan_repository_cleanliness(root)
+
+            self.assertEqual(failed["status"], "failed")
+            paths = {row["path"] for row in failed["forbidden_items"]}
+            self.assertIn("ReachOps/__pycache__/valid.cpython-311.pyc", paths)
+            self.assertTrue(any(row.get("detail") == "forbidden_generated_artifact_tracked_by_git" for row in failed["forbidden_items"]))
+
     def test_reachops_operator_pressure_runs_multi_campaign_funnel_and_action_routing(self):
         class Args:
             base_dir = ""
