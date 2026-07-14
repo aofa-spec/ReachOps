@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import shutil
@@ -26,6 +27,7 @@ SCHEMA_VERSION = "reachops.data_governance.v1"
 SCHEMA_BASELINE_VERSION = "reachops.sqlite_schema_baseline.v1"
 PRIVACY_OPERATION_SCHEMA_VERSION = "reachops.privacy_operations.v1"
 RECOVERY_OBJECTIVE_SCHEMA_VERSION = "reachops.recovery_objectives.v1"
+SUPPORT_BUNDLE_MANIFEST_SCHEMA_VERSION = "reachops.support_bundle_manifest.v1"
 
 RECOVERY_OBJECTIVES: dict[str, Any] = {
     "schema_version": RECOVERY_OBJECTIVE_SCHEMA_VERSION,
@@ -136,6 +138,89 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _relative_support_path(base_dir: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(base_dir.resolve()).as_posix()
+    except Exception:
+        return ""
+
+
+def _support_exclude_match(relative_path: str) -> str:
+    normalized = relative_path.replace("\\", "/")
+    for pattern in SUPPORT_BUNDLE_EXCLUDE_PATTERNS:
+        if fnmatch.fnmatch(normalized, pattern):
+            return pattern
+    return ""
+
+
+def build_support_bundle_manifest(base_dir: Path, candidate_paths: list[Path] | None = None) -> dict[str, Any]:
+    base_dir = base_dir.resolve()
+    if candidate_paths is None:
+        candidate_paths = [
+            base_dir / "config" / "reachops_activation_status.json",
+            base_dir / "data" / "growth_intelligence" / "growth_intelligence.db",
+            base_dir / "reports" / "acceptance" / "action_submit_evidence" / "submit.png",
+            base_dir / "logs" / "reachops.log",
+            base_dir / "reports" / "support" / "diagnostics.json",
+        ]
+    included: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    outside_base: list[str] = []
+    for raw_path in candidate_paths:
+        path = Path(raw_path)
+        relative_path = _relative_support_path(base_dir, path)
+        if not relative_path:
+            outside_base.append(str(path))
+            excluded.append(
+                {
+                    "path": str(path),
+                    "relative_path": "",
+                    "reason": "outside_base_dir",
+                    "matched_pattern": "",
+                    "exists": path.exists(),
+                }
+            )
+            continue
+        matched_pattern = _support_exclude_match(relative_path)
+        detail = {
+            "path": str(path),
+            "relative_path": relative_path,
+            "exists": path.exists(),
+            "size_bytes": path.stat().st_size if path.exists() and path.is_file() else 0,
+            "sha256": sha256_file(path) if path.exists() and path.is_file() else "",
+        }
+        if matched_pattern:
+            excluded.append({**detail, "reason": "excluded_by_policy", "matched_pattern": matched_pattern})
+        else:
+            included.append({**detail, "redaction_required": True})
+    forbidden_included = [
+        item["relative_path"]
+        for item in included
+        if _support_exclude_match(str(item.get("relative_path") or ""))
+    ]
+    return {
+        "schema_version": SUPPORT_BUNDLE_MANIFEST_SCHEMA_VERSION,
+        "base_dir": str(base_dir),
+        "default_redacted": True,
+        "redaction_required_for_included_files": True,
+        "raw_database_included": any(
+            str(item.get("relative_path") or "").endswith((".db", ".db-wal", ".db-shm")) for item in included
+        ),
+        "activation_status_included": any(
+            str(item.get("relative_path") or "") == "config/reachops_activation_status.json" for item in included
+        ),
+        "evidence_image_included": any(
+            str(item.get("relative_path") or "").lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+            for item in included
+        ),
+        "included_files": included,
+        "excluded_files": excluded,
+        "outside_base_candidates": outside_base,
+        "forbidden_included": forbidden_included,
+        "passed": not forbidden_included and not outside_base,
+    }
 
 
 def ensure_schema(db_path: Path) -> None:
@@ -427,8 +512,11 @@ def verify_privacy_operation_audit(db_path: Path, *, workspace_id: str = "worksp
 
 
 def build_support_bundle_policy(base_dir: Path) -> dict[str, Any]:
+    dry_run_manifest = build_support_bundle_manifest(base_dir)
     return {
         "default_redacted": True,
+        "manifest_schema_version": SUPPORT_BUNDLE_MANIFEST_SCHEMA_VERSION,
+        "manifest_required": True,
         "base_dir": str(base_dir),
         "exclude_patterns": list(SUPPORT_BUNDLE_EXCLUDE_PATTERNS),
         "redacted_fields": [
@@ -448,6 +536,8 @@ def build_support_bundle_policy(base_dir: Path) -> dict[str, Any]:
             "proxy credentials",
             "account credentials",
         ],
+        "dry_run_manifest": dry_run_manifest,
+        "dry_run_manifest_passed": bool(dry_run_manifest.get("passed")),
     }
 
 

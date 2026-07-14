@@ -107,7 +107,7 @@ python tools/reachops_account_readiness_audit.py --json
 python tools/reachops_control_plane_audit.py --json
 ```
 
-该审计只证明当前本地客户端已有可审计的执行计划/RunSession 控制面边界、collector/action executor contract、CSV/Webhook outcome ingestion、packaged entitlement remote disable 和 redacted support bundle 策略。organization/workspace/member/role/seat 服务端控制面、server-side RBAC、plan/seat metering、非 TikTok connector、Web UI/API/服务拆分和产品 telemetry/crash reporting 仍是外部/后续交付项，不能用本地 JSON 代替。
+该审计只证明当前本地客户端已有可审计的执行计划/RunSession 控制面边界、collector/action executor contract、CSV/Webhook outcome ingestion、packaged entitlement remote disable，以及带 dry-run manifest 的 redacted support bundle 策略。organization/workspace/member/role/seat 服务端控制面、server-side RBAC、plan/seat metering、非 TikTok connector、Web UI/API/服务拆分和产品 telemetry/crash reporting 仍是外部/后续交付项，不能用本地 JSON 代替。
 
 Issues #1-#7 商业交付闭环索引审计：
 

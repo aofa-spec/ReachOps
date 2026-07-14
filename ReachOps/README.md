@@ -130,7 +130,7 @@ SQLite schema 迁移由 `ReachOps/intelligence/migrations.py` 注册，运行时
 python tools/reachops_data_governance.py --create-missing-db --verify-backup --verify-privacy-ops --json
 ```
 
-该检查会验证 schema integrity、已应用迁移、备份/恢复 hash、RPO/RTO、corruption drill、retention classes、PII data catalog、export/delete/legal hold 审计记录和默认 redacted support bundle policy。当前隐私操作验收是 dry-run 审计证据，不会在本地验收命令中实际删除客户数据。
+该检查会验证 schema integrity、已应用迁移、备份/恢复 hash、RPO/RTO、corruption drill、retention classes、PII data catalog、export/delete/legal hold 审计记录和带 dry-run manifest 的默认 redacted support bundle policy；manifest 必须证明授权状态、SQLite 数据库和证据图片不会被纳入支持包。当前隐私操作验收是 dry-run 审计证据，不会在本地验收命令中实际删除客户数据。
 
 ## WAQO 和商业结果漏斗
 
