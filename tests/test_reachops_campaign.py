@@ -2315,6 +2315,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("windows_package_preflight", report["sections"])
         self.assertIn("issue_closure", report["sections"])
         self.assertIn("final_gate", report["sections"])
+        windows_deliverable = next(row for row in report["deliverables"] if row["name"] == "Windows 最终交付包")
+        self.assertIn("issue_closure_payload", windows_deliverable["acceptance"])
         local_evidence = report["local_mvp_evidence"]
         self.assertIn("operation_counts", local_evidence)
         self.assertIn("no_action_reason", local_evidence)
@@ -3649,7 +3651,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
     def test_reachops_final_acceptance_gate_rejects_package_missing_required_report_file(self):
         package_check = final_package_check_payload()
-        package_check["report_files"].pop("live_submit")
+        package_check["report_files"].pop("issue_closure")
         package_check["report_files"]["live_preflight"]["size"] = 0
         with tempfile.TemporaryDirectory() as tmp:
             client_path = Path(tmp) / "latest_delivery_check.json"
@@ -3669,7 +3671,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(gate["status"], "failed")
         self.assertIn("delivery_package:passed", gate["failed_checks"])
         package_evidence = {row["name"]: row for row in gate["checks"]}["delivery_package:passed"]["evidence"]
-        self.assertNotIn("live_submit", package_evidence["report_files"])
+        self.assertNotIn("issue_closure", package_evidence["report_files"])
         self.assertEqual(package_evidence["report_files"]["live_preflight"]["size"], 0)
 
     def test_reachops_final_acceptance_gate_rejects_bootstrap_package_check(self):
@@ -5952,6 +5954,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         updater = (root / "ReachOps" / "updater.py").read_text(encoding="utf-8")
         update_manifest_writer = (root / "tools" / "write_reachops_update_manifest.py").read_text(encoding="utf-8")
         release_evidence = (root / "tools" / "reachops_release_evidence.py").read_text(encoding="utf-8")
+        final_acceptance_gate_tool = (root / "tools" / "reachops_final_acceptance_gate.py").read_text(encoding="utf-8")
+        goal_delivery_runner_tool = (root / "tools" / "reachops_goal_delivery_runner.py").read_text(encoding="utf-8")
         workflow = (root / ".github" / "workflows" / "reachops-ci.yml").read_text(encoding="utf-8")
         acceptance_inputs_template = (root / "tools" / "reachops_acceptance_inputs.example.ps1").read_text(encoding="utf-8")
         acceptance_inputs_init = (root / "tools" / "init_reachops_acceptance_inputs_windows.ps1").read_text(encoding="utf-8")
@@ -6489,6 +6493,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("build_dependency_report", release_evidence)
         self.assertIn("issue_closure_payload.json", release_evidence)
         self.assertIn("reachops_issue_closure_audit.py --json", release_evidence)
+        self.assertIn('"issue_closure"', final_acceptance_gate_tool)
+        self.assertIn("issue_closure_payload", goal_delivery_runner_tool)
         self.assertIn("cache-dependency-path: requirements.lock", workflow)
         self.assertIn("tools/verify_reachops_dependency_baseline.py --json", workflow)
         self.assertIn("selenium.webdriver.chrome.webdriver", spec)

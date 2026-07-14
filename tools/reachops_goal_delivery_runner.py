@@ -112,7 +112,7 @@ def build_deliverables() -> list[dict[str, Any]]:
             "name": "Windows 最终交付包",
             "path": "dist/ReachOps + dist/installer + reports/reachops_acceptance/<timestamp>/acceptance_summary.json",
             "required_for": "final_delivery",
-            "acceptance": "exe、installer、update manifest、acceptance_summary、windows_package_preflight、authorization_handoff、repository_cleanliness、final_acceptance_gate 全部存在且被 package check 验证。",
+            "acceptance": "exe、installer、update manifest、acceptance_summary、windows_package_preflight、issue_closure_payload、authorization_handoff、repository_cleanliness、final_acceptance_gate 全部存在且被 package check 验证。",
         },
         {
             "name": "授权真实提交证据",

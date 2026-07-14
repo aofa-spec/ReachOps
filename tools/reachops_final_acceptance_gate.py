@@ -38,6 +38,7 @@ REQUIRED_PACKAGE_REPORT_FILES = (
     "live_preflight",
     "goal_status",
     "live_submit",
+    "issue_closure",
     "final_acceptance_gate",
 )
 
