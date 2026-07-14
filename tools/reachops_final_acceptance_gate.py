@@ -214,6 +214,21 @@ def _issue_closure_ready(issue_closure: dict[str, Any] | None) -> bool:
     )
 
 
+def _external_pending_summary(issue_closure: dict[str, Any] | None, limit: int = 20) -> dict[str, Any]:
+    pending = [
+        str(item)
+        for item in ((issue_closure or {}).get("external_acceptance_pending") or [])
+        if str(item or "").strip()
+    ]
+    shown = pending[:limit]
+    return {
+        "external_acceptance_pending": shown,
+        "external_acceptance_pending_total": len(pending),
+        "external_acceptance_pending_displayed": len(shown),
+        "external_acceptance_pending_remaining": max(0, len(pending) - len(shown)),
+    }
+
+
 def _client_evidence_ready(client_delivery: dict[str, Any]) -> bool:
     if str(client_delivery.get("source") or "") == "acceptance_summary.client_delivery":
         return (
@@ -270,6 +285,7 @@ def _evidence_item(
     commands: list[str] | None = None,
     proof_fields: list[str] | None = None,
     blocker_codes: list[str] | None = None,
+    blocker_summary: dict[str, Any] | None = None,
     next_action: str = "",
 ) -> dict[str, Any]:
     return {
@@ -282,6 +298,7 @@ def _evidence_item(
         "commands": commands or [],
         "proof_fields": proof_fields or [],
         "blocker_codes": blocker_codes or [],
+        "blocker_summary": blocker_summary or {},
         "next_action": next_action,
     }
 
@@ -305,6 +322,7 @@ def build_final_delivery_evidence_plan(
         if isinstance(package_check.get("acceptance_verification"), dict)
         else {}
     )
+    issue_pending_summary = _external_pending_summary(issue_closure)
     items = [
         _evidence_item(
             scope="current_stage_gate",
@@ -431,16 +449,14 @@ def build_final_delivery_evidence_plan(
                 "issue_closure.github_issues.closure_requires_external_validation=false",
             ],
             blocker_codes=[
-                *[
-                    str(item)
-                    for item in ((issue_closure or {}).get("external_acceptance_pending") or [])[:20]
-                ],
+                *issue_pending_summary["external_acceptance_pending"],
                 *(
                     ["acceptance_criteria_external_pending"]
                     if int(((issue_closure or {}).get("summary") or {}).get("acceptance_criteria_external_pending") or 0)
                     else []
                 ),
             ],
+            blocker_summary=issue_pending_summary,
             next_action="完成 Issues #1-#7 中仍标记 external_pending 的验收标准，并复跑 tools\\reachops_issue_closure_audit.py --json。",
         ),
         _evidence_item(
@@ -779,12 +795,13 @@ def build_final_acceptance_gate(
         )
         next_actions.append("在 Windows 实机生成 exe、installer、update manifest 和通过的 acceptance_summary.json，然后复跑 tools\\reachops_delivery_package_check.py --json。")
     if issue_closure is not None and not _issue_closure_ready(issue_closure):
+        issue_pending_summary = _external_pending_summary(issue_closure)
         final_delivery_blockers.append(
             {
                 "scope": "commercial_issue_closure",
                 "status": str(issue_closure.get("status") or FAILED),
                 "summary": issue_summary,
-                "external_acceptance_pending": (issue_closure.get("external_acceptance_pending") or [])[:20],
+                **issue_pending_summary,
                 "required_evidence": [
                     "acceptance_criteria_total=53",
                     "acceptance_criteria_unclassified=0",

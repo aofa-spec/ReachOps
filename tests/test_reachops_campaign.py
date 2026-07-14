@@ -3832,7 +3832,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "acceptance_criteria_unclassified": 0,
                     "external_pending_count": 36,
                 },
-                "external_acceptance_pending": ["issue_3_100_real_no_submit_runs_three_industries"],
+                "external_acceptance_pending": [
+                    f"issue_external_pending_{index:02d}" for index in range(1, 23)
+                ],
             },
             delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 41, "pending_external_validation": 3}},
             operator_pressure={"status": "ok", "summary": {"customer_leads": 108, "outreach_actions": 216}},
@@ -3864,6 +3866,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("windows_final_artifacts", blockers)
         self.assertIn("commercial_issue_closure", blockers)
         self.assertIn("acceptance_summary", blockers["windows_final_artifacts"]["missing_artifacts"])
+        self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_total"], 22)
+        self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_displayed"], 20)
+        self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_remaining"], 2)
+        self.assertEqual(len(blockers["commercial_issue_closure"]["external_acceptance_pending"]), 20)
         evidence_plan = gate["final_delivery_evidence_plan"]
         self.assertEqual(evidence_plan["schema_version"], "reachops.final_delivery_evidence_plan.v1")
         self.assertFalse(evidence_plan["ready"])
@@ -3877,6 +3883,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("delivery_package.final_delivery_ready=true", plan_items["windows_final_artifacts"]["proof_fields"])
         self.assertIn("dist\\ReachOps\\ReachOps.exe", plan_items["windows_final_artifacts"]["required_artifacts"])
         self.assertIn("issue_closure.summary.acceptance_criteria_external_pending=0", plan_items["commercial_issue_closure"]["proof_fields"])
+        self.assertEqual(plan_items["commercial_issue_closure"]["blocker_summary"]["external_acceptance_pending_total"], 22)
+        self.assertEqual(plan_items["commercial_issue_closure"]["blocker_summary"]["external_acceptance_pending_remaining"], 2)
         self.assertTrue(any("Windows 实机生成" in item for item in gate["next_actions"]))
 
     def test_reachops_final_acceptance_gate_passes_only_when_all_final_evidence_is_ready(self):
