@@ -5438,6 +5438,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(missing_issue_closure_status["latest_acceptance"]["package_report_files_ready"])
             self.assertIn("delivery_package:evidence", missing_issue_closure_status["failed_checks"])
 
+            missing_authorization_handoff_report = json.loads(json.dumps(final_package))
+            missing_authorization_handoff_report["report_files"].pop("authorization_handoff")
+            (acceptance_dir / "delivery_package_check.json").write_text(
+                json.dumps(missing_authorization_handoff_report),
+                encoding="utf-8",
+            )
+
+            missing_authorization_handoff_status = build_reachops_live_acceptance_status(args)
+            self.assertFalse(missing_authorization_handoff_status["final_delivery_ready"])
+            self.assertFalse(missing_authorization_handoff_status["latest_acceptance"]["package_evidence_ready"])
+            self.assertFalse(missing_authorization_handoff_status["latest_acceptance"]["package_report_files_ready"])
+            self.assertIn("delivery_package:evidence", missing_authorization_handoff_status["failed_checks"])
+
             (acceptance_dir / "delivery_package_check.json").write_text(
                 json.dumps(final_package),
                 encoding="utf-8",
@@ -6178,12 +6191,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("issue_closure_ready = $issueClosureReady", acceptance_background_status_script)
         self.assertIn("issue_closure_missing", acceptance_background_status_script)
         self.assertIn("issue_closure_not_closed", acceptance_background_status_script)
+        self.assertIn("$RequiredPackageReportFiles", acceptance_background_status_script)
+        self.assertIn("required_package_report_files = $RequiredPackageReportFiles", acceptance_background_status_script)
+        self.assertIn("missing_package_report_files = $missingPackageReportFiles", acceptance_background_status_script)
+        self.assertIn("MISSING_PACKAGE_REPORT_FILES=", acceptance_background_status_script)
         self.assertIn("issue_closure_report_missing", acceptance_background_status_script)
-        self.assertIn("report_files.issue_closure", acceptance_background_status_script)
         self.assertIn("authorization_handoff_report_missing", acceptance_background_status_script)
-        self.assertIn("report_files.authorization_handoff", acceptance_background_status_script)
         self.assertIn("client_delivery_report_missing", acceptance_background_status_script)
-        self.assertIn("report_files.client_delivery", acceptance_background_status_script)
+        self.assertIn("repository_cleanliness_report_missing", acceptance_background_status_script)
+        self.assertIn("final_acceptance_gate_report_missing", acceptance_background_status_script)
+        self.assertIn('"repository_cleanliness"', acceptance_background_status_script)
+        self.assertIn('"final_acceptance_gate"', acceptance_background_status_script)
         self.assertIn("$deliveryPackageReady", acceptance_background_status_script)
         self.assertIn("delivery_package_check_not_final_ready", acceptance_background_status_script)
         self.assertIn("final_gate_report", acceptance_background_status_script)
