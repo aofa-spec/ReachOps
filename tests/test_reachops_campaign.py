@@ -3815,6 +3815,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "final_delivery_ready": False,
                 "failed_checks": ["acceptance:ready"],
                 "blockers": ["ixBrowser local API not ready"],
+                "account_blocker_resolution": {
+                    "schema_version": "reachops.account_blocker_resolution.v1",
+                    "status": "stale_repair_apply",
+                    "priority_action": "apply_latest_account_repair_plan",
+                    "ready_for_retest": False,
+                    "requires_latest_repair_apply": True,
+                    "does_not_claim_real_account_pool_ready": True,
+                },
                 "delivery_check_path": "reports/acceptance_remediation/latest_delivery_check.json",
             },
             package_check={
@@ -3879,6 +3887,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("client_delivery_gate", blockers)
         self.assertIn("windows_final_artifacts", blockers)
         self.assertIn("commercial_issue_closure", blockers)
+        self.assertEqual(
+            blockers["client_delivery_gate"]["account_blocker_resolution"]["priority_action"],
+            "apply_latest_account_repair_plan",
+        )
+        self.assertTrue(
+            blockers["client_delivery_gate"]["account_blocker_resolution"][
+                "does_not_claim_real_account_pool_ready"
+            ]
+        )
         self.assertIn("acceptance_summary", blockers["windows_final_artifacts"]["missing_artifacts"])
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_total"], 22)
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_displayed"], 20)

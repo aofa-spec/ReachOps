@@ -208,6 +208,80 @@ def build_real_pilot_evidence_boundary(
     }
 
 
+def build_account_blocker_resolution(
+    acceptance: dict,
+    *,
+    batch: dict | None = None,
+    account_repair_summary: dict | None = None,
+    account_repair_apply: dict | None = None,
+) -> dict:
+    batch = batch if isinstance(batch, dict) else {}
+    repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
+    repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
+    readiness = str((acceptance if isinstance(acceptance, dict) else {}).get("readiness") or "")
+    checks = (acceptance.get("checks") if isinstance(acceptance, dict) else {}) or {}
+    profile_available = int(checks.get("profile_available_count") or 0)
+    effective_status = account_repair_apply_effective_status(repair_apply)
+    repair_plan_available = repair_summary.get("status") == "ok"
+    repair_plan_profiles = int(repair_summary.get("total_unique_profiles_by_error") or 0)
+    blocker_codes: list[str] = []
+    status = "not_blocked"
+    priority_action = ""
+    ready_for_retest = False
+    requires_latest_repair_apply = False
+    requires_manual_account_work = False
+    if readiness == "blocked_by_accounts":
+        if effective_status == "pending_recheck":
+            status = "pending_recheck"
+            priority_action = "rerun_client_preflight"
+            ready_for_retest = True
+            blocker_codes.append("account_repair_applied_pending_recheck")
+        elif effective_status == "stale":
+            status = "stale_repair_apply"
+            priority_action = "apply_latest_account_repair_plan"
+            requires_latest_repair_apply = True
+            blocker_codes.append("account_repair_apply_stale")
+        elif effective_status == "group_mismatch":
+            status = "repair_apply_group_mismatch"
+            priority_action = "apply_current_group_account_repair_plan"
+            requires_latest_repair_apply = True
+            blocker_codes.append("account_repair_apply_group_mismatch")
+        elif effective_status == "no_applicable_profiles":
+            status = "manual_account_work_required"
+            priority_action = "manually_repair_or_replace_accounts"
+            requires_manual_account_work = True
+            blocker_codes.append("account_repair_no_applicable_profiles")
+        elif repair_plan_available and repair_plan_profiles > 0:
+            status = "repair_plan_ready"
+            priority_action = "apply_latest_account_repair_plan"
+            requires_latest_repair_apply = True
+            blocker_codes.append("account_repair_plan_ready")
+        else:
+            status = "account_pool_empty"
+            priority_action = "create_or_repair_real_account_pool"
+            requires_manual_account_work = True
+            blocker_codes.append("profile_available_zero")
+    return {
+        "schema_version": "reachops.account_blocker_resolution.v1",
+        "status": status,
+        "readiness": readiness,
+        "profile_group": str(batch.get("profile_group") or repair_summary.get("profile_group") or ""),
+        "batch_id": str(batch.get("id") or repair_summary.get("batch_id") or ""),
+        "profile_available": profile_available,
+        "repair_plan_available": repair_plan_available,
+        "repair_plan_path": str(repair_summary.get("path") or ""),
+        "repair_plan_profile_count": repair_plan_profiles,
+        "latest_apply_effective_status": effective_status,
+        "latest_apply_effective_message": account_repair_apply_effective_message(repair_apply),
+        "ready_for_retest": ready_for_retest,
+        "requires_latest_repair_apply": requires_latest_repair_apply,
+        "requires_manual_account_work": requires_manual_account_work,
+        "priority_action": priority_action,
+        "blocker_codes": blocker_codes,
+        "does_not_claim_real_account_pool_ready": bool(readiness == "blocked_by_accounts" and profile_available <= 0),
+    }
+
+
 def build_autonomous_product_contract_check() -> dict:
     plan = build_execution_plan(
         target="anti aging serum",
@@ -875,6 +949,12 @@ def build_delivery_check(
         account_repair_summary=account_repair_summary,
         account_repair_apply=account_repair_apply,
     )
+    account_blocker_resolution = build_account_blocker_resolution(
+        acceptance,
+        batch=batch,
+        account_repair_summary=account_repair_summary,
+        account_repair_apply=account_repair_apply,
+    )
 
     return {
         "root_dir": str(ROOT_DIR),
@@ -892,6 +972,7 @@ def build_delivery_check(
         "no_action_reason": acceptance.get("no_action_reason") or {},
         "operation_counts": (operations.get("counts") if isinstance(operations, dict) else {}) or {},
         "real_pilot_evidence": real_pilot_evidence,
+        "account_blocker_resolution": account_blocker_resolution,
         "remediation_report": remediation,
         "account_repair_summary": account_repair_summary,
         "account_repair_apply": account_repair_apply,

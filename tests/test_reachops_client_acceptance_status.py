@@ -39,6 +39,7 @@ from tools import reachops_web_ui
 from tools import reachops_mac_loop_acceptance
 from tools.reachops_client_delivery_check import (
     account_repair_summary_lines,
+    build_account_blocker_resolution,
     build_delivery_check,
     build_real_pilot_evidence_boundary,
     latest_account_repair_apply_status,
@@ -3985,6 +3986,14 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(checks["manifest:account_repair_summary"]["total_error_events_by_error"], 2)
         self.assertEqual(checks["manifest:account_repair_summary"]["summary_only_error_count"], 0)
         self.assertEqual(checks["manifest:account_repair_summary"]["error_group_count"], 2)
+        resolution = payload["account_blocker_resolution"]
+        self.assertEqual(resolution["schema_version"], "reachops.account_blocker_resolution.v1")
+        self.assertEqual(resolution["status"], "repair_plan_ready")
+        self.assertEqual(resolution["priority_action"], "apply_latest_account_repair_plan")
+        self.assertTrue(resolution["requires_latest_repair_apply"])
+        self.assertFalse(resolution["ready_for_retest"])
+        self.assertTrue(resolution["does_not_claim_real_account_pool_ready"])
+        self.assertEqual(resolution["repair_plan_profile_count"], 2)
         self.assertTrue(repair_plan_exists)
 
     def test_delivery_check_missing_account_repair_plan_is_not_file_error(self):
@@ -4042,6 +4051,34 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(payload["account_repair_apply"]["source"], "growth_ops_runtime.log")
         self.assertIn("等待重新预检", payload["blockers"][0])
         self.assertIn("点击开始获客复测 United States 分组", payload["next_actions"][0])
+        resolution = payload["account_blocker_resolution"]
+        self.assertEqual(resolution["status"], "pending_recheck")
+        self.assertEqual(resolution["priority_action"], "rerun_client_preflight")
+        self.assertTrue(resolution["ready_for_retest"])
+        self.assertFalse(resolution["requires_latest_repair_apply"])
+        self.assertTrue(resolution["does_not_claim_real_account_pool_ready"])
+
+    def test_account_blocker_resolution_prioritizes_manual_account_work_when_no_apply_candidates(self):
+        resolution = build_account_blocker_resolution(
+            {
+                "readiness": "blocked_by_accounts",
+                "checks": {"profile_available_count": 0},
+            },
+            batch={"id": "gb_manual", "profile_group": "United States"},
+            account_repair_summary={
+                "status": "ok",
+                "path": "/tmp/latest_account_repair_plan.json",
+                "profile_group": "United States",
+                "total_unique_profiles_by_error": 0,
+            },
+            account_repair_apply={"status": "no_applicable_profiles"},
+        )
+
+        self.assertEqual(resolution["status"], "manual_account_work_required")
+        self.assertEqual(resolution["priority_action"], "manually_repair_or_replace_accounts")
+        self.assertTrue(resolution["requires_manual_account_work"])
+        self.assertFalse(resolution["ready_for_retest"])
+        self.assertIn("account_repair_no_applicable_profiles", resolution["blocker_codes"])
 
     def test_account_repair_apply_status_normalizes_counts_from_results(self):
         with TemporaryDirectory() as tmpdir:
