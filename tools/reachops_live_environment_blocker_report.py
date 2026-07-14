@@ -60,6 +60,42 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def package_blocker_summary(package: dict[str, Any]) -> dict[str, Any]:
+    artifacts = _as_dict(package.get("artifacts"))
+    report_files = _as_dict(package.get("report_files"))
+    acceptance_verification = _as_dict(package.get("acceptance_verification"))
+    missing_artifact_paths = {
+        name: str(payload.get("path") or "")
+        for name, payload in sorted(artifacts.items())
+        if isinstance(payload, dict) and not bool(payload.get("exists"))
+    }
+    missing_report_files = [
+        name
+        for name, payload in sorted(report_files.items())
+        if isinstance(payload, dict) and not bool(payload.get("exists"))
+    ]
+    return {
+        "schema_version": "reachops.windows_final_artifacts_blocker_summary.v1",
+        "status": str(package.get("status") or ""),
+        "final_delivery_ready": bool(package.get("final_delivery_ready")),
+        "bootstrap_only": bool(package.get("bootstrap_only")),
+        "missing_artifacts": [str(item) for item in _as_list(package.get("missing_artifacts")) if str(item or "").strip()],
+        "missing_artifact_paths": missing_artifact_paths,
+        "failures": [str(item) for item in _as_list(package.get("failures")) if str(item or "").strip()],
+        "acceptance_verification_passed": bool(acceptance_verification.get("passed")),
+        "acceptance_verification_failures": [
+            str(item) for item in _as_list(acceptance_verification.get("failures")) if str(item or "").strip()
+        ],
+        "acceptance_verification_pending": [
+            str(item) for item in _as_list(acceptance_verification.get("pending")) if str(item or "").strip()
+        ],
+        "missing_report_files": missing_report_files,
+        "next_required_command": "python tools\\reachops_delivery_package_check.py --json",
+        "windows_acceptance_command": "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_acceptance_windows.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
+        "does_not_claim_final_delivery_ready": not bool(package.get("final_delivery_ready")),
+    }
+
+
 def pending_external_items(summary: dict[str, Any], verification: dict[str, Any]) -> list[str]:
     goal_status = _as_dict(summary.get("goal_status"))
     items: list[str] = []
@@ -197,6 +233,7 @@ def build_report(summary: dict[str, Any], summary_path: str = "", package_check:
         and package_report_files_ready
         and package_acceptance_verification_ready
     )
+    package_blocker = package_blocker_summary(package) if package else {}
     if package and not package_final_ready:
         blockers.append(
             {
@@ -216,6 +253,7 @@ def build_report(summary: dict[str, Any], summary_path: str = "", package_check:
                 "final_gate_report": package_final_gate_report,
                 "final_gate_summary_ready": package_final_gate_summary_ready,
                 "package_final_gate_summary_ready": package_final_gate_summary_ready,
+                "blocker_summary": package_blocker,
             }
         )
     if not final_gate_ready:
@@ -273,6 +311,7 @@ def build_report(summary: dict[str, Any], summary_path: str = "", package_check:
             "final_gate_summary_ready": package_final_gate_summary_ready,
             "package_final_gate_summary_ready": package_final_gate_summary_ready,
             "final_gate_report": package_final_gate_report,
+            "blocker_summary": package_blocker,
         },
         "ready_profile_ids": ready_profile_ids,
         "failed_profile_ids": failed_profile_ids,

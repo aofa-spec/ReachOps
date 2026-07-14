@@ -2241,6 +2241,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(blocker_report["delivery_package"]["final_delivery_ready"])
         self.assertTrue(blocker_report["delivery_package"]["bootstrap_only"])
         self.assertFalse(blocker_report["delivery_package"]["final_gate_summary_ready"])
+        self.assertEqual(
+            blocker_report["delivery_package"]["blocker_summary"]["schema_version"],
+            "reachops.windows_final_artifacts_blocker_summary.v1",
+        )
+        self.assertTrue(blocker_report["delivery_package"]["blocker_summary"]["bootstrap_only"])
+        package_blocker = [row for row in blocker_report["blockers"] if row["scope"] == "final_delivery_package"][0]
+        self.assertEqual(
+            package_blocker["blocker_summary"]["next_required_command"],
+            "python tools\\reachops_delivery_package_check.py --json",
+        )
 
         weak_package_blocker_report = build_reachops_live_environment_blocker_report(
             evidenced_preflight_summary,
@@ -2274,12 +2284,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(weak_inner_evidence_report["delivery_package"]["artifacts_ready"])
         self.assertFalse(weak_inner_evidence_report["delivery_package"]["report_files_ready"])
         self.assertFalse(weak_inner_evidence_report["delivery_package"]["acceptance_verification_ready"])
+        self.assertIn(
+            "live_submit_missing",
+            weak_inner_evidence_report["delivery_package"]["blocker_summary"]["acceptance_verification_failures"],
+        )
         weak_inner_package_blocker = [
             row for row in weak_inner_evidence_report["blockers"] if row["scope"] == "final_delivery_package"
         ][0]
         self.assertFalse(weak_inner_package_blocker["artifacts_ready"])
         self.assertFalse(weak_inner_package_blocker["report_files_ready"])
         self.assertFalse(weak_inner_package_blocker["acceptance_verification_ready"])
+        self.assertIn("authorization_handoff", weak_inner_package_blocker["blocker_summary"]["missing_report_files"])
 
         stale_goal_summary = json.loads(json.dumps(passed_summary))
         stale_goal_summary["goal_status"]["status"] = "ready_for_external_validation"
