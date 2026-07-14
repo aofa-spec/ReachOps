@@ -783,6 +783,7 @@ def write_remediation_report(
         index_path,
         account_plan_md_path=account_plan_md_path,
         account_plan_json_path=account_plan_json_path,
+        account_plan=account_plan,
     )
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     latest_manifest_path = report_dir / "latest_acceptance_manifest.json"
@@ -829,9 +830,10 @@ def build_acceptance_manifest(
     *,
     account_plan_md_path: Path | None = None,
     account_plan_json_path: Path | None = None,
+    account_plan: dict | None = None,
 ) -> dict:
     root = ROOT_DIR
-    return {
+    manifest = {
         "batch_id": str(batch.get("id") or ""),
         "batch_status": str(batch.get("status") or ""),
         "profile_group": str(batch.get("profile_group") or ""),
@@ -876,6 +878,27 @@ def build_acceptance_manifest(
             for row in rows
         ],
     }
+    if account_plan:
+        manifest["account_repair_summary"] = {
+            "batch_id": str(account_plan.get("batch_id") or ""),
+            "batch_status": str(account_plan.get("batch_status") or ""),
+            "profile_group": str(account_plan.get("profile_group") or ""),
+            "total_unique_profiles_by_error": int(account_plan.get("total_unique_profiles_by_error") or 0),
+            "total_error_events_by_error": int(account_plan.get("total_error_events_by_error") or 0),
+            "summary_only_error_count": int(account_plan.get("summary_only_error_count") or 0),
+            "error_groups": [
+                {
+                    "error": str(row.get("error") or ""),
+                    "count": int(row.get("count") or 0),
+                    "profile_ids_total": int(row.get("profile_ids_total") or len(row.get("profile_ids") or [])),
+                    "summary_only_count": int(row.get("summary_only_count") or 0),
+                    "count_source": str(row.get("count_source") or "profile_preflight_detail"),
+                    "recommended_action": str(row.get("recommended_action") or ""),
+                }
+                for row in account_plan.get("groups") or []
+            ],
+        }
+    return manifest
 
 
 def build_acceptance_markdown(batch: dict, rows: list[dict], csv_path: Path, json_path: Path) -> str:

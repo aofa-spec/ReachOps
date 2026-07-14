@@ -795,6 +795,38 @@ def build_delivery_check(
             "path": str(manifest_path),
         }
     )
+    manifest_repair_summary = (
+        manifest.get("account_repair_summary") if isinstance(manifest.get("account_repair_summary"), dict) else {}
+    )
+    manifest_error_groups = manifest_repair_summary.get("error_groups") or []
+    def manifest_int(value: object) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    manifest_unique_profiles = manifest_int(manifest_repair_summary.get("total_unique_profiles_by_error"))
+    manifest_error_events = manifest_int(manifest_repair_summary.get("total_error_events_by_error"))
+    manifest_summary_only = manifest_int(manifest_repair_summary.get("summary_only_error_count"))
+    checks.append(
+        {
+            "name": "manifest:account_repair_summary",
+            "ok": (not profile_details)
+            or (
+                isinstance(manifest_error_groups, list)
+                and len(manifest_error_groups) > 0
+                and manifest_unique_profiles >= 0
+                and manifest_error_events >= len(profile_details)
+                and manifest_summary_only >= 0
+            ),
+            "required": bool(profile_details),
+            "path": str(manifest_path),
+            "total_unique_profiles_by_error": manifest_unique_profiles,
+            "total_error_events_by_error": manifest_error_events,
+            "summary_only_error_count": manifest_summary_only,
+            "error_group_count": len(manifest_error_groups) if isinstance(manifest_error_groups, list) else 0,
+        }
+    )
     checks.append(
         {
             "name": "acceptance:current_state_known",

@@ -555,6 +555,14 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertIn("client_acceptance_guide", manifest["reports"])
         self.assertIn("acceptance_index_html", manifest["reports"])
         self.assertIn("account_repair_plan_markdown", manifest["reports"])
+        self.assertEqual(manifest["account_repair_summary"]["total_unique_profiles_by_error"], 2)
+        self.assertEqual(manifest["account_repair_summary"]["total_error_events_by_error"], 2)
+        self.assertEqual(manifest["account_repair_summary"]["summary_only_error_count"], 0)
+        self.assertEqual(
+            {row["error"]: row["profile_ids_total"] for row in manifest["account_repair_summary"]["error_groups"]},
+            {"PROFILE_START_FAILED": 1, "LOGIN_REQUIRED": 1},
+        )
+        self.assertEqual(latest_manifest["account_repair_summary"], manifest["account_repair_summary"])
         errors = {row["error"]: row for row in account_plan["groups"]}
         self.assertIn("PROFILE_START_FAILED", errors)
         self.assertIn("LOGIN_REQUIRED", errors)
@@ -621,6 +629,11 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
                 root / "fix.md",
                 root / "guide.md",
                 root / "index.html",
+                account_plan=build_account_repair_plan(
+                    {"id": "gb_1", "status": "failed", "profile_group": "United States"},
+                    [{"profile_id": "45", "error": "PROFILE_START_FAILED", "message": "start failed"}],
+                    preflight_errors={"PROFILE_START_FAILED": 1, "PAGE_OPEN_FAILED": 3},
+                ),
             )
 
         self.assertIn("web_ui", manifest["client_entrypoints"])
@@ -630,6 +643,15 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertEqual(manifest["web_operator_api"]["final_status"], "/api/final-status")
         self.assertEqual(manifest["blocked_profiles"][0]["profile_id"], "45")
         self.assertEqual(manifest["readiness"], "blocked_by_accounts")
+        self.assertEqual(manifest["account_repair_summary"]["total_unique_profiles_by_error"], 1)
+        self.assertEqual(manifest["account_repair_summary"]["total_error_events_by_error"], 4)
+        self.assertEqual(manifest["account_repair_summary"]["summary_only_error_count"], 3)
+        errors = {row["error"]: row for row in manifest["account_repair_summary"]["error_groups"]}
+        self.assertEqual(errors["PROFILE_START_FAILED"]["profile_ids_total"], 1)
+        self.assertEqual(errors["PROFILE_START_FAILED"]["summary_only_count"], 0)
+        self.assertEqual(errors["PAGE_OPEN_FAILED"]["profile_ids_total"], 0)
+        self.assertEqual(errors["PAGE_OPEN_FAILED"]["summary_only_count"], 3)
+        self.assertEqual(errors["PAGE_OPEN_FAILED"]["count_source"], "profile_preflight_summary")
 
     def test_recommended_profile_action_mentions_kernel_for_mismatch(self):
         self.assertIn("内核", recommended_profile_action("IXBROWSER_KERNEL_MISMATCH"))
@@ -3897,10 +3919,13 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertIn("autonomous_product_core_contract", names)
         self.assertIn("manifest:entrypoints", names)
         self.assertIn("manifest:web_operator_final_status_api", names)
+        self.assertIn("manifest:account_repair_summary", names)
         self.assertIn("acceptance:ready", names)
         self.assertIn(payload["readiness"], {"pass", "partial", "blocked_by_accounts", "blocked_by_environment", "not_started", "pending_new_run"})
         manifest_check = next(item for item in payload["checks"] if item["name"] == "manifest:entrypoints")
         self.assertTrue(manifest_check["ok"])
+        repair_manifest_check = next(item for item in payload["checks"] if item["name"] == "manifest:account_repair_summary")
+        self.assertTrue(repair_manifest_check["ok"])
         version_check = next(item for item in payload["checks"] if item["name"] == "web_ui_version_api_local_client_identity")
         self.assertTrue(version_check["ok"])
         self.assertEqual(version_check["version_payload"]["version"], reachops_web_ui.WEB_UI_VERSION)
@@ -3954,6 +3979,12 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(errors["IXBROWSER_KERNEL_MISMATCH"]["count"], 1)
         self.assertEqual(errors["IXBROWSER_KERNEL_MISMATCH"]["profile_ids_sample"], ["21644"])
         self.assertEqual(errors["LOGIN_REQUIRED"]["profile_ids_sample"], ["23946"])
+        checks = {item["name"]: item for item in payload["checks"]}
+        self.assertTrue(checks["manifest:account_repair_summary"]["ok"])
+        self.assertEqual(checks["manifest:account_repair_summary"]["total_unique_profiles_by_error"], 2)
+        self.assertEqual(checks["manifest:account_repair_summary"]["total_error_events_by_error"], 2)
+        self.assertEqual(checks["manifest:account_repair_summary"]["summary_only_error_count"], 0)
+        self.assertEqual(checks["manifest:account_repair_summary"]["error_group_count"], 2)
         self.assertTrue(repair_plan_exists)
 
     def test_delivery_check_missing_account_repair_plan_is_not_file_error(self):
@@ -4811,6 +4842,8 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertFalse(checks["report:latest_index_path"]["required"])
         self.assertTrue(checks["manifest:entrypoints"]["ok"])
         self.assertFalse(checks["manifest:entrypoints"]["required"])
+        self.assertTrue(checks["manifest:account_repair_summary"]["ok"])
+        self.assertFalse(checks["manifest:account_repair_summary"]["required"])
 
     def test_delivery_check_requires_local_client_console_manifest_entrypoint(self):
         with TemporaryDirectory() as tmpdir:
@@ -4831,6 +4864,12 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                             "final_status": "/api/final-status",
                             "final_status_no_browser_started": True,
                             "final_status_no_submit": True,
+                        },
+                        "account_repair_summary": {
+                            "total_unique_profiles_by_error": "not-a-number",
+                            "total_error_events_by_error": "not-a-number",
+                            "summary_only_error_count": "not-a-number",
+                            "error_groups": [{"error": "LOGIN_REQUIRED"}],
                         },
                     },
                     ensure_ascii=False,
@@ -4861,8 +4900,12 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
 
         checks = {item["name"]: item for item in payload["checks"]}
         self.assertFalse(checks["manifest:entrypoints"]["ok"])
+        self.assertFalse(checks["manifest:account_repair_summary"]["ok"])
         self.assertTrue(checks["manifest:entrypoints"]["required"])
+        self.assertTrue(checks["manifest:account_repair_summary"]["required"])
+        self.assertEqual(checks["manifest:account_repair_summary"]["total_error_events_by_error"], 0)
         self.assertIn("manifest:entrypoints", payload["failed_checks"])
+        self.assertIn("manifest:account_repair_summary", payload["failed_checks"])
 
     def test_delivery_check_does_not_mark_environment_blocker_as_accepted(self):
         with TemporaryDirectory() as tmpdir:
