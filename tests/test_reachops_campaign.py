@@ -90,6 +90,7 @@ from tools.reachops_final_acceptance_gate import build_final_acceptance_gate as 
 from tools.reachops_final_acceptance_gate import client_delivery_from_acceptance_summary as reachops_client_delivery_from_acceptance_summary
 from tools.reachops_final_acceptance_gate import main as reachops_final_acceptance_gate_main
 from tools.reachops_goal_delivery_runner import build_report as build_reachops_goal_delivery_report
+from tools.reachops_goal_delivery_runner import command_payload as reachops_goal_delivery_command_payload
 from tools.reachops_goal_delivery_runner import build_delivery_boundary as build_reachops_delivery_boundary
 from tools.reachops_goal_delivery_runner import build_deliverable_index as build_reachops_deliverable_index
 from tools.reachops_goal_delivery_runner import render_markdown_summary as render_reachops_goal_delivery_summary
@@ -2689,6 +2690,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(report["execution_contract"]["mode"], "local_pm_goal_gate")
         self.assertTrue(report["execution_contract"]["does_not_submit"])
         self.assertTrue(report["execution_contract"]["does_not_open_browser_profile"])
+        self.assertEqual(report["execution_contract"]["section_timeouts"]["mvp_acceptance"], 15)
+        self.assertEqual(report["execution_contract"]["section_timeouts"]["client_delivery"], 15)
         self.assertTrue(report["execution_contract"]["operator_summary"].endswith("latest_goal_delivery_summary.md"))
         self.assertIn("ready_conditions", report["start_acquisition_contract"])
         self.assertTrue(any("ixBrowser Local API" in row for row in report["start_acquisition_contract"]["ready_conditions"]))
@@ -2752,6 +2755,106 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("`authorized_live_submit` | `false`", markdown)
         self.assertIn("`commercial_issue_closure` | `false`", markdown)
         self.assertIn("本地 MVP 可验收不等于最终客户交付完成", markdown)
+
+    def test_reachops_goal_delivery_command_payload_reports_timeout(self):
+        with patch(
+            "tools.reachops_goal_delivery_runner.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(
+                cmd=["python", "tools/slow_section.py", "--json"],
+                timeout=3,
+                output="partial output",
+                stderr="slow dependency",
+            ),
+        ):
+            section = reachops_goal_delivery_command_payload(
+                ["python", "tools/slow_section.py", "--json"],
+                timeout=3,
+            )
+
+        self.assertEqual(section["returncode"], 124)
+        self.assertTrue(section["timed_out"])
+        self.assertEqual(section["timeout_seconds"], 3)
+        self.assertEqual(section["payload"]["status"], "timeout")
+        self.assertTrue(section["payload"]["timed_out"])
+        self.assertIn("partial output", section["payload"]["stdout_tail"])
+        self.assertIn("timeout_after_3s", section["stderr"])
+
+    def test_reachops_goal_delivery_report_surfaces_section_timeouts(self):
+        def section(payload, returncode=0, *, timed_out=False, timeout_seconds=10):
+            return {
+                "command": "fixture",
+                "returncode": returncode,
+                "stderr": "timeout_after_10s" if timed_out else "",
+                "timeout_seconds": timeout_seconds,
+                "timed_out": timed_out,
+                "payload": payload,
+            }
+
+        def fake_command_payload(command, timeout=120):
+            script = " ".join(command)
+            if "reachops_mvp_acceptance_summary.py" in script:
+                return section(
+                    {
+                        "status": "timeout",
+                        "timed_out": True,
+                        "timeout_seconds": timeout,
+                        "next_action": "Run MVP acceptance directly.",
+                    },
+                    returncode=124,
+                    timed_out=True,
+                    timeout_seconds=timeout,
+                )
+            if "reachops_mac_loop_acceptance.py" in script:
+                return section({"status": "passed", "mac_loop_ready": True, "checks": {}})
+            if "reachops_client_delivery_check.py" in script:
+                return section({"status": "blocked_by_environment", "final_delivery_ready": False, "failed_checks": ["acceptance:ready"]})
+            if "reachops_windows_package_preflight.py" in script:
+                return section({"status": "ready_for_windows_build", "ready_for_windows_build": True, "failures": []})
+            if "reachops_issue_closure_audit.py" in script:
+                return section(
+                    {
+                        "schema_version": "reachops.issue_closure_audit.v1",
+                        "status": "passed_with_external_acceptance_pending",
+                        "passed": True,
+                        "github_issues": {"closure_requires_external_validation": True},
+                        "summary": {
+                            "issues_total": 7,
+                            "local_contracts_passed": 7,
+                            "acceptance_criteria_total": 53,
+                            "acceptance_criteria_local_passed": 36,
+                            "acceptance_criteria_external_pending": 17,
+                            "acceptance_criteria_unclassified": 0,
+                            "external_pending_count": 36,
+                        },
+                        "external_acceptance_pending": ["issue_3_100_real_no_submit_runs_three_industries"],
+                    }
+                )
+            if "reachops_delivery_package_check.py" in script:
+                return section({"status": "failed", "missing_artifacts": ["acceptance_summary"]}, returncode=1)
+            if "reachops_final_acceptance_gate.py" in script:
+                return section(
+                    {
+                        "status": "not_ready",
+                        "final_delivery_ready": False,
+                        "failed_checks": ["delivery_package:passed"],
+                        "final_delivery_blockers": [],
+                    },
+                    returncode=1,
+                )
+            if "reachops_repository_cleanliness_check.py" in script:
+                return section({"status": "passed", "passed": True})
+            return section({})
+
+        with patch("tools.reachops_goal_delivery_runner.command_payload", side_effect=fake_command_payload):
+            report = build_reachops_goal_delivery_report()
+
+        self.assertFalse(report["final_delivery_ready"])
+        timeout_blocker = next(row for row in report["blockers"] if row["scope"] == "goal_delivery_section_timeout")
+        self.assertEqual(timeout_blocker["status"], "timeout")
+        self.assertEqual(timeout_blocker["timed_out_sections"], ["mvp_acceptance"])
+        self.assertEqual(report["section_timeouts"][0]["section"], "mvp_acceptance")
+        self.assertIn("Run MVP acceptance directly.", report["section_timeouts"][0]["next_action"])
+        self.assertEqual(report["sections"]["mvp_acceptance"]["returncode"], 124)
 
     def test_reachops_goal_delivery_does_not_mark_live_submit_ready_without_final_gate_evidence(self):
         blockers = [{"scope": "external_authorized_execution", "status": "missing_final_gate_evidence"}]

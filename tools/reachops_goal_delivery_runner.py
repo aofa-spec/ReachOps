@@ -21,18 +21,53 @@ LIVE_READINESS_REPORT_PATH = ACCEPTANCE_REMEDIATION_DIR / "latest_live_acceptanc
 LIVE_READINESS_JSON_PATH = ACCEPTANCE_REMEDIATION_DIR / "latest_live_acceptance_readiness.json"
 AUTHORIZATION_HANDOFF_BUNDLE_PATH = ACCEPTANCE_REMEDIATION_DIR / "latest_reachops_authorization_handoff.zip"
 RUNTIME_LOG_PATH = ROOT_DIR / "reports/reachops/mac_gui/runtime/logs/growth_ops_runtime.log"
+SECTION_TIMEOUT_RETURN_CODE = 124
+PM_SECTION_TIMEOUTS = {
+    "mvp_acceptance": 15,
+    "mac_loop_acceptance": 45,
+    "client_delivery": 15,
+    "windows_package_preflight": 20,
+    "issue_closure": 20,
+    "delivery_package": 20,
+    "final_gate": 30,
+    "repository_cleanliness": 15,
+}
+
+
+def _timeout_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace").strip()
+    return str(value).strip()
 
 
 def run_json(command: list[str], timeout: int = 120) -> tuple[dict[str, Any], int, str]:
-    completed = subprocess.run(
-        command,
-        cwd=str(ROOT_DIR),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-        env={"PYTHONDONTWRITEBYTECODE": "1", **dict(os.environ)},
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env={"PYTHONDONTWRITEBYTECODE": "1", **dict(os.environ)},
+        )
+    except subprocess.TimeoutExpired as exc:
+        return (
+            {
+                "status": "timeout",
+                "passed": False,
+                "timed_out": True,
+                "timeout_seconds": timeout,
+                "command": " ".join(command),
+                "stdout_tail": _timeout_text(exc.output)[-4000:],
+                "stderr_tail": _timeout_text(exc.stderr)[-4000:],
+                "next_action": "Run this section command directly, fix the slow or blocked dependency, then rerun goal delivery.",
+            },
+            SECTION_TIMEOUT_RETURN_CODE,
+            f"timeout_after_{timeout}s",
+        )
     stdout = (completed.stdout or "").strip()
     stderr = (completed.stderr or "").strip()
     if not stdout:
@@ -49,6 +84,8 @@ def command_payload(command: list[str], timeout: int = 120) -> dict[str, Any]:
         "command": " ".join(command),
         "returncode": returncode,
         "stderr": stderr,
+        "timeout_seconds": timeout,
+        "timed_out": bool(isinstance(payload, dict) and payload.get("timed_out")),
         "payload": payload,
     }
 
@@ -58,6 +95,36 @@ def _payload(section: dict[str, Any]) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _section_timed_out(section: dict[str, Any]) -> bool:
+    payload = _payload(section)
+    return (
+        bool(section.get("timed_out"))
+        or int(section.get("returncode") or 0) == SECTION_TIMEOUT_RETURN_CODE
+        or bool(payload.get("timed_out"))
+        or str(payload.get("status") or "") == "timeout"
+    )
+
+
+def _timed_out_sections(sections: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    timed_out = []
+    for name, section in sections.items():
+        if not _section_timed_out(section):
+            continue
+        payload = _payload(section)
+        timed_out.append(
+            {
+                "section": name,
+                "command": section.get("command") or payload.get("command") or "",
+                "timeout_seconds": int(section.get("timeout_seconds") or payload.get("timeout_seconds") or 0),
+                "returncode": int(section.get("returncode") or 0),
+                "stderr": str(section.get("stderr") or ""),
+                "next_action": payload.get("next_action")
+                or "Run the section command directly, fix the slow dependency, then rerun goal delivery.",
+            }
+        )
+    return timed_out
+
+
 def build_execution_contract() -> dict[str, Any]:
     return {
         "entrypoint": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_goal_delivery_runner.py --json",
@@ -65,6 +132,7 @@ def build_execution_contract() -> dict[str, Any]:
         "mode": "local_pm_goal_gate",
         "does_not_submit": True,
         "does_not_open_browser_profile": True,
+        "section_timeouts": dict(PM_SECTION_TIMEOUTS),
         "authoritative_report": str(OUT_PATH),
         "operator_summary": str(SUMMARY_PATH),
     }
@@ -523,24 +591,25 @@ def infer_start_contract_from_runtime_log(no_action_reason: dict[str, Any] | Non
 def build_report() -> dict[str, Any]:
     python = sys.executable
     sections = {
-        "mvp_acceptance": command_payload([python, "tools/reachops_mvp_acceptance_summary.py", "--json"], timeout=180),
+        "mvp_acceptance": command_payload([python, "tools/reachops_mvp_acceptance_summary.py", "--json"], timeout=PM_SECTION_TIMEOUTS["mvp_acceptance"]),
         "mac_loop_acceptance": command_payload(
             [python, "tools/reachops_mac_loop_acceptance.py", "--base-url", "http://127.0.0.1:8769", "--json"],
-            timeout=180,
+            timeout=PM_SECTION_TIMEOUTS["mac_loop_acceptance"],
         ),
-        "client_delivery": command_payload([python, "tools/reachops_client_delivery_check.py", "--json"], timeout=120),
-        "windows_package_preflight": command_payload([python, "tools/reachops_windows_package_preflight.py", "--json"], timeout=60),
-        "issue_closure": command_payload([python, "tools/reachops_issue_closure_audit.py", "--json"], timeout=120),
+        "client_delivery": command_payload([python, "tools/reachops_client_delivery_check.py", "--json"], timeout=PM_SECTION_TIMEOUTS["client_delivery"]),
+        "windows_package_preflight": command_payload([python, "tools/reachops_windows_package_preflight.py", "--json"], timeout=PM_SECTION_TIMEOUTS["windows_package_preflight"]),
+        "issue_closure": command_payload([python, "tools/reachops_issue_closure_audit.py", "--json"], timeout=PM_SECTION_TIMEOUTS["issue_closure"]),
         "delivery_package": command_payload(
             [python, "tools/reachops_delivery_package_check.py", "--allow-external-pending", "--json"],
-            timeout=60,
+            timeout=PM_SECTION_TIMEOUTS["delivery_package"],
         ),
-        "final_gate": command_payload([python, "tools/reachops_final_acceptance_gate.py", "--json"], timeout=180),
+        "final_gate": command_payload([python, "tools/reachops_final_acceptance_gate.py", "--json"], timeout=PM_SECTION_TIMEOUTS["final_gate"]),
         "repository_cleanliness": command_payload(
             [python, "tools/reachops_repository_cleanliness_check.py", "--clean", "--json"],
-            timeout=60,
+            timeout=PM_SECTION_TIMEOUTS["repository_cleanliness"],
         ),
     }
+    section_timeouts = _timed_out_sections(sections)
 
     mvp = _payload(sections["mvp_acceptance"])
     mac_loop = _payload(sections["mac_loop_acceptance"])
@@ -562,6 +631,16 @@ def build_report() -> dict[str, Any]:
     final_ready = str(final_gate.get("status") or "") == "passed" and bool(final_gate.get("final_delivery_ready"))
 
     blockers: list[dict[str, Any]] = []
+    if section_timeouts:
+        blockers.append(
+            {
+                "scope": "goal_delivery_section_timeout",
+                "status": "timeout",
+                "timed_out_sections": [row["section"] for row in section_timeouts],
+                "section_timeouts": section_timeouts,
+                "action": "先单独运行超时 section 的命令，修复慢依赖或环境阻断，再复跑 tools\\reachops_goal_delivery_runner.py --json。",
+            }
+        )
     if not local_ready:
         blockers.append(
             {
@@ -672,6 +751,7 @@ def build_report() -> dict[str, Any]:
         "failed_checks": final_gate.get("failed_checks") or [],
         "final_delivery_blockers": final_delivery_blockers,
         "goal_pending_external_validation": goal_pending,
+        "section_timeouts": section_timeouts,
         "blockers": blockers,
         "sections": sections,
         "next_actions": [
