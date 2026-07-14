@@ -93,6 +93,14 @@ REQUIRED_PAGE_STATES = {
     "SUBMIT_BUTTON_MISSING",
     "UNKNOWN_PAGE_STATE",
 }
+ACCOUNT_REPAIR_AUTO_APPLY_ERRORS = {
+    "IXBROWSER_KERNEL_MISMATCH",
+    "LOGIN_REQUIRED",
+    "CAPTCHA_DETECTED",
+    "PROXY_FAILED",
+    "COMMENT_ACCESS_GATED",
+    "ACCOUNT_RESTRICTED",
+}
 
 
 def is_executable(path: Path) -> bool:
@@ -224,6 +232,21 @@ def build_account_blocker_resolution(
     effective_status = account_repair_apply_effective_status(repair_apply)
     repair_plan_available = repair_summary.get("status") == "ok"
     repair_plan_profiles = int(repair_summary.get("total_unique_profiles_by_error") or 0)
+    error_groups = [row for row in (repair_summary.get("error_groups") or []) if isinstance(row, dict)]
+    auto_apply_profile_count = sum(
+        int(row.get("profile_ids_total") or 0)
+        for row in error_groups
+        if str(row.get("error") or "").strip() in ACCOUNT_REPAIR_AUTO_APPLY_ERRORS
+    )
+    non_auto_error_codes = sorted(
+        {
+            str(row.get("error") or "").strip()
+            for row in error_groups
+            if str(row.get("error") or "").strip()
+            and int(row.get("profile_ids_total") or 0) > 0
+            and str(row.get("error") or "").strip() not in ACCOUNT_REPAIR_AUTO_APPLY_ERRORS
+        }
+    )
     blocker_codes: list[str] = []
     status = "not_blocked"
     priority_action = ""
@@ -238,24 +261,44 @@ def build_account_blocker_resolution(
             blocker_codes.append("account_repair_applied_pending_recheck")
         elif effective_status == "stale":
             status = "stale_repair_apply"
-            priority_action = "apply_latest_account_repair_plan"
-            requires_latest_repair_apply = True
+            if auto_apply_profile_count > 0:
+                priority_action = "apply_latest_account_repair_plan"
+                requires_latest_repair_apply = True
+            elif repair_plan_available and repair_plan_profiles > 0:
+                priority_action = "manually_repair_or_replace_accounts"
+                requires_manual_account_work = True
+            else:
+                priority_action = "apply_latest_account_repair_plan"
+                requires_latest_repair_apply = True
             blocker_codes.append("account_repair_apply_stale")
+            if repair_plan_available and repair_plan_profiles > 0 and auto_apply_profile_count <= 0:
+                blocker_codes.append("account_repair_plan_has_no_auto_applicable_profiles")
         elif effective_status == "group_mismatch":
             status = "repair_apply_group_mismatch"
-            priority_action = "apply_current_group_account_repair_plan"
-            requires_latest_repair_apply = True
+            if auto_apply_profile_count > 0:
+                priority_action = "apply_current_group_account_repair_plan"
+                requires_latest_repair_apply = True
+            else:
+                priority_action = "manually_repair_or_replace_accounts"
+                requires_manual_account_work = True
             blocker_codes.append("account_repair_apply_group_mismatch")
+            if repair_plan_available and repair_plan_profiles > 0 and auto_apply_profile_count <= 0:
+                blocker_codes.append("account_repair_plan_has_no_auto_applicable_profiles")
         elif effective_status == "no_applicable_profiles":
             status = "manual_account_work_required"
             priority_action = "manually_repair_or_replace_accounts"
             requires_manual_account_work = True
             blocker_codes.append("account_repair_no_applicable_profiles")
-        elif repair_plan_available and repair_plan_profiles > 0:
+        elif repair_plan_available and auto_apply_profile_count > 0:
             status = "repair_plan_ready"
             priority_action = "apply_latest_account_repair_plan"
             requires_latest_repair_apply = True
             blocker_codes.append("account_repair_plan_ready")
+        elif repair_plan_available and repair_plan_profiles > 0:
+            status = "manual_account_work_required"
+            priority_action = "manually_repair_or_replace_accounts"
+            requires_manual_account_work = True
+            blocker_codes.append("account_repair_plan_has_no_auto_applicable_profiles")
         else:
             status = "account_pool_empty"
             priority_action = "create_or_repair_real_account_pool"
@@ -271,6 +314,8 @@ def build_account_blocker_resolution(
         "repair_plan_available": repair_plan_available,
         "repair_plan_path": str(repair_summary.get("path") or ""),
         "repair_plan_profile_count": repair_plan_profiles,
+        "repair_plan_auto_apply_profile_count": auto_apply_profile_count,
+        "non_auto_error_codes": non_auto_error_codes,
         "latest_apply_effective_status": effective_status,
         "latest_apply_effective_message": account_repair_apply_effective_message(repair_apply),
         "ready_for_retest": ready_for_retest,

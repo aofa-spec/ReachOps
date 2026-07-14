@@ -3994,6 +3994,8 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertFalse(resolution["ready_for_retest"])
         self.assertTrue(resolution["does_not_claim_real_account_pool_ready"])
         self.assertEqual(resolution["repair_plan_profile_count"], 2)
+        self.assertEqual(resolution["repair_plan_auto_apply_profile_count"], 2)
+        self.assertEqual(resolution["non_auto_error_codes"], [])
         self.assertTrue(repair_plan_exists)
 
     def test_delivery_check_missing_account_repair_plan_is_not_file_error(self):
@@ -4079,6 +4081,66 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertTrue(resolution["requires_manual_account_work"])
         self.assertFalse(resolution["ready_for_retest"])
         self.assertIn("account_repair_no_applicable_profiles", resolution["blocker_codes"])
+
+    def test_account_blocker_resolution_does_not_suggest_apply_for_non_auto_errors_only(self):
+        resolution = build_account_blocker_resolution(
+            {
+                "readiness": "blocked_by_accounts",
+                "checks": {"profile_available_count": 0},
+            },
+            batch={"id": "gb_timeout", "profile_group": "United States"},
+            account_repair_summary={
+                "status": "ok",
+                "path": "/tmp/latest_account_repair_plan.json",
+                "profile_group": "United States",
+                "total_unique_profiles_by_error": 20,
+                "error_groups": [
+                    {
+                        "error": "PROFILE_PREFLIGHT_TIMEOUT",
+                        "profile_ids_total": 20,
+                    }
+                ],
+            },
+            account_repair_apply={},
+        )
+
+        self.assertEqual(resolution["status"], "manual_account_work_required")
+        self.assertEqual(resolution["priority_action"], "manually_repair_or_replace_accounts")
+        self.assertEqual(resolution["repair_plan_profile_count"], 20)
+        self.assertEqual(resolution["repair_plan_auto_apply_profile_count"], 0)
+        self.assertEqual(resolution["non_auto_error_codes"], ["PROFILE_PREFLIGHT_TIMEOUT"])
+        self.assertFalse(resolution["requires_latest_repair_apply"])
+        self.assertTrue(resolution["requires_manual_account_work"])
+        self.assertIn("account_repair_plan_has_no_auto_applicable_profiles", resolution["blocker_codes"])
+
+    def test_account_blocker_resolution_stale_apply_uses_manual_work_when_latest_plan_has_no_auto_profiles(self):
+        resolution = build_account_blocker_resolution(
+            {
+                "readiness": "blocked_by_accounts",
+                "checks": {"profile_available_count": 0},
+            },
+            batch={"id": "gb_timeout", "profile_group": "United States"},
+            account_repair_summary={
+                "status": "ok",
+                "path": "/tmp/latest_account_repair_plan.json",
+                "profile_group": "United States",
+                "total_unique_profiles_by_error": 20,
+                "error_groups": [
+                    {
+                        "error": "PROFILE_PREFLIGHT_TIMEOUT",
+                        "profile_ids_total": 20,
+                    }
+                ],
+            },
+            account_repair_apply={"status": "applied", "stale": True},
+        )
+
+        self.assertEqual(resolution["status"], "stale_repair_apply")
+        self.assertEqual(resolution["priority_action"], "manually_repair_or_replace_accounts")
+        self.assertFalse(resolution["requires_latest_repair_apply"])
+        self.assertTrue(resolution["requires_manual_account_work"])
+        self.assertIn("account_repair_apply_stale", resolution["blocker_codes"])
+        self.assertIn("account_repair_plan_has_no_auto_applicable_profiles", resolution["blocker_codes"])
 
     def test_account_repair_apply_status_normalizes_counts_from_results(self):
         with TemporaryDirectory() as tmpdir:
@@ -4494,6 +4556,12 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(dry["status"], "dry_run")
         self.assertEqual(dry["selected_count"], 2)
         self.assertTrue(all(row["attempted"] is False for row in dry["results"]))
+        self.assertEqual(
+            dry["post_apply_verification"]["schema_version"],
+            "reachops.account_repair_post_apply_verification.v1",
+        )
+        self.assertFalse(dry["post_apply_verification"]["apply_performed"])
+        self.assertFalse(dry["post_apply_verification"]["requires_recheck_after_apply"])
         self.assertEqual(applied["status"], "applied")
         self.assertEqual(applied["moved_count"], 2)
         self.assertEqual(applied["safety_contract"]["schema_version"], "reachops.account_repair_safety_contract.v1")
@@ -4503,6 +4571,14 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertTrue(applied["safety_contract"]["no_browser_started"])
         self.assertTrue(applied["safety_contract"]["no_submit"])
         self.assertTrue(applied["safety_contract"]["no_ai_token_used"])
+        verification = applied["post_apply_verification"]
+        self.assertTrue(verification["apply_alone_is_not_acceptance"])
+        self.assertTrue(verification["apply_performed"])
+        self.assertTrue(verification["requires_recheck_after_apply"])
+        self.assertIn("python tools/reachops_client_delivery_check.py --json", verification["required_commands"])
+        self.assertIn("client_delivery.final_delivery_ready=true", verification["pass_conditions"])
+        self.assertIn("account_blocker_resolution.status=pending_recheck", verification["intermediate_states_allowed"])
+        self.assertIn("client_delivery.profile_available=0", verification["failure_conditions"])
         self.assertEqual(manager.moves, [("24909", "IXBROWSER_KERNEL_MISMATCH"), ("24910", "IXBROWSER_KERNEL_MISMATCH")])
 
     def test_apply_account_repair_plan_rejects_apply_when_no_auto_profiles_selected(self):
@@ -4539,6 +4615,8 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(applied["moved_count"], 0)
         self.assertIn("PROFILE_PREFLIGHT_TIMEOUT", applied["non_auto_error_codes"])
         self.assertTrue(applied["next_actions"])
+        self.assertTrue(applied["post_apply_verification"]["requires_manual_account_work"])
+        self.assertFalse(applied["post_apply_verification"]["requires_recheck_after_apply"])
         self.assertTrue(applied["no_browser_started"])
         self.assertTrue(applied["no_submit"])
 
