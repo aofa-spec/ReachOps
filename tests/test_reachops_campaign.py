@@ -5573,6 +5573,45 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            acceptance_dir = tmp_path / "reports" / "reachops_acceptance" / "20260714_010101"
+            acceptance_dir.mkdir(parents=True)
+            (acceptance_dir / "acceptance_summary.json").write_text(
+                json.dumps(
+                    {
+                        "status": "blocked",
+                        "acceptance_verification": {"status": "failed", "pending": []},
+                        "final_acceptance_gate": {
+                            "status": "not_ready",
+                            "final_delivery_ready": False,
+                            "failed_checks": ["delivery_package:passed"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (acceptance_dir / "delivery_package_check.json").write_text(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "passed": False,
+                        "final_delivery_ready": False,
+                        "missing_artifacts": ["acceptance_summary"],
+                        "failures": ["acceptance_summary_missing"],
+                        "artifacts": {
+                            "acceptance_summary": {
+                                "path": str(acceptance_dir / "acceptance_summary.json"),
+                                "exists": False,
+                            }
+                        },
+                        "acceptance_verification": {
+                            "passed": False,
+                            "failures": ["acceptance_summary_missing"],
+                            "pending": [],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             result = build_reachops_authorization_handoff_bundle(
                 type(
@@ -5620,13 +5659,32 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 self.assertIn("latest_phase2_handoff_check.json", manifest["included_files"])
                 self.assertIn("tools/reachops_acceptance_inputs.local.ps1", manifest["excluded_sensitive_files"])
                 self.assertEqual(
+                    manifest["windows_package_blocker_summary"]["schema_version"],
+                    "reachops.windows_final_artifacts_blocker_summary.v1",
+                )
+                self.assertIn(
+                    "acceptance_summary",
+                    manifest["windows_package_blocker_summary"]["missing_artifacts"],
+                )
+                self.assertIn(
+                    "acceptance_summary_missing",
+                    manifest["windows_package_blocker_summary"]["failures"],
+                )
+                self.assertEqual(
                     manifest["commercial_issue_closure_command"],
                     "python tools\\reachops_issue_closure_audit.py --json",
                 )
                 self.assertIn("reachops_issue_closure_audit.py --json", "\n".join(manifest["verification_commands"]))
+                readiness_json = json.loads(zf.read("latest_live_acceptance_readiness.json").decode("utf-8"))
+                self.assertEqual(
+                    readiness_json["latest_acceptance"]["package_blocker_summary"]["next_required_command"],
+                    "python tools\\reachops_delivery_package_check.py --json",
+                )
                 readme = zf.read("README_AUTHORIZATION_HANDOFF.md").decode("utf-8")
                 self.assertIn("commercial_issue_closure_command", readme)
                 self.assertIn("reachops_issue_closure_audit.py --json", readme)
+                self.assertIn("windows_package_blocker_schema", readme)
+                self.assertIn("acceptance_summary_missing", readme)
                 commands = zf.read("authorization_handoff_commands.txt").decode("utf-8")
                 self.assertIn("init_reachops_acceptance_inputs_windows.ps1 -Json", commands)
                 self.assertIn("reachops_issue_closure_audit.py --json", commands)
