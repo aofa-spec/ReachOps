@@ -216,7 +216,7 @@ python tools\reachops_client_delivery_check.py --base-dir "reports\reachops\mac_
 - 当前 `/Users/aofa/Documents/New project` 没有 Windows `dist\` 交付产物，也没有本地最终 `acceptance_summary.json`。
 - `tools\reachops_client_delivery_check.py --json` 当前返回 `status=blocked_by_accounts`、`readiness=blocked_by_accounts`、`acceptance_ready=false`、`profile_available=0`；最新账号预检阻断为 `IXBROWSER_KERNEL_MISMATCH`、`LOGIN_REQUIRED` 和页面打开超时。
 - `tools\reachops_delivery_package_check.py --allow-external-pending --json` 当前返回 `status=failed`、`final_delivery_ready=false`，缺失 `exe`、`installer`、`manifest`、`acceptance_summary`。
-- `tools\reachops_final_acceptance_gate.py --json` 当前返回 `status=not_ready`、`final_delivery_ready=false`，失败项为 `goal_status:passed`、`delivery_package:passed`。
+- `tools\reachops_final_acceptance_gate.py --json` 当前返回 `status=not_ready`、`final_delivery_ready=false`，失败项包括 `goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed` 和 `commercial_issue_closure:closed`。
 - 旧 Windows VM 验收记录只能作为诊断参考，不能作为当前工作区最终交付通过证据。
 
 历史 Windows VM 诊断记录：

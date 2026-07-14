@@ -2370,6 +2370,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(index["commercial_issue_closure"]["blocking_scope"], "commercial_issue_closure")
         self.assertFalse(boundary["external_authorized_execution_ready"])
 
+    def test_reachops_web_ui_fallback_evidence_plan_exposes_issue_closure(self):
+        from tools import reachops_web_ui
+
+        plan = reachops_web_ui.fallback_final_delivery_evidence_plan(
+            [{"scope": "commercial_issue_closure", "status": "passed_with_external_acceptance_pending"}]
+        )
+
+        self.assertFalse(plan["ready"])
+        self.assertEqual(plan["pending_scopes"], ["commercial_issue_closure"])
+        item = plan["items"][0]
+        self.assertEqual(item["title"], "Issues #1-#7 商业交付闭环证据")
+        self.assertIn("python tools\\reachops_issue_closure_audit.py --json", item["commands"])
+        self.assertIn("issue_closure.summary.acceptance_criteria_external_pending=0", item["proof_fields"])
+        self.assertIn("issue_closure.github_issues.closure_requires_external_validation=false", item["proof_fields"])
+
     def test_reachops_delivery_package_check_validates_artifacts_manifest_and_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

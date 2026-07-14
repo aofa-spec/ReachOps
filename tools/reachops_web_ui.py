@@ -294,6 +294,7 @@ def fallback_final_delivery_evidence_plan(final_blockers: list[dict]) -> dict:
             "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_acceptance_windows.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
             "python tools\\reachops_delivery_package_check.py --json",
         ],
+        "commercial_issue_closure": ["python tools\\reachops_issue_closure_audit.py --json"],
     }
     proof_by_scope = {
         "external_authorized_execution": [
@@ -317,11 +318,19 @@ def fallback_final_delivery_evidence_plan(final_blockers: list[dict]) -> dict:
             "delivery_package.acceptance_verification.failures=[]",
             "delivery_package.acceptance_verification.pending=[]",
         ],
+        "commercial_issue_closure": [
+            "issue_closure.summary.issues_total=7",
+            "issue_closure.summary.acceptance_criteria_total=53",
+            "issue_closure.summary.acceptance_criteria_external_pending=0",
+            "issue_closure.summary.external_pending_count=0",
+            "issue_closure.github_issues.closure_requires_external_validation=false",
+        ],
     }
     title_by_scope = {
         "external_authorized_execution": "授权真实平台执行证据",
         "client_delivery_gate": "客户端交付门禁证据",
         "windows_final_artifacts": "Windows 最终客户端包证据",
+        "commercial_issue_closure": "Issues #1-#7 商业交付闭环证据",
     }
     for blocker in final_blockers:
         if not isinstance(blocker, dict):
