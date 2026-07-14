@@ -437,6 +437,56 @@ class EvidenceBundleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            delivery_check_path = repair_dir / "latest_delivery_check.json"
+            delivery_check_path.write_text(
+                json.dumps(
+                    {
+                        "status": "blocked_by_accounts",
+                        "account_support_handoff": {
+                            "schema_version": "reachops.account_support_handoff.v1",
+                            "support_required": True,
+                            "support_case": "account_pool_blocked",
+                            "status": "stale_repair_apply",
+                            "profile_group": "US",
+                            "batch_id": "batch-1",
+                            "priority_action": "manually_repair_or_replace_accounts",
+                            "ready_for_retest": False,
+                            "requires_latest_repair_apply": False,
+                            "requires_manual_account_work": True,
+                            "does_not_claim_real_account_pool_ready": True,
+                            "repair_plan": {
+                                "available": True,
+                                "profile_count": 1,
+                                "auto_apply_profile_count": 0,
+                                "non_auto_error_codes": ["LOGIN_REQUIRED"],
+                            },
+                            "impacted_accounts": {
+                                "error_group_count": 1,
+                                "error_groups": [
+                                    {
+                                        "error": "LOGIN_REQUIRED",
+                                        "count": 3,
+                                        "profile_ids_sample": ["profile-1"],
+                                    }
+                                ],
+                            },
+                            "operator_steps": ["人工修复或替换 US 分组账号。"],
+                            "retest_commands": [
+                                "python tools/reachops_client_delivery_check.py --json",
+                                "python tools/reachops_goal_delivery_runner.py --json",
+                            ],
+                            "acceptance_required": ["profile_available>=1", "status=passed"],
+                            "safety_contract": {
+                                "apply_alone_is_not_acceptance": True,
+                                "no_browser_started": True,
+                                "no_submit": True,
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
 
             bundle = build_evidence_bundle(
                 base_dir=base,
@@ -458,6 +508,7 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertTrue(any(row["kind"] == "offline_learning_evidence" and row["exists"] for row in bundle["artifacts"]))
             self.assertTrue(any(row["kind"] == "account_repair_plan" and row["exists"] for row in bundle["artifacts"]))
             self.assertTrue(any(row["kind"] == "account_repair_apply" and row["exists"] for row in bundle["artifacts"]))
+            self.assertTrue(any(row["kind"] == "account_support_handoff" and row["exists"] for row in bundle["artifacts"]))
             self.assertTrue(any(row["stage"] == "PLAN" for row in bundle["timeline"]))
             self.assertTrue(any(row["stage"] == "REPAIR" for row in bundle["timeline"]))
             self.assertTrue(any(row["stage"] == "CHECKPOINT" and row["source"] == "run_session.checkpoint" for row in bundle["timeline"]))
@@ -547,6 +598,22 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertTrue(bundle["account_repair_summary"]["hard_blocker_only"])
             self.assertTrue(bundle["account_repair_summary"]["no_browser_started"])
             self.assertTrue(bundle["account_repair_summary"]["no_submit"])
+            self.assertEqual(
+                bundle["account_support_handoff_summary"]["schema_version"],
+                "reachops.account_support_handoff_summary.v1",
+            )
+            self.assertEqual(
+                bundle["account_support_handoff_summary"]["handoff_schema_version"],
+                "reachops.account_support_handoff.v1",
+            )
+            self.assertTrue(bundle["account_support_handoff_summary"]["source_exists"])
+            self.assertTrue(bundle["account_support_handoff_summary"]["support_required"])
+            self.assertEqual(bundle["account_support_handoff_summary"]["support_case"], "account_pool_blocked")
+            self.assertEqual(bundle["account_support_handoff_summary"]["priority_action"], "manually_repair_or_replace_accounts")
+            self.assertTrue(bundle["account_support_handoff_summary"]["requires_manual_account_work"])
+            self.assertTrue(bundle["account_support_handoff_summary"]["does_not_claim_real_account_pool_ready"])
+            self.assertEqual(bundle["account_support_handoff_summary"]["repair_plan_non_auto_error_codes"], ["LOGIN_REQUIRED"])
+            self.assertEqual(bundle["account_support_handoff_summary"]["error_groups"][0]["profile_ids_sample"], ["profile-1"])
             self.assertEqual(bundle["autonomy_readiness_summary"]["schema_version"], "reachops.autonomy_readiness_summary.v1")
             self.assertTrue(bundle["autonomy_readiness_summary"]["ready"])
             self.assertEqual(bundle["autonomy_readiness_summary"]["failed_count"], 0)
@@ -638,6 +705,11 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertEqual(bundle["audit"]["page_state_sidecar_artifact_count"], 1)
             self.assertEqual(bundle["audit"]["offline_learning_artifact_count"], 1)
             self.assertEqual(bundle["audit"]["account_repair_artifact_count"], 3)
+            self.assertEqual(bundle["audit"]["account_support_handoff_artifact_count"], 1)
+            self.assertTrue(bundle["audit"]["account_support_handoff_source_exists"])
+            self.assertTrue(bundle["audit"]["account_support_handoff_support_required"])
+            self.assertFalse(bundle["audit"]["account_support_handoff_ready_for_retest"])
+            self.assertTrue(bundle["audit"]["account_support_handoff_does_not_claim_ready"])
             self.assertEqual(bundle["audit"]["account_repair_error_group_count"], 1)
             self.assertTrue(bundle["audit"]["account_repair_pending_recheck"])
             self.assertTrue(bundle["audit"]["account_repair_manual_apply_required"])
@@ -728,6 +800,12 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertIn("Consecutive failure cooldown: 2", render_evidence_markdown(bundle))
             self.assertIn("Account Repair Summary", render_evidence_markdown(bundle))
             self.assertIn("Pending recheck: true", render_evidence_markdown(bundle))
+            self.assertIn("Account Support Handoff", render_evidence_markdown(bundle))
+            self.assertIn("Support case: account_pool_blocked", render_evidence_markdown(bundle))
+            self.assertIn("Priority action: manually_repair_or_replace_accounts", render_evidence_markdown(bundle))
+            self.assertIn("Does not claim real account pool ready: true", render_evidence_markdown(bundle))
+            self.assertIn("Non-auto errors: LOGIN_REQUIRED", render_evidence_markdown(bundle))
+            self.assertIn("Retest command: python tools/reachops_client_delivery_check.py --json", render_evidence_markdown(bundle))
             self.assertIn("Human review required: 1", render_evidence_markdown(bundle))
             self.assertIn("Risk Gate Machine Actions", render_evidence_markdown(bundle))
             self.assertIn("request_operator_authorization(required=true)", render_evidence_markdown(bundle))

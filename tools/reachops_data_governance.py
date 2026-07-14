@@ -129,6 +129,7 @@ SUPPORT_BUNDLE_EXCLUDE_PATTERNS = [
 
 SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS = [
     "reports/support/diagnostics.json",
+    "reports/support/account_support_handoff.json",
     "reports/support/delivery_package_check.json",
     "reports/support/final_acceptance_gate.json",
     "reports/support/issue_closure_payload.json",
