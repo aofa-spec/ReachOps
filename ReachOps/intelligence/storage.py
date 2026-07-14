@@ -10,6 +10,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, Iterable, List, Optional
 
+from .migrations import apply_schema_migrations
 from .schemas import (
     ActionQueueItem,
     AcquisitionCampaign,
@@ -503,6 +504,7 @@ class GrowthStorage:
             )
             self._ensure_columns(conn, "outreach_executions", {"batch_id": "TEXT DEFAULT ''", "risk_gate_json": "TEXT DEFAULT ''"})
             self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''"})
+            apply_schema_migrations(conn)
             self._seed_default_action_templates(conn)
 
     def _ensure_columns(self, conn, table_name: str, columns: Dict[str, str]):

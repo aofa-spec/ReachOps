@@ -109,6 +109,18 @@ powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1 -SkipI
 
 商业运行时的真实触达授权必须来自服务端签发的 `entitlement_signature`。打包运行时会拒绝 unsigned、过期、设备不匹配、撤销、离线宽限过期、超并发设备限制或被紧急禁用的 entitlement；源码开发环境仍可使用无提交的模板和本地 blocked 报告做测试。
 
+## 数据治理、迁移和恢复
+
+SQLite schema 迁移由 `ReachOps/intelligence/migrations.py` 注册，运行时初始化会写入 `schema_migrations`，并记录每个迁移的 checksum、rollback policy 和应用时间。隐私操作审计写入 `data_privacy_audit`，用于 export、delete、legal hold、backup 和 restore 证据。
+
+本地数据治理验收命令：
+
+```bash
+python tools/reachops_data_governance.py --create-missing-db --verify-backup --json
+```
+
+该检查会验证 schema integrity、已应用迁移、备份/恢复 hash、retention classes、PII data catalog 和默认 redacted support bundle policy。
+
 ## 交付状态
 
 当前本地已验证：

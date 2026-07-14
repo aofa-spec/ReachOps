@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -2726,7 +2727,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(report["database"]["schema"]["integrity_check"], "ok")
             self.assertEqual(report["database"]["schema"]["schema_version"], "reachops.sqlite_schema_baseline.v1")
             self.assertGreater(report["database"]["schema"]["table_count"], 20)
-            self.assertFalse(report["database"]["migration_policy"]["final_delivery_ready"])
+            self.assertTrue(report["database"]["migration_policy"]["final_delivery_ready"])
+            self.assertEqual(report["database"]["migration_policy"]["current_mode"], "versioned_forward_migrations_with_documented_rollback")
+            self.assertIn("20260714_0001_data_privacy_audit", report["database"]["migration_policy"]["applied_versions"])
+            self.assertEqual(report["database"]["migrations"]["status"], "passed")
+            self.assertEqual(report["database"]["migrations"]["failures"], [])
+            self.assertIn("data_privacy_audit", report["database"]["schema"]["tables"])
             self.assertIn("raw_interaction", report["retention_classes"])
             self.assertIn("activation_secret", report["retention_classes"])
             pii_fields = {f"{row['table']}.{row['field']}" for row in report["data_catalog"] if row["classification"] == "pii"}
@@ -2739,12 +2745,30 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("reports/**/*.png", support["exclude_patterns"])
             self.assertIn("candidate_users.comment_text", support["redacted_fields"])
             self.assertIn("outreach_executions.evidence_path", support["excluded_file_fields"])
+            self.assertEqual(report["privacy_operations"]["audit_table"], "data_privacy_audit")
 
             corrupt_db = root / "corrupt.db"
             corrupt_db.write_bytes(b"not sqlite")
             corrupt = build_reachops_data_governance_report(root=root, db_path=corrupt_db, output_dir=output_dir)
             self.assertFalse(corrupt["passed"])
             self.assertIn("database_integrity_failed", corrupt["failures"])
+            self.assertIn("migration_status_error", corrupt["failures"])
+
+            legacy_db = root / "legacy.db"
+            with sqlite3.connect(legacy_db) as conn:
+                conn.execute("CREATE TABLE legacy_marker (id TEXT PRIMARY KEY)")
+            migrated = build_reachops_data_governance_report(
+                root=root,
+                db_path=legacy_db,
+                output_dir=output_dir,
+                create_missing_db=True,
+                verify_backup=True,
+            )
+            self.assertTrue(migrated["passed"])
+            self.assertIn("legacy_marker", migrated["database"]["schema"]["tables"])
+            self.assertIn("schema_migrations", migrated["database"]["schema"]["tables"])
+            self.assertIn("data_privacy_audit", migrated["database"]["schema"]["tables"])
+            self.assertIn("20260714_0001_data_privacy_audit", migrated["database"]["migration_policy"]["applied_versions"])
 
     def test_reachops_delivery_package_check_rejects_external_summary_and_manifest_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -5294,6 +5318,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         dependency_license_inventory = (root / "ReachOps" / "packaging" / "dependency-license-inventory.json").read_text(encoding="utf-8")
         dependency_baseline_verifier = (root / "tools" / "verify_reachops_dependency_baseline.py").read_text(encoding="utf-8")
         data_governance = (root / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
+        data_migrations = (root / "ReachOps" / "intelligence" / "migrations.py").read_text(encoding="utf-8")
+        storage = (root / "ReachOps" / "intelligence" / "storage.py").read_text(encoding="utf-8")
         security_signing = (root / "ReachOps" / "security_signing.py").read_text(encoding="utf-8")
         authorization_gate = (root / "ReachOps" / "workbench" / "authorization_gate.py").read_text(encoding="utf-8")
         updater = (root / "ReachOps" / "updater.py").read_text(encoding="utf-8")
@@ -5690,6 +5716,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("SUPPORT_BUNDLE_EXCLUDE_PATTERNS", data_governance)
         self.assertIn("RETENTION_CLASSES", data_governance)
         self.assertIn("DATA_CATALOG", data_governance)
+        self.assertIn("inspect_migration_status", data_governance)
+        self.assertIn("versioned_forward_migrations_with_documented_rollback", data_governance)
+        self.assertIn("SCHEMA_MIGRATION_TABLE", data_governance)
+        self.assertIn("SchemaMigration", data_migrations)
+        self.assertIn("20260714_0001_data_privacy_audit", data_migrations)
+        self.assertIn("rollback_policy", data_migrations)
+        self.assertIn("apply_schema_migrations", storage)
         self.assertIn("SIGNATURE_ALGORITHM", security_signing)
         self.assertIn("canonical_payload", security_signing)
         self.assertIn("sign_payload", security_signing)
@@ -5779,6 +5812,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("manifest_signature", reachops_readme)
         self.assertIn("rollback_policy.allow_downgrade=true", reachops_readme)
         self.assertIn("entitlement_signature", reachops_readme)
+        self.assertIn("schema_migrations", reachops_readme)
+        self.assertIn("data_privacy_audit", reachops_readme)
+        self.assertIn("reachops_data_governance.py --create-missing-db --verify-backup --json", reachops_readme)
         self.assertIn("effective_pending_external_validation=3", readme)
         self.assertIn("客户端交付验收门禁", readme)
         self.assertIn("reachops_client_delivery_check.py --json", readme)

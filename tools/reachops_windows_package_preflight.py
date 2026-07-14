@@ -19,6 +19,7 @@ REQUIRED_FILES = {
     "dependency_baseline_verifier": "tools/verify_reachops_dependency_baseline.py",
     "dependency_license_inventory": "ReachOps/packaging/dependency-license-inventory.json",
     "data_governance": "tools/reachops_data_governance.py",
+    "data_migrations": "ReachOps/intelligence/migrations.py",
     "security_signing": "ReachOps/security_signing.py",
     "windows_build_script": "tools/build_reachops_windows.ps1",
     "pyinstaller_spec": "ReachOps/packaging/reachops.spec",
@@ -124,6 +125,19 @@ SCRIPT_EXPECTATIONS = {
         "SUPPORT_BUNDLE_EXCLUDE_PATTERNS",
         "RETENTION_CLASSES",
         "DATA_CATALOG",
+        "inspect_migration_status",
+        "versioned_forward_migrations_with_documented_rollback",
+        "SCHEMA_MIGRATION_TABLE",
+    ],
+    "ReachOps/intelligence/migrations.py": [
+        "SchemaMigration",
+        "MIGRATIONS",
+        "20260714_0001_data_privacy_audit",
+        "data_privacy_audit",
+        "rollback_policy",
+    ],
+    "ReachOps/intelligence/storage.py": [
+        "apply_schema_migrations",
     ],
     "ReachOps/security_signing.py": [
         "SIGNATURE_ALGORITHM",

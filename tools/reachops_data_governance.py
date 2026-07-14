@@ -17,6 +17,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from ReachOps.intelligence.storage import GrowthStorage
+from ReachOps.intelligence.migrations import DATA_PRIVACY_AUDIT_TABLE, MIGRATIONS, SCHEMA_MIGRATION_TABLE
 from ReachOps.runtime_paths import RuntimePaths
 
 
@@ -133,10 +134,81 @@ def inspect_schema(db_path: Path) -> dict[str, Any]:
     }
 
 
+def inspect_migration_status(db_path: Path) -> dict[str, Any]:
+    expected = {
+        migration.version: {
+            "description": migration.description,
+            "checksum": migration.checksum,
+            "rollback_policy": migration.rollback_policy,
+        }
+        for migration in MIGRATIONS
+    }
+    if not db_path.exists():
+        return {
+            "status": "failed",
+            "ready": False,
+            "expected_versions": list(expected),
+            "applied_versions": [],
+            "missing_versions": list(expected),
+            "failures": ["database_missing"],
+        }
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            tables = {
+                str(row["name"])
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
+            }
+            if SCHEMA_MIGRATION_TABLE not in tables:
+                return {
+                    "status": "failed",
+                    "ready": False,
+                    "expected_versions": list(expected),
+                    "applied_versions": [],
+                    "missing_versions": list(expected),
+                    "failures": ["schema_migrations_table_missing"],
+                }
+            rows = conn.execute(f"SELECT * FROM {SCHEMA_MIGRATION_TABLE} ORDER BY version").fetchall()
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "ready": False,
+            "expected_versions": list(expected),
+            "applied_versions": [],
+            "missing_versions": list(expected),
+            "failures": ["migration_status_error"],
+            "error": str(exc),
+        }
+    applied = {str(row["version"]): dict(row) for row in rows}
+    failures: list[str] = []
+    for version, contract in expected.items():
+        row = applied.get(version)
+        if not row:
+            failures.append(f"{version}:missing")
+            continue
+        if row.get("checksum") != contract["checksum"]:
+            failures.append(f"{version}:checksum_mismatch")
+        if not str(row.get("rollback_policy") or "").strip():
+            failures.append(f"{version}:rollback_policy_missing")
+    if DATA_PRIVACY_AUDIT_TABLE not in inspect_schema(db_path).get("tables", {}):
+        failures.append("data_privacy_audit_table_missing")
+    return {
+        "status": "passed" if not failures else "failed",
+        "ready": not failures,
+        "expected_versions": list(expected),
+        "applied_versions": list(applied),
+        "missing_versions": [version for version in expected if version not in applied],
+        "rollback_policies": {version: contract["rollback_policy"] for version, contract in expected.items()},
+        "failures": failures,
+    }
+
+
 def backup_and_restore_verify(db_path: Path, output_dir: Path) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     backup_path = output_dir / "growth_intelligence.backup.sqlite"
     restored_path = output_dir / "growth_intelligence.restored.sqlite"
+    if backup_path.exists():
+        backup_path.unlink()
     if restored_path.exists():
         restored_path.unlink()
     if not db_path.exists():
@@ -217,7 +289,7 @@ def build_report(
     root = Path(root).resolve()
     runtime_paths = RuntimePaths.build()
     db = Path(db_path).resolve() if db_path else Path(runtime_paths.db_path)
-    if create_missing_db and not db.exists():
+    if create_missing_db:
         ensure_schema(db)
     out = Path(output_dir).resolve() if output_dir else root / "reports" / "reachops_data_governance"
     schema = inspect_schema(db)
@@ -230,6 +302,8 @@ def build_report(
         failures.append("data_catalog_missing")
     if not RETENTION_CLASSES:
         failures.append("retention_policy_missing")
+    migrations = inspect_migration_status(db)
+    failures.extend(str(item) for item in migrations.get("failures") or [])
     support_bundle = build_support_bundle_policy(Path(runtime_paths.base_dir))
     backup = {"status": "not_run", "passed": False, "failures": ["backup_restore_not_run"]}
     if verify_backup:
@@ -244,17 +318,22 @@ def build_report(
             "path": str(db),
             "schema": schema,
             "migration_policy": {
-                "current_mode": "init_schema_plus_ensure_columns",
+                "current_mode": "versioned_forward_migrations_with_documented_rollback",
                 "target_mode": "versioned_forward_migrations_with_documented_rollback",
-                "final_delivery_ready": False,
-                "not_final_delivery_reason": "_ensure_columns is a bootstrap compatibility path, not a full commercial migration engine.",
+                "final_delivery_ready": bool(migrations.get("ready")),
+                "schema_migration_table": SCHEMA_MIGRATION_TABLE,
+                "expected_versions": migrations.get("expected_versions", []),
+                "applied_versions": migrations.get("applied_versions", []),
+                "rollback_policies": migrations.get("rollback_policies", {}),
             },
+            "migrations": migrations,
         },
         "backup_restore": backup,
         "retention_classes": RETENTION_CLASSES,
         "data_catalog": DATA_CATALOG,
         "support_bundle": support_bundle,
         "privacy_operations": {
+            "audit_table": DATA_PRIVACY_AUDIT_TABLE,
             "workspace_export_procedure": "export campaign/customer data, redact support-only fields, include audit manifest",
             "workspace_delete_procedure": "delete or redact raw_interaction/evidence/log data unless legal hold is active",
             "legal_hold_supported": "policy_defined_not_yet_runtime_enforced",
@@ -269,7 +348,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--root", default=str(ROOT_DIR))
     parser.add_argument("--db-path", default="")
     parser.add_argument("--output-dir", default="")
-    parser.add_argument("--create-missing-db", action="store_true")
+    parser.add_argument("--create-missing-db", action="store_true", help="Create the database if missing and apply idempotent schema migrations.")
     parser.add_argument("--verify-backup", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
