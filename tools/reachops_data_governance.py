@@ -67,6 +67,11 @@ DATA_CATALOG: list[dict[str, Any]] = [
     {"table": "outreach_executions", "field": "target_username", "classification": "pii", "purpose": "execution audit", "retention_class": "raw_interaction", "support_bundle": "redact"},
     {"table": "outreach_executions", "field": "evidence_path", "classification": "evidence_pointer", "purpose": "execution evidence", "retention_class": "evidence", "support_bundle": "exclude_file"},
     {"table": "outreach_executions", "field": "risk_gate_json", "classification": "audit_evidence", "purpose": "risk decision audit", "retention_class": "operational_log", "support_bundle": "redact"},
+    {"table": "lead_outcomes", "field": "owner", "classification": "customer_metadata", "purpose": "accepted opportunity ownership", "retention_class": "raw_interaction", "support_bundle": "redact"},
+    {"table": "lead_outcomes", "field": "dedupe_key", "classification": "derived_lead_evidence", "purpose": "WAQO uniqueness", "retention_class": "aggregate_metric", "support_bundle": "redact"},
+    {"table": "lead_outcomes", "field": "evidence_path", "classification": "evidence_pointer", "purpose": "accepted opportunity evidence", "retention_class": "evidence", "support_bundle": "exclude_file"},
+    {"table": "lead_outcomes", "field": "revenue_amount", "classification": "commercial_outcome", "purpose": "lead-to-revenue attribution", "retention_class": "aggregate_metric", "support_bundle": "redact"},
+    {"table": "lead_outcomes", "field": "lost_reason", "classification": "commercial_outcome", "purpose": "outcome quality feedback", "retention_class": "raw_interaction", "support_bundle": "redact"},
     {"table": "growth_events", "field": "payload", "classification": "operational_log", "purpose": "support audit", "retention_class": "operational_log", "support_bundle": "redact"},
     {"table": "growth_errors", "field": "message", "classification": "operational_log", "purpose": "support diagnostics", "retention_class": "operational_log", "support_bundle": "redact"},
 ]

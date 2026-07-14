@@ -121,6 +121,16 @@ python tools/reachops_data_governance.py --create-missing-db --verify-backup --j
 
 该检查会验证 schema integrity、已应用迁移、备份/恢复 hash、retention classes、PII data catalog 和默认 redacted support bundle policy。
 
+## WAQO 和商业结果漏斗
+
+商业验收不以评论数、浏览器打开数或 fixture 动作数作为最终指标。`tools/reachops_outcome_metrics.py` 定义 WAQO：一周内由人工 owner 接受、进入 active follow-up、有 source/evidence/dedupe_key 的唯一 qualified opportunity。默认排除 `fixture` 和 `dry_run` 数据。
+
+```bash
+python tools/reachops_outcome_metrics.py --create-missing-db --json
+```
+
+该检查会输出 WAQO、accepted/rejected、reply、meaningful conversation、meeting、quote、order、revenue 和 lost reason 漏斗，并要求 rejected lead 具备结构化 rejection reason。
+
 ## 交付状态
 
 当前本地已验证：

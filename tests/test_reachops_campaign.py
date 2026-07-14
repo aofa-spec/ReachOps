@@ -26,6 +26,7 @@ from ReachOps.intelligence.operation_lead_manager import OperationLeadManager
 from ReachOps.intelligence.outreach_copy import OutreachCopySuggestion
 from ReachOps.intelligence.schemas import ActionQueueItem, CampaignFunnel, CandidateUser, DiscoveredContent, DiscoveredCreator
 from ReachOps.intelligence.source_planner import CampaignAnalyzer
+from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.action_router import ActionRouterConfig
 from ReachOps.workbench.action_router import FixtureActionExecutor
@@ -73,6 +74,7 @@ from tools.verify_reachops_acceptance_summary import verify_summary as verify_re
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
 from tools.reachops_data_governance import build_report as build_reachops_data_governance_report
+from tools.reachops_outcome_metrics import build_report as build_reachops_outcome_metrics_report
 from tools.reachops_final_acceptance_gate import build_final_acceptance_gate as build_reachops_final_acceptance_gate
 from tools.reachops_final_acceptance_gate import client_delivery_from_acceptance_summary as reachops_client_delivery_from_acceptance_summary
 from tools.reachops_final_acceptance_gate import main as reachops_final_acceptance_gate_main
@@ -2770,6 +2772,87 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("data_privacy_audit", migrated["database"]["schema"]["tables"])
             self.assertIn("20260714_0001_data_privacy_audit", migrated["database"]["migration_policy"]["applied_versions"])
 
+    def test_reachops_outcome_metrics_define_waqo_and_exclude_fixture_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "outcomes.db"
+            storage = GrowthStorage(str(db_path))
+            now = "2026-07-14T00:00:00Z"
+            with storage.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                     source_path, status, batch_id, created_at, updated_at)
+                    VALUES
+                    ('lead-real', 'candidate-real', 'purchase', 'high', 92, 'asked for price', 'accepted',
+                     'https://www.tiktok.com/@creator/video/1', 'accepted', 'batch-real', ?, ?),
+                    ('lead-fixture', 'candidate-fixture', 'purchase', 'high', 99, 'fixture lead', 'accepted',
+                     'fixture://source', 'accepted', 'batch-fixture', ?, ?),
+                    ('lead-rejected', 'candidate-rejected', 'consult', 'normal', 61, 'not a fit', 'rejected',
+                     'https://www.tiktok.com/@creator/video/2', 'rejected', 'batch-real', ?, ?)
+                    """,
+                    (now, now, now, now, now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO lead_outcomes
+                    (id, lead_id, workspace_id, owner, qualification_decision, qualification_reason,
+                     rejection_reason, lifecycle_stage, dedupe_key, source_path, evidence_path, data_scope,
+                     active_followup, accepted_at, reply_at, meaningful_conversation_at, meeting_at, quote_at,
+                     order_at, revenue_amount, revenue_currency, lost_reason, attribution_confidence,
+                     created_at, updated_at)
+                    VALUES
+                    ('out-real', 'lead-real', 'ws-1', 'owner-1', 'accepted', 'human accepted',
+                     '', 'accepted', 'buyer@example.test', 'https://www.tiktok.com/@creator/video/1',
+                     'reports/evidence/lead-real.json', 'real_customer', 1, ?, ?, ?, ?, ?, ?,
+                     1200.0, 'USD', '', 'operator_confirmed', ?, ?),
+                    ('out-fixture', 'lead-fixture', 'ws-1', 'owner-1', 'accepted', 'fixture accepted',
+                     '', 'accepted', 'fixture-buyer', 'fixture://source',
+                     'fixture://evidence', 'fixture', 1, ?, ?, '', '', '', '',
+                     0.0, 'USD', '', 'fixture', ?, ?),
+                    ('out-rejected', 'lead-rejected', 'ws-1', 'owner-1', 'rejected', '',
+                     'not ICP', 'rejected', 'rejected-buyer', 'https://www.tiktok.com/@creator/video/2',
+                     'reports/evidence/lead-rejected.json', 'real_customer', 0, '', '', '', '', '', '',
+                     0.0, 'USD', 'not ICP', 'operator_confirmed', ?, ?)
+                    """,
+                    (now, now, now, now, now, now, now, now, now, now, now, now, now, now),
+                )
+
+            report = build_reachops_outcome_metrics_report(
+                db_path=db_path,
+                start_at="2026-07-13T00:00:00Z",
+                end_at="2026-07-15T00:00:00Z",
+            )
+
+            self.assertEqual(report["schema_version"], "reachops.outcome_metrics.v1")
+            self.assertTrue(report["passed"])
+            self.assertEqual(report["definition"]["schema_version"], "reachops.waqo_definition.v1")
+            self.assertEqual(report["definition"]["abbreviation"], "WAQO")
+            self.assertIn("data_scope=real_customer", report["definition"]["included"])
+            self.assertIn("dry_run", report["definition"]["excluded"])
+            self.assertEqual(report["waqo"]["count"], 1)
+            self.assertEqual(report["waqo"]["excluded_fixture_or_dry_run"], 1)
+            self.assertEqual(report["funnel"]["accepted_opportunities"], 1)
+            self.assertEqual(report["funnel"]["fixture_or_dry_run_excluded"], 1)
+            self.assertEqual(report["funnel"]["replies"], 1)
+            self.assertEqual(report["funnel"]["meaningful_conversations"], 1)
+            self.assertEqual(report["funnel"]["meetings"], 1)
+            self.assertEqual(report["funnel"]["quotes"], 1)
+            self.assertEqual(report["funnel"]["orders"], 1)
+            self.assertEqual(report["funnel"]["revenue_amount"], 1200.0)
+            self.assertEqual(report["quality"]["missing_rejection_reason"], 0)
+
+            with storage.connect() as conn:
+                conn.execute("UPDATE lead_outcomes SET rejection_reason='' WHERE id='out-rejected'")
+            rejected_without_reason = build_reachops_outcome_metrics_report(
+                db_path=db_path,
+                start_at="2026-07-13T00:00:00Z",
+                end_at="2026-07-15T00:00:00Z",
+            )
+            self.assertFalse(rejected_without_reason["passed"])
+            self.assertIn("rejected_leads_missing_reason", rejected_without_reason["failures"])
+
     def test_reachops_delivery_package_check_rejects_external_summary_and_manifest_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
@@ -5319,6 +5402,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         dependency_baseline_verifier = (root / "tools" / "verify_reachops_dependency_baseline.py").read_text(encoding="utf-8")
         data_governance = (root / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
         data_migrations = (root / "ReachOps" / "intelligence" / "migrations.py").read_text(encoding="utf-8")
+        outcome_metrics = (root / "tools" / "reachops_outcome_metrics.py").read_text(encoding="utf-8")
         storage = (root / "ReachOps" / "intelligence" / "storage.py").read_text(encoding="utf-8")
         security_signing = (root / "ReachOps" / "security_signing.py").read_text(encoding="utf-8")
         authorization_gate = (root / "ReachOps" / "workbench" / "authorization_gate.py").read_text(encoding="utf-8")
@@ -5721,8 +5805,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("SCHEMA_MIGRATION_TABLE", data_governance)
         self.assertIn("SchemaMigration", data_migrations)
         self.assertIn("20260714_0001_data_privacy_audit", data_migrations)
+        self.assertIn("20260714_0002_lead_outcomes", data_migrations)
+        self.assertIn("lead_outcomes", data_migrations)
         self.assertIn("rollback_policy", data_migrations)
         self.assertIn("apply_schema_migrations", storage)
+        self.assertIn("reachops.outcome_metrics.v1", outcome_metrics)
+        self.assertIn("reachops.waqo_definition.v1", outcome_metrics)
+        self.assertIn("Weekly Accepted Qualified Opportunities", outcome_metrics)
+        self.assertIn("fixture_data_excluded_by_default", outcome_metrics)
+        self.assertIn("lead-to-revenue", outcome_metrics)
         self.assertIn("SIGNATURE_ALGORITHM", security_signing)
         self.assertIn("canonical_payload", security_signing)
         self.assertIn("sign_payload", security_signing)
@@ -5815,6 +5906,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("schema_migrations", reachops_readme)
         self.assertIn("data_privacy_audit", reachops_readme)
         self.assertIn("reachops_data_governance.py --create-missing-db --verify-backup --json", reachops_readme)
+        self.assertIn("WAQO", reachops_readme)
+        self.assertIn("reachops_outcome_metrics.py --create-missing-db --json", reachops_readme)
+        self.assertIn("fixture", reachops_readme)
+        self.assertIn("dry_run", reachops_readme)
         self.assertIn("effective_pending_external_validation=3", readme)
         self.assertIn("客户端交付验收门禁", readme)
         self.assertIn("reachops_client_delivery_check.py --json", readme)

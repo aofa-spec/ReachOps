@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ from ReachOps.workbench.action_router import ActionRouterConfig, FixtureActionEx
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
+from tools.reachops_outcome_metrics import build_report as build_outcome_metrics_report
 from tools.reachops_live_submit_acceptance import run_acceptance as run_live_submit_acceptance
 from tools.reachops_repository_cleanliness_check import clean_generated_redundant_paths, scan_repository_cleanliness
 from tools.reachops_web_panel_dom_smoke import run_dom_smoke as run_web_panel_dom_smoke
@@ -375,6 +377,52 @@ def run_packaging_update_fixture() -> dict:
         "preserve_data": bool((manifest.get("runtime_policy") or {}).get("preserve_data")),
         "preserve_activation_status": bool((manifest.get("runtime_policy") or {}).get("preserve_activation_status")),
     }
+
+
+def run_outcome_metrics_fixture() -> dict:
+    base_dir = Path(tempfile.mkdtemp(prefix="reachops-audit-outcomes-"))
+    db_path = base_dir / "outcomes.db"
+    now = "2026-07-14T00:00:00Z"
+    build_outcome_metrics_report(db_path=db_path, create_missing_db=True)
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO operation_leads
+            (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+             source_path, status, batch_id, created_at, updated_at)
+            VALUES
+            ('lead-real', 'candidate-real', 'purchase', 'high', 92, 'asked for price', 'accepted',
+             'https://www.tiktok.com/@creator/video/1', 'accepted', 'batch-real', ?, ?),
+            ('lead-fixture', 'candidate-fixture', 'purchase', 'high', 99, 'fixture lead', 'accepted',
+             'fixture://source', 'accepted', 'batch-fixture', ?, ?)
+            """,
+            (now, now, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO lead_outcomes
+            (id, lead_id, workspace_id, owner, qualification_decision, qualification_reason,
+             rejection_reason, lifecycle_stage, dedupe_key, source_path, evidence_path, data_scope,
+             active_followup, accepted_at, reply_at, meaningful_conversation_at, meeting_at, quote_at,
+             order_at, revenue_amount, revenue_currency, lost_reason, attribution_confidence,
+             created_at, updated_at)
+            VALUES
+            ('out-real', 'lead-real', 'ws-1', 'owner-1', 'accepted', 'human accepted',
+             '', 'accepted', 'buyer@example.test', 'https://www.tiktok.com/@creator/video/1',
+             'reports/evidence/lead-real.json', 'real_customer', 1, ?, ?, ?, ?, ?, ?,
+             1200.0, 'USD', '', 'operator_confirmed', ?, ?),
+            ('out-fixture', 'lead-fixture', 'ws-1', 'owner-1', 'accepted', 'fixture accepted',
+             '', 'accepted', 'fixture-buyer', 'fixture://source',
+             'fixture://evidence', 'fixture', 1, ?, ?, '', '', '', '',
+             0.0, 'USD', '', 'fixture', ?, ?)
+            """,
+            (now, now, now, now, now, now, now, now, now, now, now, now),
+        )
+    return build_outcome_metrics_report(
+        db_path=db_path,
+        start_at="2026-07-13T00:00:00Z",
+        end_at="2026-07-15T00:00:00Z",
+    )
 
 
 def run_web_panel_runtime_smoke_with_retry(attempts: int = 3) -> dict:
@@ -1666,6 +1714,7 @@ def run_audit(args) -> dict:
     live_submit_acceptance_fixture = run_live_submit_acceptance_fixture()
     live_submit_block_fixture = run_live_submit_acceptance_block_fixture()
     packaging_update_fixture = run_packaging_update_fixture()
+    outcome_metrics_fixture = run_outcome_metrics_fixture()
     client_delivery_gate = run_client_delivery_gate_fixture()
     web_local_api_architecture = run_web_local_api_architecture_fixture()
     web_panel_dom_smoke = run_web_panel_dom_smoke()
@@ -2081,6 +2130,19 @@ def run_audit(args) -> dict:
                 and export_artifact_inspection.get("action_report_has_errors")
             ),
             export_artifact_inspection,
+        ),
+        check(
+            "WAQO 和结果漏斗排除 fixture/dry-run 数据",
+            bool(
+                outcome_metrics_fixture.get("passed")
+                and outcome_metrics_fixture.get("definition", {}).get("schema_version") == "reachops.waqo_definition.v1"
+                and int(outcome_metrics_fixture.get("waqo", {}).get("count") or 0) == 1
+                and int(outcome_metrics_fixture.get("waqo", {}).get("excluded_fixture_or_dry_run") or 0) == 1
+                and int(outcome_metrics_fixture.get("funnel", {}).get("orders") or 0) == 1
+                and float(outcome_metrics_fixture.get("funnel", {}).get("revenue_amount") or 0) == 1200.0
+                and outcome_metrics_fixture.get("quality", {}).get("fixture_data_excluded_by_default") is True
+            ),
+            outcome_metrics_fixture,
         ),
         check("独立配置/数据/授权目录存在", all(Path(path).exists() for path in [paths.data_dir, paths.config_dir, paths.logs_dir]), {"data_dir": paths.data_dir, "config_dir": paths.config_dir, "activation_status_path": paths.activation_status_path}),
         check("Windows 打包入口存在", all((ROOT_DIR / path).exists() for path in ["ReachOps/packaging/reachops.spec", "ReachOps/packaging/ReachOps.iss", "tools/build_reachops_windows.ps1"]), {"version": VERSION}),
