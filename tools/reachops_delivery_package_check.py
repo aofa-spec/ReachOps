@@ -277,6 +277,22 @@ def _remediation_plan(
     }
 
 
+def _not_final_reason_lines(missing_artifacts: list[str], failures: list[str]) -> list[str]:
+    reason_labels = {
+        "acceptance_summary_missing": "acceptance_summary is missing; run Windows acceptance and write reports\\reachops_acceptance\\acceptance_summary.json.",
+        "acceptance_summary_not_passed": "acceptance_summary is not passed; rerun acceptance until verification failures and pending items are empty.",
+        "exe_missing": "ReachOps.exe is missing; run tools\\build_reachops_windows.ps1 on Windows.",
+        "installer_missing": "ReachOps installer is missing; run tools\\build_reachops_windows.ps1 on Windows.",
+        "manifest_missing": "update manifest is missing; generate reachops-update-manifest.json during the Windows build.",
+    }
+    reasons: list[str] = []
+    for artifact in missing_artifacts:
+        reasons.append(f"missing required final artifact: {artifact}")
+    for failure in failures:
+        reasons.append(reason_labels.get(failure, f"delivery package failure: {failure}"))
+    return list(dict.fromkeys(reasons))
+
+
 def _final_gate_convergence_allowed(report_payload: dict[str, Any], checks_by_name: dict[str, Any]) -> bool:
     failed_checks = [str(item) for item in report_payload.get("failed_checks") or []]
     if failed_checks != ["delivery_package:passed"]:
@@ -483,6 +499,8 @@ def check_delivery_package(
         not_final_delivery_reasons.append("allow_missing_final_gate is bootstrap-only; rerun without it after final_acceptance_gate.json is written.")
     if allow_final_gate_convergence and bool(final_gate_report.get("convergence_only")):
         not_final_delivery_reasons.append("allow_final_gate_convergence is an intermediate convergence pass; rerun strict package check after final_acceptance_gate.json is rewritten.")
+    not_final_delivery_reasons.extend(_not_final_reason_lines(missing_artifacts, failures))
+    not_final_delivery_reasons = list(dict.fromkeys(not_final_delivery_reasons))
 
     final_ready = not failures
     status = "passed" if final_ready else "failed"

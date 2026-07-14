@@ -3213,6 +3213,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("manifest", result["missing_artifacts"])
             self.assertIn("acceptance_summary", result["missing_artifacts"])
             self.assertTrue(result["artifacts"]["acceptance_summary"]["path"].endswith("reports/reachops_acceptance/acceptance_summary.json"))
+            self.assertIn("missing required final artifact: acceptance_summary", result["not_final_delivery_reasons"])
+            self.assertIn(
+                "acceptance_summary is not passed; rerun acceptance until verification failures and pending items are empty.",
+                result["not_final_delivery_reasons"],
+            )
+            self.assertIn("update manifest is missing; generate reachops-update-manifest.json during the Windows build.", result["not_final_delivery_reasons"])
             remediation = result["remediation_plan"]
             self.assertIn("Windows 最终交付包未闭环", remediation["summary"])
             self.assertIn("exe", remediation["artifact_actions"])
