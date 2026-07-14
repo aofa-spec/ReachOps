@@ -3010,6 +3010,64 @@ class ReachOpsCampaignTests(unittest.TestCase):
             )
 
             acceptance_summary = report_dir / "acceptance_summary.json"
+            report_sections = [
+                "delivery_audit",
+                "operator_pressure",
+                "installer_smoke",
+                "ui_startup",
+                "activation_status",
+                "live_acceptance_status",
+                "authorization_handoff",
+                "live_validation",
+                "repository_cleanliness",
+                "windows_package_preflight",
+                "client_delivery",
+                "live_readiness",
+                "live_preflight",
+                "goal_status",
+                "live_submit",
+            ]
+            summary_sections = {}
+            for section in report_sections:
+                report_path = report_dir / f"{section}.json"
+                report_path.write_text(json.dumps({"status": "passed", "section": section}), encoding="utf-8")
+                summary_sections[section] = {"status": "passed", "json_path": str(report_path)}
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps({"status": "passed"}),
+                encoding="utf-8",
+            )
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps({"status": "ready_for_windows_build", "ready_for_windows_build": True}),
+                encoding="utf-8",
+            )
+            client_delivery_path = report_dir / "client_delivery.json"
+            write_final_client_delivery_payload(client_delivery_path)
+            handoff_path = report_dir / "authorization_handoff_payload.json"
+            handoff_path.write_text(json.dumps({"status": "passed"}), encoding="utf-8")
+            readiness_md = report_dir / "latest_live_acceptance_readiness.md"
+            readiness_json = report_dir / "latest_live_acceptance_readiness.json"
+            handoff_bundle = report_dir / "latest_reachops_authorization_handoff.zip"
+            readiness_md.write_text("# ReachOps readiness\n", encoding="utf-8")
+            readiness_json.write_text(json.dumps({"status": "passed"}), encoding="utf-8")
+            handoff_bundle.write_bytes(b"handoff bundle")
+            summary_sections["repository_cleanliness"] = {
+                "status": "passed",
+                "json_path": str(report_dir / "repository_cleanliness_payload.json"),
+            }
+            summary_sections["windows_package_preflight"] = {
+                "status": "ready_for_windows_build",
+                "ready_for_windows_build": True,
+                "json_path": str(report_dir / "windows_package_preflight.json"),
+            }
+            summary_sections["client_delivery"] = final_client_delivery_payload(str(client_delivery_path))
+            summary_sections["client_delivery"]["json_path"] = str(client_delivery_path)
+            summary_sections["authorization_handoff"] = {
+                "status": "passed",
+                "json_path": str(handoff_path),
+                "bundle_path": str(handoff_bundle),
+                "readiness_report_path": str(readiness_md),
+                "readiness_json_path": str(readiness_json),
+            }
             issue_closure_payload = {
                 **final_issue_closure_payload(),
                 "json_path": str(report_dir / "issue_closure_payload.json"),
@@ -3022,6 +3080,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(
                     {
                         "status": "passed",
+                        **summary_sections,
                         "issue_closure": issue_closure_payload,
                         "final_acceptance_gate": final_gate_payload,
                     }
@@ -3054,15 +3113,58 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 evidence["artifacts"]["final_acceptance_gate"]["sha256"],
                 hashlib.sha256((report_dir / "final_acceptance_gate.json").read_bytes()).hexdigest(),
             )
+            self.assertEqual(
+                evidence["artifacts"]["authorization_handoff"]["sha256"],
+                hashlib.sha256(handoff_path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                evidence["artifacts"]["authorization_handoff_readiness_report"]["sha256"],
+                hashlib.sha256(readiness_md.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                evidence["artifacts"]["authorization_handoff_readiness_json"]["sha256"],
+                hashlib.sha256(readiness_json.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                evidence["artifacts"]["authorization_handoff_bundle"]["sha256"],
+                hashlib.sha256(handoff_bundle.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                evidence["artifacts"]["client_delivery"]["sha256"],
+                hashlib.sha256(client_delivery_path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(evidence["acceptance"]["summary"]["authorization_handoff"]["status"], "passed")
+            self.assertEqual(evidence["acceptance"]["summary"]["client_delivery"]["readiness"], "pass")
             self.assertEqual(evidence["acceptance"]["summary"]["issue_closure"]["schema_version"], "reachops.issue_closure_audit.v1")
             self.assertEqual(evidence["acceptance"]["summary"]["issue_closure"]["summary"]["acceptance_criteria_total"], 53)
+            self.assertIn("authorization_handoff", evidence["package_report_files"])
+            self.assertIn("client_delivery", evidence["package_report_files"])
+            self.assertEqual(evidence["missing_package_report_files"], [])
             self.assertIn("python tools\\reachops_issue_closure_audit.py --json", evidence["rollback"]["verification_commands"])
             self.assertTrue(Path(evidence["evidence_path"]).exists())
             rollback_note = Path(evidence["rollback_note_path"]).read_text(encoding="utf-8")
             self.assertIn("ReachOps Rollback Note 0.4.0", rollback_note)
             self.assertIn("Rollback Policy", rollback_note)
             self.assertIn("previous verified ReachOps installer", rollback_note)
+            self.assertIn("Missing package reports: none", rollback_note)
+            self.assertIn("Authorization handoff evidence", rollback_note)
+            self.assertIn("Authorization handoff readiness report", rollback_note)
+            self.assertIn("Client delivery evidence", rollback_note)
             self.assertIn("issue_closure", rollback_note)
+
+            (report_dir / "live_submit.json").unlink()
+            missing_report_evidence = build_reachops_release_evidence(
+                root=root,
+                version="0.4.0",
+                build="mvp-001",
+                channel="mvp",
+                acceptance_summary=acceptance_summary,
+                manifest=manifest_path,
+                output_dir=root / "reports" / "reachops_release" / "0.4.0-missing-report",
+            )
+            self.assertIn("live_submit", missing_report_evidence["missing_package_report_files"])
+            missing_report_note = Path(missing_report_evidence["rollback_note_path"]).read_text(encoding="utf-8")
+            self.assertIn("Missing package reports: live_submit", missing_report_note)
 
     def test_reachops_data_governance_verifies_backup_restore_and_redaction_policy(self):
         with tempfile.TemporaryDirectory() as tmp:

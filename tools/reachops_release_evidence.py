@@ -21,6 +21,15 @@ from tools.verify_reachops_dependency_baseline import build_report as build_depe
 
 SCHEMA_VERSION = "reachops.release_evidence.v1"
 
+ACCEPTANCE_SUMMARY_SECTIONS = (
+    "repository_cleanliness",
+    "windows_package_preflight",
+    "authorization_handoff",
+    "client_delivery",
+    "issue_closure",
+    "final_acceptance_gate",
+)
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -100,6 +109,69 @@ def _resolve_acceptance_report_path(acceptance_path: Path, value: Any, default_n
     return acceptance_path.parent / default_name
 
 
+def _acceptance_section(payload: dict[str, Any], name: str) -> dict[str, Any]:
+    section = payload.get(name)
+    return section if isinstance(section, dict) else {}
+
+
+def _package_report_artifacts(
+    acceptance_path: Path,
+    summary_sections: dict[str, dict[str, Any]],
+    package_check: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    report_files = package_check.get("report_files") if isinstance(package_check.get("report_files"), dict) else {}
+    artifact_paths: dict[str, Path] = {}
+    for name, detail in report_files.items():
+        if isinstance(detail, dict) and detail.get("path"):
+            artifact_paths[str(name)] = Path(str(detail["path"]))
+
+    default_names = {
+        "repository_cleanliness": "repository_cleanliness_payload.json",
+        "windows_package_preflight": "windows_package_preflight.json",
+        "authorization_handoff": "authorization_handoff_payload.json",
+        "client_delivery": "client_delivery.json",
+        "issue_closure": "issue_closure_payload.json",
+        "final_acceptance_gate": "final_acceptance_gate.json",
+    }
+    for name, default_name in default_names.items():
+        if name not in artifact_paths:
+            artifact_paths[name] = _resolve_acceptance_report_path(
+                acceptance_path,
+                summary_sections.get(name, {}).get("json_path"),
+                default_name,
+            )
+
+    authorization = summary_sections.get("authorization_handoff", {})
+    artifact_paths["authorization_handoff_readiness_report"] = _resolve_acceptance_report_path(
+        acceptance_path,
+        authorization.get("readiness_report_path"),
+        "latest_live_acceptance_readiness.md",
+    )
+    artifact_paths["authorization_handoff_readiness_json"] = _resolve_acceptance_report_path(
+        acceptance_path,
+        authorization.get("readiness_json_path"),
+        "latest_live_acceptance_readiness.json",
+    )
+    artifact_paths["authorization_handoff_bundle"] = _resolve_acceptance_report_path(
+        acceptance_path,
+        authorization.get("bundle_path"),
+        "latest_reachops_authorization_handoff.zip",
+    )
+    return {name: _artifact(path) for name, path in sorted(artifact_paths.items())}
+
+
+def _missing_package_reports(package_check: dict[str, Any]) -> list[str]:
+    report_files = package_check.get("report_files") if isinstance(package_check.get("report_files"), dict) else {}
+    missing: list[str] = []
+    for name, detail in report_files.items():
+        if not isinstance(detail, dict):
+            missing.append(str(name))
+            continue
+        if not detail.get("exists") or int(detail.get("size") or 0) <= 0:
+            missing.append(str(name))
+    return sorted(dict.fromkeys(missing))
+
+
 def _default_output_dir(root: Path, version: str, build: str) -> Path:
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y%m%dT%H%M%SZ")
     safe_build = "".join(ch if ch.isalnum() or ch in {".", "-", "_"} else "-" for ch in str(build or "0"))
@@ -140,6 +212,15 @@ def _rollback_note(payload: dict[str, Any]) -> str:
             f"- Package check status: {payload['package_check'].get('status', 'unknown')}",
             f"- Package check failures: {', '.join(payload['package_check'].get('failures') or []) or 'none'}",
             f"- Missing artifacts: {', '.join(payload['package_check'].get('missing_artifacts') or []) or 'none'}",
+            f"- Missing package reports: {', '.join(payload.get('missing_package_report_files') or []) or 'none'}",
+            f"- Repository cleanliness evidence: {payload['artifacts']['repository_cleanliness']['path']}",
+            f"- Windows package preflight evidence: {payload['artifacts']['windows_package_preflight']['path']}",
+            f"- Authorization handoff evidence: {payload['artifacts']['authorization_handoff']['path']}",
+            f"- Authorization handoff readiness report: {payload['artifacts']['authorization_handoff_readiness_report']['path']}",
+            f"- Authorization handoff readiness JSON: {payload['artifacts']['authorization_handoff_readiness_json']['path']}",
+            f"- Authorization handoff status: {payload['acceptance']['summary'].get('authorization_handoff', {}).get('status', 'unknown')}",
+            f"- Client delivery evidence: {payload['artifacts']['client_delivery']['path']}",
+            f"- Client delivery status: {payload['acceptance']['summary'].get('client_delivery', {}).get('status', 'unknown')}",
             f"- Issue closure evidence: {payload['artifacts']['issue_closure']['path']}",
             f"- Issue closure status: {payload['acceptance']['summary'].get('issue_closure', {}).get('status', 'unknown')}",
             "",
@@ -167,28 +248,20 @@ def build_release_evidence(
     dependency_baseline = build_dependency_report(root)
     manifest_payload = _load_json(manifest_path)
     acceptance_payload = _load_json(acceptance_path)
-    acceptance_issue_closure = (
-        acceptance_payload.get("issue_closure")
-        if isinstance(acceptance_payload.get("issue_closure"), dict)
-        else {}
-    )
-    acceptance_final_gate = (
-        acceptance_payload.get("final_acceptance_gate")
-        if isinstance(acceptance_payload.get("final_acceptance_gate"), dict)
-        else {}
-    )
-    issue_closure_path = _resolve_acceptance_report_path(
-        acceptance_path,
-        acceptance_issue_closure.get("json_path") if acceptance_issue_closure else "",
-        "issue_closure_payload.json",
-    )
-    final_gate_path = _resolve_acceptance_report_path(
-        acceptance_path,
-        acceptance_final_gate.get("json_path") if acceptance_final_gate else "",
-        "final_acceptance_gate.json",
-    )
+    summary_sections = {name: _acceptance_section(acceptance_payload, name) for name in ACCEPTANCE_SUMMARY_SECTIONS}
+    report_artifacts = _package_report_artifacts(acceptance_path, summary_sections, package_check)
+    missing_package_reports = _missing_package_reports(package_check)
     runtime_policy = manifest_payload.get("runtime_policy") if isinstance(manifest_payload.get("runtime_policy"), dict) else {}
     source_status = _git_status(root)
+    artifacts = {
+        "exe": _artifact(exe),
+        "installer": _artifact(installer),
+        "manifest": _artifact(manifest_path),
+        "acceptance_summary": _artifact(acceptance_path),
+        **report_artifacts,
+        "requirements_lock": _artifact(root / "requirements.lock"),
+        "dependency_license_inventory": _artifact(root / "ReachOps" / "packaging" / "dependency-license-inventory.json"),
+    }
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "product_id": PRODUCT_ID,
@@ -206,16 +279,7 @@ def build_release_evidence(
             "tracked_source_clean": not source_status,
         },
         "dependency_baseline": dependency_baseline,
-        "artifacts": {
-            "exe": _artifact(exe),
-            "installer": _artifact(installer),
-            "manifest": _artifact(manifest_path),
-            "acceptance_summary": _artifact(acceptance_path),
-            "issue_closure": _artifact(issue_closure_path),
-            "final_acceptance_gate": _artifact(final_gate_path),
-            "requirements_lock": _artifact(root / "requirements.lock"),
-            "dependency_license_inventory": _artifact(root / "ReachOps" / "packaging" / "dependency-license-inventory.json"),
-        },
+        "artifacts": artifacts,
         "manifest": {
             "path": str(manifest_path),
             "product_id": manifest_payload.get("product_id"),
@@ -229,11 +293,12 @@ def build_release_evidence(
             "path": str(acceptance_path),
             "summary": {
                 "status": acceptance_payload.get("status"),
-                "issue_closure": acceptance_issue_closure,
-                "final_acceptance_gate": acceptance_final_gate,
+                **summary_sections,
             },
         },
         "package_check": package_check,
+        "package_report_files": package_check.get("report_files") if isinstance(package_check.get("report_files"), dict) else {},
+        "missing_package_report_files": missing_package_reports,
         "rollback": {
             "preserve_config": bool(runtime_policy.get("preserve_config", True)),
             "preserve_data": bool(runtime_policy.get("preserve_data", True)),
