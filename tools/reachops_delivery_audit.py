@@ -765,6 +765,9 @@ def run_web_local_api_architecture_fixture() -> dict:
         and "collect_metadata=bool(args.collect_live_metadata)" in client_delivery_check,
         "client_gate_exposes_account_support_handoff": "build_account_support_handoff" in client_delivery_check
         and "reachops.account_support_handoff.v1" in client_delivery_check
+        and "write_account_support_handoff_diagnostic" in client_delivery_check
+        and "reachops.account_support_handoff_diagnostic.v1" in client_delivery_check
+        and "reports\" / \"support\" / \"account_support_handoff.json" in client_delivery_check
         and '"account_support_handoff"' in client_delivery_check
         and "retest_commands" in client_delivery_check
         and "apply_alone_is_not_acceptance" in client_delivery_check

@@ -46,6 +46,7 @@ from tools.reachops_client_delivery_check import (
     latest_account_repair_apply_status,
     main as run_delivery_check,
     profile_remediation_csv_quality,
+    write_delivery_check,
 )
 from tools.reachops_apply_account_repair_plan import apply_account_repair_plan
 from tools.reachops_web_panel_dom_smoke import run_dom_smoke
@@ -5058,6 +5059,88 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
 
         self.assertTrue(str(out_path).endswith("latest_delivery_check.json"))
         self.assertEqual(payload["delivery_check_path"], str(out_path))
+        self.assertTrue(str(payload["support_account_handoff_path"]).endswith("reports/support/account_support_handoff.json"))
+
+    def test_write_delivery_check_creates_support_account_handoff_diagnostic(self):
+        with TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            payload = {
+                "base_dir": str(base),
+                "delivery_check_path": str(base / "reports" / "acceptance_remediation" / "latest_delivery_check.json"),
+                "status": "blocked_by_accounts",
+                "readiness": "blocked_by_accounts",
+                "final_delivery_ready": False,
+                "failed_checks": ["acceptance:ready"],
+                "batch_id": "gb_support",
+                "account_blocker_resolution": {
+                    "schema_version": "reachops.account_blocker_resolution.v1",
+                    "status": "stale_repair_apply",
+                    "does_not_claim_real_account_pool_ready": True,
+                },
+                "account_support_handoff": {
+                    "schema_version": "reachops.account_support_handoff.v1",
+                    "support_required": True,
+                    "support_case": "account_pool_blocked",
+                    "status": "stale_repair_apply",
+                    "profile_group": "United States",
+                    "batch_id": "gb_support",
+                    "priority_action": "manually_repair_or_replace_accounts",
+                    "ready_for_retest": False,
+                    "requires_manual_account_work": True,
+                    "does_not_claim_real_account_pool_ready": True,
+                    "retest_commands": ["python tools/reachops_client_delivery_check.py --json"],
+                    "acceptance_required": ["profile_available>=1"],
+                    "safety_contract": {
+                        "apply_alone_is_not_acceptance": True,
+                        "no_browser_started": True,
+                        "no_submit": True,
+                    },
+                },
+            }
+
+            delivery_path = write_delivery_check(payload)
+            support_path = base / "reports" / "support" / "account_support_handoff.json"
+            self.assertTrue(delivery_path.is_file())
+            self.assertTrue(support_path.is_file())
+            diagnostic = json.loads(support_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(diagnostic["schema_version"], "reachops.account_support_handoff_diagnostic.v1")
+        self.assertEqual(diagnostic["delivery_check_path"], str(delivery_path))
+        self.assertEqual(diagnostic["support_case"], "account_pool_blocked")
+        self.assertEqual(diagnostic["priority_action"], "manually_repair_or_replace_accounts")
+        self.assertTrue(diagnostic["support_required"])
+        self.assertTrue(diagnostic["requires_manual_account_work"])
+        self.assertTrue(diagnostic["does_not_claim_real_account_pool_ready"])
+        self.assertFalse(diagnostic["ready_for_retest"])
+        self.assertTrue(diagnostic["no_browser_started"])
+        self.assertTrue(diagnostic["no_submit"])
+        self.assertIn("python tools/reachops_client_delivery_check.py --json", diagnostic["retest_commands"])
+
+    def test_write_delivery_check_derives_support_path_without_base_dir(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            delivery_path = root / "reports" / "acceptance_remediation" / "latest_delivery_check.json"
+            payload = {
+                "delivery_check_path": str(delivery_path),
+                "status": "blocked_by_accounts",
+                "readiness": "blocked_by_accounts",
+                "final_delivery_ready": False,
+                "account_support_handoff": {
+                    "schema_version": "reachops.account_support_handoff.v1",
+                    "support_required": True,
+                    "support_case": "account_pool_blocked",
+                    "does_not_claim_real_account_pool_ready": True,
+                    "safety_contract": {"no_browser_started": True, "no_submit": True},
+                },
+            }
+
+            write_delivery_check(payload)
+            support_path = root / "reports" / "support" / "account_support_handoff.json"
+            diagnostic = json.loads(support_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["support_account_handoff_path"], str(support_path))
+        self.assertEqual(diagnostic["delivery_check_path"], str(delivery_path))
+        self.assertEqual(diagnostic["support_case"], "account_pool_blocked")
 
     def test_delivery_check_cli_accepts_base_dir_output_and_json(self):
         with TemporaryDirectory() as tmpdir:

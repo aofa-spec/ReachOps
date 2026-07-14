@@ -1120,6 +1120,7 @@ def build_delivery_check(
         "root_dir": str(ROOT_DIR),
         "base_dir": str(base_dir),
         "delivery_check_path": str(base_dir / "reports" / "acceptance_remediation" / "latest_delivery_check.json"),
+        "support_account_handoff_path": str(base_dir / "reports" / "support" / "account_support_handoff.json"),
         "status": status,
         "readiness": acceptance.get("readiness"),
         "batch_id": batch.get("id", ""),
@@ -1144,11 +1145,75 @@ def build_delivery_check(
     }
 
 
+def build_account_support_handoff_diagnostic(payload: dict) -> dict:
+    handoff = payload.get("account_support_handoff") if isinstance(payload.get("account_support_handoff"), dict) else {}
+    blocker_resolution = (
+        payload.get("account_blocker_resolution")
+        if isinstance(payload.get("account_blocker_resolution"), dict)
+        else {}
+    )
+    safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    return {
+        "schema_version": "reachops.account_support_handoff_diagnostic.v1",
+        "generated_from": "reachops_client_delivery_check",
+        "delivery_check_path": str(payload.get("delivery_check_path") or ""),
+        "status": str(payload.get("status") or ""),
+        "readiness": str(payload.get("readiness") or ""),
+        "final_delivery_ready": bool(payload.get("final_delivery_ready")),
+        "failed_checks": [str(item) for item in (payload.get("failed_checks") or [])],
+        "support_required": bool(handoff.get("support_required")),
+        "support_case": str(handoff.get("support_case") or "not_required"),
+        "profile_group": str(handoff.get("profile_group") or ""),
+        "batch_id": str(handoff.get("batch_id") or payload.get("batch_id") or ""),
+        "priority_action": str(handoff.get("priority_action") or ""),
+        "ready_for_retest": bool(handoff.get("ready_for_retest")),
+        "requires_latest_repair_apply": bool(handoff.get("requires_latest_repair_apply")),
+        "requires_manual_account_work": bool(handoff.get("requires_manual_account_work")),
+        "does_not_claim_real_account_pool_ready": bool(handoff.get("does_not_claim_real_account_pool_ready", True)),
+        "account_blocker_resolution": blocker_resolution,
+        "account_support_handoff": handoff,
+        "retest_commands": [str(item) for item in (handoff.get("retest_commands") or [])],
+        "acceptance_required": [str(item) for item in (handoff.get("acceptance_required") or [])],
+        "safety_contract": safety_contract,
+        "no_browser_started": bool(safety_contract.get("no_browser_started", True)),
+        "no_submit": bool(safety_contract.get("no_submit", True)),
+        "support_bundle_redacted_by_default": True,
+    }
+
+
+def default_support_account_handoff_path(payload: dict, delivery_check_path: Path | None = None) -> Path:
+    base_dir = str(payload.get("base_dir") or "").strip()
+    if base_dir:
+        return Path(base_dir) / "reports" / "support" / "account_support_handoff.json"
+    if delivery_check_path and delivery_check_path.parent.name == "acceptance_remediation":
+        reports_dir = delivery_check_path.parent.parent
+        if reports_dir.name == "reports":
+            return reports_dir / "support" / "account_support_handoff.json"
+    if delivery_check_path:
+        return delivery_check_path.with_name("account_support_handoff.json")
+    return Path("reports") / "support" / "account_support_handoff.json"
+
+
+def write_account_support_handoff_diagnostic(payload: dict, output_path: str | Path | None = None) -> Path:
+    out_path = Path(output_path or payload.get("support_account_handoff_path") or "")
+    if not str(out_path):
+        delivery_check_path = Path(str(payload.get("delivery_check_path") or "")) if payload.get("delivery_check_path") else None
+        out_path = default_support_account_handoff_path(payload, delivery_check_path)
+    payload["support_account_handoff_path"] = str(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    diagnostic = build_account_support_handoff_diagnostic(payload)
+    out_path.write_text(json.dumps(diagnostic, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_path
+
+
 def write_delivery_check(payload: dict, output_path: str | Path | None = None) -> Path:
     out_path = Path(output_path or payload.get("delivery_check_path") or "")
     if not str(out_path):
         out_path = Path(payload["base_dir"]) / "reports" / "acceptance_remediation" / "latest_delivery_check.json"
     payload["delivery_check_path"] = str(out_path)
+    payload["support_account_handoff_path"] = str(
+        payload.get("support_account_handoff_path") or default_support_account_handoff_path(payload, out_path)
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not payload.get("ixbrowser_metadata") and out_path.is_file():
         try:
@@ -1159,6 +1224,7 @@ def write_delivery_check(payload: dict, output_path: str | Path | None = None) -
         if isinstance(previous_metadata, dict) and previous_metadata:
             payload["ixbrowser_metadata"] = previous_metadata
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_account_support_handoff_diagnostic(payload)
     return out_path
 
 
