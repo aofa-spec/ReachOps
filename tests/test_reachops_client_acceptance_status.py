@@ -4393,6 +4393,42 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(mismatch["error"], "account_repair_group_mismatch")
         self.assertEqual(mismatch["profile_group"], "United States")
 
+    def test_web_account_repair_apply_explains_no_applicable_profiles(self):
+        old_process = reachops_web_ui.RUN_PROCESS
+
+        def fake_apply(path, apply=False):
+            return {
+                "status": "no_applicable_profiles",
+                "ok": False,
+                "profile_group": "United States",
+                "selected_count": 0,
+                "moved_count": 0,
+                "failed_count": 0,
+                "non_auto_error_codes": ["PROFILE_PREFLIGHT_TIMEOUT"],
+                "next_actions": ["最新账号修复计划没有默认可自动隔离的账号，未移动任何 ixBrowser 配置。"],
+                "no_browser_started": True,
+                "no_submit": True,
+            }
+
+        try:
+            reachops_web_ui.RUN_PROCESS = None
+            with patch(
+                "tools.reachops_apply_account_repair_plan.load_plan",
+                return_value={"profile_group": "United States", "groups": []},
+            ), patch("tools.reachops_apply_account_repair_plan.apply_account_repair_plan", side_effect=fake_apply):
+                result = reachops_web_ui.apply_latest_account_repair_plan_from_web("United States")
+        finally:
+            reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(result["status"], "no_applicable_profiles")
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["no_browser_started"])
+        self.assertTrue(result["no_submit"])
+        next_actions = " ".join(result["next_actions"])
+        self.assertIn("手动打开受影响账号", next_actions)
+        self.assertNotIn("Local API", next_actions)
+        self.assertNotIn("ixBrowser 客户端已启动", next_actions)
+
     def test_delivery_check_exposes_no_action_reason_when_actions_are_zero(self):
         batch = {"id": "gb_no_action", "status": "completed", "profile_group": "United States", "config_json": "{}"}
         acceptance = {

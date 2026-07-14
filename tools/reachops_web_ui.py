@@ -5213,6 +5213,19 @@ def apply_latest_account_repair_plan_from_web(profile_group: str = "") -> dict:
                 "确认至少 1 个可用账号保留在执行分组后，再勾选重新预检并开始获客。",
             ]
         )
+    elif result.get("status") == "no_applicable_profiles":
+        append_web_log(
+            f"WARN   account_repair_apply status=no_applicable_profiles group={result.get('profile_group') or profile_group or '-'} "
+            f"selected={result.get('selected_count', 0)} moved={result.get('moved_count', 0)} failed={result.get('failed_count', 0)} "
+            f"errors={','.join(result.get('non_auto_error_codes') or []) or '-'}"
+        )
+        result.setdefault("next_actions", []).extend(
+            [
+                "最新账号修复计划没有默认可自动隔离的账号，未移动任何 ixBrowser 配置。",
+                "手动打开受影响账号，确认登录状态、内核版本、代理和 TikTok 页面加载；不可用账号再移入封禁账号分组。",
+                "至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑真实执行复测。",
+            ]
+        )
     else:
         first_error = ""
         for row in result.get("results") or []:
