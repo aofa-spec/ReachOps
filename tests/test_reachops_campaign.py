@@ -4746,6 +4746,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "python tools\\reachops_live_acceptance_status.py --write-report --json",
                 payload["verification_commands"],
             )
+            self.assertIn("python tools\\reachops_goal_delivery_runner.py --json", payload["verification_commands"])
+            self.assertIn("python tools\\reachops_issue_closure_audit.py --json", payload["verification_commands"])
 
     def test_reachops_live_validation_manifest_builds_operator_next_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -6820,11 +6822,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("-not ($Force -or $UpdateExisting)", acceptance_inputs_init)
         self.assertIn("-UpdateExisting to set only supplied fields", acceptance_inputs_init)
         self.assertIn("python tools\\reachops_live_acceptance_status.py --write-report --json-report-path --json", acceptance_inputs_init)
+        self.assertIn("python tools\\reachops_goal_delivery_runner.py --json", acceptance_inputs_init)
+        self.assertIn("python tools\\reachops_issue_closure_audit.py --json", acceptance_inputs_init)
         self.assertIn("Create the local ReachOps live-acceptance input file", acceptance_inputs_init_py)
         self.assertIn("--confirm-authorized-targets", acceptance_inputs_init_py)
         self.assertIn("--update-existing", acceptance_inputs_init_py)
         self.assertIn("normalize_cli_value", acceptance_inputs_init_py)
         self.assertIn("pattern.sub(lambda _match: replacement", acceptance_inputs_init_py)
+        self.assertIn("reachops_goal_delivery_runner.py --json", acceptance_inputs_init_py)
+        self.assertIn("reachops_issue_closure_audit.py --json", acceptance_inputs_init_py)
         self.assertIn("reachops_account_readiness_audit.py --json", readme)
         self.assertIn("30 个受控真实账号", readme)
         self.assertIn("100 次真实 no-submit 试点", readme)
