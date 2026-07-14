@@ -28,6 +28,7 @@ from ReachOps.workbench.action_router import ActionRouterConfig, FixtureActionEx
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
+from tools.reachops_data_governance import build_report as build_data_governance_report
 from tools.reachops_outcome_metrics import build_report as build_outcome_metrics_report
 from tools.reachops_outcome_metrics import import_outcomes_csv as import_outcomes_csv_fixture
 from tools.reachops_live_submit_acceptance import run_acceptance as run_live_submit_acceptance
@@ -432,6 +433,20 @@ def run_outcome_metrics_fixture() -> dict:
     )
     report["ingestion"] = ingestion
     return report
+
+
+def run_data_governance_fixture() -> dict:
+    base_dir = Path(tempfile.mkdtemp(prefix="reachops-audit-governance-"))
+    db_path = base_dir / "growth_intelligence.db"
+    output_dir = base_dir / "governance"
+    return build_data_governance_report(
+        root=ROOT_DIR,
+        db_path=db_path,
+        output_dir=output_dir,
+        create_missing_db=True,
+        verify_backup=True,
+        verify_privacy_ops=True,
+    )
 
 
 def run_web_panel_runtime_smoke_with_retry(attempts: int = 3) -> dict:
@@ -1724,6 +1739,7 @@ def run_audit(args) -> dict:
     live_submit_block_fixture = run_live_submit_acceptance_block_fixture()
     packaging_update_fixture = run_packaging_update_fixture()
     outcome_metrics_fixture = run_outcome_metrics_fixture()
+    data_governance_fixture = run_data_governance_fixture()
     client_delivery_gate = run_client_delivery_gate_fixture()
     web_local_api_architecture = run_web_local_api_architecture_fixture()
     web_panel_dom_smoke = run_web_panel_dom_smoke()
@@ -2155,6 +2171,20 @@ def run_audit(args) -> dict:
                 and outcome_metrics_fixture.get("quality", {}).get("fixture_data_excluded_by_default") is True
             ),
             outcome_metrics_fixture,
+        ),
+        check(
+            "数据治理执行备份恢复、腐坏库恢复和隐私操作审计",
+            bool(
+                data_governance_fixture.get("passed")
+                and data_governance_fixture.get("backup_restore", {}).get("status") == "passed"
+                and data_governance_fixture.get("backup_restore", {}).get("rpo_met") is True
+                and data_governance_fixture.get("backup_restore", {}).get("rto_met") is True
+                and data_governance_fixture.get("backup_restore", {}).get("corruption_drill", {}).get("status") == "passed"
+                and data_governance_fixture.get("privacy_operations", {}).get("schema_version") == "reachops.privacy_operations.v1"
+                and data_governance_fixture.get("privacy_operations", {}).get("audit", {}).get("observed_operations") == ["delete", "export", "legal_hold"]
+                and data_governance_fixture.get("recovery_objectives", {}).get("schema_version") == "reachops.recovery_objectives.v1"
+            ),
+            data_governance_fixture,
         ),
         check("独立配置/数据/授权目录存在", all(Path(path).exists() for path in [paths.data_dir, paths.config_dir, paths.logs_dir]), {"data_dir": paths.data_dir, "config_dir": paths.config_dir, "activation_status_path": paths.activation_status_path}),
         check("Windows 打包入口存在", all((ROOT_DIR / path).exists() for path in ["ReachOps/packaging/reachops.spec", "ReachOps/packaging/ReachOps.iss", "tools/build_reachops_windows.ps1"]), {"version": VERSION}),

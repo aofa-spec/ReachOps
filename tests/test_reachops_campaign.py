@@ -2723,6 +2723,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 output_dir=output_dir,
                 create_missing_db=True,
                 verify_backup=True,
+                verify_privacy_ops=True,
             )
 
             self.assertEqual(report["schema_version"], "reachops.data_governance.v1")
@@ -2730,6 +2731,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(report["backup_restore"]["status"], "passed")
             self.assertTrue(Path(report["backup_restore"]["backup_path"]).exists())
             self.assertTrue(Path(report["backup_restore"]["restored_path"]).exists())
+            self.assertTrue(report["backup_restore"]["rpo_met"])
+            self.assertTrue(report["backup_restore"]["rto_met"])
+            self.assertEqual(report["backup_restore"]["recovery_objectives"]["schema_version"], "reachops.recovery_objectives.v1")
+            self.assertEqual(report["backup_restore"]["corruption_drill"]["status"], "passed")
+            self.assertEqual(report["backup_restore"]["corruption_drill"]["corrupt_integrity_check"], "error")
+            self.assertEqual(report["backup_restore"]["corruption_drill"]["restored_integrity_check"], "ok")
             self.assertEqual(report["database"]["schema"]["integrity_check"], "ok")
             self.assertEqual(report["database"]["schema"]["schema_version"], "reachops.sqlite_schema_baseline.v1")
             self.assertGreater(report["database"]["schema"]["table_count"], 20)
@@ -2751,7 +2758,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("reports/**/*.png", support["exclude_patterns"])
             self.assertIn("candidate_users.comment_text", support["redacted_fields"])
             self.assertIn("outreach_executions.evidence_path", support["excluded_file_fields"])
+            self.assertEqual(report["recovery_objectives"]["rpo_minutes"], 15)
+            self.assertEqual(report["recovery_objectives"]["rto_minutes"], 30)
             self.assertEqual(report["privacy_operations"]["audit_table"], "data_privacy_audit")
+            self.assertEqual(report["privacy_operations"]["schema_version"], "reachops.privacy_operations.v1")
+            privacy_audit = report["privacy_operations"]["audit"]
+            self.assertTrue(privacy_audit["passed"])
+            self.assertEqual(privacy_audit["observed_operations"], ["delete", "export", "legal_hold"])
+            self.assertIn("privacy-export-workspace-audit", privacy_audit["inserted_audit_ids"])
+            with sqlite3.connect(db_path) as conn:
+                audit_count = conn.execute("SELECT COUNT(*) FROM data_privacy_audit").fetchone()[0]
+            self.assertGreaterEqual(audit_count, 3)
 
             corrupt_db = root / "corrupt.db"
             corrupt_db.write_bytes(b"not sqlite")
@@ -2769,6 +2786,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 output_dir=output_dir,
                 create_missing_db=True,
                 verify_backup=True,
+                verify_privacy_ops=True,
             )
             self.assertTrue(migrated["passed"])
             self.assertIn("legacy_marker", migrated["database"]["schema"]["tables"])
@@ -5864,6 +5882,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("RETENTION_CLASSES", data_governance)
         self.assertIn("DATA_CATALOG", data_governance)
         self.assertIn("inspect_migration_status", data_governance)
+        self.assertIn("verify_privacy_operation_audit", data_governance)
+        self.assertIn("reachops.privacy_operations.v1", data_governance)
+        self.assertIn("reachops.recovery_objectives.v1", data_governance)
+        self.assertIn("corruption_drill_required", data_governance)
+        self.assertIn("--verify-privacy-ops", data_governance)
         self.assertIn("versioned_forward_migrations_with_documented_rollback", data_governance)
         self.assertIn("SCHEMA_MIGRATION_TABLE", data_governance)
         self.assertIn("SchemaMigration", data_migrations)
@@ -5968,7 +5991,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("entitlement_signature", reachops_readme)
         self.assertIn("schema_migrations", reachops_readme)
         self.assertIn("data_privacy_audit", reachops_readme)
-        self.assertIn("reachops_data_governance.py --create-missing-db --verify-backup --json", reachops_readme)
+        self.assertIn("reachops_data_governance.py --create-missing-db --verify-backup --verify-privacy-ops --json", reachops_readme)
+        self.assertIn("RPO/RTO", reachops_readme)
+        self.assertIn("corruption drill", reachops_readme)
         self.assertIn("WAQO", reachops_readme)
         self.assertIn("reachops_outcome_metrics.py --create-missing-db --json", reachops_readme)
         self.assertIn("fixture", reachops_readme)

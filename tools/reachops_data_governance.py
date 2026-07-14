@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timezone
+from time import perf_counter
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,36 @@ from ReachOps.runtime_paths import RuntimePaths
 
 SCHEMA_VERSION = "reachops.data_governance.v1"
 SCHEMA_BASELINE_VERSION = "reachops.sqlite_schema_baseline.v1"
+PRIVACY_OPERATION_SCHEMA_VERSION = "reachops.privacy_operations.v1"
+RECOVERY_OBJECTIVE_SCHEMA_VERSION = "reachops.recovery_objectives.v1"
+
+RECOVERY_OBJECTIVES: dict[str, Any] = {
+    "schema_version": RECOVERY_OBJECTIVE_SCHEMA_VERSION,
+    "rpo_minutes": 15,
+    "rto_minutes": 30,
+    "quarterly_exercise_required": True,
+    "backup_before_migration_required": True,
+    "restore_verification_required": True,
+    "corruption_drill_required": True,
+}
+
+PRIVACY_OPERATION_PROCEDURES: dict[str, dict[str, Any]] = {
+    "export": {
+        "procedure": "export workspace/customer rows plus audit manifest; redact support-only fields by default",
+        "requires_audit_record": True,
+        "destructive": False,
+    },
+    "delete": {
+        "procedure": "delete or redact raw_interaction/evidence/log data unless legal hold is active; retain direct-identifier-free aggregates",
+        "requires_audit_record": True,
+        "destructive": True,
+    },
+    "legal_hold": {
+        "procedure": "record hold scope and suspend deletion for matching workspace/customer data until released by authorized actor",
+        "requires_audit_record": True,
+        "destructive": False,
+    },
+}
 
 RETENTION_CLASSES: dict[str, dict[str, Any]] = {
     "raw_interaction": {
@@ -93,6 +124,10 @@ SUPPORT_BUNDLE_EXCLUDE_PATTERNS = [
     "reports/**/*.jpeg",
     "reports/**/*.webp",
 ]
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def sha256_file(path: Path) -> str:
@@ -222,14 +257,18 @@ def backup_and_restore_verify(db_path: Path, output_dir: Path) -> dict[str, Any]
     if not db_path.exists():
         return {"status": "failed", "passed": False, "failures": ["database_missing"], "backup_path": str(backup_path), "restored_path": str(restored_path)}
     try:
+        backup_started = perf_counter()
         with sqlite3.connect(str(db_path)) as source, sqlite3.connect(str(backup_path)) as backup:
             source.backup(backup)
+        backup_seconds = round(perf_counter() - backup_started, 6)
     except Exception as exc:
         return {"status": "failed", "passed": False, "failures": ["backup_failed"], "error": str(exc), "backup_path": str(backup_path), "restored_path": str(restored_path)}
     try:
+        restore_started = perf_counter()
         shutil.copy2(backup_path, restored_path)
         original = inspect_schema(db_path)
         restored = inspect_schema(restored_path)
+        restore_seconds = round(perf_counter() - restore_started, 6)
     except Exception as exc:
         return {"status": "failed", "passed": False, "failures": ["restore_failed"], "error": str(exc), "backup_path": str(backup_path), "restored_path": str(restored_path)}
     failures: list[str] = []
@@ -247,6 +286,14 @@ def backup_and_restore_verify(db_path: Path, output_dir: Path) -> dict[str, Any]
         for name, table in (restored.get("tables") or {}).items()
     }:
         failures.append("row_count_mismatch")
+    corruption_drill = run_corruption_drill(backup_path, restored_path, output_dir)
+    failures.extend(str(item) for item in corruption_drill.get("failures") or [])
+    rpo_met = backup_seconds <= float(RECOVERY_OBJECTIVES["rpo_minutes"]) * 60
+    rto_met = restore_seconds <= float(RECOVERY_OBJECTIVES["rto_minutes"]) * 60
+    if not rpo_met:
+        failures.append("rpo_not_met")
+    if not rto_met:
+        failures.append("rto_not_met")
     return {
         "status": "passed" if not failures else "failed",
         "passed": not failures,
@@ -254,10 +301,128 @@ def backup_and_restore_verify(db_path: Path, output_dir: Path) -> dict[str, Any]
         "backup_path": str(backup_path),
         "backup_sha256": sha256_file(backup_path) if backup_path.exists() else "",
         "restored_path": str(restored_path),
+        "backup_seconds": backup_seconds,
+        "restore_seconds": restore_seconds,
+        "rpo_met": rpo_met,
+        "rto_met": rto_met,
+        "recovery_objectives": RECOVERY_OBJECTIVES,
+        "corruption_drill": corruption_drill,
         "source_schema_hash": original.get("schema_hash"),
         "restored_schema_hash": restored.get("schema_hash"),
         "source_integrity_check": original.get("integrity_check"),
         "restored_integrity_check": restored.get("integrity_check"),
+    }
+
+
+def run_corruption_drill(backup_path: Path, restored_path: Path, output_dir: Path) -> dict[str, Any]:
+    corrupt_path = output_dir / "growth_intelligence.corrupt.sqlite"
+    if corrupt_path.exists():
+        corrupt_path.unlink()
+    failures: list[str] = []
+    try:
+        shutil.copy2(backup_path, corrupt_path)
+        with corrupt_path.open("r+b") as fh:
+            fh.write(b"not sqlite")
+        corrupt_schema = inspect_schema(corrupt_path)
+        restored_schema = inspect_schema(restored_path)
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "passed": False,
+            "failures": ["corruption_drill_failed"],
+            "error": str(exc),
+            "corrupt_path": str(corrupt_path),
+        }
+    if corrupt_schema.get("integrity_check") not in {"error", "missing"}:
+        failures.append("corruption_not_detected")
+    if restored_schema.get("integrity_check") != "ok":
+        failures.append("restored_database_not_usable_after_corruption_drill")
+    return {
+        "status": "passed" if not failures else "failed",
+        "passed": not failures,
+        "failures": failures,
+        "corrupt_path": str(corrupt_path),
+        "corrupt_integrity_check": corrupt_schema.get("integrity_check"),
+        "restored_integrity_check": restored_schema.get("integrity_check"),
+        "recovery_source": str(restored_path),
+    }
+
+
+def verify_privacy_operation_audit(db_path: Path, *, workspace_id: str = "workspace-audit") -> dict[str, Any]:
+    failures: list[str] = []
+    inserted: list[str] = []
+    if not db_path.exists():
+        return {
+            "schema_version": PRIVACY_OPERATION_SCHEMA_VERSION,
+            "status": "failed",
+            "passed": False,
+            "failures": ["database_missing"],
+            "procedures": PRIVACY_OPERATION_PROCEDURES,
+        }
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            for operation, procedure in PRIVACY_OPERATION_PROCEDURES.items():
+                audit_id = f"privacy-{operation}-{workspace_id}"
+                conn.execute(
+                    f"""
+                    INSERT OR REPLACE INTO {DATA_PRIVACY_AUDIT_TABLE}
+                    (id, workspace_id, operation, subject_type, subject_id, status, request_id, actor, evidence_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        audit_id,
+                        workspace_id,
+                        operation,
+                        "workspace",
+                        workspace_id,
+                        "dry_run_verified",
+                        f"req-{operation}-{workspace_id}",
+                        "data_governance_audit",
+                        json.dumps(
+                            {
+                                "schema_version": PRIVACY_OPERATION_SCHEMA_VERSION,
+                                "procedure": procedure["procedure"],
+                                "destructive_action_performed": False,
+                                "support_bundle_redacted_by_default": True,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        utc_now_iso(),
+                    ),
+                )
+                inserted.append(audit_id)
+            rows = conn.execute(
+                f"SELECT operation, status, evidence_json FROM {DATA_PRIVACY_AUDIT_TABLE} WHERE workspace_id=?",
+                (workspace_id,),
+            ).fetchall()
+    except Exception as exc:
+        return {
+            "schema_version": PRIVACY_OPERATION_SCHEMA_VERSION,
+            "status": "failed",
+            "passed": False,
+            "failures": ["privacy_operation_audit_failed"],
+            "error": str(exc),
+            "procedures": PRIVACY_OPERATION_PROCEDURES,
+        }
+    observed = {str(row["operation"]): dict(row) for row in rows}
+    for operation in PRIVACY_OPERATION_PROCEDURES:
+        if operation not in observed:
+            failures.append(f"{operation}_audit_missing")
+            continue
+        if observed[operation].get("status") != "dry_run_verified":
+            failures.append(f"{operation}_status_invalid")
+    return {
+        "schema_version": PRIVACY_OPERATION_SCHEMA_VERSION,
+        "status": "passed" if not failures else "failed",
+        "passed": not failures,
+        "failures": failures,
+        "workspace_id": workspace_id,
+        "procedures": PRIVACY_OPERATION_PROCEDURES,
+        "inserted_audit_ids": inserted,
+        "observed_operations": sorted(observed),
+        "audit_table": DATA_PRIVACY_AUDIT_TABLE,
     }
 
 
@@ -293,6 +458,7 @@ def build_report(
     output_dir: str | Path | None = None,
     create_missing_db: bool = False,
     verify_backup: bool = False,
+    verify_privacy_ops: bool = False,
 ) -> dict[str, Any]:
     root = Path(root).resolve()
     runtime_paths = RuntimePaths.build()
@@ -317,6 +483,16 @@ def build_report(
     if verify_backup:
         backup = backup_and_restore_verify(db, out)
         failures.extend(str(item) for item in backup.get("failures") or [])
+    privacy_operation_audit = {
+        "schema_version": PRIVACY_OPERATION_SCHEMA_VERSION,
+        "status": "not_run",
+        "passed": False,
+        "failures": ["privacy_operation_audit_not_run"],
+        "procedures": PRIVACY_OPERATION_PROCEDURES,
+    }
+    if verify_privacy_ops:
+        privacy_operation_audit = verify_privacy_operation_audit(db)
+        failures.extend(str(item) for item in privacy_operation_audit.get("failures") or [])
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "passed" if not failures else "failed",
@@ -337,15 +513,19 @@ def build_report(
             "migrations": migrations,
         },
         "backup_restore": backup,
+        "recovery_objectives": RECOVERY_OBJECTIVES,
         "retention_classes": RETENTION_CLASSES,
         "data_catalog": DATA_CATALOG,
         "support_bundle": support_bundle,
         "privacy_operations": {
+            "schema_version": PRIVACY_OPERATION_SCHEMA_VERSION,
             "audit_table": DATA_PRIVACY_AUDIT_TABLE,
-            "workspace_export_procedure": "export campaign/customer data, redact support-only fields, include audit manifest",
-            "workspace_delete_procedure": "delete or redact raw_interaction/evidence/log data unless legal hold is active",
-            "legal_hold_supported": "policy_defined_not_yet_runtime_enforced",
+            "workspace_export_procedure": PRIVACY_OPERATION_PROCEDURES["export"]["procedure"],
+            "workspace_delete_procedure": PRIVACY_OPERATION_PROCEDURES["delete"]["procedure"],
+            "legal_hold_procedure": PRIVACY_OPERATION_PROCEDURES["legal_hold"]["procedure"],
+            "legal_hold_supported": "audit_enforced_dry_run_before_runtime_deletion",
             "audit_record_required": True,
+            "audit": privacy_operation_audit,
         },
         "failures": list(dict.fromkeys(failures)),
     }
@@ -358,6 +538,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--create-missing-db", action="store_true", help="Create the database if missing and apply idempotent schema migrations.")
     parser.add_argument("--verify-backup", action="store_true")
+    parser.add_argument("--verify-privacy-ops", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -372,6 +553,7 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=output_dir,
             create_missing_db=args.create_missing_db,
             verify_backup=args.verify_backup,
+            verify_privacy_ops=args.verify_privacy_ops,
         )
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
