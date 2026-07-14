@@ -97,6 +97,23 @@ def _apply_lead_outcomes(conn) -> None:
     )
 
 
+def _apply_lead_outcome_ingestion_controls(conn) -> None:
+    existing = {
+        str(row["name"] if hasattr(row, "keys") else row[1])
+        for row in conn.execute(f"PRAGMA table_info({LEAD_OUTCOMES_TABLE})").fetchall()
+    }
+    columns = {
+        "contact_policy": "TEXT DEFAULT ''",
+        "outcome_ingest_source": "TEXT DEFAULT ''",
+        "outcome_ingested_at": "TEXT DEFAULT ''",
+        "cost_amount": "REAL DEFAULT 0",
+        "cost_currency": "TEXT DEFAULT 'USD'",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {LEAD_OUTCOMES_TABLE} ADD COLUMN {name} {definition}")
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(
         version="20260714_0001_data_privacy_audit",
@@ -109,6 +126,12 @@ MIGRATIONS: tuple[SchemaMigration, ...] = (
         description="Create WAQO and lead-to-revenue outcome records separated from fixture and dry-run execution evidence.",
         rollback_policy="forward_only; rollback by restoring the verified pre-migration SQLite backup captured before applying this migration",
         apply=_apply_lead_outcomes,
+    ),
+    SchemaMigration(
+        version="20260714_0003_lead_outcome_ingestion_controls",
+        description="Add CSV/Webhook outcome ingestion provenance, contact policy, and cost fields for pilot commercial metrics.",
+        rollback_policy="forward_only; rollback by restoring the verified pre-migration SQLite backup captured before applying this migration",
+        apply=_apply_lead_outcome_ingestion_controls,
     ),
 )
 

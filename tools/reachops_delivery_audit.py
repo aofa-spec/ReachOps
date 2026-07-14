@@ -29,6 +29,7 @@ from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
 from tools.reachops_outcome_metrics import build_report as build_outcome_metrics_report
+from tools.reachops_outcome_metrics import import_outcomes_csv as import_outcomes_csv_fixture
 from tools.reachops_live_submit_acceptance import run_acceptance as run_live_submit_acceptance
 from tools.reachops_repository_cleanliness_check import clean_generated_redundant_paths, scan_repository_cleanliness
 from tools.reachops_web_panel_dom_smoke import run_dom_smoke as run_web_panel_dom_smoke
@@ -384,6 +385,16 @@ def run_outcome_metrics_fixture() -> dict:
     db_path = base_dir / "outcomes.db"
     now = "2026-07-14T00:00:00Z"
     build_outcome_metrics_report(db_path=db_path, create_missing_db=True)
+    csv_path = base_dir / "outcomes.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "id,lead_id,workspace_id,owner,qualification_decision,qualification_reason,rejection_reason,lifecycle_stage,dedupe_key,source_path,evidence_path,data_scope,active_followup,accepted_at,reply_at,meaningful_conversation_at,meeting_at,quote_at,order_at,revenue_amount,revenue_currency,lost_reason,attribution_confidence,contact_policy,cost_amount,cost_currency,created_at",
+                f"out-real,lead-real,ws-1,owner-1,accepted,human accepted,,accepted,buyer@example.test,https://www.tiktok.com/@creator/video/1,reports/evidence/lead-real.json,real_customer,1,{now},{now},{now},{now},{now},{now},1200,USD,,operator_confirmed,authorized_followup,300,USD,{now}",
+            ]
+        ),
+        encoding="utf-8",
+    )
     with sqlite3.connect(str(db_path)) as conn:
         conn.execute(
             """
@@ -403,26 +414,24 @@ def run_outcome_metrics_fixture() -> dict:
             INSERT INTO lead_outcomes
             (id, lead_id, workspace_id, owner, qualification_decision, qualification_reason,
              rejection_reason, lifecycle_stage, dedupe_key, source_path, evidence_path, data_scope,
-             active_followup, accepted_at, reply_at, meaningful_conversation_at, meeting_at, quote_at,
-             order_at, revenue_amount, revenue_currency, lost_reason, attribution_confidence,
-             created_at, updated_at)
+             active_followup, accepted_at, reply_at, revenue_amount, revenue_currency, lost_reason,
+             attribution_confidence, contact_policy, cost_amount, cost_currency, created_at, updated_at)
             VALUES
-            ('out-real', 'lead-real', 'ws-1', 'owner-1', 'accepted', 'human accepted',
-             '', 'accepted', 'buyer@example.test', 'https://www.tiktok.com/@creator/video/1',
-             'reports/evidence/lead-real.json', 'real_customer', 1, ?, ?, ?, ?, ?, ?,
-             1200.0, 'USD', '', 'operator_confirmed', ?, ?),
             ('out-fixture', 'lead-fixture', 'ws-1', 'owner-1', 'accepted', 'fixture accepted',
-             '', 'accepted', 'fixture-buyer', 'fixture://source',
-             'fixture://evidence', 'fixture', 1, ?, ?, '', '', '', '',
-             0.0, 'USD', '', 'fixture', ?, ?)
-            """,
-            (now, now, now, now, now, now, now, now, now, now, now, now),
+             '', 'accepted', 'fixture-buyer', 'fixture://source', 'fixture://evidence', 'fixture',
+             1, ?, ?, 0.0, 'USD', '', 'fixture', 'fixture', 0.0, 'USD', ?, ?)
+            """
+            ,
+            (now, now, now, now),
         )
-    return build_outcome_metrics_report(
+    ingestion = import_outcomes_csv_fixture(db_path=db_path, csv_path=csv_path, ingest_source="csv")
+    report = build_outcome_metrics_report(
         db_path=db_path,
         start_at="2026-07-13T00:00:00Z",
         end_at="2026-07-15T00:00:00Z",
     )
+    report["ingestion"] = ingestion
+    return report
 
 
 def run_web_panel_runtime_smoke_with_retry(attempts: int = 3) -> dict:
@@ -2140,6 +2149,9 @@ def run_audit(args) -> dict:
                 and int(outcome_metrics_fixture.get("waqo", {}).get("excluded_fixture_or_dry_run") or 0) == 1
                 and int(outcome_metrics_fixture.get("funnel", {}).get("orders") or 0) == 1
                 and float(outcome_metrics_fixture.get("funnel", {}).get("revenue_amount") or 0) == 1200.0
+                and outcome_metrics_fixture.get("ingestion", {}).get("schema_version") == "reachops.outcome_ingestion.v1"
+                and int(outcome_metrics_fixture.get("ingestion", {}).get("imported") or 0) == 1
+                and float(outcome_metrics_fixture.get("pilot_report", {}).get("cost_per_accepted_opportunity") or 0) == 300.0
                 and outcome_metrics_fixture.get("quality", {}).get("fixture_data_excluded_by_default") is True
             ),
             outcome_metrics_fixture,

@@ -135,7 +135,9 @@ SCRIPT_EXPECTATIONS = {
         "MIGRATIONS",
         "20260714_0001_data_privacy_audit",
         "20260714_0002_lead_outcomes",
+        "20260714_0003_lead_outcome_ingestion_controls",
         "lead_outcomes",
+        "contact_policy",
         "data_privacy_audit",
         "rollback_policy",
     ],
@@ -176,8 +178,12 @@ SCRIPT_EXPECTATIONS = {
     "tools/reachops_outcome_metrics.py": [
         "reachops.outcome_metrics.v1",
         "reachops.waqo_definition.v1",
+        "reachops.outcome_ingestion.v1",
+        "import_outcomes_csv",
+        "import_outcomes_webhook_payload",
         "Weekly Accepted Qualified Opportunities",
         "fixture_data_excluded_by_default",
+        "cost_per_accepted_opportunity",
         "lead-to-revenue",
     ],
     "tools/reachops_release_evidence.py": [

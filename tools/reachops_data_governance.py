@@ -72,6 +72,9 @@ DATA_CATALOG: list[dict[str, Any]] = [
     {"table": "lead_outcomes", "field": "evidence_path", "classification": "evidence_pointer", "purpose": "accepted opportunity evidence", "retention_class": "evidence", "support_bundle": "exclude_file"},
     {"table": "lead_outcomes", "field": "revenue_amount", "classification": "commercial_outcome", "purpose": "lead-to-revenue attribution", "retention_class": "aggregate_metric", "support_bundle": "redact"},
     {"table": "lead_outcomes", "field": "lost_reason", "classification": "commercial_outcome", "purpose": "outcome quality feedback", "retention_class": "raw_interaction", "support_bundle": "redact"},
+    {"table": "lead_outcomes", "field": "contact_policy", "classification": "customer_policy", "purpose": "consent and permitted follow-up boundary", "retention_class": "operational_log", "support_bundle": "redact"},
+    {"table": "lead_outcomes", "field": "outcome_ingest_source", "classification": "audit_evidence", "purpose": "CSV or webhook outcome provenance", "retention_class": "operational_log", "support_bundle": "redact"},
+    {"table": "lead_outcomes", "field": "cost_amount", "classification": "commercial_outcome", "purpose": "cost per accepted opportunity reporting", "retention_class": "aggregate_metric", "support_bundle": "redact"},
     {"table": "growth_events", "field": "payload", "classification": "operational_log", "purpose": "support audit", "retention_class": "operational_log", "support_bundle": "redact"},
     {"table": "growth_errors", "field": "message", "classification": "operational_log", "purpose": "support diagnostics", "retention_class": "operational_log", "support_bundle": "redact"},
 ]

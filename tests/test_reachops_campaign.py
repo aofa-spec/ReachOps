@@ -74,7 +74,11 @@ from tools.verify_reachops_acceptance_summary import verify_summary as verify_re
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
 from tools.reachops_data_governance import build_report as build_reachops_data_governance_report
-from tools.reachops_outcome_metrics import build_report as build_reachops_outcome_metrics_report
+from tools.reachops_outcome_metrics import (
+    build_report as build_reachops_outcome_metrics_report,
+    import_outcomes_csv as import_reachops_outcomes_csv,
+    import_outcomes_webhook_payload as import_reachops_outcomes_webhook_payload,
+)
 from tools.reachops_final_acceptance_gate import build_final_acceptance_gate as build_reachops_final_acceptance_gate
 from tools.reachops_final_acceptance_gate import client_delivery_from_acceptance_summary as reachops_client_delivery_from_acceptance_summary
 from tools.reachops_final_acceptance_gate import main as reachops_final_acceptance_gate_main
@@ -2801,22 +2805,23 @@ class ReachOpsCampaignTests(unittest.TestCase):
                      rejection_reason, lifecycle_stage, dedupe_key, source_path, evidence_path, data_scope,
                      active_followup, accepted_at, reply_at, meaningful_conversation_at, meeting_at, quote_at,
                      order_at, revenue_amount, revenue_currency, lost_reason, attribution_confidence,
+                     contact_policy, cost_amount, cost_currency, outcome_ingest_source, outcome_ingested_at,
                      created_at, updated_at)
                     VALUES
                     ('out-real', 'lead-real', 'ws-1', 'owner-1', 'accepted', 'human accepted',
                      '', 'accepted', 'buyer@example.test', 'https://www.tiktok.com/@creator/video/1',
                      'reports/evidence/lead-real.json', 'real_customer', 1, ?, ?, ?, ?, ?, ?,
-                     1200.0, 'USD', '', 'operator_confirmed', ?, ?),
+                     1200.0, 'USD', '', 'operator_confirmed', 'authorized_followup', 300.0, 'USD', 'csv', ?, ?, ?),
                     ('out-fixture', 'lead-fixture', 'ws-1', 'owner-1', 'accepted', 'fixture accepted',
                      '', 'accepted', 'fixture-buyer', 'fixture://source',
                      'fixture://evidence', 'fixture', 1, ?, ?, '', '', '', '',
-                     0.0, 'USD', '', 'fixture', ?, ?),
+                     0.0, 'USD', '', 'fixture', 'fixture', 0.0, 'USD', 'fixture', ?, ?, ?),
                     ('out-rejected', 'lead-rejected', 'ws-1', 'owner-1', 'rejected', '',
                      'not ICP', 'rejected', 'rejected-buyer', 'https://www.tiktok.com/@creator/video/2',
                      'reports/evidence/lead-rejected.json', 'real_customer', 0, '', '', '', '', '', '',
-                     0.0, 'USD', 'not ICP', 'operator_confirmed', ?, ?)
+                     0.0, 'USD', 'not ICP', 'operator_confirmed', 'not_permitted', 0.0, 'USD', 'webhook', ?, ?, ?)
                     """,
-                    (now, now, now, now, now, now, now, now, now, now, now, now, now, now),
+                    (now, now, now, now, now, now, now, now, now, now, now, now, now, now, now, now, now),
                 )
 
             report = build_reachops_outcome_metrics_report(
@@ -2841,7 +2846,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(report["funnel"]["quotes"], 1)
             self.assertEqual(report["funnel"]["orders"], 1)
             self.assertEqual(report["funnel"]["revenue_amount"], 1200.0)
+            self.assertEqual(report["elapsed_time"]["reply"]["average_hours_from_acceptance"], 0.0)
+            self.assertEqual(report["conversion_rates"]["reply_rate"], 1.0)
+            self.assertEqual(report["pilot_report"]["acceptance_rate"], 0.5)
+            self.assertEqual(report["pilot_report"]["cost_per_accepted_opportunity"], 300.0)
+            self.assertTrue(report["pilot_report"]["dedupe_enforced_by_unique_key"])
             self.assertEqual(report["quality"]["missing_rejection_reason"], 0)
+            self.assertEqual(report["quality"]["accepted_missing_contact_policy"], 0)
 
             with storage.connect() as conn:
                 conn.execute("UPDATE lead_outcomes SET rejection_reason='' WHERE id='out-rejected'")
@@ -2852,6 +2863,58 @@ class ReachOpsCampaignTests(unittest.TestCase):
             )
             self.assertFalse(rejected_without_reason["passed"])
             self.assertIn("rejected_leads_missing_reason", rejected_without_reason["failures"])
+
+    def test_reachops_outcome_metrics_ingest_csv_and_webhook_payloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "outcomes.db"
+            csv_path = root / "outcomes.csv"
+            now = "2026-07-14T00:00:00Z"
+            csv_path.write_text(
+                "\n".join(
+                    [
+                        "id,lead_id,workspace_id,owner,qualification_decision,qualification_reason,rejection_reason,lifecycle_stage,dedupe_key,source_path,evidence_path,data_scope,active_followup,accepted_at,reply_at,meaningful_conversation_at,meeting_at,quote_at,order_at,revenue_amount,revenue_currency,lost_reason,attribution_confidence,contact_policy,cost_amount,cost_currency,created_at",
+                        f"out-csv,lead-csv,ws-1,owner-1,accepted,human accepted,,accepted,csv-buyer,https://source.example/1,reports/evidence/csv.json,real_customer,1,{now},{now},{now},{now},,{now},900,USD,,operator_confirmed,authorized_followup,90,USD,{now}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            csv_result = import_reachops_outcomes_csv(db_path=db_path, csv_path=csv_path)
+            self.assertTrue(csv_result["passed"])
+            self.assertEqual(csv_result["schema_version"], "reachops.outcome_ingestion.v1")
+            self.assertEqual(csv_result["imported"], 1)
+
+            webhook_result = import_reachops_outcomes_webhook_payload(
+                db_path=db_path,
+                payload={
+                    "id": "out-webhook",
+                    "lead_id": "lead-webhook",
+                    "workspace_id": "ws-1",
+                    "owner": "owner-2",
+                    "qualification_decision": "rejected",
+                    "rejection_reason": "not in pilot segment",
+                    "dedupe_key": "webhook-buyer",
+                    "source_path": "https://source.example/2",
+                    "evidence_path": "reports/evidence/webhook.json",
+                    "data_scope": "real_customer",
+                    "contact_policy": "do_not_contact",
+                    "created_at": now,
+                },
+            )
+            self.assertTrue(webhook_result["passed"])
+            self.assertEqual(webhook_result["imported"], 1)
+
+            report = build_reachops_outcome_metrics_report(
+                db_path=db_path,
+                start_at="2026-07-13T00:00:00Z",
+                end_at="2026-07-15T00:00:00Z",
+            )
+            self.assertTrue(report["passed"])
+            self.assertEqual(report["waqo"]["count"], 1)
+            self.assertEqual(report["funnel"]["orders"], 1)
+            self.assertEqual(report["pilot_report"]["precision"], 0.5)
+            self.assertEqual(report["pilot_report"]["cost_per_accepted_opportunity"], 90.0)
 
     def test_reachops_delivery_package_check_rejects_external_summary_and_manifest_paths(self):
         with tempfile.TemporaryDirectory() as tmp:

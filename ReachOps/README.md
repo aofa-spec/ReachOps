@@ -129,7 +129,13 @@ python tools/reachops_data_governance.py --create-missing-db --verify-backup --j
 python tools/reachops_outcome_metrics.py --create-missing-db --json
 ```
 
-该检查会输出 WAQO、accepted/rejected、reply、meaningful conversation、meeting、quote、order、revenue 和 lost reason 漏斗，并要求 rejected lead 具备结构化 rejection reason。
+CSV outcome ingestion 用于试点客户先回填人工确认结果，不需要先接入重型 CRM：
+
+```powershell
+python tools/reachops_outcome_metrics.py --db-path data/growth_intelligence.sqlite --create-missing-db --import-csv pilot_outcomes.csv --ingest-source csv --json
+```
+
+该检查会输出 WAQO、accepted/rejected、reply、meaningful conversation、meeting、quote、order、revenue、lost reason、elapsed time、conversion rates、cost per accepted opportunity、precision/recall 占位和 duplicate rate；accepted opportunity 必须有 `contact_policy`，rejected lead 必须具备结构化 rejection reason。Webhook-style JSON payload 可以通过 `--import-webhook-json` 进入同一张 outcome 表，默认仍排除 fixture/dry-run。
 
 ## 交付状态
 
