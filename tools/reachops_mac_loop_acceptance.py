@@ -58,12 +58,30 @@ def read_json_url_retry(url: str, *, timeout: int = 20, attempts: int = 3, delay
     return last_payload, last_error
 
 
-def build_report(base_url: str = "http://127.0.0.1:8769") -> dict[str, Any]:
+def build_report(
+    base_url: str = "http://127.0.0.1:8769",
+    *,
+    read_timeout: int = 20,
+    groups_timeout: int = 180,
+    ix_status_timeout: int = 30,
+    retry_attempts: int = 4,
+    retry_delay: float = 3.0,
+) -> dict[str, Any]:
     base = str(base_url or "http://127.0.0.1:8769").rstrip("/")
-    logs, logs_error = read_json_url(f"{base}/api/logs")
-    acceptance, acceptance_error = read_json_url(f"{base}/api/acceptance")
-    groups, groups_error = read_json_url_retry(f"{base}/api/groups?refresh=1", timeout=180, attempts=4, delay=3.0)
-    ix_status, ix_status_error = read_json_url_retry(f"{base}/api/ixbrowser-status", timeout=30, attempts=4, delay=3.0)
+    logs, logs_error = read_json_url(f"{base}/api/logs", timeout=read_timeout)
+    acceptance, acceptance_error = read_json_url(f"{base}/api/acceptance", timeout=read_timeout)
+    groups, groups_error = read_json_url_retry(
+        f"{base}/api/groups?refresh=1",
+        timeout=groups_timeout,
+        attempts=retry_attempts,
+        delay=retry_delay,
+    )
+    ix_status, ix_status_error = read_json_url_retry(
+        f"{base}/api/ixbrowser-status",
+        timeout=ix_status_timeout,
+        attempts=retry_attempts,
+        delay=retry_delay,
+    )
     client_delivery = build_delivery_check()
     live_status = build_live_acceptance_status(
         argparse.Namespace(
@@ -210,6 +228,15 @@ def build_report(base_url: str = "http://127.0.0.1:8769") -> dict[str, Any]:
         "status": "passed" if passed else "failed",
         "mac_loop_ready": bool(passed),
         "final_delivery_ready": False,
+        "probe_contract": {
+            "read_timeout_seconds": int(read_timeout),
+            "groups_timeout_seconds": int(groups_timeout),
+            "ix_status_timeout_seconds": int(ix_status_timeout),
+            "retry_attempts": int(retry_attempts),
+            "retry_delay_seconds": float(retry_delay),
+            "does_not_submit": True,
+            "does_not_open_browser_profile": True,
+        },
         "web_ui": {
             "base_url": base,
             "logs_error": logs_error,
@@ -271,13 +298,28 @@ def build_report(base_url: str = "http://127.0.0.1:8769") -> dict[str, Any]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify the latest Mac Web UI acquisition loop reached a stable terminal state.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8769")
+    parser.add_argument(
+        "--pm-fast",
+        action="store_true",
+        help="Use short read-only probe timeouts for PM aggregate gates. This never submits or opens browser profiles.",
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    report = build_report(args.base_url)
+    if args.pm_fast:
+        report = build_report(
+            args.base_url,
+            read_timeout=2,
+            groups_timeout=3,
+            ix_status_timeout=3,
+            retry_attempts=1,
+            retry_delay=0,
+        )
+    else:
+        report = build_report(args.base_url)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

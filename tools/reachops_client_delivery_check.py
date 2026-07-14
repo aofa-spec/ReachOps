@@ -1099,13 +1099,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check ReachOps Mac client delivery acceptance evidence.")
     parser.add_argument("--base-dir", default=str(DEFAULT_BASE_DIR), help="Runtime directory that contains data/ and logs/.")
     parser.add_argument("--output", default="", help="Path for latest_delivery_check.json. Defaults under base-dir reports.")
+    parser.add_argument(
+        "--collect-live-metadata",
+        action="store_true",
+        help="Also run the read-only ixBrowser/Web UI group metadata probe. Omitted by PM gates to stay deterministic.",
+    )
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    payload = build_delivery_check(Path(args.base_dir), collect_metadata=True)
+    payload = build_delivery_check(Path(args.base_dir), collect_metadata=bool(args.collect_live_metadata))
     out_path = write_delivery_check(payload, args.output or None)
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))

@@ -756,7 +756,12 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_acceptance_persists_client_gate": "write_delivery_check(client_delivery)" in web_ui and "latest_delivery_check.json" in (ROOT_DIR / "tools" / "reachops_client_delivery_check.py").read_text(encoding="utf-8"),
         "client_gate_rejects_stale_profile_preflight": "profile_preflight_is_stale" in client_acceptance and "profile_preflight_fresh" in client_acceptance and "不能复用旧账号可用性" in client_acceptance,
         "client_gate_requires_selected_group_profile_list_evidence": "profile_candidates_loaded_from_selected_group" in client_acceptance and "account_queue_started_for_selected_group" in client_acceptance and "profile_list_execution_evidence" in client_acceptance and "不能证明配置列表参与本次采集" in client_acceptance,
-        "client_gate_embeds_readonly_ixbrowser_metadata": "collect_ixbrowser_metadata" in client_delivery_check and "reachops_ixbrowser_profile_metadata_report.py" in client_delivery_check and '"ixbrowser_metadata"' in client_delivery_check and "open_profile_called" in client_delivery_check and "collect_metadata=True" in client_delivery_check,
+        "client_gate_embeds_readonly_ixbrowser_metadata": "collect_ixbrowser_metadata" in client_delivery_check
+        and "reachops_ixbrowser_profile_metadata_report.py" in client_delivery_check
+        and '"ixbrowser_metadata"' in client_delivery_check
+        and "open_profile_called" in client_delivery_check
+        and "--collect-live-metadata" in client_delivery_check
+        and "collect_metadata=bool(args.collect_live_metadata)" in client_delivery_check,
         "client_gate_human_output_has_repair_loop": "account_repair_summary_lines" in client_delivery_check and "action=" in client_delivery_check and "after_repair_acceptance=" in client_delivery_check and "account_repair_safety=" in client_delivery_check and "no_submit" in client_delivery_check and "after_repair_commands=" in client_delivery_check and "account_repair_summary" in client_delivery_check,
         "web_activation_status_visible_to_operator": "parsed.path == \"/api/activation\"" in web_ui and "build_activation_payload" in web_ui and "activationState" in web_ui and "refreshActivation" in web_ui,
         "web_final_status_visible_to_operator": "parsed.path == \"/api/final-status\"" in web_ui and "build_final_status_payload" in web_ui and "finalStatusState" in web_ui and "finalStatusActions" in web_ui and "finalStatusCommands" in web_ui and "next_required_actions" in web_ui and "verification_commands" in web_ui and "refreshFinalStatus" in web_ui,

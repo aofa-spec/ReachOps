@@ -144,8 +144,11 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertIn('fg=APP_COLORS["text"]', standalone)
 
     def test_mvp_acceptance_summary_uses_current_client_gate_over_historical_pass(self):
+        seen_commands = []
+
         def fake_run_json(command, timeout=120):
             joined = " ".join(command)
+            seen_commands.append(joined)
             if "reachops_delivery_audit.py" in joined:
                 return {"status": "ok", "summary": {"failed": 0}}, 0, ""
             if "reachops_goal_status_report.py" in joined:
@@ -186,6 +189,8 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertFalse(summary["current_client_gate_ready"])
         self.assertIn("client_delivery:acceptance:ready", summary["failed_checks"])
         self.assertEqual(summary["blockers"], ["United States 可用账号为 0"])
+        mac_loop_command = next(command for command in seen_commands if "reachops_mac_loop_acceptance.py" in command)
+        self.assertIn("--pm-fast", mac_loop_command)
 
     def test_blocked_by_accounts_uses_real_profile_group(self):
         batch = {
@@ -4913,6 +4918,27 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertTrue(payload["ready"])
         self.assertEqual(len(calls), 2)
 
+    def test_mac_loop_acceptance_pm_fast_uses_short_probe_contract(self):
+        captured = {}
+        report = {"mac_loop_ready": False, "status": "failed"}
+
+        def fake_build_report(base_url, **kwargs):
+            captured["base_url"] = base_url
+            captured.update(kwargs)
+            return report
+
+        with patch("tools.reachops_mac_loop_acceptance.build_report", side_effect=fake_build_report):
+            with redirect_stdout(io.StringIO()):
+                code = reachops_mac_loop_acceptance.main(["--base-url", "http://127.0.0.1:8769", "--pm-fast", "--json"])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(captured["base_url"], "http://127.0.0.1:8769")
+        self.assertEqual(captured["read_timeout"], 2)
+        self.assertEqual(captured["groups_timeout"], 3)
+        self.assertEqual(captured["ix_status_timeout"], 3)
+        self.assertEqual(captured["retry_attempts"], 1)
+        self.assertEqual(captured["retry_delay"], 0)
+
     def test_delivery_check_cli_writes_latest_file_contract(self):
         payload = build_delivery_check()
         out_path = Path(payload["base_dir"]) / "reports" / "acceptance_remediation" / "latest_delivery_check.json"
@@ -5200,6 +5226,26 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         names = {item["name"] for item in payload["checks"]}
         probe.assert_not_called()
         self.assertNotIn("ixbrowser:list_api_metadata", names)
+
+    def test_delivery_check_cli_default_does_not_collect_live_metadata(self):
+        payload = {"ok": False, "status": "blocked_by_accounts", "readiness": "blocked_by_accounts"}
+        with patch("tools.reachops_client_delivery_check.build_delivery_check", return_value=payload) as build:
+            with patch("tools.reachops_client_delivery_check.write_delivery_check", return_value=Path("/tmp/latest_delivery_check.json")):
+                with redirect_stdout(io.StringIO()):
+                    code = run_delivery_check(["--json"])
+
+        self.assertEqual(code, 1)
+        self.assertFalse(build.call_args.kwargs["collect_metadata"])
+
+    def test_delivery_check_cli_collect_live_metadata_is_explicit(self):
+        payload = {"ok": False, "status": "blocked_by_accounts", "readiness": "blocked_by_accounts"}
+        with patch("tools.reachops_client_delivery_check.build_delivery_check", return_value=payload) as build:
+            with patch("tools.reachops_client_delivery_check.write_delivery_check", return_value=Path("/tmp/latest_delivery_check.json")):
+                with redirect_stdout(io.StringIO()):
+                    code = run_delivery_check(["--collect-live-metadata", "--json"])
+
+        self.assertEqual(code, 1)
+        self.assertTrue(build.call_args.kwargs["collect_metadata"])
 
     def test_start_validation_rejects_incomplete_group_counts(self):
         payload = {
