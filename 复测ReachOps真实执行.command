@@ -43,6 +43,40 @@ else:
     print("0")
 PY
 )"
+STALE_REPAIR="$("$PYTHON_BIN" - "$PRECHECK_JSON" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    payload = {}
+repair = payload.get("account_repair_apply") if isinstance(payload.get("account_repair_apply"), dict) else {}
+if repair.get("stale"):
+    print("1")
+else:
+    print("0")
+PY
+)"
+if [ "$STALE_REPAIR" = "1" ]; then
+  "$PYTHON_BIN" - "$PRECHECK_JSON" <<'PY'
+import json, sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+repair = payload.get("account_repair_apply") or {}
+summary = payload.get("account_repair_summary") or {}
+print("旧账号修复结果已失效：系统已产生新的账号阻断批次，不能继续用旧修复结果复测。")
+print(f"旧修复结果: {repair.get('path') or repair.get('source') or '-'}")
+print(f"失效原因: {repair.get('stale_reason') or '-'}")
+print(f"最新修复计划: {summary.get('path') or '-'}")
+print("请先执行 ./执行ReachOps账号修复.command 处理最新计划，再重新运行本复测入口。")
+print("本次不会启动浏览器，也不会提交任何平台动作。")
+PY
+  echo ""
+  echo "按任意键关闭此窗口。"
+  read -k 1
+  exit 2
+fi
 if [ "$PENDING_RECHECK" = "1" ]; then
   export REACHOPS_FORCE_ACCOUNT_RECHECK="1"
   "$PYTHON_BIN" - "$PRECHECK_JSON" <<'PY'

@@ -3841,6 +3841,10 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertIn("tools/reachops_client_delivery_check.py --json > \"$PRECHECK_JSON\"", script)
         self.assertIn("account_repair_apply", script)
         self.assertIn("pending_recheck", script)
+        self.assertIn("STALE_REPAIR", script)
+        self.assertIn("旧账号修复结果已失效", script)
+        self.assertIn("执行ReachOps账号修复.command", script)
+        self.assertIn("exit 2", script)
         self.assertIn("REACHOPS_FORCE_ACCOUNT_RECHECK", script)
         self.assertIn("重新预检模式", script)
         self.assertIn("tools/run_reachops_headless_macos.py", script)
@@ -4082,6 +4086,57 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(payload["stale_reason"], "newer_account_repair_plan_for_current_batch")
         self.assertFalse(payload["same_batch"])
         self.assertFalse(payload["pending_recheck"])
+
+    def test_delivery_check_blocks_stale_account_repair_apply_before_retest(self):
+        batch = {"id": "gb_new_failed", "status": "failed", "profile_group": "United States", "config_json": "{}"}
+        acceptance = {
+            "readiness": "blocked_by_accounts",
+            "checks": {"profile_available_count": 0},
+            "blockers": ["账号预检没有可用账号，无法进入真实采集/触达。"],
+            "next_actions": ["先修复 United States 分组账号。"],
+            "profile_preflight_details": [
+                {
+                    "profile_id": "24919",
+                    "status": "不可用",
+                    "error": "IXBROWSER_KERNEL_MISMATCH",
+                    "message": "当前版本仅支持 138 内核打开",
+                }
+            ],
+        }
+        with TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            report_dir = base_dir / "reports" / "acceptance_remediation"
+            report_dir.mkdir(parents=True)
+            apply_path = report_dir / "latest_account_repair_apply.json"
+            apply_path.write_text(
+                json.dumps(
+                    {
+                        "status": "applied",
+                        "profile_group": "United States",
+                        "selected_count": 1,
+                        "moved_count": 1,
+                        "failed_count": 0,
+                        "results": [{"profile_id": "24909", "attempted": True, "ok": True}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            old_time = time.time() - 60
+            os.utime(apply_path, (old_time, old_time))
+            with patch("tools.reachops_client_delivery_check.latest_batch", return_value=batch):
+                with patch("tools.reachops_client_delivery_check.latest_profile_preflight", return_value={"checked": 1, "available": 0}):
+                    with patch("tools.reachops_client_delivery_check.read_lines", return_value=[]):
+                        with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
+                            with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
+                                payload = build_delivery_check(base_dir)
+
+        self.assertTrue(payload["account_repair_apply"]["stale"])
+        self.assertFalse(payload["account_repair_apply"]["pending_recheck"])
+        self.assertIn("旧账号修复结果已失效", payload["blockers"][0])
+        self.assertIn("先执行最新账号修复计划", payload["next_actions"][0])
+        self.assertIn("latest_apply_stale", payload["real_pilot_evidence"]["account_pool_remediation"])
+        self.assertTrue(payload["real_pilot_evidence"]["account_pool_remediation"]["latest_apply_stale"])
 
     def test_delivery_check_human_output_formats_account_repair_summary(self):
         payload = {
