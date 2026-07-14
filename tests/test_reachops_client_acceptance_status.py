@@ -650,6 +650,119 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             with patch("tools.reachops_web_ui.validate_account_repair_for_start", return_value=(True, account_payload)):
                 yield
 
+    def test_run_session_payload_recovers_dead_running_session(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_log_path = reachops_web_ui.LOG_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            old_started_at = reachops_web_ui.RUN_STARTED_AT
+            try:
+                base = Path(tmpdir)
+                reachops_web_ui.DATA_DIR = base
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = base / "runs" / "latest_run_session.json"
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = ""
+                reachops_web_ui.RESULT_PATH = base / "reachops_web_ui_last_run.json"
+                reachops_web_ui.LOG_PATH = base / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RUN_PROCESS = None
+                reachops_web_ui.RUN_STARTED_AT = 0.0
+
+                plan = reachops_web_ui.build_execution_plan(
+                    target="anti aging serum",
+                    source_type="keyword",
+                    mode="collect",
+                    profile_group="United States",
+                    base_dir=str(base),
+                    origin="test_dead_run_session_recovery",
+                )
+                session = reachops_web_ui.create_run_session(
+                    plan,
+                    execution_plan_path=str(base / "plans" / "plan.json"),
+                    result_path=str(reachops_web_ui.RESULT_PATH),
+                    log_path=str(reachops_web_ui.LOG_PATH),
+                )
+                session = reachops_web_ui.transition_run_session(
+                    session,
+                    "PRECHECK",
+                    pid=987654,
+                    last_stage="PRECHECK running fixture",
+                )
+                session["created_at"] = "2026-01-01T00:00:00Z"
+                session["started_at"] = "2026-01-01T00:00:00Z"
+                session["updated_at"] = "2026-01-01T00:00:00Z"
+                session_path = reachops_web_ui.run_session_path_for(session)
+                reachops_web_ui.write_run_session(session, session_path, reachops_web_ui.LATEST_RUN_SESSION_PATH)
+                reachops_web_ui.RESULT_PATH.write_text(
+                    json.dumps({"status": "completed", "plan_id": "old-plan"}),
+                    encoding="utf-8",
+                )
+
+                payload = reachops_web_ui.build_current_run_session_payload()
+                persisted = json.loads(reachops_web_ui.LATEST_RUN_SESSION_PATH.read_text(encoding="utf-8"))
+                result = json.loads(reachops_web_ui.RESULT_PATH.read_text(encoding="utf-8"))
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.LOG_PATH = old_log_path
+                reachops_web_ui.RUN_PROCESS = old_process
+                reachops_web_ui.RUN_STARTED_AT = old_started_at
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["recovery"]["recovered"])
+        self.assertEqual(payload["summary"]["state"], "BLOCKED")
+        self.assertEqual(payload["run_session"]["result"]["error"], "process_interrupted")
+        self.assertEqual(persisted["state"], "BLOCKED")
+        self.assertEqual(result["error"], "process_interrupted")
+
+    def test_run_session_recovery_respects_matching_terminal_result(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_log_path = reachops_web_ui.LOG_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            try:
+                base = Path(tmpdir)
+                reachops_web_ui.DATA_DIR = base
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = base / "runs" / "latest_run_session.json"
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = ""
+                reachops_web_ui.RESULT_PATH = base / "reachops_web_ui_last_run.json"
+                reachops_web_ui.LOG_PATH = base / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RUN_PROCESS = None
+
+                plan = reachops_web_ui.build_execution_plan(target="anti aging serum", mode="collect", base_dir=str(base))
+                session = reachops_web_ui.create_run_session(plan)
+                session = reachops_web_ui.transition_run_session(session, "PRECHECK", pid=12345)
+                session["created_at"] = "2026-01-01T00:00:00Z"
+                session["started_at"] = "2026-01-01T00:00:00Z"
+                reachops_web_ui.write_run_session(
+                    session,
+                    reachops_web_ui.run_session_path_for(session),
+                    reachops_web_ui.LATEST_RUN_SESSION_PATH,
+                )
+                reachops_web_ui.RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+                reachops_web_ui.RESULT_PATH.write_text(
+                    json.dumps({"status": "completed", "plan_id": session["plan_id"]}),
+                    encoding="utf-8",
+                )
+
+                payload = reachops_web_ui.build_current_run_session_payload()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.LOG_PATH = old_log_path
+                reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertFalse(payload["recovery"]["recovered"])
+        self.assertEqual(payload["summary"]["state"], "PRECHECK")
+
     def test_web_ui_has_real_volume_control_and_no_tiktok_default(self):
         html = html_page().decode("utf-8")
 

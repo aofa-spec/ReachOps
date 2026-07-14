@@ -1965,6 +1965,7 @@ def payload_from_execution_plan(plan: dict) -> dict:
 
 
 def build_current_run_session_payload() -> dict:
+    recovery = recover_current_run_session_if_interrupted("RUN_SESSION_STATUS_RECOVERY")
     path = Path(CURRENT_RUN_SESSION_PATH) if CURRENT_RUN_SESSION_PATH else LATEST_RUN_SESSION_PATH
     if not path.is_file() and LATEST_RUN_SESSION_PATH.is_file():
         path = LATEST_RUN_SESSION_PATH
@@ -1974,6 +1975,7 @@ def build_current_run_session_payload() -> dict:
             "schema_version": "reachops.run_session.v1",
             "path": str(path),
             "exists": False,
+            "recovery": recovery,
             "no_browser_started": True,
             "no_submit": True,
         }
@@ -2003,6 +2005,7 @@ def build_current_run_session_payload() -> dict:
             },
             "ai_usage_ledger": session.get("ai_usage_ledger") or {},
             "execution_runtime_contract": session.get("execution_runtime_contract") or {},
+            "recovery": recovery,
             "run_session": session,
             "no_ai_token_used": bool((session.get("ai_usage_ledger") or {}).get("no_ai_token_used", True)),
             "no_browser_started": True,
@@ -2015,6 +2018,7 @@ def build_current_run_session_payload() -> dict:
             "path": str(path),
             "exists": True,
             "error": str(exc),
+            "recovery": recovery,
             "no_browser_started": True,
             "no_submit": True,
         }
@@ -2265,12 +2269,27 @@ def review_offline_policy_candidate(payload: dict) -> dict:
         }
 
 
+def run_result_belongs_to_session(run_result: dict, session: dict) -> bool:
+    if not isinstance(run_result, dict) or not isinstance(session, dict):
+        return False
+    result_session = run_result.get("run_session") if isinstance(run_result.get("run_session"), dict) else {}
+    result_plan = run_result.get("execution_plan") if isinstance(run_result.get("execution_plan"), dict) else {}
+    result_session_id = str(run_result.get("run_session_id") or result_session.get("session_id") or "").strip()
+    if result_session_id:
+        return result_session_id == str(session.get("session_id") or "").strip()
+    result_plan_id = str(run_result.get("plan_id") or result_plan.get("plan_id") or "").strip()
+    if result_plan_id:
+        return result_plan_id == str(session.get("plan_id") or "").strip()
+    return False
+
+
 def recover_current_run_session_if_interrupted(reason: str = "WEB_UI_RECOVERY") -> dict:
     running = run_is_active()
-    run_result = read_run_result_payload()
+    raw_run_result = read_run_result_payload()
     session = read_current_run_session()
     if not session:
         return {"recovered": False}
+    run_result = raw_run_result if run_result_belongs_to_session(raw_run_result, session) else {}
     session_state = str(session.get("state") or "")
     session_started = parse_utc(str(session.get("started_at") or session.get("created_at") or ""))
     if (
