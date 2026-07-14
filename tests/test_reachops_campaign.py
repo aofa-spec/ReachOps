@@ -10,7 +10,7 @@ import unittest
 import zipfile
 from collections import Counter
 from contextlib import redirect_stdout
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8208,28 +8208,66 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(group_manager.moves, [("12345", "LOGIN_REQUIRED")])
 
     def test_profile_preflight_timeout_marks_profile_unavailable_without_quarantine(self):
+        class FakeFuture:
+            def __init__(self):
+                self.cancelled = False
+
+            def cancel(self):
+                self.cancelled = True
+                return True
+
+        class FakePool:
+            def __init__(self, max_workers):
+                self.max_workers = max_workers
+                self.future = FakeFuture()
+                self.submitted = []
+                self.shutdown_calls = []
+                pools.append(self)
+
+            def submit(self, fn, *args):
+                self.submitted.append((fn, args))
+                return self.future
+
+            def shutdown(self, wait=True, cancel_futures=False):
+                self.shutdown_calls.append({"wait": wait, "cancel_futures": cancel_futures})
+
+        def fake_as_completed(_futures, timeout=None):
+            timeouts.append(timeout)
+            raise FuturesTimeout()
+
+        pools = []
+        timeouts = []
         with tempfile.TemporaryDirectory() as tmp:
             service = GrowthIntelligenceService(base_dir=tmp)
             group_manager = FakeProfileGroupManager()
-            driver = BlockingProfilePreflightDriver(block_seconds=0.35)
-            checker = ProfilePreflightChecker(
-                service.storage,
-                ProfilePreflightConfig(
-                    max_workers=1,
-                    page_load_timeout_seconds=1,
-                    wait_after_open_seconds=0,
-                    total_timeout_seconds=0.1,
-                ),
-                driver_factory=lambda _profile: (driver, (FakeReleaseManager(), "slow"), ""),
-                group_manager=group_manager,
-            )
-            checker._executor._release = lambda _handle: None
-            started = time.time()
+            with patch("ReachOps.workbench.profile_preflight.ThreadPoolExecutor", FakePool), patch(
+                "ReachOps.workbench.profile_preflight.as_completed", fake_as_completed
+            ):
+                checker = ProfilePreflightChecker(
+                    service.storage,
+                    ProfilePreflightConfig(
+                        max_workers=1,
+                        page_load_timeout_seconds=1,
+                        wait_after_open_seconds=0,
+                        total_timeout_seconds=0.1,
+                    ),
+                    driver_factory=lambda _profile: (
+                        BlockingProfilePreflightDriver(),
+                        (FakeReleaseManager(), "slow"),
+                        "",
+                    ),
+                    group_manager=group_manager,
+                )
 
-            available, summary = checker.available_profiles([{"profile_id": "12346", "group_name": "US"}])
+                available, summary = checker.available_profiles([{"profile_id": "12346", "group_name": "US"}])
 
-            self.assertLess(time.time() - started, 0.3)
             self.assertEqual(available, [])
+            self.assertEqual(timeouts, [0.1])
+            self.assertEqual(len(pools), 1)
+            self.assertEqual(pools[0].max_workers, 1)
+            self.assertEqual(len(pools[0].submitted), 1)
+            self.assertTrue(pools[0].future.cancelled)
+            self.assertEqual(pools[0].shutdown_calls, [{"wait": False, "cancel_futures": True}])
             self.assertEqual(summary["errors"]["PROFILE_PREFLIGHT_TIMEOUT"], 1)
             self.assertEqual(group_manager.moves, [])
             health = {row["profile_id"]: row for row in service.storage.list_profile_health(limit=10)}
