@@ -131,6 +131,7 @@ if (!$SkipTests) {
         tools\reachops_web_panel_runtime_smoke.py `
         tools\reachops_delivery_package_check.py `
         tools\reachops_release_evidence.py `
+        tools\reachops_issue_closure_audit.py `
         tools\reachops_final_acceptance_gate.py `
         tools\reachops_goal_delivery_runner.py `
         tools\reachops_live_acceptance_status.py `

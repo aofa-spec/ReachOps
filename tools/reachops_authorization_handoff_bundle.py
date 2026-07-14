@@ -134,6 +134,7 @@ def build_handoff_bundle(args: argparse.Namespace, snapshot: dict[str, Any] | No
         "next_required_actions": status.get("next_required_actions") or [],
         "operator_commands": status.get("operator_commands") or [],
         "verification_commands": status.get("verification_commands") or [],
+        "commercial_issue_closure_command": "python tools\\reachops_issue_closure_audit.py --json",
     }
 
     readme = "\n".join(
@@ -149,6 +150,7 @@ def build_handoff_bundle(args: argparse.Namespace, snapshot: dict[str, Any] | No
             f"- json_report: latest_live_acceptance_readiness.json",
             f"- phase2_handoff_report: latest_phase2_handoff_check.md",
             f"- phase2_handoff_json: latest_phase2_handoff_check.json",
+            "- commercial_issue_closure_command: python tools\\reachops_issue_closure_audit.py --json",
             "",
             "## Required external inputs",
             "",
@@ -244,8 +246,13 @@ def verify_handoff_bundle(path: str | Path = "") -> dict[str, Any]:
             failures.append("no_submit_not_declared")
         if not manifest.get("operator_commands"):
             failures.append("operator_commands_missing")
+        verification_commands = "\n".join(str(item) for item in (manifest.get("verification_commands") or []))
+        if "reachops_issue_closure_audit.py --json" not in verification_commands:
+            failures.append("issue_closure_command_not_declared")
     if "init_reachops_acceptance_inputs_windows.ps1 -Json" not in commands_text:
         failures.append("init_command_missing")
+    if "reachops_issue_closure_audit.py --json" not in commands_text:
+        failures.append("issue_closure_command_missing")
     if "reachops_final_acceptance_gate.py --json" not in commands_text:
         failures.append("final_gate_command_missing")
     return {

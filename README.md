@@ -258,6 +258,7 @@ python tools\reachops_delivery_package_check.py --json
 严格最终验收 gate：
 
 ```powershell
+python tools\reachops_issue_closure_audit.py --json
 python tools\reachops_final_acceptance_gate.py --json
 ```
 

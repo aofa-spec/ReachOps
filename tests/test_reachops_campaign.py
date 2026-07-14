@@ -709,6 +709,7 @@ def final_package_check_payload():
             "goal_status": {"exists": True, "size": 1},
             "live_submit": {"exists": True, "size": 1},
             "final_acceptance_gate": {"exists": True, "size": 1},
+            "issue_closure": {"exists": True, "size": 1},
         },
         "final_gate_report": {
             "status": "passed",
@@ -4738,6 +4739,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 [
                     "python tools\\reachops_client_delivery_check.py --json",
                     "python tools\\reachops_delivery_package_check.py --json",
+                    "python tools\\reachops_issue_closure_audit.py --json",
                     "python tools\\reachops_final_acceptance_gate.py --json",
                 ],
             )
@@ -5014,8 +5016,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 self.assertIn("latest_phase2_handoff_check.md", manifest["included_files"])
                 self.assertIn("latest_phase2_handoff_check.json", manifest["included_files"])
                 self.assertIn("tools/reachops_acceptance_inputs.local.ps1", manifest["excluded_sensitive_files"])
+                self.assertEqual(
+                    manifest["commercial_issue_closure_command"],
+                    "python tools\\reachops_issue_closure_audit.py --json",
+                )
+                self.assertIn("reachops_issue_closure_audit.py --json", "\n".join(manifest["verification_commands"]))
+                readme = zf.read("README_AUTHORIZATION_HANDOFF.md").decode("utf-8")
+                self.assertIn("commercial_issue_closure_command", readme)
+                self.assertIn("reachops_issue_closure_audit.py --json", readme)
                 commands = zf.read("authorization_handoff_commands.txt").decode("utf-8")
                 self.assertIn("init_reachops_acceptance_inputs_windows.ps1 -Json", commands)
+                self.assertIn("reachops_issue_closure_audit.py --json", commands)
                 self.assertIn("reachops_final_acceptance_gate.py --json", commands)
             verified = verify_reachops_authorization_handoff_bundle(bundle_path)
             self.assertTrue(verified["passed"])
@@ -5029,6 +5040,46 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(broken["passed"])
             self.assertIn("required_files_missing", broken["failures"])
             self.assertIn("forbidden_sensitive_files_included", broken["failures"])
+
+            stale_bundle = tmp_path / "stale_handoff.zip"
+            with zipfile.ZipFile(stale_bundle, "w") as zf:
+                for name in (
+                    "README_AUTHORIZATION_HANDOFF.md",
+                    "latest_live_acceptance_readiness.md",
+                    "latest_live_acceptance_readiness.json",
+                    "latest_phase2_handoff_check.md",
+                    "latest_phase2_handoff_check.json",
+                    "authorization_handoff_commands.txt",
+                    "authorization_handoff_manifest.json",
+                    "reachops_acceptance_inputs.example.ps1",
+                ):
+                    if name.endswith(".json"):
+                        payload = {
+                            "excluded_sensitive_files": ["tools/reachops_acceptance_inputs.local.ps1"],
+                            "no_browser_started": True,
+                            "no_submit": True,
+                            "operator_commands": ["powershell -ExecutionPolicy Bypass -File tools\\init_reachops_acceptance_inputs_windows.ps1 -Json"],
+                            "verification_commands": ["python tools\\reachops_final_acceptance_gate.py --json"],
+                        }
+                        if name == "latest_phase2_handoff_check.json":
+                            payload = {"live_readiness": {"local_inputs": {"usable": False}}}
+                        zf.writestr(name, json.dumps(payload))
+                    elif name == "authorization_handoff_commands.txt":
+                        zf.writestr(
+                            name,
+                            "\n".join(
+                                [
+                                    "powershell -ExecutionPolicy Bypass -File tools\\init_reachops_acceptance_inputs_windows.ps1 -Json",
+                                    "python tools\\reachops_final_acceptance_gate.py --json",
+                                ]
+                            ),
+                        )
+                    else:
+                        zf.writestr(name, "placeholder")
+            stale = verify_reachops_authorization_handoff_bundle(stale_bundle)
+            self.assertFalse(stale["passed"])
+            self.assertIn("issue_closure_command_missing", stale["failures"])
+            self.assertIn("issue_closure_command_not_declared", stale["failures"])
 
     def test_reachops_live_acceptance_status_reads_filled_local_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -5105,6 +5156,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(status["activation"]["next_required_actions"], [])
             self.assertTrue(status["ready_for_live_preflight"])
             self.assertEqual(status["next_required_actions"], ["运行受控真实提交并生成 live submit evidence"])
+            self.assertIn("python tools\\reachops_issue_closure_audit.py --json", status["verification_commands"])
             self.assertIn("python tools\\reachops_final_acceptance_gate.py --json", status["verification_commands"])
 
     def test_reachops_live_acceptance_status_expands_latest_pending_actions(self):
@@ -5341,6 +5393,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
             final_package = final_package_check_payload()
             final_package["root"] = str(tmp_path.resolve())
+            missing_issue_closure_report = json.loads(json.dumps(final_package))
+            missing_issue_closure_report["report_files"].pop("issue_closure")
+            (acceptance_dir / "delivery_package_check.json").write_text(
+                json.dumps(missing_issue_closure_report),
+                encoding="utf-8",
+            )
+
+            missing_issue_closure_status = build_reachops_live_acceptance_status(args)
+            self.assertFalse(missing_issue_closure_status["final_delivery_ready"])
+            self.assertFalse(missing_issue_closure_status["latest_acceptance"]["package_evidence_ready"])
+            self.assertFalse(missing_issue_closure_status["latest_acceptance"]["package_report_files_ready"])
+            self.assertIn("delivery_package:evidence", missing_issue_closure_status["failed_checks"])
+
             (acceptance_dir / "delivery_package_check.json").write_text(
                 json.dumps(final_package),
                 encoding="utf-8",
@@ -5824,6 +5889,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         spec = (root / "ReachOps" / "packaging" / "reachops.spec").read_text(encoding="utf-8")
         iss = (root / "ReachOps" / "packaging" / "ReachOps.iss").read_text(encoding="utf-8")
         build_script = (root / "tools" / "build_reachops_windows.ps1").read_text(encoding="utf-8")
+        web_ui_script = (root / "tools" / "reachops_web_ui.py").read_text(encoding="utf-8")
         acceptance_script = (root / "tools" / "run_reachops_acceptance_windows.ps1").read_text(encoding="utf-8")
         acceptance_background_script = (root / "tools" / "start_reachops_acceptance_background_windows.ps1").read_text(encoding="utf-8")
         acceptance_background_status_script = (root / "tools" / "get_reachops_acceptance_background_status_windows.ps1").read_text(encoding="utf-8")
@@ -6165,6 +6231,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_web_ui.py", build_script)
         self.assertIn("reachops_client_delivery_check.py", build_script)
         self.assertIn("reachops_web_panel_runtime_smoke.py", build_script)
+        self.assertIn("tools\\reachops_issue_closure_audit.py", build_script)
         self.assertIn("reachops_live_submit_acceptance.py", sync_script)
         self.assertIn("reachops_web_ui.py", sync_script)
         self.assertIn("reachops_mac_web_ui.py", sync_script)
@@ -6202,8 +6269,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("get_reachops_acceptance_background_status_windows.ps1", sync_script)
         self.assertIn("verify_reachops_acceptance_summary.py", sync_script)
         self.assertIn("reachops_delivery_package_check.py", sync_script)
+        self.assertIn("reachops_issue_closure_audit.py", sync_script)
         self.assertIn("reachops_final_acceptance_gate.py", sync_script)
+        self.assertIn("reachops_issue_closure_audit.py --json", sync_script)
         self.assertIn("reachops_final_acceptance_gate.py --json", delivery_plan)
+        self.assertIn("reachops_issue_closure_audit.py --json", web_ui_script)
         self.assertIn("final_delivery_ready=true", delivery_plan)
         self.assertIn("failed_checks=[]", delivery_plan)
         self.assertIn("reachops_final_acceptance_gate.py --json", operator_matrix)
@@ -6220,7 +6290,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_delivery_audit.py --json", sync_script)
         self.assertIn("reachops_operator_pressure.py --json", sync_script)
         self.assertIn("reachops_final_acceptance_gate.py --json", sync_script)
+        self.assertIn("reachops_issue_closure_sync.json", sync_script)
         self.assertIn("reachops_final_acceptance_gate_sync.json", sync_script)
+        self.assertIn("SYNC_ISSUE_CLOSURE_STATUS=", sync_script)
         self.assertIn("SYNC_FINAL_ACCEPTANCE_GATE_STATUS=", sync_script)
         self.assertIn("SYNC_FINAL_DELIVERY_READY=", sync_script)
         self.assertIn("reachops_web_ui.py missing", sync_script)
@@ -6444,6 +6516,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("effective_pending_external_validation=3", readme)
         self.assertIn("客户端交付验收门禁", readme)
         self.assertIn("reachops_client_delivery_check.py --json", readme)
+        self.assertIn("reachops_issue_closure_audit.py --json", readme)
         self.assertIn("reachops_final_acceptance_gate.py --json", readme)
         self.assertIn("status=passed", readme)
         self.assertIn("final_delivery_ready=true", readme)
@@ -6462,6 +6535,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("delivery_audit_payload.json", live_acceptance_runbook)
         self.assertIn("operator_pressure_payload.json", live_acceptance_runbook)
         self.assertIn("activation_status_payload.json", live_acceptance_runbook)
+        self.assertIn("issue_closure_payload.json", live_acceptance_runbook)
         self.assertIn("live_readiness_payload.json", live_acceptance_runbook)
         self.assertIn("live_preflight_payload.json", live_acceptance_runbook)
         self.assertIn("live_submit_payload.json", live_acceptance_runbook)
@@ -6484,11 +6558,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("final_delivery_blockers", pressure_audit_report)
         self.assertIn("delivery_package_check_not_final_ready", pressure_audit_report)
         self.assertIn("SYNC_FINAL_ACCEPTANCE_GATE_STATUS", pressure_audit_report)
+        self.assertIn("SYNC_ISSUE_CLOSURE_STATUS", pressure_audit_report)
         self.assertIn("verification_commands", pressure_audit_report)
         self.assertIn("最终复核命令", pressure_audit_report)
         self.assertIn("VERIFICATION_COMMANDS", pressure_audit_report)
         self.assertIn("python tools\\reachops_client_delivery_check.py --json", pressure_audit_report)
         self.assertIn("python tools\\reachops_delivery_package_check.py --json", pressure_audit_report)
+        self.assertIn("python tools\\reachops_issue_closure_audit.py --json", pressure_audit_report)
         self.assertIn("python tools\\reachops_final_acceptance_gate.py --json", pressure_audit_report)
         self.assertIn("client_delivery:final_ready", pressure_audit_report)
         self.assertIn("delivery_package:passed", pressure_audit_report)
@@ -6517,6 +6593,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("delivery_package_check_not_final_ready", handoff)
         self.assertIn("final_delivery_package", handoff)
         self.assertIn("SYNC_FINAL_ACCEPTANCE_GATE_STATUS", handoff)
+        self.assertIn("SYNC_ISSUE_CLOSURE_STATUS", handoff)
         self.assertIn("verification_commands", handoff)
         self.assertIn("27273", handoff)
         self.assertIn("reachops_acceptance_inputs.local.ps1", handoff)

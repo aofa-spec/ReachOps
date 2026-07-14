@@ -28,6 +28,7 @@ REQUIRED_PACKAGE_REPORT_FILES = (
     "goal_status",
     "live_submit",
     "final_acceptance_gate",
+    "issue_closure",
 )
 
 
