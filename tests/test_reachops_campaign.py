@@ -719,6 +719,7 @@ def final_package_check_payload():
             "required_checks": [
                 "client_delivery:final_ready",
                 "commercial_issue_closure:closed",
+                "current_stage_gate:local_ready_or_external_pending",
                 "delivery_audit:no_failed_checks",
                 "delivery_package:passed",
                 "goal_status:passed",
@@ -727,6 +728,7 @@ def final_package_check_payload():
             "present_required_checks": [
                 "client_delivery:final_ready",
                 "commercial_issue_closure:closed",
+                "current_stage_gate:local_ready_or_external_pending",
                 "delivery_audit:no_failed_checks",
                 "delivery_package:passed",
                 "goal_status:passed",
@@ -735,6 +737,7 @@ def final_package_check_payload():
             "missing_required_checks": [],
             "failed_required_checks": [],
             "checks_by_name": {
+                "current_stage_gate:local_ready_or_external_pending": {"name": "current_stage_gate:local_ready_or_external_pending", "ok": True},
                 "goal_status:passed": {"name": "goal_status:passed", "ok": True},
                 "client_delivery:final_ready": {"name": "client_delivery:final_ready", "ok": True},
                 "delivery_package:passed": {"name": "delivery_package:passed", "ok": True},
@@ -796,6 +799,7 @@ def final_acceptance_gate_payload():
         "final_delivery_ready": True,
         "failed_checks": [],
         "checks": [
+            {"name": "current_stage_gate:local_ready_or_external_pending", "ok": True},
             {"name": "goal_status:passed", "ok": True},
             {"name": "client_delivery:final_ready", "ok": True},
             {"name": "delivery_package:passed", "ok": True},
@@ -803,6 +807,34 @@ def final_acceptance_gate_payload():
             {"name": "operator_pressure:leads_and_actions", "ok": True},
             {"name": "commercial_issue_closure:closed", "ok": True},
         ],
+    }
+
+
+def final_goal_status_payload(status: str = "passed", pending_external_validation: list[str] | None = None):
+    pending = pending_external_validation or []
+    gate_status = "passed" if status == "passed" and not pending else "ready_for_external_validation"
+    return {
+        "status": status,
+        "pending_external_validation": pending,
+        "summary": {"final_pending_external_validation": len(pending), "final_failed": 0},
+        "current_stage_gate": {
+            "schema_version": "reachops.current_stage_gate.v1",
+            "status": gate_status,
+            "local_passed": True,
+            "local_checks": {
+                "delivery_audit_has_no_local_failures": True,
+                "client_delivery_reports_real_pilot_boundary": True,
+                "client_delivery_does_not_claim_blocked_real_pilot": True,
+            },
+            "external_validation_pending": pending,
+            "does_not_claim_real_pilot_when_blocked": True,
+            "real_pilot_evidence": {
+                "real_pilot_ready": False if pending else True,
+                "status": "external_validation_pending" if pending else "passed",
+                "profile_available": 0 if pending else 1,
+                "operation_counts": {"candidates": 0 if pending else 1, "actions": 0 if pending else 1, "touched": 0 if pending else 1},
+            },
+        },
     }
 
 
@@ -2956,7 +2988,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
             bad_final_gate_payload["status"] = "not_ready"
             bad_final_gate_payload["final_delivery_ready"] = False
             bad_final_gate_payload["failed_checks"] = ["delivery_package:passed"]
-            bad_final_gate_payload["checks"][2]["ok"] = False
+            for row in bad_final_gate_payload["checks"]:
+                if row["name"] == "delivery_package:passed":
+                    row["ok"] = False
             invalid_final_gate = json.loads(json.dumps(summary))
             (report_dir / "final_acceptance_gate.json").write_text(
                 json.dumps(bad_final_gate_payload),
@@ -2976,17 +3010,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             convergence_gate_payload["status"] = "not_ready"
             convergence_gate_payload["final_delivery_ready"] = False
             convergence_gate_payload["failed_checks"] = ["delivery_package:passed"]
-            convergence_gate_payload["checks"][2] = {
-                "name": "delivery_package:passed",
-                "ok": False,
-                "status": "failed",
-                "evidence": {
-                    "bootstrap_only": True,
-                    "not_final_delivery_reasons": [
-                        "allow_missing_final_gate is bootstrap-only; rerun without it after final_acceptance_gate.json is written."
-                    ],
-                },
-            }
+            for index, row in enumerate(convergence_gate_payload["checks"]):
+                if row["name"] == "delivery_package:passed":
+                    convergence_gate_payload["checks"][index] = {
+                        "name": "delivery_package:passed",
+                        "ok": False,
+                        "status": "failed",
+                        "evidence": {
+                            "bootstrap_only": True,
+                            "not_final_delivery_reasons": [
+                                "allow_missing_final_gate is bootstrap-only; rerun without it after final_acceptance_gate.json is written."
+                            ],
+                        },
+                    }
             convergence_summary = json.loads(json.dumps(summary))
             convergence_summary["final_acceptance_gate"] = convergence_gate_payload
             convergence_summary["final_acceptance_gate"]["json_path"] = str(report_dir / "final_acceptance_gate.json")
@@ -3018,7 +3054,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("final_acceptance_gate_json_checks_missing", missing_checks["failures"])
 
             failed_check_summary = json.loads(json.dumps(summary))
-            failed_check_summary["final_acceptance_gate"]["checks"][2]["ok"] = False
+            for row in failed_check_summary["final_acceptance_gate"]["checks"]:
+                if row["name"] == "delivery_package:passed":
+                    row["ok"] = False
             (report_dir / "final_acceptance_gate.json").write_text(json.dumps(failed_check_summary["final_acceptance_gate"]), encoding="utf-8")
             acceptance_summary.write_text(json.dumps(failed_check_summary), encoding="utf-8")
             failed_check = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
@@ -3739,11 +3777,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
     def test_reachops_final_acceptance_gate_requires_client_and_package_final_ready(self):
         gate = build_reachops_final_acceptance_gate(
-            goal_status={
-                "status": "ready_for_external_validation",
-                "pending_external_validation": ["真实 TikTok 平台提交"],
-                "summary": {"final_pending_external_validation": 1, "final_failed": 0},
-            },
+            goal_status=final_goal_status_payload(
+                status="ready_for_external_validation",
+                pending_external_validation=["真实 TikTok 平台提交"],
+            ),
             client_delivery={
                 "status": "blocked_by_environment",
                 "readiness": "blocked_by_environment",
@@ -3790,6 +3827,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("delivery_package:passed", gate["failed_checks"])
         self.assertIn("commercial_issue_closure:closed", gate["failed_checks"])
         checks_by_name = {row["name"]: row for row in gate["checks"]}
+        self.assertNotIn("current_stage_gate:local_ready_or_external_pending", gate["failed_checks"])
+        self.assertTrue(checks_by_name["current_stage_gate:local_ready_or_external_pending"]["ok"])
+        self.assertEqual(
+            checks_by_name["current_stage_gate:local_ready_or_external_pending"]["status"],
+            "ready_for_external_validation",
+        )
         self.assertEqual(
             checks_by_name["client_delivery:final_ready"]["evidence"]["delivery_check_path"],
             "reports/acceptance_remediation/latest_delivery_check.json",
@@ -3823,11 +3866,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             client_path = Path(tmp) / "latest_delivery_check.json"
             client_payload = write_final_client_delivery_payload(client_path)
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=final_package_check_payload(),
                 issue_closure=final_issue_closure_payload(),
@@ -3838,13 +3877,34 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(gate["status"], "passed")
         self.assertTrue(gate["final_delivery_ready"])
 
+    def test_reachops_final_acceptance_gate_requires_current_stage_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client_path = Path(tmp) / "latest_delivery_check.json"
+            client_payload = write_final_client_delivery_payload(client_path)
+            goal_status = final_goal_status_payload()
+            goal_status["current_stage_gate"]["local_passed"] = False
+            goal_status["current_stage_gate"]["local_checks"]["client_delivery_reports_real_pilot_boundary"] = False
+            gate = build_reachops_final_acceptance_gate(
+                goal_status=goal_status,
+                client_delivery=client_payload,
+                package_check=final_package_check_payload(),
+                issue_closure=final_issue_closure_payload(),
+                delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
+                operator_pressure={"status": "ok", "summary": {"customer_leads": 108, "outreach_actions": 216}},
+            )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertFalse(gate["final_delivery_ready"])
+        self.assertIn("current_stage_gate:local_ready_or_external_pending", gate["failed_checks"])
+        checks_by_name = {row["name"]: row for row in gate["checks"]}
+        self.assertFalse(checks_by_name["current_stage_gate:local_ready_or_external_pending"]["evidence"]["local_passed"])
+        blockers = {row["scope"]: row for row in gate["final_delivery_blockers"]}
+        self.assertIn("current_stage_gate", blockers)
+        self.assertIn("current_stage_gate", gate["final_delivery_evidence_plan"]["pending_scopes"])
+
     def test_reachops_final_acceptance_gate_rejects_client_without_persisted_delivery_check(self):
         gate = build_reachops_final_acceptance_gate(
-            goal_status={
-                "status": "passed",
-                "pending_external_validation": [],
-                "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-            },
+            goal_status=final_goal_status_payload(),
             client_delivery=final_client_delivery_payload("/tmp/reachops-missing-latest-delivery-check.json"),
             package_check=final_package_check_payload(),
             delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -3869,11 +3929,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             blocked_payload["failed_checks"] = ["acceptance:ready"]
             client_path.write_text(json.dumps(blocked_payload), encoding="utf-8")
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=final_package_check_payload(),
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -3892,11 +3948,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             client_path = Path(tmp) / "latest_delivery_check.json"
             client_payload = write_final_client_delivery_payload(client_path)
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=package_check,
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -3916,11 +3968,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             client_path = Path(tmp) / "latest_delivery_check.json"
             client_payload = write_final_client_delivery_payload(client_path)
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=package_check,
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -3941,11 +3989,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             client_path = Path(tmp) / "latest_delivery_check.json"
             client_payload = write_final_client_delivery_payload(client_path)
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=package_check,
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -3971,11 +4015,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             client_path = Path(tmp) / "latest_delivery_check.json"
             client_payload = write_final_client_delivery_payload(client_path)
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=package_check,
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -3993,11 +4033,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             client_path = Path(tmp) / "latest_delivery_check.json"
             client_payload = write_final_client_delivery_payload(client_path)
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=package_check,
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -4018,11 +4054,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             client_path = Path(tmp) / "latest_delivery_check.json"
             client_payload = write_final_client_delivery_payload(client_path)
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=package_check,
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -4043,11 +4075,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             client_path = Path(tmp) / "latest_delivery_check.json"
             client_payload = write_final_client_delivery_payload(client_path)
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=package_check,
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -4070,11 +4098,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             client_path = Path(tmp) / "latest_delivery_check.json"
             client_payload = write_final_client_delivery_payload(client_path)
             gate = build_reachops_final_acceptance_gate(
-                goal_status={
-                    "status": "passed",
-                    "pending_external_validation": [],
-                    "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-                },
+                goal_status=final_goal_status_payload(),
                 client_delivery=client_payload,
                 package_check=package_check,
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
@@ -4089,11 +4113,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
     def test_reachops_final_acceptance_gate_rejects_bootstrap_package_check(self):
         gate = build_reachops_final_acceptance_gate(
-            goal_status={
-                "status": "passed",
-                "pending_external_validation": [],
-                "summary": {"final_pending_external_validation": 0, "final_failed": 0},
-            },
+            goal_status=final_goal_status_payload(),
             client_delivery={
                 "status": "passed",
                 "readiness": "pass",
@@ -4127,7 +4147,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             audit_payload = {"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}}
             pressure_payload = {"status": "ok", "summary": {"customer_leads": 12, "outreach_actions": 24}}
-            goal_payload = {"status": "passed", "pending_external_validation": [], "summary": {"final_failed": 0}}
+            goal_payload = final_goal_status_payload()
             client_payload = {
                 "status": "passed",
                 "readiness": "pass",
@@ -4157,6 +4177,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             check_names = [row["name"] for row in payload["checks"]]
             self.assertEqual(exit_code, 0)
             self.assertEqual(payload["status"], "passed")
+            self.assertIn("current_stage_gate:local_ready_or_external_pending", check_names)
             self.assertIn("delivery_audit:no_failed_checks", check_names)
             self.assertIn("operator_pressure:leads_and_actions", check_names)
             self.assertIn("commercial_issue_closure:closed", check_names)

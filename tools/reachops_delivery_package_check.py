@@ -16,6 +16,7 @@ from ReachOps.version import PRODUCT_ID, VERSION
 from tools.verify_reachops_acceptance_summary import load_summary, verify_summary
 
 REQUIRED_FINAL_GATE_CHECKS = {
+    "current_stage_gate:local_ready_or_external_pending",
     "goal_status:passed",
     "client_delivery:final_ready",
     "delivery_package:passed",

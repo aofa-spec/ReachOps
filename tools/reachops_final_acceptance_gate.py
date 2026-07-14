@@ -167,6 +167,36 @@ def _goal_ready(goal_status: dict[str, Any]) -> bool:
     return str(goal_status.get("status") or "") == PASSED and not goal_status.get("pending_external_validation")
 
 
+def _current_stage_gate_status(goal_status: dict[str, Any]) -> dict[str, Any]:
+    gate = goal_status.get("current_stage_gate") if isinstance(goal_status.get("current_stage_gate"), dict) else {}
+    local_checks = gate.get("local_checks") if isinstance(gate.get("local_checks"), dict) else {}
+    return {
+        "schema_version": str(gate.get("schema_version") or ""),
+        "status": str(gate.get("status") or ""),
+        "local_passed": bool(gate.get("local_passed")),
+        "local_checks": local_checks,
+        "external_validation_pending": gate.get("external_validation_pending") or [],
+        "does_not_claim_real_pilot_when_blocked": bool(gate.get("does_not_claim_real_pilot_when_blocked")),
+        "real_pilot_evidence": gate.get("real_pilot_evidence") if isinstance(gate.get("real_pilot_evidence"), dict) else {},
+    }
+
+
+def _current_stage_gate_ready_or_external_pending(goal_status: dict[str, Any]) -> bool:
+    gate = _current_stage_gate_status(goal_status)
+    required_local_checks = (
+        "delivery_audit_has_no_local_failures",
+        "client_delivery_reports_real_pilot_boundary",
+        "client_delivery_does_not_claim_blocked_real_pilot",
+    )
+    return (
+        gate["schema_version"] == "reachops.current_stage_gate.v1"
+        and gate["local_passed"]
+        and gate["status"] in {PASSED, READY_FOR_EXTERNAL_VALIDATION}
+        and all(bool(gate["local_checks"].get(name)) for name in required_local_checks)
+        and gate["does_not_claim_real_pilot_when_blocked"]
+    )
+
+
 def _issue_closure_ready(issue_closure: dict[str, Any] | None) -> bool:
     if not isinstance(issue_closure, dict) or not issue_closure:
         return True
@@ -276,6 +306,29 @@ def build_final_delivery_evidence_plan(
         else {}
     )
     items = [
+        _evidence_item(
+            scope="current_stage_gate",
+            title="当前恢复阶段本地门禁证据",
+            ready=_current_stage_gate_ready_or_external_pending(goal_status),
+            status=_current_stage_gate_status(goal_status)["status"] or FAILED,
+            required_evidence=[
+                "current_stage_gate.schema_version=reachops.current_stage_gate.v1",
+                "current_stage_gate.local_passed=true",
+                "本地 delivery audit 无代码级失败",
+                "client delivery 明确暴露真实 pilot 边界",
+                "账号或平台阻断时不声称真实 pilot 通过",
+            ],
+            commands=["python tools\\reachops_goal_status_report.py --json"],
+            proof_fields=[
+                "current_stage_gate.status in [passed, ready_for_external_validation]",
+                "current_stage_gate.local_passed=true",
+                "current_stage_gate.local_checks.delivery_audit_has_no_local_failures=true",
+                "current_stage_gate.local_checks.client_delivery_reports_real_pilot_boundary=true",
+                "current_stage_gate.local_checks.client_delivery_does_not_claim_blocked_real_pilot=true",
+            ],
+            blocker_codes=[str(item) for item in _current_stage_gate_status(goal_status)["external_validation_pending"]],
+            next_action="修复 current_stage_gate 本地失败项；外部阻断只能保留为 external_validation_pending，不能声明最终通过。",
+        ),
         _evidence_item(
             scope="external_authorized_execution",
             title="授权真实平台执行证据",
@@ -566,7 +619,14 @@ def build_final_acceptance_gate(
     operator_pressure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     issue_summary = (issue_closure or {}).get("summary") if isinstance((issue_closure or {}).get("summary"), dict) else {}
+    current_stage_gate = _current_stage_gate_status(goal_status)
     checks = [
+        _check(
+            "current_stage_gate:local_ready_or_external_pending",
+            _current_stage_gate_ready_or_external_pending(goal_status),
+            current_stage_gate["status"] or FAILED,
+            current_stage_gate,
+        ),
         _check(
             "goal_status:passed",
             _goal_ready(goal_status),
@@ -658,6 +718,18 @@ def build_final_acceptance_gate(
 
     final_delivery_blockers = []
     next_actions = []
+    if not _current_stage_gate_ready_or_external_pending(goal_status):
+        final_delivery_blockers.append(
+            {
+                "scope": "current_stage_gate",
+                "status": current_stage_gate["status"] or FAILED,
+                "local_passed": current_stage_gate["local_passed"],
+                "local_checks": current_stage_gate["local_checks"],
+                "external_validation_pending": current_stage_gate["external_validation_pending"],
+                "next_action": "修复 current_stage_gate 本地失败项，确保本阶段恢复基线明确通过或只剩外部真实环境验收。",
+            }
+        )
+        next_actions.append("修复 current_stage_gate 本地失败项，确保本阶段恢复基线明确通过或只剩外部真实环境验收。")
     if not _goal_ready(goal_status):
         pending = [str(item) for item in (goal_status.get("pending_external_validation") or []) if str(item or "").strip()]
         final_delivery_blockers.append(
