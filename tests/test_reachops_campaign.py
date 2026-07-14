@@ -91,6 +91,7 @@ from tools.reachops_final_acceptance_gate import client_delivery_from_acceptance
 from tools.reachops_final_acceptance_gate import main as reachops_final_acceptance_gate_main
 from tools.reachops_goal_delivery_runner import build_report as build_reachops_goal_delivery_report
 from tools.reachops_goal_delivery_runner import command_payload as reachops_goal_delivery_command_payload
+from tools.reachops_goal_delivery_runner import run_sections as run_reachops_goal_delivery_sections
 from tools.reachops_goal_delivery_runner import build_delivery_boundary as build_reachops_delivery_boundary
 from tools.reachops_goal_delivery_runner import build_deliverable_index as build_reachops_deliverable_index
 from tools.reachops_goal_delivery_runner import render_markdown_summary as render_reachops_goal_delivery_summary
@@ -2778,6 +2779,58 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(section["payload"]["timed_out"])
         self.assertIn("partial output", section["payload"]["stdout_tail"])
         self.assertIn("timeout_after_3s", section["stderr"])
+
+    def test_reachops_goal_delivery_runs_sections_in_phased_parallel_order(self):
+        created_workers = []
+        real_executor = ThreadPoolExecutor
+
+        class CapturingExecutor:
+            def __init__(self, max_workers):
+                created_workers.append(max_workers)
+                self._executor = real_executor(max_workers=max_workers)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self._executor.shutdown(wait=True)
+
+            def submit(self, *args, **kwargs):
+                return self._executor.submit(*args, **kwargs)
+
+        commands = {
+            "mvp_acceptance": (["python", "mvp.py"], 15),
+            "mac_loop_acceptance": (["python", "mac.py"], 45),
+            "client_delivery": (["python", "client.py"], 15),
+            "final_gate": (["python", "final.py"], 30),
+        }
+        phases = [
+            ("evidence_collection", ("mvp_acceptance", "mac_loop_acceptance")),
+            ("client_gate_snapshot", ("client_delivery",)),
+            ("final_gate_snapshot", ("final_gate",)),
+        ]
+
+        def fake_command_payload(command, timeout=120):
+            script = " ".join(command)
+            return {
+                "command": script,
+                "returncode": 0,
+                "stderr": "",
+                "timeout_seconds": timeout,
+                "timed_out": False,
+                "payload": {"status": "ok", "script": script},
+            }
+
+        with patch("tools.reachops_goal_delivery_runner.ThreadPoolExecutor", CapturingExecutor):
+            with patch("tools.reachops_goal_delivery_runner.command_payload", side_effect=fake_command_payload):
+                sections = run_reachops_goal_delivery_sections(commands, phases=phases)
+
+        self.assertEqual(list(sections), list(commands))
+        self.assertEqual(created_workers, [2, 1, 1])
+        self.assertEqual(sections["mvp_acceptance"]["timeout_seconds"], 15)
+        self.assertEqual(sections["mac_loop_acceptance"]["timeout_seconds"], 45)
+        self.assertEqual(sections["client_delivery"]["payload"]["script"], "python client.py")
+        self.assertEqual(sections["final_gate"]["payload"]["script"], "python final.py")
 
     def test_reachops_goal_delivery_report_surfaces_section_timeouts(self):
         def section(payload, returncode=0, *, timed_out=False, timeout_seconds=10):

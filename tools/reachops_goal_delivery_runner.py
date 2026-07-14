@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,21 @@ PM_SECTION_TIMEOUTS = {
     "final_gate": 30,
     "repository_cleanliness": 15,
 }
+SECTION_EXECUTION_PHASES = [
+    (
+        "evidence_collection",
+        (
+            "mvp_acceptance",
+            "mac_loop_acceptance",
+            "windows_package_preflight",
+            "issue_closure",
+            "delivery_package",
+            "repository_cleanliness",
+        ),
+    ),
+    ("client_gate_snapshot", ("client_delivery",)),
+    ("final_gate_snapshot", ("final_gate",)),
+]
 
 
 def _timeout_text(value: Any) -> str:
@@ -88,6 +104,74 @@ def command_payload(command: list[str], timeout: int = 120) -> dict[str, Any]:
         "timed_out": bool(isinstance(payload, dict) and payload.get("timed_out")),
         "payload": payload,
     }
+
+
+def build_section_commands(python: str | None = None) -> dict[str, tuple[list[str], int]]:
+    interpreter = python or sys.executable
+    return {
+        "mvp_acceptance": (
+            [interpreter, "tools/reachops_mvp_acceptance_summary.py", "--json"],
+            PM_SECTION_TIMEOUTS["mvp_acceptance"],
+        ),
+        "mac_loop_acceptance": (
+            [interpreter, "tools/reachops_mac_loop_acceptance.py", "--base-url", "http://127.0.0.1:8769", "--json"],
+            PM_SECTION_TIMEOUTS["mac_loop_acceptance"],
+        ),
+        "client_delivery": (
+            [interpreter, "tools/reachops_client_delivery_check.py", "--json"],
+            PM_SECTION_TIMEOUTS["client_delivery"],
+        ),
+        "windows_package_preflight": (
+            [interpreter, "tools/reachops_windows_package_preflight.py", "--json"],
+            PM_SECTION_TIMEOUTS["windows_package_preflight"],
+        ),
+        "issue_closure": (
+            [interpreter, "tools/reachops_issue_closure_audit.py", "--json"],
+            PM_SECTION_TIMEOUTS["issue_closure"],
+        ),
+        "delivery_package": (
+            [interpreter, "tools/reachops_delivery_package_check.py", "--allow-external-pending", "--json"],
+            PM_SECTION_TIMEOUTS["delivery_package"],
+        ),
+        "final_gate": (
+            [interpreter, "tools/reachops_final_acceptance_gate.py", "--json"],
+            PM_SECTION_TIMEOUTS["final_gate"],
+        ),
+        "repository_cleanliness": (
+            [interpreter, "tools/reachops_repository_cleanliness_check.py", "--clean", "--json"],
+            PM_SECTION_TIMEOUTS["repository_cleanliness"],
+        ),
+    }
+
+
+def run_section_batch(section_commands: dict[str, tuple[list[str], int]]) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=len(section_commands)) as executor:
+        futures = {
+            executor.submit(command_payload, command, timeout=timeout): name
+            for name, (command, timeout) in section_commands.items()
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+    return results
+
+
+def run_sections(
+    section_commands: dict[str, tuple[list[str], int]],
+    phases: list[tuple[str, tuple[str, ...]]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
+    for _phase_name, phase_names in (phases or SECTION_EXECUTION_PHASES):
+        phase_commands = {name: section_commands[name] for name in phase_names if name in section_commands}
+        if not phase_commands:
+            continue
+        results.update(run_section_batch(phase_commands))
+        seen.update(phase_commands)
+    remaining = {name: spec for name, spec in section_commands.items() if name not in seen}
+    if remaining:
+        results.update(run_section_batch(remaining))
+    return {name: results[name] for name in section_commands}
 
 
 def _payload(section: dict[str, Any]) -> dict[str, Any]:
@@ -589,26 +673,7 @@ def infer_start_contract_from_runtime_log(no_action_reason: dict[str, Any] | Non
 
 
 def build_report() -> dict[str, Any]:
-    python = sys.executable
-    sections = {
-        "mvp_acceptance": command_payload([python, "tools/reachops_mvp_acceptance_summary.py", "--json"], timeout=PM_SECTION_TIMEOUTS["mvp_acceptance"]),
-        "mac_loop_acceptance": command_payload(
-            [python, "tools/reachops_mac_loop_acceptance.py", "--base-url", "http://127.0.0.1:8769", "--json"],
-            timeout=PM_SECTION_TIMEOUTS["mac_loop_acceptance"],
-        ),
-        "client_delivery": command_payload([python, "tools/reachops_client_delivery_check.py", "--json"], timeout=PM_SECTION_TIMEOUTS["client_delivery"]),
-        "windows_package_preflight": command_payload([python, "tools/reachops_windows_package_preflight.py", "--json"], timeout=PM_SECTION_TIMEOUTS["windows_package_preflight"]),
-        "issue_closure": command_payload([python, "tools/reachops_issue_closure_audit.py", "--json"], timeout=PM_SECTION_TIMEOUTS["issue_closure"]),
-        "delivery_package": command_payload(
-            [python, "tools/reachops_delivery_package_check.py", "--allow-external-pending", "--json"],
-            timeout=PM_SECTION_TIMEOUTS["delivery_package"],
-        ),
-        "final_gate": command_payload([python, "tools/reachops_final_acceptance_gate.py", "--json"], timeout=PM_SECTION_TIMEOUTS["final_gate"]),
-        "repository_cleanliness": command_payload(
-            [python, "tools/reachops_repository_cleanliness_check.py", "--clean", "--json"],
-            timeout=PM_SECTION_TIMEOUTS["repository_cleanliness"],
-        ),
-    }
+    sections = run_sections(build_section_commands(sys.executable))
     section_timeouts = _timed_out_sections(sections)
 
     mvp = _payload(sections["mvp_acceptance"])
