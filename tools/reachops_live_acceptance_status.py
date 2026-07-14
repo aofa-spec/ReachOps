@@ -362,7 +362,10 @@ def pending_acceptance_actions(acceptance: dict[str, Any]) -> list[str]:
 
 def final_gate_actions(acceptance: dict[str, Any]) -> list[str]:
     if not acceptance.get("exists"):
-        return []
+        return [
+            "先在 Windows 实机运行 tools\\run_reachops_acceptance_windows.ps1 生成 acceptance_summary.json 和 final_acceptance_gate.json。",
+            "再运行 tools\\reachops_final_acceptance_gate.py --json 并确认 status=passed、final_delivery_ready=true。",
+        ]
     if acceptance.get("final_gate_status") == "passed" and acceptance.get("final_gate_ready"):
         return []
     explicit = [str(item) for item in (acceptance.get("final_gate_next_actions") or []) if str(item or "").strip()]
@@ -668,8 +671,14 @@ def build_status(args: argparse.Namespace, snapshot: dict[str, Any] | None = Non
     gate_actions = final_gate_actions(acceptance)
     input_actions = missing_input_actions(deduped_missing)
     next_required_actions: list[str] = []
-    for action in input_actions + activation_actions(activation) + acceptance_actions + gate_actions:
+    early_actions = input_actions + activation_actions(activation) + acceptance_actions
+    for action in early_actions:
         _append_unique(next_required_actions, action)
+    if not next_required_actions and stage3_ready_for_preflight and not acceptance.get("exists") and not final_delivery_ready:
+        next_required_actions = ["运行受控真实提交并生成 live submit evidence"]
+    elif not next_required_actions:
+        for action in gate_actions:
+            _append_unique(next_required_actions, action)
     if not next_required_actions and not final_delivery_ready:
         next_required_actions = ["运行受控真实提交并生成 live submit evidence"]
     blocked_reasons, failed_checks = build_blocked_reasons(

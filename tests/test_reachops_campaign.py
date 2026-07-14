@@ -4984,6 +4984,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(plan["Windows交付包"]["status"], "blocked")
             self.assertTrue(any("acceptance_summary.json" in item for item in plan["Windows交付包"]["blockers"]))
             self.assertEqual(plan["最终门禁"]["status"], "blocked")
+            self.assertIn(
+                "运行 tools\\reachops_final_acceptance_gate.py --json 并确认 status=passed、final_delivery_ready=true。",
+                plan["最终门禁"]["actions"],
+            )
             self.assertEqual(status["next_required_actions"][0], "运行 tools\\init_reachops_acceptance_inputs_windows.ps1 生成本地验收输入文件，然后填入已授权 TikTok 目标和激活状态路径。")
             self.assertIn(
                 "powershell -ExecutionPolicy Bypass -File tools\\init_reachops_acceptance_inputs_windows.ps1 -Json",
@@ -5064,6 +5068,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("ixBrowser 数字 Profile ID", status["live_validation"]["missing_inputs"])
             self.assertIn("生成或放置真实激活状态文件，并设置 ActivationStatusPath。", status["next_required_actions"])
             self.assertTrue(status["activation"]["failed_checks"])
+            plan = {row["stage"]: row for row in status["blocking_plan"]}
+            self.assertIn(
+                "先在 Windows 实机运行 tools\\run_reachops_acceptance_windows.ps1 生成 acceptance_summary.json 和 final_acceptance_gate.json。",
+                plan["最终门禁"]["actions"],
+            )
+            self.assertIn(
+                "再运行 tools\\reachops_final_acceptance_gate.py --json 并确认 status=passed、final_delivery_ready=true。",
+                plan["最终门禁"]["actions"],
+            )
 
     def test_reachops_live_acceptance_status_marks_template_activation_path_as_placeholder(self):
         with tempfile.TemporaryDirectory() as tmp:
