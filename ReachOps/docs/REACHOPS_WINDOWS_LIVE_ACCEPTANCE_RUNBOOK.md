@@ -309,6 +309,8 @@ reports\reachops_acceptance\<timestamp>\goal_status_report.json
 reports\reachops_acceptance\<timestamp>\delivery_audit_payload.json
 reports\reachops_acceptance\<timestamp>\operator_pressure_payload.json
 reports\reachops_acceptance\<timestamp>\activation_status_payload.json
+reports\reachops_acceptance\<timestamp>\authorization_handoff_payload.json
+reports\reachops_acceptance\<timestamp>\latest_reachops_authorization_handoff.zip
 reports\reachops_acceptance\<timestamp>\live_validation_manifest.json
 reports\reachops_acceptance\<timestamp>\repository_cleanliness_payload.json
 reports\reachops_acceptance\<timestamp>\windows_package_preflight.json
@@ -321,4 +323,4 @@ reports\reachops_acceptance\<timestamp>\final_acceptance_gate.json
 reports\acceptance_remediation\latest_delivery_check.json
 ```
 
-The project is fully delivered only when `acceptance_summary.json` says `passed`, the effective pending external validation count is zero, `tools\reachops_issue_closure_audit.py --json` has no issue-closure external pending items, `tools\reachops_delivery_package_check.py --json` returns `passed`, the package `report_files` include `repository_cleanliness`, `windows_package_preflight`, and `issue_closure`, and `tools\reachops_final_acceptance_gate.py --json` returns `passed` with `final_delivery_ready=true`.
+The project is fully delivered only when `acceptance_summary.json` says `passed`, the effective pending external validation count is zero, `tools\reachops_issue_closure_audit.py --json` has no issue-closure external pending items, `tools\reachops_delivery_package_check.py --json` returns `passed`, the package `report_files` include the full required set including `repository_cleanliness`, `windows_package_preflight`, `authorization_handoff`, `client_delivery`, `issue_closure`, and `final_acceptance_gate`, and `tools\reachops_final_acceptance_gate.py --json` returns `passed` with `final_delivery_ready=true`.

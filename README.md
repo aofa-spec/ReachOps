@@ -245,7 +245,7 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.p
 - `dist\installer\ReachOps-Setup-0.4.0.exe` 存在。
 - `dist\installer\reachops-update-manifest.json` hash 校验通过。
 - `reports\reachops_acceptance\<timestamp>\acceptance_summary.json` 中 `status=passed`。
-- `reports\reachops_acceptance\<timestamp>\repository_cleanliness_payload.json`、`windows_package_preflight.json`、`issue_closure_payload.json` 和 `final_acceptance_gate.json` 存在，且 package `report_files.repository_cleanliness`、`report_files.windows_package_preflight`、`report_files.issue_closure`、`report_files.final_acceptance_gate` 通过。
+- `reports\reachops_acceptance\<timestamp>\repository_cleanliness_payload.json`、`windows_package_preflight.json`、`authorization_handoff_payload.json`、`issue_closure_payload.json` 和 `final_acceptance_gate.json` 存在，`reports\acceptance_remediation\latest_delivery_check.json` 可追溯，且 package `report_files.repository_cleanliness`、`report_files.windows_package_preflight`、`report_files.authorization_handoff`、`report_files.client_delivery`、`report_files.issue_closure`、`report_files.final_acceptance_gate` 全部通过。
 - `tools\reachops_issue_closure_audit.py --json` 返回 Issues #1-#7 无外部 closure pending，`acceptance_criteria_external_pending=0`、`external_pending_count=0`、`closure_requires_external_validation=false`。
 - `effective_pending_external_validation=0`。
 - 真实 comment/follow/DM 尝试都有执行记录、错误码或截图证据。
