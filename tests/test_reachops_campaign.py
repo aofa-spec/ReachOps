@@ -3279,6 +3279,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("reports/**/*.png", support["exclude_patterns"])
             self.assertIn("candidate_users.comment_text", support["redacted_fields"])
             self.assertIn("outreach_executions.evidence_path", support["excluded_file_fields"])
+            self.assertTrue(support["diagnostic_manifest_complete"])
+            self.assertIn("reports/support/delivery_package_check.json", support["required_diagnostics"])
+            self.assertIn("reports/support/final_acceptance_gate.json", support["required_diagnostics"])
+            self.assertIn("reports/support/issue_closure_payload.json", support["required_diagnostics"])
             support_manifest = support["dry_run_manifest"]
             self.assertTrue(support["dry_run_manifest_passed"])
             self.assertEqual(support_manifest["schema_version"], "reachops.support_bundle_manifest.v1")
@@ -3290,6 +3294,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
             excluded_support_paths = {item["relative_path"] for item in support_manifest["excluded_files"]}
             self.assertIn("logs/reachops.log", included_support_paths)
             self.assertIn("reports/support/diagnostics.json", included_support_paths)
+            self.assertIn("reports/support/delivery_package_check.json", included_support_paths)
+            self.assertIn("reports/support/final_acceptance_gate.json", included_support_paths)
+            self.assertIn("reports/support/issue_closure_payload.json", included_support_paths)
+            self.assertIn("reports/support/repository_cleanliness_payload.json", included_support_paths)
+            self.assertIn("reports/support/windows_package_preflight.json", included_support_paths)
             self.assertIn("config/reachops_activation_status.json", excluded_support_paths)
             self.assertIn("data/growth_intelligence/growth_intelligence.db", excluded_support_paths)
             self.assertIn("reports/acceptance/action_submit_evidence/submit.png", excluded_support_paths)

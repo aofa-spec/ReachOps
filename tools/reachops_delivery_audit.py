@@ -2274,6 +2274,7 @@ def run_audit(args) -> dict:
                 and data_governance_fixture.get("privacy_operations", {}).get("audit", {}).get("observed_operations") == ["delete", "export", "legal_hold"]
                 and data_governance_fixture.get("recovery_objectives", {}).get("schema_version") == "reachops.recovery_objectives.v1"
                 and data_governance_fixture.get("support_bundle", {}).get("manifest_schema_version") == "reachops.support_bundle_manifest.v1"
+                and data_governance_fixture.get("support_bundle", {}).get("diagnostic_manifest_complete") is True
                 and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest_passed") is True
                 and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest", {}).get("activation_status_included") is False
                 and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest", {}).get("raw_database_included") is False

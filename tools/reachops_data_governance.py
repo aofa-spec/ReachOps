@@ -127,6 +127,15 @@ SUPPORT_BUNDLE_EXCLUDE_PATTERNS = [
     "reports/**/*.webp",
 ]
 
+SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS = [
+    "reports/support/diagnostics.json",
+    "reports/support/delivery_package_check.json",
+    "reports/support/final_acceptance_gate.json",
+    "reports/support/issue_closure_payload.json",
+    "reports/support/repository_cleanliness_payload.json",
+    "reports/support/windows_package_preflight.json",
+]
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -163,7 +172,7 @@ def build_support_bundle_manifest(base_dir: Path, candidate_paths: list[Path] | 
             base_dir / "data" / "growth_intelligence" / "growth_intelligence.db",
             base_dir / "reports" / "acceptance" / "action_submit_evidence" / "submit.png",
             base_dir / "logs" / "reachops.log",
-            base_dir / "reports" / "support" / "diagnostics.json",
+            *[base_dir / path for path in SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS],
         ]
     included: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
@@ -513,6 +522,7 @@ def verify_privacy_operation_audit(db_path: Path, *, workspace_id: str = "worksp
 
 def build_support_bundle_policy(base_dir: Path) -> dict[str, Any]:
     dry_run_manifest = build_support_bundle_manifest(base_dir)
+    included_paths = {str(item.get("relative_path") or "") for item in dry_run_manifest.get("included_files") or []}
     return {
         "default_redacted": True,
         "manifest_schema_version": SUPPORT_BUNDLE_MANIFEST_SCHEMA_VERSION,
@@ -536,6 +546,8 @@ def build_support_bundle_policy(base_dir: Path) -> dict[str, Any]:
             "proxy credentials",
             "account credentials",
         ],
+        "required_diagnostics": list(SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS),
+        "diagnostic_manifest_complete": all(path in included_paths for path in SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS),
         "dry_run_manifest": dry_run_manifest,
         "dry_run_manifest_passed": bool(dry_run_manifest.get("passed")),
     }
