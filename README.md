@@ -115,7 +115,7 @@ Issues #1-#7 商业交付闭环索引审计：
 python tools/reachops_issue_closure_audit.py --json
 ```
 
-该审计把 Issues #1-#7 映射到现有本地证据：CI/release baseline、`/api/start` contract、账号 readiness、授权/升级供应链、数据治理、WAQO/outcome funnel 和商业控制面边界。输出中的 `closure_requires_external_validation=true` 和 `does_not_claim_all_issues_closed=true` 表示本地合同可重复验收，但仍不能替代 GitHub issue 关闭、真实账号/真实平台试点、服务端 RBAC、connector GA 等外部验收。
+该审计把 Issues #1-#7 映射到现有本地证据：CI/release baseline、`/api/start` contract、账号 readiness、授权/升级供应链、数据治理、WAQO/outcome funnel 和商业控制面边界。它还展开 53 条 acceptance criteria，要求 `acceptance_criteria_unclassified=0`，并把每条标成 `local_passed` 或 `external_pending`。输出中的 `closure_requires_external_validation=true` 和 `does_not_claim_all_issues_closed=true` 表示本地合同可重复验收，但仍不能替代 GitHub issue 关闭、真实账号/真实平台试点、服务端 RBAC、connector GA、三家试点客户归因等外部验收。
 
 ## Windows 客户端
 

@@ -1875,6 +1875,8 @@ def run_audit(args) -> dict:
                 and issue_closure_fixture.get("status") == "passed_with_external_acceptance_pending"
                 and (issue_closure_fixture.get("summary") or {}).get("issues_total") == 7
                 and (issue_closure_fixture.get("summary") or {}).get("local_contracts_passed") == 7
+                and (issue_closure_fixture.get("summary") or {}).get("acceptance_criteria_total") == 53
+                and (issue_closure_fixture.get("summary") or {}).get("acceptance_criteria_unclassified") == 0
                 and (issue_closure_fixture.get("summary") or {}).get("external_pending_count", 0) >= 1
                 and (issue_closure_fixture.get("summary") or {}).get("does_not_claim_all_issues_closed") is True
                 and (issue_closure_fixture.get("github_issues") or {}).get("closure_requires_external_validation") is True
