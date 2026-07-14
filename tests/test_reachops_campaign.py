@@ -1059,9 +1059,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("issue_3_100_real_no_submit_runs_three_industries", external_criteria)
         self.assertIn("issue_6_three_pilot_customers_attribution_before_ga", external_criteria)
         self.assertIn("issue_7_server_side_roles_permissions_audited", external_criteria)
+        self.assertIn("issue_6_three_pilot_customers_attribution_before_ga", issues[6]["external_pending"])
         self.assertTrue(issues[1]["does_not_claim_issue_closed"])
         self.assertTrue(issues[3]["does_not_claim_issue_closed"])
+        self.assertTrue(issues[6]["does_not_claim_issue_closed"])
         self.assertTrue(issues[7]["does_not_claim_issue_closed"])
+        self.assertEqual(issues[6]["local_status"], "local_contract_passed_external_pending")
         issue_2_criteria = {row["id"]: row for row in issues[2]["acceptance_criteria"]}
         self.assertEqual(
             issue_2_criteria["issue_2_unittest_zero_failures_linux_windows"]["evidence_key"],

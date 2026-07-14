@@ -139,7 +139,12 @@ def _issue(
     acceptance_criteria: list[dict[str, Any]],
     external_pending: list[str] | None = None,
 ) -> dict[str, Any]:
-    pending = list(external_pending or [])
+    external_criteria = [
+        str(row.get("id"))
+        for row in acceptance_criteria
+        if row.get("status") == "external_pending" and str(row.get("id") or "").strip()
+    ]
+    pending = list(dict.fromkeys(list(external_pending or []) + external_criteria))
     unclassified = [row for row in acceptance_criteria if row.get("status") == "unclassified"]
     return {
         "issue_number": number,
