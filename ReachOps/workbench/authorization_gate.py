@@ -140,6 +140,13 @@ class LiveSubmitAuthorizationGate:
         audit = status.get("audit") if isinstance(status.get("audit"), dict) else {}
         if not str(audit.get("issued_by") or "").strip() or not str(audit.get("event_id") or "").strip():
             return blocked("LIVE_SUBMIT_ENTITLEMENT_INCOMPLETE", "signed entitlement is missing audit history")
+        if bool(audit.get("replay_detected")) or str(audit.get("nonce_status") or "").strip().lower() == "replayed":
+            return blocked(
+                "LIVE_SUBMIT_ENTITLEMENT_REPLAYED",
+                "signed entitlement audit history marks this payload as replayed",
+                audit_event_id=str(audit.get("event_id") or ""),
+                nonce_status=str(audit.get("nonce_status") or ""),
+            )
 
         registration = status.get("device_registration") if isinstance(status.get("device_registration"), dict) else {}
         registered_device_id = str(registration.get("device_id") or status.get("device_id") or "").strip()

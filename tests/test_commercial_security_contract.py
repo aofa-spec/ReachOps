@@ -253,6 +253,30 @@ class CommercialSecurityContractTest(unittest.TestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.error_code, "LIVE_SUBMIT_FEATURE_DISABLED")
 
+    def test_packaged_runtime_rejects_replayed_entitlement_payload(self):
+        with TemporaryDirectory() as td, patch.object(
+            LiveSubmitAuthorizationGate,
+            "is_packaged_runtime",
+            return_value=True,
+        ):
+            status_path = Path(td) / "reachops_activation_status.json"
+            signed = sign_payload(
+                active_entitlement(audit={"issued_by": "reachops-license-service", "event_id": "evt-1", "nonce_status": "replayed"}),
+                "k1",
+                "secret",
+                signature_field="entitlement_signature",
+            )
+            status_path.write_text(json.dumps(signed), encoding="utf-8")
+            gate = LiveSubmitAuthorizationGate(
+                str(status_path),
+                device_identity=StubDeviceIdentity,
+                entitlement_key_ring={"k1": "secret"},
+            )
+            decision = gate.authorize_live_submit({"action_type": "comment_reply"}, {"profile_id": "profile-1"})
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.error_code, "LIVE_SUBMIT_ENTITLEMENT_REPLAYED")
+
     def test_remote_http_update_manifest_is_rejected_before_network_access(self):
         manager = ReachOpsUpdateManager(current_version="0.4.0")
 

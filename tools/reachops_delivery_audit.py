@@ -29,6 +29,7 @@ from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
 from tools.reachops_data_governance import build_report as build_data_governance_report
+from tools.reachops_security_supply_chain_audit import build_report as build_security_supply_chain_report
 from tools.reachops_outcome_metrics import build_report as build_outcome_metrics_report
 from tools.reachops_outcome_metrics import import_outcomes_csv as import_outcomes_csv_fixture
 from tools.reachops_live_submit_acceptance import run_acceptance as run_live_submit_acceptance
@@ -1740,6 +1741,7 @@ def run_audit(args) -> dict:
     packaging_update_fixture = run_packaging_update_fixture()
     outcome_metrics_fixture = run_outcome_metrics_fixture()
     data_governance_fixture = run_data_governance_fixture()
+    security_supply_chain_fixture = build_security_supply_chain_report()
     client_delivery_gate = run_client_delivery_gate_fixture()
     web_local_api_architecture = run_web_local_api_architecture_fixture()
     web_panel_dom_smoke = run_web_panel_dom_smoke()
@@ -2185,6 +2187,20 @@ def run_audit(args) -> dict:
                 and data_governance_fixture.get("recovery_objectives", {}).get("schema_version") == "reachops.recovery_objectives.v1"
             ),
             data_governance_fixture,
+        ),
+        check(
+            "打包授权和更新供应链安全矩阵通过",
+            bool(
+                security_supply_chain_fixture.get("passed")
+                and security_supply_chain_fixture.get("schema_version") == "reachops.security_supply_chain_audit.v1"
+                and security_supply_chain_fixture.get("entitlement", {}).get("cases", {}).get("replay_detected", {}).get("error_code") == "LIVE_SUBMIT_ENTITLEMENT_REPLAYED"
+                and security_supply_chain_fixture.get("entitlement", {}).get("key_rotation", {}).get("retired_key_rejected") is True
+                and security_supply_chain_fixture.get("update_supply_chain", {}).get("installer_verified") is True
+                and security_supply_chain_fixture.get("update_supply_chain", {}).get("http_manifest_rejected") is True
+                and security_supply_chain_fixture.get("update_supply_chain", {}).get("downgrade_without_rollback_blocked") is True
+                and security_supply_chain_fixture.get("update_supply_chain", {}).get("explicit_rollback_available") is True
+            ),
+            security_supply_chain_fixture,
         ),
         check("独立配置/数据/授权目录存在", all(Path(path).exists() for path in [paths.data_dir, paths.config_dir, paths.logs_dir]), {"data_dir": paths.data_dir, "config_dir": paths.config_dir, "activation_status_path": paths.activation_status_path}),
         check("Windows 打包入口存在", all((ROOT_DIR / path).exists() for path in ["ReachOps/packaging/reachops.spec", "ReachOps/packaging/ReachOps.iss", "tools/build_reachops_windows.ps1"]), {"version": VERSION}),

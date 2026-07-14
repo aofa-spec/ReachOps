@@ -74,6 +74,7 @@ from tools.verify_reachops_acceptance_summary import verify_summary as verify_re
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
 from tools.reachops_data_governance import build_report as build_reachops_data_governance_report
+from tools.reachops_security_supply_chain_audit import build_report as build_reachops_security_supply_chain_report
 from tools.reachops_outcome_metrics import (
     build_report as build_reachops_outcome_metrics_report,
     import_outcomes_csv as import_reachops_outcomes_csv,
@@ -2934,6 +2935,32 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(report["pilot_report"]["precision"], 0.5)
             self.assertEqual(report["pilot_report"]["cost_per_accepted_opportunity"], 90.0)
 
+    def test_reachops_security_supply_chain_audit_covers_entitlement_and_update_manifest(self):
+        report = build_reachops_security_supply_chain_report()
+
+        self.assertEqual(report["schema_version"], "reachops.security_supply_chain_audit.v1")
+        self.assertTrue(report["passed"])
+        entitlement = report["entitlement"]
+        self.assertEqual(entitlement["schema_version"], "reachops.entitlement_security_matrix.v1")
+        self.assertTrue(entitlement["cases"]["valid_signed"]["allowed"])
+        self.assertTrue(entitlement["cases"]["rotated_new_key"]["allowed"])
+        self.assertFalse(entitlement["cases"]["retired_old_key"]["allowed"])
+        self.assertEqual(entitlement["cases"]["retired_old_key"]["signature_reason"], "signature_key_unknown")
+        self.assertEqual(entitlement["cases"]["replay_detected"]["error_code"], "LIVE_SUBMIT_ENTITLEMENT_REPLAYED")
+        self.assertEqual(entitlement["cases"]["revoked"]["error_code"], "LIVE_SUBMIT_ENTITLEMENT_REVOKED")
+        self.assertEqual(entitlement["revocation_sla_hours"], 24)
+        update = report["update_supply_chain"]
+        self.assertEqual(update["schema_version"], "reachops.update_supply_chain_matrix.v1")
+        self.assertTrue(update["signature_valid"])
+        self.assertTrue(update["installer_verified"])
+        self.assertTrue(update["tampered_manifest_rejected"])
+        self.assertTrue(update["bad_installer_hash_or_size_rejected"])
+        self.assertTrue(update["http_manifest_rejected"])
+        self.assertTrue(update["https_signed_manifest_loaded"])
+        self.assertTrue(update["downgrade_without_rollback_blocked"])
+        self.assertTrue(update["explicit_rollback_available"])
+        self.assertIn("manifest_signature", update["verified_fields"])
+
     def test_reachops_delivery_package_check_rejects_external_summary_and_manifest_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
@@ -5482,6 +5509,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         dependency_license_inventory = (root / "ReachOps" / "packaging" / "dependency-license-inventory.json").read_text(encoding="utf-8")
         dependency_baseline_verifier = (root / "tools" / "verify_reachops_dependency_baseline.py").read_text(encoding="utf-8")
         data_governance = (root / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
+        security_supply_chain_audit = (root / "tools" / "reachops_security_supply_chain_audit.py").read_text(encoding="utf-8")
         data_migrations = (root / "ReachOps" / "intelligence" / "migrations.py").read_text(encoding="utf-8")
         outcome_metrics = (root / "tools" / "reachops_outcome_metrics.py").read_text(encoding="utf-8")
         storage = (root / "ReachOps" / "intelligence" / "storage.py").read_text(encoding="utf-8")
@@ -5889,6 +5917,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("--verify-privacy-ops", data_governance)
         self.assertIn("versioned_forward_migrations_with_documented_rollback", data_governance)
         self.assertIn("SCHEMA_MIGRATION_TABLE", data_governance)
+        self.assertIn("reachops.security_supply_chain_audit.v1", security_supply_chain_audit)
+        self.assertIn("reachops.entitlement_security_matrix.v1", security_supply_chain_audit)
+        self.assertIn("reachops.update_supply_chain_matrix.v1", security_supply_chain_audit)
+        self.assertIn("REVOCATION_SLA_HOURS", security_supply_chain_audit)
+        self.assertIn("LIVE_SUBMIT_ENTITLEMENT_REPLAYED", security_supply_chain_audit)
+        self.assertIn("downgrade_without_rollback_blocked", security_supply_chain_audit)
         self.assertIn("SchemaMigration", data_migrations)
         self.assertIn("20260714_0001_data_privacy_audit", data_migrations)
         self.assertIn("20260714_0002_lead_outcomes", data_migrations)
@@ -5989,6 +6023,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("manifest_signature", reachops_readme)
         self.assertIn("rollback_policy.allow_downgrade=true", reachops_readme)
         self.assertIn("entitlement_signature", reachops_readme)
+        self.assertIn("reachops_security_supply_chain_audit.py --json", reachops_readme)
+        self.assertIn("replay", reachops_readme)
+        self.assertIn("installer hash/size", reachops_readme)
         self.assertIn("schema_migrations", reachops_readme)
         self.assertIn("data_privacy_audit", reachops_readme)
         self.assertIn("reachops_data_governance.py --create-missing-db --verify-backup --verify-privacy-ops --json", reachops_readme)

@@ -109,6 +109,14 @@ powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1 -SkipI
 
 商业运行时的真实触达授权必须来自服务端签发的 `entitlement_signature`。打包运行时会拒绝 unsigned、过期、设备不匹配、撤销、离线宽限过期、超并发设备限制或被紧急禁用的 entitlement；源码开发环境仍可使用无提交的模板和本地 blocked 报告做测试。
 
+本地供应链审计命令：
+
+```bash
+python tools/reachops_security_supply_chain_audit.py --json
+```
+
+该检查会验证 packaged entitlement 的 key rotation、retired key 拒绝、revocation SLA、replay 标记拒绝、设备绑定、离线宽限、超并发设备限制和紧急禁用；同时验证 update manifest 的 HTTPS、`manifest_signature`、installer hash/size、product/channel/version 和 rollback/downgrade 策略。
+
 ## 数据治理、迁移和恢复
 
 SQLite schema 迁移由 `ReachOps/intelligence/migrations.py` 注册，运行时初始化会写入 `schema_migrations`，并记录每个迁移的 checksum、rollback policy 和应用时间。隐私操作审计写入 `data_privacy_audit`，用于 export、delete、legal hold、backup 和 restore 证据。
