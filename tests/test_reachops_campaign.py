@@ -892,6 +892,62 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("ten_consecutive_ci_runs_without_code_failure", report["external_governance_pending"])
         self.assertTrue(report["does_not_claim_branch_protection"])
         self.assertTrue(report["does_not_claim_ten_green_ci_runs"])
+        self.assertFalse(report["github_governance"]["checked"])
+
+    def test_reachops_ci_release_baseline_audit_records_branch_protection_unavailable(self):
+        report = build_reachops_ci_release_baseline_report(
+            run_pip=False,
+            github_governance={
+                "branch_protection": {
+                    "available": False,
+                    "status": "403",
+                    "message": "Upgrade to GitHub Pro or make this repository public to enable this feature.",
+                },
+                "workflow_runs": [
+                    {"status": "completed", "conclusion": "success"},
+                    {"status": "completed", "conclusion": "success"},
+                ],
+            },
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertTrue(report["github_governance"]["checked"])
+        self.assertFalse(report["github_governance"]["branch_protection"]["available"])
+        self.assertIn("main_branch_protection_requires_pr_review", report["external_governance_pending"])
+        self.assertIn("main_branch_protection_requires_successful_checks", report["external_governance_pending"])
+        self.assertIn("ten_consecutive_ci_runs_without_code_failure", report["external_governance_pending"])
+        self.assertEqual(
+            report["external_governance_blockers"][0]["name"],
+            "branch_protection_unavailable",
+        )
+        self.assertTrue(report["does_not_claim_branch_protection"])
+
+    def test_reachops_ci_release_baseline_audit_accepts_verified_github_governance(self):
+        report = build_reachops_ci_release_baseline_report(
+            run_pip=False,
+            github_governance={
+                "branch_protection": {
+                    "available": True,
+                    "payload": {
+                        "required_pull_request_reviews": {"required_approving_review_count": 1},
+                        "required_status_checks": {
+                            "contexts": [
+                                "Linux full unit suite (Python 3.11)",
+                                "Windows core contracts (Python 3.11)",
+                                "Deterministic delivery audits",
+                            ]
+                        },
+                    },
+                },
+                "workflow_runs": [{"status": "completed", "conclusion": "success"} for _ in range(10)],
+            },
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["external_governance_pending"], [])
+        self.assertFalse(report["does_not_claim_branch_protection"])
+        self.assertFalse(report["does_not_claim_ten_green_ci_runs"])
+        self.assertTrue(all(row["status"] == "passed" for row in report["external_governance_gates"]))
 
     def test_reachops_account_readiness_audit_declares_no_submit_and_external_pilot_boundary(self):
         report = build_reachops_account_readiness_report()
