@@ -672,6 +672,110 @@ def infer_start_contract_from_runtime_log(no_action_reason: dict[str, Any] | Non
     }
 
 
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def build_local_mvp_blocker(
+    mvp: dict[str, Any],
+    mac_loop: dict[str, Any],
+    client: dict[str, Any],
+    clean: dict[str, Any],
+) -> dict[str, Any]:
+    status = mac_loop.get("status") or mvp.get("status") or client.get("status") or clean.get("status")
+    failed_checks = (
+        _string_list(mvp.get("failed_checks"))
+        + _string_list(mac_loop.get("failed_checks"))
+        + _string_list(client.get("failed_checks"))
+        + _string_list(clean.get("failed_checks"))
+    )
+    real_pilot = client.get("real_pilot_evidence") if isinstance(client.get("real_pilot_evidence"), dict) else {}
+    account_handoff = (
+        client.get("account_support_handoff") if isinstance(client.get("account_support_handoff"), dict) else {}
+    )
+    account_resolution = (
+        client.get("account_blocker_resolution")
+        if isinstance(client.get("account_blocker_resolution"), dict)
+        else {}
+    )
+    external_pending = _string_list(real_pilot.get("external_acceptance_pending")) + _string_list(
+        client.get("external_acceptance_pending")
+    )
+
+    blocker = {
+        "scope": "local_mvp",
+        "status": status,
+        "classification": "local_mvp_contract_or_runtime_failure",
+        "failed_checks": failed_checks,
+        "mac_loop_checks": mac_loop.get("checks") or {},
+        "next_actions": mac_loop.get("next_actions") or [],
+        "action": "修复 Mac 本地自动循环、客户端门禁或项目清洁度失败项。",
+        "does_not_claim_local_mvp_ready": True,
+    }
+
+    account_pool_blocked = bool(account_handoff or account_resolution) or str(client.get("readiness") or "") in {
+        "blocked_by_accounts",
+        "blocked_by_environment",
+    }
+    if account_pool_blocked:
+        retest_commands = _string_list(account_handoff.get("retest_commands"))
+        acceptance_required = _string_list(account_handoff.get("acceptance_required"))
+        support_summary = {
+            "schema_version": "reachops.local_mvp_account_pool_blocker.v1",
+            "status": account_handoff.get("status") or account_resolution.get("status") or client.get("status"),
+            "support_required": bool(account_handoff.get("support_required", True)),
+            "support_case": account_handoff.get("support_case") or "account_pool_blocked",
+            "profile_group": account_handoff.get("profile_group") or account_resolution.get("profile_group"),
+            "batch_id": account_handoff.get("batch_id") or account_resolution.get("batch_id") or client.get("batch_id"),
+            "priority_action": account_handoff.get("priority_action") or account_resolution.get("priority_action"),
+            "ready_for_retest": bool(account_handoff.get("ready_for_retest") or account_resolution.get("ready_for_retest")),
+            "requires_latest_repair_apply": bool(
+                account_handoff.get("requires_latest_repair_apply")
+                or account_resolution.get("requires_latest_repair_apply")
+            ),
+            "requires_manual_account_work": bool(
+                account_handoff.get("requires_manual_account_work")
+                or account_resolution.get("requires_manual_account_work")
+            ),
+            "does_not_claim_real_account_pool_ready": True,
+            "external_acceptance_pending": external_pending,
+            "retest_commands": retest_commands,
+            "acceptance_required": acceptance_required,
+            "next_required_command": retest_commands[0] if retest_commands else "python tools\\reachops_client_delivery_check.py --json",
+        }
+        if account_resolution:
+            support_summary["blocker_codes"] = _string_list(account_resolution.get("blocker_codes"))
+            support_summary["profile_available"] = account_resolution.get("profile_available")
+        if account_handoff:
+            support_summary["repair_plan"] = account_handoff.get("repair_plan") or {}
+            support_summary["latest_apply"] = account_handoff.get("latest_apply") or {}
+
+        blocker.update(
+            {
+                "classification": "account_pool_external_validation",
+                "external_acceptance_pending": external_pending,
+                "account_blocker_resolution": account_resolution,
+                "account_support_handoff": account_handoff,
+                "blocker_summary": support_summary,
+                "next_actions": _string_list(account_handoff.get("operator_steps"))
+                or mac_loop.get("next_actions")
+                or [],
+                "action": "按账号支持交接修复或替换真实账号池，然后复跑客户端交付门禁和目标模式总门禁。",
+            }
+        )
+    elif external_pending:
+        blocker.update(
+            {
+                "classification": "external_validation_pending",
+                "external_acceptance_pending": external_pending,
+                "action": "补齐外部验收输入和真实运行证据后复跑目标模式总门禁。",
+            }
+        )
+    return blocker
+
+
 def build_report() -> dict[str, Any]:
     sections = run_sections(build_section_commands(sys.executable))
     section_timeouts = _timed_out_sections(sections)
@@ -707,15 +811,7 @@ def build_report() -> dict[str, Any]:
             }
         )
     if not local_ready:
-        blockers.append(
-            {
-                "scope": "local_mvp",
-                "status": mac_loop.get("status") or mvp.get("status") or client.get("status") or clean.get("status"),
-                "mac_loop_checks": mac_loop.get("checks") or {},
-                "next_actions": mac_loop.get("next_actions") or [],
-                "action": "修复 Mac 本地自动循环、客户端门禁或项目清洁度失败项。",
-            }
-        )
+        blockers.append(build_local_mvp_blocker(mvp, mac_loop, client, clean))
     if not windows_build_ready:
         blockers.append(
             {

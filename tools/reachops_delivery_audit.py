@@ -573,6 +573,7 @@ def run_web_local_api_architecture_fixture() -> dict:
     live_submit_acceptance = (ROOT_DIR / "tools" / "reachops_live_submit_acceptance.py").read_text(encoding="utf-8")
     client_acceptance = (ROOT_DIR / "tools" / "reachops_client_acceptance_status.py").read_text(encoding="utf-8")
     client_delivery_check = (ROOT_DIR / "tools" / "reachops_client_delivery_check.py").read_text(encoding="utf-8")
+    goal_delivery_runner = (ROOT_DIR / "tools" / "reachops_goal_delivery_runner.py").read_text(encoding="utf-8")
     schemas = (ROOT_DIR / "ReachOps" / "intelligence" / "schemas.py").read_text(encoding="utf-8")
     error_diagnostics = (ROOT_DIR / "ReachOps" / "workbench" / "error_diagnostics.py").read_text(encoding="utf-8")
     app_entry = (ROOT_DIR / "ReachOpsApp.py").read_text(encoding="utf-8")
@@ -772,6 +773,12 @@ def run_web_local_api_architecture_fixture() -> dict:
         and "retest_commands" in client_delivery_check
         and "apply_alone_is_not_acceptance" in client_delivery_check
         and "does_not_claim_real_account_pool_ready" in client_delivery_check,
+        "goal_delivery_surfaces_account_support_handoff_blocker": "build_local_mvp_blocker" in goal_delivery_runner
+        and "reachops.local_mvp_account_pool_blocker.v1" in goal_delivery_runner
+        and "account_pool_external_validation" in goal_delivery_runner
+        and "account_support_handoff" in goal_delivery_runner
+        and "does_not_claim_local_mvp_ready" in goal_delivery_runner
+        and "does_not_claim_real_account_pool_ready" in goal_delivery_runner,
         "client_gate_human_output_has_repair_loop": "account_repair_summary_lines" in client_delivery_check and "action=" in client_delivery_check and "after_repair_acceptance=" in client_delivery_check and "account_repair_safety=" in client_delivery_check and "no_submit" in client_delivery_check and "after_repair_commands=" in client_delivery_check and "account_repair_summary" in client_delivery_check,
         "web_activation_status_visible_to_operator": "parsed.path == \"/api/activation\"" in web_ui and "build_activation_payload" in web_ui and "activationState" in web_ui and "refreshActivation" in web_ui,
         "web_final_status_visible_to_operator": "parsed.path == \"/api/final-status\"" in web_ui and "build_final_status_payload" in web_ui and "finalStatusState" in web_ui and "finalStatusActions" in web_ui and "finalStatusCommands" in web_ui and "next_required_actions" in web_ui and "verification_commands" in web_ui and "refreshFinalStatus" in web_ui,

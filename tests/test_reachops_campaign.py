@@ -94,6 +94,7 @@ from tools.reachops_goal_delivery_runner import command_payload as reachops_goal
 from tools.reachops_goal_delivery_runner import run_sections as run_reachops_goal_delivery_sections
 from tools.reachops_goal_delivery_runner import build_delivery_boundary as build_reachops_delivery_boundary
 from tools.reachops_goal_delivery_runner import build_deliverable_index as build_reachops_deliverable_index
+from tools.reachops_goal_delivery_runner import build_local_mvp_blocker as build_reachops_local_mvp_blocker
 from tools.reachops_goal_delivery_runner import render_markdown_summary as render_reachops_goal_delivery_summary
 from tools.reachops_repository_cleanliness_check import scan_repository_cleanliness
 from tools.reachops_windows_package_preflight import build_preflight as build_reachops_windows_package_preflight
@@ -2832,6 +2833,81 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(sections["mac_loop_acceptance"]["timeout_seconds"], 45)
         self.assertEqual(sections["client_delivery"]["payload"]["script"], "python client.py")
         self.assertEqual(sections["final_gate"]["payload"]["script"], "python final.py")
+
+    def test_reachops_goal_delivery_local_mvp_blocker_surfaces_account_support_handoff(self):
+        blocker = build_reachops_local_mvp_blocker(
+            mvp={"status": "mvp_accepted_external_pending", "failed_checks": []},
+            mac_loop={"status": "passed", "mac_loop_ready": True, "checks": {}, "next_actions": []},
+            client={
+                "status": "blocked_by_accounts",
+                "readiness": "blocked_by_accounts",
+                "batch_id": "gb_account_blocked",
+                "failed_checks": ["acceptance:ready"],
+                "real_pilot_evidence": {
+                    "external_acceptance_pending": [
+                        "profile_available_zero",
+                        "candidate_count_zero",
+                    ]
+                },
+                "account_blocker_resolution": {
+                    "status": "stale_repair_apply",
+                    "profile_group": "United States",
+                    "batch_id": "gb_account_blocked",
+                    "profile_available": 0,
+                    "priority_action": "manually_repair_or_replace_accounts",
+                    "requires_manual_account_work": True,
+                    "does_not_claim_real_account_pool_ready": True,
+                    "blocker_codes": ["account_repair_plan_has_no_auto_applicable_profiles"],
+                },
+                "account_support_handoff": {
+                    "schema_version": "reachops.account_support_handoff.v1",
+                    "status": "stale_repair_apply",
+                    "support_required": True,
+                    "support_case": "account_pool_blocked",
+                    "profile_group": "United States",
+                    "batch_id": "gb_account_blocked",
+                    "priority_action": "manually_repair_or_replace_accounts",
+                    "ready_for_retest": False,
+                    "requires_manual_account_work": True,
+                    "does_not_claim_real_account_pool_ready": True,
+                    "operator_steps": ["手动修复或替换账号池。"],
+                    "retest_commands": [
+                        "python tools\\reachops_client_delivery_check.py --json",
+                        "python tools\\reachops_goal_delivery_runner.py --json",
+                    ],
+                    "acceptance_required": [
+                        "client_delivery.status=passed",
+                        "goal_delivery.local_mvp_ready=true",
+                    ],
+                },
+            },
+            clean={"status": "passed", "passed": True},
+        )
+
+        self.assertEqual(blocker["scope"], "local_mvp")
+        self.assertEqual(blocker["classification"], "account_pool_external_validation")
+        self.assertTrue(blocker["does_not_claim_local_mvp_ready"])
+        self.assertIn("acceptance:ready", blocker["failed_checks"])
+        self.assertEqual(blocker["external_acceptance_pending"], ["profile_available_zero", "candidate_count_zero"])
+        self.assertEqual(blocker["account_support_handoff"]["support_case"], "account_pool_blocked")
+        self.assertEqual(
+            blocker["blocker_summary"]["schema_version"],
+            "reachops.local_mvp_account_pool_blocker.v1",
+        )
+        self.assertEqual(blocker["blocker_summary"]["support_case"], "account_pool_blocked")
+        self.assertEqual(blocker["blocker_summary"]["priority_action"], "manually_repair_or_replace_accounts")
+        self.assertTrue(blocker["blocker_summary"]["requires_manual_account_work"])
+        self.assertTrue(blocker["blocker_summary"]["does_not_claim_real_account_pool_ready"])
+        self.assertIn(
+            "account_repair_plan_has_no_auto_applicable_profiles",
+            blocker["blocker_summary"]["blocker_codes"],
+        )
+        self.assertEqual(
+            blocker["blocker_summary"]["next_required_command"],
+            "python tools\\reachops_client_delivery_check.py --json",
+        )
+        self.assertIn("手动修复或替换账号池。", blocker["next_actions"])
+        self.assertIn("账号支持交接", blocker["action"])
 
     def test_reachops_goal_delivery_report_surfaces_section_timeouts(self):
         def section(payload, returncode=0, *, timed_out=False, timeout_seconds=10):
