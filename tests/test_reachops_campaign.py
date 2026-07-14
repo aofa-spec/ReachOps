@@ -1957,7 +1957,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
         weak_inner_evidence_package = final_package_check_payload()
         weak_inner_evidence_package["artifacts"]["installer"]["size"] = 0
-        weak_inner_evidence_package["report_files"]["live_submit"]["exists"] = False
+        weak_inner_evidence_package["report_files"]["authorization_handoff"]["exists"] = False
         weak_inner_evidence_package["acceptance_verification"] = {"passed": False, "failures": ["live_submit_missing"], "pending": []}
         weak_inner_evidence_report = build_reachops_live_environment_blocker_report(
             evidenced_preflight_summary,
@@ -6222,6 +6222,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("artifacts_ready", live_environment_blocker_script)
         self.assertIn("manifest_ready", live_environment_blocker_script)
         self.assertIn("report_files_ready", live_environment_blocker_script)
+        self.assertIn("authorization_handoff", live_environment_blocker_script)
         self.assertIn("windows_package_preflight", live_environment_blocker_script)
         self.assertIn("acceptance_verification_ready", live_environment_blocker_script)
         self.assertIn("package_final_gate_summary_ready", live_environment_blocker_script)
