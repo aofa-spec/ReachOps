@@ -742,6 +742,31 @@ def final_package_check_payload():
     }
 
 
+def final_issue_closure_payload():
+    return {
+        "schema_version": "reachops.issue_closure_audit.v1",
+        "status": "passed",
+        "passed": True,
+        "github_issues": {
+            "range": "#1-#7",
+            "expected_open_until_external_acceptance": False,
+            "closure_requires_external_validation": False,
+        },
+        "summary": {
+            "issues_total": 7,
+            "local_contracts_passed": 7,
+            "acceptance_criteria_total": 53,
+            "acceptance_criteria_local_passed": 53,
+            "acceptance_criteria_external_pending": 0,
+            "acceptance_criteria_unclassified": 0,
+            "external_pending_count": 0,
+            "does_not_claim_all_issues_closed": False,
+        },
+        "issues": [],
+        "external_acceptance_pending": [],
+    }
+
+
 def final_client_delivery_payload(path: str):
     return {
         "status": "passed",
@@ -2128,6 +2153,25 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         "build_contract": {"preflight_report_path": "/tmp/windows_package_preflight.json"},
                     }
                 )
+            if "reachops_issue_closure_audit.py" in script:
+                return section(
+                    {
+                        "schema_version": "reachops.issue_closure_audit.v1",
+                        "status": "passed_with_external_acceptance_pending",
+                        "passed": True,
+                        "github_issues": {"closure_requires_external_validation": True},
+                        "summary": {
+                            "issues_total": 7,
+                            "local_contracts_passed": 7,
+                            "acceptance_criteria_total": 53,
+                            "acceptance_criteria_local_passed": 36,
+                            "acceptance_criteria_external_pending": 17,
+                            "acceptance_criteria_unclassified": 0,
+                            "external_pending_count": 36,
+                        },
+                        "external_acceptance_pending": ["issue_3_100_real_no_submit_runs_three_industries"],
+                    }
+                )
             if "reachops_delivery_package_check.py" in script:
                 return section(
                     {
@@ -2194,6 +2238,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("local_mvp", scopes)
         self.assertIn("windows_final_artifacts", scopes)
         self.assertIn("external_authorized_execution", scopes)
+        self.assertIn("commercial_issue_closure", scopes)
         final_blockers = {row["scope"]: row for row in report["final_delivery_blockers"]}
         self.assertIn("windows_final_artifacts", final_blockers)
         self.assertIn("external_authorized_execution", final_blockers)
@@ -2208,6 +2253,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("mvp_acceptance", report["sections"])
         self.assertIn("mac_loop_acceptance", report["sections"])
         self.assertIn("windows_package_preflight", report["sections"])
+        self.assertIn("issue_closure", report["sections"])
         self.assertIn("final_gate", report["sections"])
         local_evidence = report["local_mvp_evidence"]
         self.assertIn("operation_counts", local_evidence)
@@ -2265,6 +2311,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(index["windows_final_package"]["ready"])
         self.assertFalse(index["final_acceptance_gate"]["ready"])
         self.assertFalse(index["authorized_live_submit"]["ready"])
+        self.assertFalse(index["commercial_issue_closure"]["ready"])
+        self.assertEqual(index["commercial_issue_closure"]["blocking_scope"], "commercial_issue_closure")
+        self.assertEqual(index["commercial_issue_closure"]["acceptance_criteria_total"], 53)
+        self.assertEqual(index["commercial_issue_closure"]["acceptance_criteria_external_pending"], 17)
         self.assertEqual(index["windows_final_package"]["blocking_scope"], "windows_final_artifacts")
         self.assertIn("exe", index["windows_final_package"]["missing_artifacts"])
         self.assertIn("acceptance_summary", index["windows_final_package"]["missing_artifacts"])
@@ -2281,6 +2331,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("authorization_handoff", markdown)
         self.assertIn("`windows_final_package` | `false`", markdown)
         self.assertIn("`authorized_live_submit` | `false`", markdown)
+        self.assertIn("`commercial_issue_closure` | `false`", markdown)
         self.assertIn("本地 MVP 可验收不等于最终客户交付完成", markdown)
 
     def test_reachops_goal_delivery_does_not_mark_live_submit_ready_without_final_gate_evidence(self):
@@ -2296,6 +2347,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             final_gate={},
             clean={"status": "passed", "passed": True},
             blockers=blockers,
+            issue_closure={"status": "passed_with_external_acceptance_pending", "passed": True, "github_issues": {"closure_requires_external_validation": True}, "summary": {"acceptance_criteria_total": 53, "acceptance_criteria_external_pending": 17, "acceptance_criteria_unclassified": 0, "external_pending_count": 36}},
         )
         boundary = build_reachops_delivery_boundary(
             local_ready=False,
@@ -2310,6 +2362,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
         self.assertFalse(index["authorized_live_submit"]["ready"])
         self.assertEqual(index["authorized_live_submit"]["blocking_scope"], "external_authorized_execution")
+        self.assertFalse(index["commercial_issue_closure"]["ready"])
+        self.assertEqual(index["commercial_issue_closure"]["blocking_scope"], "commercial_issue_closure")
         self.assertFalse(boundary["external_authorized_execution_ready"])
 
     def test_reachops_delivery_package_check_validates_artifacts_manifest_and_reports(self):
@@ -3163,6 +3217,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "artifacts": {"acceptance_summary": {"path": "reports/reachops_acceptance/acceptance_summary.json", "exists": False}},
                 "report_files": {"final_acceptance_gate": {"path": "", "exists": False}},
             },
+            issue_closure={
+                "schema_version": "reachops.issue_closure_audit.v1",
+                "status": "passed_with_external_acceptance_pending",
+                "passed": True,
+                "github_issues": {"closure_requires_external_validation": True},
+                "summary": {
+                    "issues_total": 7,
+                    "local_contracts_passed": 7,
+                    "acceptance_criteria_total": 53,
+                    "acceptance_criteria_local_passed": 36,
+                    "acceptance_criteria_external_pending": 17,
+                    "acceptance_criteria_unclassified": 0,
+                    "external_pending_count": 36,
+                },
+                "external_acceptance_pending": ["issue_3_100_real_no_submit_runs_three_industries"],
+            },
             delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 41, "pending_external_validation": 3}},
             operator_pressure={"status": "ok", "summary": {"customer_leads": 108, "outreach_actions": 216}},
         )
@@ -3172,6 +3242,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("goal_status:passed", gate["failed_checks"])
         self.assertIn("client_delivery:final_ready", gate["failed_checks"])
         self.assertIn("delivery_package:passed", gate["failed_checks"])
+        self.assertIn("commercial_issue_closure:closed", gate["failed_checks"])
         checks_by_name = {row["name"]: row for row in gate["checks"]}
         self.assertEqual(
             checks_by_name["client_delivery:final_ready"]["evidence"]["delivery_check_path"],
@@ -3184,6 +3255,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("external_authorized_execution", blockers)
         self.assertIn("client_delivery_gate", blockers)
         self.assertIn("windows_final_artifacts", blockers)
+        self.assertIn("commercial_issue_closure", blockers)
         self.assertIn("acceptance_summary", blockers["windows_final_artifacts"]["missing_artifacts"])
         evidence_plan = gate["final_delivery_evidence_plan"]
         self.assertEqual(evidence_plan["schema_version"], "reachops.final_delivery_evidence_plan.v1")
@@ -3191,11 +3263,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("external_authorized_execution", evidence_plan["pending_scopes"])
         self.assertIn("client_delivery_gate", evidence_plan["pending_scopes"])
         self.assertIn("windows_final_artifacts", evidence_plan["pending_scopes"])
+        self.assertIn("commercial_issue_closure", evidence_plan["pending_scopes"])
         plan_items = {row["scope"]: row for row in evidence_plan["items"]}
         self.assertIn("goal_status.pending_external_validation=[]", plan_items["external_authorized_execution"]["proof_fields"])
         self.assertIn("client_delivery.final_delivery_ready=true", plan_items["client_delivery_gate"]["proof_fields"])
         self.assertIn("delivery_package.final_delivery_ready=true", plan_items["windows_final_artifacts"]["proof_fields"])
         self.assertIn("dist\\ReachOps\\ReachOps.exe", plan_items["windows_final_artifacts"]["required_artifacts"])
+        self.assertIn("issue_closure.summary.acceptance_criteria_external_pending=0", plan_items["commercial_issue_closure"]["proof_fields"])
         self.assertTrue(any("Windows 实机生成" in item for item in gate["next_actions"]))
 
     def test_reachops_final_acceptance_gate_passes_only_when_all_final_evidence_is_ready(self):
@@ -3210,6 +3284,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 },
                 client_delivery=client_payload,
                 package_check=final_package_check_payload(),
+                issue_closure=final_issue_closure_payload(),
                 delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
                 operator_pressure={"status": "ok", "summary": {"customer_leads": 108, "outreach_actions": 216}},
             )
@@ -3525,8 +3600,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     with patch("tools.reachops_final_acceptance_gate.build_goal_status_report", return_value=goal_payload) as goal_mock:
                         with patch("tools.reachops_final_acceptance_gate.build_delivery_check", return_value=client_payload):
                             with patch("tools.reachops_final_acceptance_gate.check_delivery_package", return_value=package_payload):
-                                with redirect_stdout(stdout):
-                                    exit_code = reachops_final_acceptance_gate_main(["--root", tmp, "--json"])
+                                with patch(
+                                    "tools.reachops_final_acceptance_gate.build_issue_closure_report",
+                                    return_value=final_issue_closure_payload(),
+                                ) as issue_mock:
+                                    with redirect_stdout(stdout):
+                                        exit_code = reachops_final_acceptance_gate_main(["--root", tmp, "--json"])
 
             payload = json.loads(stdout.getvalue())
             check_names = [row["name"] for row in payload["checks"]]
@@ -3534,9 +3613,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(payload["status"], "passed")
             self.assertIn("delivery_audit:no_failed_checks", check_names)
             self.assertIn("operator_pressure:leads_and_actions", check_names)
+            self.assertIn("commercial_issue_closure:closed", check_names)
             audit_mock.assert_called_once()
             pressure_mock.assert_called_once()
             goal_mock.assert_called_once_with(audit_payload, client_delivery=client_payload)
+            issue_mock.assert_called_once()
 
     def test_reachops_final_acceptance_gate_default_audit_failure_returns_json(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -6215,6 +6296,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_issue_closure_audit.py --json", readme)
         self.assertIn("Issues #1-#7", readme)
         self.assertIn("closure_requires_external_validation", readme)
+        self.assertIn("commercial_issue_closure", readme)
+        self.assertIn("acceptance_criteria_external_pending=0", readme)
         self.assertIn("init_reachops_acceptance_inputs.py --json", readme)
         self.assertIn("init_reachops_acceptance_inputs_windows.ps1", readme)
         self.assertIn("-InputFile .\\tools\\reachops_acceptance_inputs.local.ps1", readme)

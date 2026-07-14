@@ -301,6 +301,7 @@ def build_deliverable_index(
     final_gate: dict[str, Any],
     clean: dict[str, Any],
     blockers: list[dict[str, Any]],
+    issue_closure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blocker_by_scope = {str(row.get("scope") or ""): row for row in blockers if isinstance(row, dict)}
     windows_blocker = blocker_by_scope.get("windows_final_artifacts", {})
@@ -314,6 +315,16 @@ def build_deliverable_index(
     )
     pending_external = final_gate_pending_external_validation(final_gate)
     authorized_live_ready = final_gate_authorized_live_submit_ready(final_gate)
+    issue_summary = (issue_closure or {}).get("summary") if isinstance((issue_closure or {}).get("summary"), dict) else {}
+    issue_closure_ready = bool(
+        issue_closure
+        and issue_closure.get("passed")
+        and int(issue_summary.get("acceptance_criteria_total") or 0) == 53
+        and int(issue_summary.get("acceptance_criteria_unclassified") or 0) == 0
+        and int(issue_summary.get("acceptance_criteria_external_pending") or 0) == 0
+        and int(issue_summary.get("external_pending_count") or 0) == 0
+        and (issue_closure.get("github_issues") or {}).get("closure_requires_external_validation") is False
+    )
     return {
         "web_operator_panel": {
             "required_for": "local_mvp",
@@ -356,6 +367,16 @@ def build_deliverable_index(
             "blocking_scope": "external_authorized_execution"
             if (not authorized_live_ready or blocker_by_scope.get("external_authorized_execution"))
             else "",
+        },
+        "commercial_issue_closure": {
+            "required_for": "final_delivery",
+            "ready": issue_closure_ready,
+            "status": (issue_closure or {}).get("status") or "",
+            "acceptance_criteria_total": issue_summary.get("acceptance_criteria_total"),
+            "acceptance_criteria_external_pending": issue_summary.get("acceptance_criteria_external_pending"),
+            "acceptance_criteria_unclassified": issue_summary.get("acceptance_criteria_unclassified"),
+            "external_pending_count": issue_summary.get("external_pending_count"),
+            "blocking_scope": "" if issue_closure_ready else "commercial_issue_closure",
         },
         "final_acceptance_gate": {
             "required_for": "final_delivery",
@@ -480,6 +501,7 @@ def build_report() -> dict[str, Any]:
         ),
         "client_delivery": command_payload([python, "tools/reachops_client_delivery_check.py", "--json"], timeout=120),
         "windows_package_preflight": command_payload([python, "tools/reachops_windows_package_preflight.py", "--json"], timeout=60),
+        "issue_closure": command_payload([python, "tools/reachops_issue_closure_audit.py", "--json"], timeout=120),
         "delivery_package": command_payload(
             [python, "tools/reachops_delivery_package_check.py", "--allow-external-pending", "--json"],
             timeout=60,
@@ -495,6 +517,7 @@ def build_report() -> dict[str, Any]:
     mac_loop = _payload(sections["mac_loop_acceptance"])
     client = _payload(sections["client_delivery"])
     windows_preflight = _payload(sections["windows_package_preflight"])
+    issue_closure = _payload(sections["issue_closure"])
     package = _payload(sections["delivery_package"])
     final_gate = _payload(sections["final_gate"])
     clean = _payload(sections["repository_cleanliness"])
@@ -551,6 +574,24 @@ def build_report() -> dict[str, Any]:
                 "action": "在明确授权目标、账号分组、评论内容和有效激活状态后完成真实 TikTok 平台提交验收。",
             }
         )
+    issue_summary = issue_closure.get("summary") if isinstance(issue_closure.get("summary"), dict) else {}
+    issue_closure_ready = bool(
+        issue_closure.get("passed")
+        and int(issue_summary.get("acceptance_criteria_total") or 0) == 53
+        and int(issue_summary.get("acceptance_criteria_unclassified") or 0) == 0
+        and int(issue_summary.get("acceptance_criteria_external_pending") or 0) == 0
+        and int(issue_summary.get("external_pending_count") or 0) == 0
+        and (issue_closure.get("github_issues") or {}).get("closure_requires_external_validation") is False
+    )
+    if not issue_closure_ready:
+        blockers.append(
+            {
+                "scope": "commercial_issue_closure",
+                "status": issue_closure.get("status"),
+                "summary": issue_summary,
+                "action": "完成 Issues #1-#7 中仍标记 external_pending 的验收标准，并复跑 tools\\reachops_issue_closure_audit.py --json。",
+            }
+        )
 
     status = "final_delivery_ready" if final_ready else "local_mvp_accepted_final_pending" if local_ready else "not_ready"
     delivery_boundary = build_delivery_boundary(
@@ -574,6 +615,7 @@ def build_report() -> dict[str, Any]:
         final_gate=final_gate,
         clean=clean,
         blockers=blockers,
+        issue_closure=issue_closure,
     )
     local_mvp_evidence = build_local_mvp_evidence(mvp, mac_loop, client)
     final_delivery_blockers = (
@@ -670,6 +712,7 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         "windows_build_inputs",
         "windows_final_package",
         "authorized_live_submit",
+        "commercial_issue_closure",
         "final_acceptance_gate",
         "repository_cleanliness",
     ):
