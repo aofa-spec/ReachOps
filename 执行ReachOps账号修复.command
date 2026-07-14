@@ -28,6 +28,8 @@ print("1" if payload.get("no_applicable_profiles") else "0")
 PY
 )"
 if [ "$NO_APPLICABLE" = "1" ]; then
+  APPLY_JSON="$(mktemp /tmp/reachops_account_repair_apply.XXXXXX.json)"
+  "$PYTHON_BIN" tools/reachops_apply_account_repair_plan.py --apply --json > "$APPLY_JSON"
   "$PYTHON_BIN" - "$PREVIEW_JSON" <<'PY'
 import json, sys
 from pathlib import Path
@@ -40,6 +42,7 @@ for action in payload.get("next_actions") or []:
     print("下一步: " + str(action))
 print("本次不会启动浏览器，也不会提交任何平台动作。")
 PY
+  echo "已记录本次账号修复结果: no_applicable_profiles"
   echo ""
   echo "按任意键关闭此窗口。"
   read -k 1

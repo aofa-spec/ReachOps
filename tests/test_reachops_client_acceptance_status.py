@@ -3831,8 +3831,10 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertIn("tools/reachops_apply_account_repair_plan.py --json", script)
         self.assertIn("tools/reachops_apply_account_repair_plan.py --apply --json", script)
         self.assertIn("PREVIEW_JSON", script)
+        self.assertIn("APPLY_JSON", script)
         self.assertIn("no_applicable_profiles", script)
         self.assertIn("最新账号修复计划没有默认可自动隔离的账号", script)
+        self.assertIn("已记录本次账号修复结果: no_applicable_profiles", script)
         self.assertIn("exit 2", script)
         self.assertIn("CONFIRM", script)
         self.assertIn("APPLY", script)
@@ -4395,6 +4397,7 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
 
     def test_web_account_repair_apply_explains_no_applicable_profiles(self):
         old_process = reachops_web_ui.RUN_PROCESS
+        captured_write = {}
 
         def fake_apply(path, apply=False):
             return {
@@ -4410,18 +4413,28 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                 "no_submit": True,
             }
 
+        def fake_write(result):
+            captured_write["status"] = result.get("status")
+            captured_write["selected_count"] = result.get("selected_count")
+            return Path("/tmp/latest_account_repair_apply.json")
+
         try:
             reachops_web_ui.RUN_PROCESS = None
             with patch(
                 "tools.reachops_apply_account_repair_plan.load_plan",
                 return_value={"profile_group": "United States", "groups": []},
-            ), patch("tools.reachops_apply_account_repair_plan.apply_account_repair_plan", side_effect=fake_apply):
+            ), patch(
+                "tools.reachops_apply_account_repair_plan.apply_account_repair_plan",
+                side_effect=fake_apply,
+            ), patch("tools.reachops_apply_account_repair_plan.write_account_repair_apply_result", side_effect=fake_write):
                 result = reachops_web_ui.apply_latest_account_repair_plan_from_web("United States")
         finally:
             reachops_web_ui.RUN_PROCESS = old_process
 
         self.assertEqual(result["status"], "no_applicable_profiles")
         self.assertFalse(result["ok"])
+        self.assertEqual(result["apply_result_path"], "/tmp/latest_account_repair_apply.json")
+        self.assertEqual(captured_write, {"status": "no_applicable_profiles", "selected_count": 0})
         self.assertTrue(result["no_browser_started"])
         self.assertTrue(result["no_submit"])
         next_actions = " ".join(result["next_actions"])

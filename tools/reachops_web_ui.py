@@ -5200,9 +5200,9 @@ def apply_latest_account_repair_plan_from_web(profile_group: str = "") -> dict:
             "message": f"{type(exc).__name__}: {exc}",
         }
     result["profile_group_requested"] = str(profile_group or "")
+    result_path = write_account_repair_apply_result(result)
+    result["apply_result_path"] = str(result_path)
     if result.get("status") == "applied":
-        result_path = write_account_repair_apply_result(result)
-        result["apply_result_path"] = str(result_path)
         append_web_log(
             f"CONFIG account_repair_apply status=applied group={result.get('profile_group') or profile_group or '-'} "
             f"selected={result.get('selected_count', 0)} moved={result.get('moved_count', 0)} failed={result.get('failed_count', 0)}"
