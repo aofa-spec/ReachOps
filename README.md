@@ -162,7 +162,7 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_readiness_windo
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windows.ps1
 ```
 
-`tools\reachops_activation_status_template.py` 只生成授权状态模板；模板文件带有 `template_only=true`，不能作为真实授权通过。
+`tools\reachops_activation_status_template.py` 只生成授权状态模板；模板文件带有 `template_only=true`，不能作为真实授权通过。打包商业运行时还要求真实授权文件带有服务端签发的 `entitlement_signature`，并会校验设备绑定、到期时间、撤销状态、离线宽限、并发设备限制和紧急禁用项。
 
 `tools\reachops_live_acceptance_status.py` 只读状态，不打开浏览器、不提交动作，用来汇总当前还缺本地输入、有效授权、目标 URL、真实提交证据或客户端交付门禁。若已有 acceptance summary，它会在 `next_required_actions` 中展开具体待处理项。
 

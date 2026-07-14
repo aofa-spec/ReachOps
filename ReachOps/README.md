@@ -101,11 +101,13 @@ powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1 -SkipI
 升级流程使用 `reachops-update-manifest.json`：
 
 ```text
-读取 manifest → 校验 product/platform/version → 比较版本
-→ 校验安装包 size/sha256 → 生成静默安装参数
+读取 manifest → 校验 product/platform/channel/version/signature/rollback_policy
+→ 比较版本 → 校验安装包 size/sha256 → 生成静默安装参数
 ```
 
-升级策略默认保留独立配置目录、数据目录和授权状态。
+远程 manifest 必须使用 HTTPS 且带 `manifest_signature`；本地 manifest 只用于离线构建、恢复和测试。升级策略默认保留独立配置目录、数据目录和授权状态；默认禁止降级，只有 manifest 显式声明 `rollback_policy.allow_downgrade=true` 时才进入受控 rollback 路径。
+
+商业运行时的真实触达授权必须来自服务端签发的 `entitlement_signature`。打包运行时会拒绝 unsigned、过期、设备不匹配、撤销、离线宽限过期、超并发设备限制或被紧急禁用的 entitlement；源码开发环境仍可使用无提交的模板和本地 blocked 报告做测试。
 
 ## 交付状态
 

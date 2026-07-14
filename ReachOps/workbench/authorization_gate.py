@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from ReachOps.security_signing import load_key_ring, verify_signed_payload
+
 from .device_identity import DeviceIdentity
 
 
@@ -29,9 +31,15 @@ class LiveSubmitAuthorizationGate:
 
     STATUS_FILENAME = "reachops_activation_status.json"
 
-    def __init__(self, status_path: str, device_identity: type[DeviceIdentity] = DeviceIdentity):
+    def __init__(
+        self,
+        status_path: str,
+        device_identity: type[DeviceIdentity] = DeviceIdentity,
+        entitlement_key_ring: dict[str, str] | None = None,
+    ):
         self.status_path = status_path
         self.device_identity = device_identity
+        self.entitlement_key_ring = entitlement_key_ring
 
     @classmethod
     def from_storage(cls, storage) -> "LiveSubmitAuthorizationGate":
@@ -60,6 +68,22 @@ class LiveSubmitAuthorizationGate:
             return AuthorizationDecision(True, evidence={**evidence, "development_bypass": True})
         if not status:
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status not found", evidence)
+        if self.is_packaged_runtime():
+            signature_ok, signature_reason = verify_signed_payload(
+                status,
+                key_ring=self.entitlement_key_ring if self.entitlement_key_ring is not None else load_key_ring(),
+                signature_field="entitlement_signature",
+            )
+            if not signature_ok:
+                return AuthorizationDecision(
+                    False,
+                    "LIVE_SUBMIT_ENTITLEMENT_SIGNATURE_INVALID",
+                    "packaged runtime requires a valid signed entitlement",
+                    {**evidence, "signature_reason": signature_reason},
+                )
+            commercial_check = self._validate_packaged_entitlement(status, evidence["current_device_id"], feature, action_type)
+            if commercial_check:
+                return commercial_check
         if bool(status.get("template_only")):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status is a template", evidence)
         if not bool(status.get("active")):
@@ -81,6 +105,84 @@ class LiveSubmitAuthorizationGate:
         if action_type and action_type in {"comment_reply", "follow_review", "dm_review"} and capabilities.get(action_type) is False:
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", f"action not enabled: {action_type}", evidence)
         return AuthorizationDecision(True, evidence={**evidence, "expires_at": expires_at})
+
+    def _validate_packaged_entitlement(
+        self,
+        status: dict[str, Any],
+        current_device_id: str,
+        feature: str,
+        action_type: str,
+    ) -> AuthorizationDecision | None:
+        def blocked(code: str, message: str, **extra_evidence) -> AuthorizationDecision:
+            return AuthorizationDecision(
+                False,
+                code,
+                message,
+                {
+                    "status_path": self.status_path,
+                    "runtime_mode": self.runtime_mode(),
+                    "current_device_id": current_device_id,
+                    **extra_evidence,
+                },
+            )
+
+        if not str(status.get("entitlement_id") or "").strip():
+            return blocked("LIVE_SUBMIT_ENTITLEMENT_INCOMPLETE", "signed entitlement is missing entitlement_id")
+        if not str(status.get("issued_at") or "").strip():
+            return blocked("LIVE_SUBMIT_ENTITLEMENT_INCOMPLETE", "signed entitlement is missing issued_at")
+        if not str(status.get("expires_at") or "").strip():
+            return blocked("LIVE_SUBMIT_LICENSE_EXPIRED", "signed entitlement is missing expires_at")
+        if not str(status.get("device_id") or "").strip():
+            return blocked("LIVE_SUBMIT_DEVICE_MISMATCH", "signed entitlement must be bound to this device")
+        if bool(status.get("revoked")) or str(status.get("revoked_at") or "").strip():
+            return blocked("LIVE_SUBMIT_ENTITLEMENT_REVOKED", "signed entitlement has been revoked")
+
+        audit = status.get("audit") if isinstance(status.get("audit"), dict) else {}
+        if not str(audit.get("issued_by") or "").strip() or not str(audit.get("event_id") or "").strip():
+            return blocked("LIVE_SUBMIT_ENTITLEMENT_INCOMPLETE", "signed entitlement is missing audit history")
+
+        registration = status.get("device_registration") if isinstance(status.get("device_registration"), dict) else {}
+        registered_device_id = str(registration.get("device_id") or status.get("device_id") or "").strip()
+        if registered_device_id != current_device_id:
+            return blocked(
+                "LIVE_SUBMIT_DEVICE_MISMATCH",
+                "signed entitlement device registration does not match this device",
+                bound_device_id=registered_device_id,
+            )
+        try:
+            max_devices = int(registration.get("max_concurrent_devices") or 1)
+            registered_count = int(registration.get("registered_device_count") or 1)
+        except Exception:
+            return blocked(
+                "LIVE_SUBMIT_DEVICE_LIMIT_EXCEEDED",
+                "signed entitlement has invalid concurrent device limits",
+                max_concurrent_devices=registration.get("max_concurrent_devices"),
+                registered_device_count=registration.get("registered_device_count"),
+            )
+        if max_devices < 1 or registered_count > max_devices:
+            return blocked(
+                "LIVE_SUBMIT_DEVICE_LIMIT_EXCEEDED",
+                "signed entitlement exceeds the concurrent device limit",
+                max_concurrent_devices=max_devices,
+                registered_device_count=registered_count,
+            )
+
+        grace_until = str(status.get("offline_grace_until") or "").strip()
+        if not grace_until:
+            return blocked("LIVE_SUBMIT_OFFLINE_GRACE_EXPIRED", "signed entitlement is missing offline grace deadline")
+        if self._is_expired(grace_until):
+            return blocked("LIVE_SUBMIT_OFFLINE_GRACE_EXPIRED", "signed entitlement offline grace has expired", offline_grace_until=grace_until)
+
+        disabled = {str(item) for item in status.get("emergency_disabled_features", []) if str(item).strip()}
+        if feature in disabled or action_type in disabled:
+            return blocked(
+                "LIVE_SUBMIT_FEATURE_DISABLED",
+                "signed entitlement disables this feature remotely",
+                feature=feature,
+                action_type=action_type,
+                emergency_disabled_features=sorted(disabled),
+            )
+        return None
 
     def _read_status(self) -> dict:
         try:

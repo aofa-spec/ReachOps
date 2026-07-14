@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .version import PRODUCT_ID, VERSION
+from .security_signing import load_key_ring, verify_signed_payload
+from .version import BUILD_CHANNEL, PRODUCT_ID, VERSION
 
 
 @dataclass
@@ -29,13 +30,21 @@ class ReachOpsUpdateManager:
     tools/write_reachops_update_manifest.py.
     """
 
-    def __init__(self, current_version: str = VERSION, install_dir: str | None = None):
+    def __init__(
+        self,
+        current_version: str = VERSION,
+        install_dir: str | None = None,
+        manifest_key_ring: dict[str, str] | None = None,
+    ):
         self.current_version = str(current_version or VERSION).lstrip("v")
         self.install_dir = os.path.abspath(install_dir or os.getcwd())
+        self.manifest_key_ring = manifest_key_ring
 
     def load_manifest(self, source: str | os.PathLike) -> dict[str, Any]:
         source_text = str(source)
+        require_signature = False
         if source_text.startswith("https://"):
+            require_signature = True
             with urllib.request.urlopen(source_text, timeout=20) as response:
                 payload = response.read().decode("utf-8")
         elif source_text.startswith("http://"):
@@ -43,31 +52,60 @@ class ReachOpsUpdateManager:
         else:
             payload = Path(source).read_text(encoding="utf-8")
         manifest = json.loads(payload)
-        self.validate_manifest(manifest)
+        self.validate_manifest(manifest, require_signature=require_signature)
         return manifest
 
-    def validate_manifest(self, manifest: dict[str, Any]) -> None:
+    def validate_manifest(self, manifest: dict[str, Any], require_signature: bool = False) -> None:
         if str(manifest.get("product_id") or "") != PRODUCT_ID:
             raise ValueError("manifest product_id mismatch")
         if str(manifest.get("platform") or "") != "windows":
             raise ValueError("manifest platform must be windows")
+        if str(manifest.get("channel") or "") != BUILD_CHANNEL:
+            raise ValueError("manifest channel mismatch")
         version = str(manifest.get("version") or "").strip()
         if not version:
             raise ValueError("manifest version is required")
         installer = manifest.get("installer") or {}
         if not isinstance(installer, dict):
             raise ValueError("manifest installer must be an object")
-        if not str(installer.get("sha256") or "").strip():
+        sha256 = str(installer.get("sha256") or "").lower().replace("sha256:", "")
+        if len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256):
             raise ValueError("manifest installer.sha256 is required")
+        try:
+            installer_size = int(installer.get("size_bytes") or 0)
+        except Exception:
+            installer_size = 0
+        if installer_size <= 0:
+            raise ValueError("manifest installer.size_bytes is required")
+        rollback_policy = manifest.get("rollback_policy") if isinstance(manifest.get("rollback_policy"), dict) else {}
+        if "allow_downgrade" not in rollback_policy:
+            raise ValueError("manifest rollback_policy.allow_downgrade is required")
+        minimum_version = str(rollback_policy.get("minimum_version") or "").strip()
+        if not minimum_version:
+            raise ValueError("manifest rollback_policy.minimum_version is required")
+        if self.compare_versions(self.current_version, minimum_version) < 0:
+            raise ValueError("manifest rollback policy blocks this client version")
+        if require_signature:
+            signature_ok, signature_reason = verify_signed_payload(
+                manifest,
+                key_ring=self.manifest_key_ring if self.manifest_key_ring is not None else load_key_ring(),
+                signature_field="manifest_signature",
+            )
+            if not signature_ok:
+                raise ValueError(f"manifest signature invalid: {signature_reason}")
 
     def check_manifest(self, manifest: dict[str, Any]) -> ReachOpsUpdateInfo:
         self.validate_manifest(manifest)
         latest = str(manifest.get("version") or "").lstrip("v")
         comparison = self.compare_versions(self.current_version, latest)
+        rollback_policy = manifest.get("rollback_policy") if isinstance(manifest.get("rollback_policy"), dict) else {}
+        allow_downgrade = bool(rollback_policy.get("allow_downgrade"))
         if comparison < 0:
             return ReachOpsUpdateInfo(True, self.current_version, latest, "new_version_available", manifest)
         if comparison == 0:
             return ReachOpsUpdateInfo(False, self.current_version, latest, "already_latest", manifest)
+        if allow_downgrade:
+            return ReachOpsUpdateInfo(True, self.current_version, latest, "rollback_available", manifest)
         return ReachOpsUpdateInfo(False, self.current_version, latest, "current_version_is_newer", manifest)
 
     def verify_installer(self, installer_path: str | os.PathLike, manifest: dict[str, Any]) -> bool:
