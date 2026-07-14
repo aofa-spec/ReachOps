@@ -21,6 +21,7 @@ REQUIRED_FINAL_GATE_CHECKS = {
     "delivery_package:passed",
     "delivery_audit:no_failed_checks",
     "operator_pressure:leads_and_actions",
+    "commercial_issue_closure:closed",
 }
 
 

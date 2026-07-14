@@ -716,6 +716,7 @@ def final_package_check_payload():
             "failed_checks": [],
             "required_checks": [
                 "client_delivery:final_ready",
+                "commercial_issue_closure:closed",
                 "delivery_audit:no_failed_checks",
                 "delivery_package:passed",
                 "goal_status:passed",
@@ -723,6 +724,7 @@ def final_package_check_payload():
             ],
             "present_required_checks": [
                 "client_delivery:final_ready",
+                "commercial_issue_closure:closed",
                 "delivery_audit:no_failed_checks",
                 "delivery_package:passed",
                 "goal_status:passed",
@@ -736,6 +738,7 @@ def final_package_check_payload():
                 "delivery_package:passed": {"name": "delivery_package:passed", "ok": True},
                 "delivery_audit:no_failed_checks": {"name": "delivery_audit:no_failed_checks", "ok": True},
                 "operator_pressure:leads_and_actions": {"name": "operator_pressure:leads_and_actions", "ok": True},
+                "commercial_issue_closure:closed": {"name": "commercial_issue_closure:closed", "ok": True},
             },
         },
         "acceptance_verification": {"passed": True, "failures": [], "pending": []},
@@ -796,6 +799,7 @@ def final_acceptance_gate_payload():
             {"name": "delivery_package:passed", "ok": True},
             {"name": "delivery_audit:no_failed_checks", "ok": True},
             {"name": "operator_pressure:leads_and_actions", "ok": True},
+            {"name": "commercial_issue_closure:closed", "ok": True},
         ],
     }
 
@@ -2674,6 +2678,26 @@ class ReachOpsCampaignTests(unittest.TestCase):
             failed_check = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
             self.assertFalse(failed_check["passed"])
             self.assertIn("final_acceptance_gate_json_checks_failed", failed_check["failures"])
+            (report_dir / "final_acceptance_gate.json").write_text(json.dumps(summary["final_acceptance_gate"]), encoding="utf-8")
+
+            stale_issue_closure_summary = json.loads(json.dumps(summary))
+            stale_issue_closure_summary["final_acceptance_gate"]["checks"] = [
+                row
+                for row in stale_issue_closure_summary["final_acceptance_gate"]["checks"]
+                if row["name"] != "commercial_issue_closure:closed"
+            ]
+            (report_dir / "final_acceptance_gate.json").write_text(
+                json.dumps(stale_issue_closure_summary["final_acceptance_gate"]),
+                encoding="utf-8",
+            )
+            acceptance_summary.write_text(json.dumps(stale_issue_closure_summary), encoding="utf-8")
+            stale_issue_closure = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(stale_issue_closure["passed"])
+            self.assertIn("final_acceptance_gate_json_checks_missing", stale_issue_closure["failures"])
+            self.assertEqual(
+                stale_issue_closure["final_gate_report"]["missing_required_checks"],
+                ["commercial_issue_closure:closed"],
+            )
             (report_dir / "final_acceptance_gate.json").write_text(json.dumps(summary["final_acceptance_gate"]), encoding="utf-8")
 
             outside_report = root / "outside_live_submit_payload.json"
