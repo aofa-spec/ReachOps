@@ -3532,6 +3532,34 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(remediation["artifact_actions"]["exe"]["expected_path"].endswith("dist/ReachOps/ReachOps.exe"))
             self.assertTrue(remediation["artifact_actions"]["acceptance_summary"]["expected_path"].endswith("reports/reachops_acceptance/acceptance_summary.json"))
             self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(remediation["commands"]))
+            handoff = result["windows_acceptance_handoff"]
+            self.assertEqual(handoff["schema_version"], "reachops.windows_acceptance_handoff.v1")
+            self.assertTrue(handoff["support_required"])
+            self.assertEqual(handoff["support_case"], "windows_acceptance_not_final_ready")
+            self.assertFalse(handoff["final_delivery_ready"])
+            self.assertTrue(handoff["does_not_claim_final_delivery_ready"])
+            self.assertIn("acceptance_summary", handoff["missing_artifacts"])
+            self.assertIn("acceptance_summary_missing", handoff["failure_codes"])
+            self.assertTrue(handoff["artifact_status"]["acceptance_summary"]["path"].endswith("reports/reachops_acceptance/acceptance_summary.json"))
+            self.assertFalse(handoff["acceptance_verification"]["passed"])
+            self.assertIn("acceptance_summary_missing", handoff["acceptance_verification"]["failures"])
+            self.assertIn("reports\\reachops_acceptance\\acceptance_summary.json exists", handoff["acceptance_required"])
+            self.assertIn("python tools\\reachops_final_acceptance_gate.py --json", handoff["retest_commands"])
+            self.assertTrue(handoff["safety_contract"]["diagnostic_only"])
+            self.assertTrue(handoff["safety_contract"]["no_browser_started"])
+            self.assertTrue(handoff["safety_contract"]["no_submit"])
+            self.assertTrue(handoff["safety_contract"]["does_not_create_acceptance_summary"])
+            self.assertTrue(handoff["safety_contract"]["requires_windows_real_acceptance"])
+            handoff_path = Path(result["windows_acceptance_handoff_path"])
+            self.assertTrue(handoff_path.is_file())
+            self.assertEqual(
+                handoff_path.resolve(),
+                (Path(tmp) / "reports" / "support" / "windows_acceptance_handoff.json").resolve(),
+            )
+            self.assertEqual(
+                json.loads(handoff_path.read_text(encoding="utf-8"))["schema_version"],
+                "reachops.windows_acceptance_handoff.v1",
+            )
 
     def test_reachops_release_evidence_records_checksums_and_rollback_note(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -277,6 +277,97 @@ def _remediation_plan(
     }
 
 
+def _support_handoff_path(root: Path) -> Path:
+    return root / "reports" / "support" / "windows_acceptance_handoff.json"
+
+
+def build_windows_acceptance_handoff(
+    *,
+    root: Path,
+    acceptance_path: Path,
+    manifest_path: Path,
+    status: str,
+    final_delivery_ready: bool,
+    missing_artifacts: list[str],
+    failures: list[str],
+    pending_external_validation: list[Any],
+    pending_external_actions: list[str],
+    artifacts: dict[str, Any],
+    acceptance_verification: dict[str, Any],
+    final_gate_report: dict[str, Any],
+    remediation_plan: dict[str, Any],
+) -> dict[str, Any]:
+    support_required = not bool(final_delivery_ready)
+    return {
+        "schema_version": "reachops.windows_acceptance_handoff.v1",
+        "status": status,
+        "support_required": support_required,
+        "support_case": "windows_acceptance_not_final_ready" if support_required else "not_required",
+        "root": str(root),
+        "acceptance_summary_path": str(acceptance_path),
+        "manifest_path": str(manifest_path),
+        "final_delivery_ready": bool(final_delivery_ready),
+        "does_not_claim_final_delivery_ready": not bool(final_delivery_ready),
+        "missing_artifacts": list(missing_artifacts),
+        "failure_codes": list(failures),
+        "pending_external_validation": [str(item) for item in pending_external_validation],
+        "pending_external_actions": list(pending_external_actions),
+        "artifact_status": {
+            key: {
+                "path": value.get("path"),
+                "exists": bool(value.get("exists")),
+                "size": int(value.get("size") or 0),
+            }
+            for key, value in artifacts.items()
+            if isinstance(value, dict)
+        },
+        "acceptance_verification": {
+            "passed": bool(acceptance_verification.get("passed")),
+            "failures": [str(item) for item in acceptance_verification.get("failures") or []],
+            "pending": [str(item) for item in acceptance_verification.get("pending") or []],
+        },
+        "final_gate_report": {
+            "exists": bool(final_gate_report.get("exists")),
+            "status": str(final_gate_report.get("status") or ""),
+            "final_delivery_ready": bool(final_gate_report.get("final_delivery_ready")),
+            "failed_checks": [str(item) for item in final_gate_report.get("failed_checks") or []],
+            "missing_required_checks": [str(item) for item in final_gate_report.get("missing_required_checks") or []],
+            "failed_required_checks": [str(item) for item in final_gate_report.get("failed_required_checks") or []],
+        },
+        "remediation_plan": remediation_plan,
+        "retest_commands": [
+            "powershell -ExecutionPolicy Bypass -File tools\\build_reachops_windows.ps1",
+            "powershell -ExecutionPolicy Bypass -File tools\\init_reachops_acceptance_inputs_windows.ps1 -Json",
+            "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_acceptance_windows.ps1 -InputFile tools\\reachops_acceptance_inputs.local.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
+            "python tools\\reachops_delivery_package_check.py --json",
+            "python tools\\reachops_final_acceptance_gate.py --json",
+        ],
+        "acceptance_required": [
+            "reports\\reachops_acceptance\\acceptance_summary.json exists",
+            "delivery_package.status=passed",
+            "delivery_package.final_delivery_ready=true",
+            "final_acceptance_gate.status=passed",
+            "final_acceptance_gate.final_delivery_ready=true",
+            "final_acceptance_gate.failed_checks=[]",
+        ],
+        "safety_contract": {
+            "diagnostic_only": True,
+            "no_browser_started": True,
+            "no_submit": True,
+            "does_not_create_acceptance_summary": True,
+            "does_not_run_real_platform_actions": True,
+            "requires_windows_real_acceptance": True,
+        },
+    }
+
+
+def write_windows_acceptance_handoff(root: Path, handoff: dict[str, Any]) -> Path:
+    path = _support_handoff_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(handoff, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
 def _not_final_reason_lines(missing_artifacts: list[str], failures: list[str]) -> list[str]:
     reason_labels = {
         "acceptance_summary_missing": "acceptance_summary is missing; run Windows acceptance and write reports\\reachops_acceptance\\acceptance_summary.json.",
@@ -520,10 +611,28 @@ def check_delivery_package(
         acceptance_path=acceptance_path,
         manifest_path=manifest,
     )
+    pending_external_actions = _pending_actions(external_pending)
+    final_delivery_ready = bool(final_ready and not bootstrap_only and not external_pending_only)
+    windows_acceptance_handoff = build_windows_acceptance_handoff(
+        root=root,
+        acceptance_path=acceptance_path,
+        manifest_path=manifest,
+        status=status,
+        final_delivery_ready=final_delivery_ready,
+        missing_artifacts=missing_artifacts,
+        failures=failures,
+        pending_external_validation=external_pending,
+        pending_external_actions=pending_external_actions,
+        artifacts=artifact_status,
+        acceptance_verification=acceptance_verification,
+        final_gate_report=final_gate_report,
+        remediation_plan=remediation_plan,
+    )
+    windows_acceptance_handoff_path = write_windows_acceptance_handoff(root, windows_acceptance_handoff)
     return {
         "status": status,
         "passed": final_ready,
-        "final_delivery_ready": bool(final_ready and not bootstrap_only and not external_pending_only),
+        "final_delivery_ready": final_delivery_ready,
         "bootstrap_only": bootstrap_only,
         "not_final_delivery_reasons": not_final_delivery_reasons,
         "allow_external_pending": bool(allow_external_pending),
@@ -532,9 +641,11 @@ def check_delivery_package(
         "root": str(root),
         "failures": failures,
         "pending_external_validation": external_pending,
-        "pending_external_actions": _pending_actions(external_pending),
+        "pending_external_actions": pending_external_actions,
         "missing_artifacts": missing_artifacts,
         "remediation_plan": remediation_plan,
+        "windows_acceptance_handoff_path": str(windows_acceptance_handoff_path),
+        "windows_acceptance_handoff": windows_acceptance_handoff,
         "artifacts": artifact_status,
         "report_files": report_files,
         "final_gate_report": final_gate_report,
