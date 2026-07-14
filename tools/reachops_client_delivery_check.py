@@ -118,6 +118,8 @@ def account_repair_apply_effective_status(repair_apply: dict) -> str:
         return ""
     if repair_apply.get("stale"):
         return "stale"
+    if repair_apply.get("same_group") is False:
+        return "group_mismatch"
     if raw_status == "applied" and repair_apply.get("pending_recheck"):
         return "pending_recheck"
     return raw_status
@@ -127,6 +129,8 @@ def account_repair_apply_effective_message(repair_apply: dict) -> str:
     effective_status = account_repair_apply_effective_status(repair_apply)
     if effective_status == "stale":
         return "旧账号修复结果已失效；必须执行最新账号修复计划后再复测。"
+    if effective_status == "group_mismatch":
+        return "账号修复结果属于其他分组，不能用于当前执行分组；请执行当前分组的最新账号修复计划。"
     if effective_status == "pending_recheck":
         return "账号修复已执行；需要重新预检当前分组后才能验收。"
     if effective_status == "no_applicable_profiles":
@@ -636,6 +640,15 @@ def build_delivery_check(
         acceptance["next_actions"] = [
             "先执行最新账号修复计划，确认至少 1 个已登录、内核匹配、可手动打开 TikTok 的账号保留在执行分组内。",
             f"修复后再复测 {group} 分组；系统会重新读取分组、重新选择剩余账号并重新预检。",
+        ] + list(acceptance.get("next_actions") or [])
+    elif account_repair_apply_effective_status(account_repair_apply) == "group_mismatch" and acceptance.get("readiness") == "blocked_by_accounts":
+        current_group = str(batch.get("profile_group") or "当前分组")
+        apply_group = str(account_repair_apply.get("profile_group") or "其他分组")
+        acceptance["blockers"] = [
+            f"账号修复结果属于 {apply_group} 分组，不能用于当前 {current_group} 分组验收。"
+        ] + list(acceptance.get("blockers") or [])
+        acceptance["next_actions"] = [
+            f"执行 {current_group} 分组的最新账号修复计划，再重新预检当前分组。",
         ] + list(acceptance.get("next_actions") or [])
     elif account_repair_apply.get("pending_recheck") and acceptance.get("readiness") == "blocked_by_accounts":
         group = str(batch.get("profile_group") or account_repair_apply.get("profile_group") or "当前分组")

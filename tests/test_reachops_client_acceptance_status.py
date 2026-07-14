@@ -4132,6 +4132,42 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(payload["effective_status"], "stale")
         self.assertIn("旧账号修复结果已失效", payload["effective_message"])
 
+    def test_account_repair_apply_status_rejects_other_group_apply(self):
+        with TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            report_dir = base_dir / "reports" / "acceptance_remediation"
+            report_dir.mkdir(parents=True)
+            apply_path = report_dir / "latest_account_repair_apply.json"
+            apply_path.write_text(
+                json.dumps(
+                    {
+                        "status": "applied",
+                        "batch_id": "gb_current_failed",
+                        "profile_group": "Canada",
+                        "selected_count": 1,
+                        "moved_count": 1,
+                        "failed_count": 0,
+                        "results": [{"profile_id": "24909", "attempted": True, "ok": True}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            payload = latest_account_repair_apply_status(
+                base_dir,
+                [],
+                profile_group="United States",
+                batch_id="gb_current_failed",
+            )
+
+        self.assertFalse(payload["same_group"])
+        self.assertTrue(payload["same_batch"])
+        self.assertFalse(payload.get("stale", False))
+        self.assertFalse(payload["pending_recheck"])
+        self.assertEqual(payload["effective_status"], "group_mismatch")
+        self.assertIn("属于其他分组", payload["effective_message"])
+
     def test_delivery_check_blocks_stale_account_repair_apply_before_retest(self):
         batch = {"id": "gb_new_failed", "status": "failed", "profile_group": "United States", "config_json": "{}"}
         acceptance = {
@@ -4187,6 +4223,49 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(
             payload["real_pilot_evidence"]["account_pool_remediation"]["latest_apply_effective_status"],
             "stale",
+        )
+
+    def test_delivery_check_blocks_other_group_account_repair_apply(self):
+        batch = {"id": "gb_current_failed", "status": "failed", "profile_group": "United States", "config_json": "{}"}
+        acceptance = {
+            "readiness": "blocked_by_accounts",
+            "checks": {"profile_available_count": 0},
+            "blockers": ["账号预检没有可用账号，无法进入真实采集/触达。"],
+            "next_actions": ["先修复 United States 分组账号。"],
+            "profile_preflight_details": [],
+        }
+        with TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            report_dir = base_dir / "reports" / "acceptance_remediation"
+            report_dir.mkdir(parents=True)
+            (report_dir / "latest_account_repair_apply.json").write_text(
+                json.dumps(
+                    {
+                        "status": "applied",
+                        "batch_id": "gb_current_failed",
+                        "profile_group": "Canada",
+                        "selected_count": 1,
+                        "moved_count": 1,
+                        "failed_count": 0,
+                        "results": [{"profile_id": "24909", "attempted": True, "ok": True}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with patch("tools.reachops_client_delivery_check.latest_batch", return_value=batch):
+                with patch("tools.reachops_client_delivery_check.latest_profile_preflight", return_value={"checked": 1, "available": 0}):
+                    with patch("tools.reachops_client_delivery_check.read_lines", return_value=[]):
+                        with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
+                            with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
+                                payload = build_delivery_check(base_dir)
+
+        self.assertEqual(payload["account_repair_apply"]["effective_status"], "group_mismatch")
+        self.assertIn("不能用于当前 United States 分组验收", payload["blockers"][0])
+        self.assertIn("执行 United States 分组的最新账号修复计划", payload["next_actions"][0])
+        self.assertEqual(
+            payload["real_pilot_evidence"]["account_pool_remediation"]["latest_apply_effective_status"],
+            "group_mismatch",
         )
 
     def test_delivery_check_explains_no_applicable_account_repair_apply(self):
