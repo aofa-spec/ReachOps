@@ -85,6 +85,14 @@ python3 tools/reachops_goal_status_report.py --json
 - goal status 可到 `ready_for_external_validation`；真实平台提交前不应宣称 `passed`。
 - `tools/reachops_delivery_package_check.py` 需要 Windows 产物和 acceptance reports；本机没有这些产物时返回缺失是预期状态。
 
+CI/release baseline 本地审计：
+
+```bash
+python tools/reachops_ci_release_baseline_audit.py --json
+```
+
+该审计只证明本地可重复门禁：Linux/Windows Python 3.11 CI 矩阵、依赖锁、`pip check`、dependency-license inventory、deterministic delivery audits、release evidence 和 rollback note 合同。GitHub `main` 分支保护、强制 PR review 和十连 CI 绿灯仍是外部治理门禁，不能用本地 JSON 代替。
+
 ## Windows 客户端
 
 启动 UI：

@@ -73,6 +73,7 @@ from tools.reachops_ixbrowser_profile_metadata_report import build_report as bui
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
+from tools.reachops_ci_release_baseline_audit import build_report as build_reachops_ci_release_baseline_report
 from tools.reachops_data_governance import build_report as build_reachops_data_governance_report
 from tools.reachops_security_supply_chain_audit import build_report as build_reachops_security_supply_chain_report
 from tools.reachops_start_contract_audit import build_report as build_reachops_start_contract_report
@@ -822,6 +823,23 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(manager.compare_versions("0.5.0", "0.5.0"), 0)
             self.assertEqual(manager.compare_versions("0.5.1", "0.5.0"), 1)
             self.assertEqual(manager.compare_versions("0.4.9", "0.5.0"), -1)
+
+    def test_reachops_ci_release_baseline_audit_declares_local_and_external_gates(self):
+        report = build_reachops_ci_release_baseline_report(run_pip=False)
+
+        self.assertEqual(report["schema_version"], "reachops.ci_release_baseline_audit.v1")
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["status"], "passed_with_external_governance_pending")
+        self.assertTrue(report["local_checks"]["ci_contract_complete"])
+        self.assertTrue(report["local_checks"]["dependency_baseline_passed"])
+        self.assertTrue(report["local_checks"]["pip_check_passed"])
+        self.assertTrue(report["local_checks"]["release_contract_complete"])
+        self.assertEqual(report["supported_platforms"]["python"], "3.11")
+        self.assertEqual(report["supported_platforms"]["windows_runner"], "windows-latest")
+        self.assertIn("main_branch_protection_requires_pr_review", report["external_governance_pending"])
+        self.assertIn("ten_consecutive_ci_runs_without_code_failure", report["external_governance_pending"])
+        self.assertTrue(report["does_not_claim_branch_protection"])
+        self.assertTrue(report["does_not_claim_ten_green_ci_runs"])
 
     def test_reachops_delivery_audit_reports_local_passes_and_external_pending(self):
         class Args:
@@ -1909,6 +1927,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(report["final_delivery_ready"])
         self.assertEqual(report["failures"], [])
         self.assertTrue(report["files"]["windows_build_script"]["exists"])
+        self.assertTrue(report["files"]["ci_release_baseline_audit"]["exists"])
         self.assertTrue(report["files"]["pyinstaller_spec"]["exists"])
         self.assertTrue(report["files"]["inno_setup_script"]["exists"])
         self.assertTrue(report["files"]["acceptance_inputs_template"]["exists"])
@@ -1916,6 +1935,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(report["files"]["authorization_handoff_bundle"]["exists"])
         self.assertTrue(report["files"]["start_contract_audit"]["exists"])
         self.assertTrue(report["contract_checks"]["tools/build_reachops_windows.ps1"]["ok"])
+        self.assertTrue(report["contract_checks"]["tools/reachops_ci_release_baseline_audit.py"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/run_reachops_acceptance_windows.ps1"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/reachops_start_contract_audit.py"]["ok"])
         self.assertTrue(report["build_contract"]["default_build_requires_installer"])
@@ -5540,6 +5560,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         reachops_requirements = (root / "ReachOps" / "packaging" / "requirements-reachops.txt").read_text(encoding="utf-8")
         dependency_license_inventory = (root / "ReachOps" / "packaging" / "dependency-license-inventory.json").read_text(encoding="utf-8")
         dependency_baseline_verifier = (root / "tools" / "verify_reachops_dependency_baseline.py").read_text(encoding="utf-8")
+        ci_release_baseline_audit = (root / "tools" / "reachops_ci_release_baseline_audit.py").read_text(encoding="utf-8")
         data_governance = (root / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
         security_supply_chain_audit = (root / "tools" / "reachops_security_supply_chain_audit.py").read_text(encoding="utf-8")
         start_contract_audit = (root / "tools" / "reachops_start_contract_audit.py").read_text(encoding="utf-8")
@@ -5937,6 +5958,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops.dependency_baseline.v1", dependency_baseline_verifier)
         self.assertIn("requirements_lock_line_", dependency_baseline_verifier)
         self.assertIn("dependency_license_inventory", dependency_baseline_verifier)
+        self.assertIn("reachops.ci_release_baseline_audit.v1", ci_release_baseline_audit)
+        self.assertIn("python -m pip check", ci_release_baseline_audit)
+        self.assertIn("ten_consecutive_ci_runs_without_code_failure", ci_release_baseline_audit)
+        self.assertIn("main_branch_protection_requires_pr_review", ci_release_baseline_audit)
+        self.assertIn("reachops-release-evidence.json", ci_release_baseline_audit)
+        self.assertIn("reachops-rollback-note.md", ci_release_baseline_audit)
         self.assertIn("reachops.data_governance.v1", data_governance)
         self.assertIn("backup_and_restore_verify", data_governance)
         self.assertIn("SUPPORT_BUNDLE_EXCLUDE_PATTERNS", data_governance)
@@ -6060,6 +6087,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_activation_status_template.py", readme)
         self.assertIn("entitlement_signature", readme)
         self.assertIn("离线宽限", readme)
+        self.assertIn("reachops_ci_release_baseline_audit.py --json", readme)
         self.assertIn("manifest_signature", reachops_readme)
         self.assertIn("rollback_policy.allow_downgrade=true", reachops_readme)
         self.assertIn("entitlement_signature", reachops_readme)

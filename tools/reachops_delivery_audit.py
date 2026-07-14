@@ -26,6 +26,7 @@ from ReachOps.intelligence.ai_strategy import HTTPAcquisitionIntelligenceProvide
 from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.action_router import ActionRouterConfig, FixtureActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
+from tools.reachops_ci_release_baseline_audit import build_report as build_ci_release_baseline_report
 from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
 from tools.reachops_data_governance import build_report as build_data_governance_report
@@ -1757,6 +1758,7 @@ def run_audit(args) -> dict:
     collection_error_states = run_collection_error_state_fixture()
     product_link_campaign = run_product_link_campaign_fixture()
     creator_topic_inputs = run_creator_and_topic_input_fixture()
+    ci_release_baseline_fixture = build_ci_release_baseline_report(ROOT_DIR)
 
     repository_cleanup = clean_generated_redundant_paths(ROOT_DIR)
     repository_cleanliness = scan_repository_cleanliness(ROOT_DIR)
@@ -1808,6 +1810,19 @@ def run_audit(args) -> dict:
                 and len(start_contract_fixture.get("rejection_cases") or []) >= 8
             ),
             start_contract_fixture,
+        ),
+        check(
+            "CI 和 release baseline 本地门禁可重复审计",
+            bool(
+                ci_release_baseline_fixture.get("passed")
+                and (ci_release_baseline_fixture.get("local_checks") or {}).get("ci_contract_complete")
+                and (ci_release_baseline_fixture.get("local_checks") or {}).get("dependency_baseline_passed")
+                and (ci_release_baseline_fixture.get("local_checks") or {}).get("pip_check_passed")
+                and (ci_release_baseline_fixture.get("local_checks") or {}).get("release_contract_complete")
+                and ci_release_baseline_fixture.get("does_not_claim_branch_protection") is True
+                and ci_release_baseline_fixture.get("does_not_claim_ten_green_ci_runs") is True
+            ),
+            ci_release_baseline_fixture,
         ),
         check(
             "AI/规则能生成产品分析",

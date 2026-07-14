@@ -16,6 +16,7 @@ from ReachOps.version import VERSION
 
 REQUIRED_FILES = {
     "dependency_lock": "requirements.lock",
+    "ci_release_baseline_audit": "tools/reachops_ci_release_baseline_audit.py",
     "dependency_baseline_verifier": "tools/verify_reachops_dependency_baseline.py",
     "dependency_license_inventory": "ReachOps/packaging/dependency-license-inventory.json",
     "data_governance": "tools/reachops_data_governance.py",
@@ -121,6 +122,18 @@ SCRIPT_EXPECTATIONS = {
         "reachops.dependency_baseline.v1",
         "requirements_lock_line_",
         "dependency_license_inventory",
+    ],
+    "tools/reachops_ci_release_baseline_audit.py": [
+        "reachops.ci_release_baseline_audit.v1",
+        "SUPPORTED_PYTHON",
+        "SUPPORTED_WINDOWS_RUNNER",
+        "python -m pip check",
+        "ten_consecutive_ci_runs_without_code_failure",
+        "main_branch_protection_requires_pr_review",
+        "reachops-release-evidence.json",
+        "reachops-rollback-note.md",
+        "does_not_claim_branch_protection",
+        "does_not_claim_ten_green_ci_runs",
     ],
     "tools/reachops_data_governance.py": [
         "reachops.data_governance.v1",
