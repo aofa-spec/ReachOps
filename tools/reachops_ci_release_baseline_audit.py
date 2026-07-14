@@ -136,6 +136,31 @@ def build_report(root: str | Path = ROOT_DIR, *, run_pip: bool = True) -> dict[s
         ),
         "includes_dependency_baseline": "build_dependency_report(root)" in release_evidence,
         "includes_delivery_package_check": "check_delivery_package(" in release_evidence,
+        "indexes_final_package_report_set": _contains_all(
+            release_evidence,
+            [
+                "ACCEPTANCE_SUMMARY_SECTIONS",
+                '"repository_cleanliness"',
+                '"windows_package_preflight"',
+                '"authorization_handoff"',
+                '"authorization_handoff_readiness_report"',
+                '"authorization_handoff_readiness_json"',
+                '"client_delivery"',
+                '"final_acceptance_gate"',
+                '"package_report_files"',
+                '"missing_package_report_files"',
+            ],
+        ),
+        "rollback_note_exposes_report_recovery_evidence": _contains_all(
+            release_evidence,
+            [
+                "Missing package reports",
+                "Authorization handoff evidence",
+                "Authorization handoff readiness report",
+                "Authorization handoff readiness JSON",
+                "Client delivery evidence",
+            ],
+        ),
         "writes_evidence_and_rollback_note": _contains_all(
             release_evidence,
             ["reachops-release-evidence.json", "reachops-rollback-note.md", "_rollback_note(payload)"],

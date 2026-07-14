@@ -91,7 +91,7 @@ CI/release baseline 本地审计：
 python tools/reachops_ci_release_baseline_audit.py --json
 ```
 
-该审计只证明本地可重复门禁：Linux/Windows Python 3.11 CI 矩阵、依赖锁、`pip check`、dependency-license inventory、deterministic delivery audits、release evidence 和 rollback note 合同。GitHub `main` 分支保护、强制 PR review 和十连 CI 绿灯仍是外部治理门禁，不能用本地 JSON 代替。
+该审计只证明本地可重复门禁：Linux/Windows Python 3.11 CI 矩阵、依赖锁、`pip check`、dependency-license inventory、deterministic delivery audits、release evidence、完整 final report set 索引和 rollback note 恢复证据合同。GitHub `main` 分支保护、强制 PR review 和十连 CI 绿灯仍是外部治理门禁，不能用本地 JSON 代替。
 
 账号 readiness / no-submit 证据包本地审计：
 
