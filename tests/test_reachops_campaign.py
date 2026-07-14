@@ -973,6 +973,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(issues[1]["does_not_claim_issue_closed"])
         self.assertTrue(issues[3]["does_not_claim_issue_closed"])
         self.assertTrue(issues[7]["does_not_claim_issue_closed"])
+        issue_2_criteria = {row["id"]: row for row in issues[2]["acceptance_criteria"]}
+        self.assertEqual(
+            issue_2_criteria["issue_2_unittest_zero_failures_linux_windows"]["evidence_key"],
+            "current_review_pr_github_checks_and_local_full_unittest",
+        )
+        self.assertNotIn("PR #8", json.dumps(report, ensure_ascii=False))
 
     def test_reachops_delivery_audit_reports_local_passes_and_external_pending(self):
         class Args:

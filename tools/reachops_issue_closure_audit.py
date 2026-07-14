@@ -259,7 +259,7 @@ def build_report(root: str | Path = ROOT_DIR, *, run_pip: bool = False) -> dict[
                     "issue_2_unittest_zero_failures_linux_windows",
                     'python -m unittest discover -s tests -p "test_*.py" -v returns zero failures/errors on Linux and Windows.',
                     "local_passed" if start_contract.get("passed") else "unclassified",
-                    "PR #8 GitHub checks and local full unittest",
+                    "current_review_pr_github_checks_and_local_full_unittest",
                 ),
                 _criterion(
                     "issue_2_versioned_start_contract",
