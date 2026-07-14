@@ -173,6 +173,8 @@ def build_handoff_bundle(args: argparse.Namespace, snapshot: dict[str, Any] | No
     return {
         "status": "created",
         "bundle_path": str(output_path),
+        "readiness_report_path": str(markdown_path),
+        "readiness_json_path": str(json_path),
         "exists": output_path.is_file(),
         "size": output_path.stat().st_size if output_path.is_file() else 0,
         "no_browser_started": True,

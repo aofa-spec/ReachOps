@@ -191,6 +191,8 @@ function Write-AcceptanceSummary {
         [string]$ActivationStatusJsonPath,
         [string]$LiveAcceptanceStatusJsonPath,
         [string]$AuthorizationHandoffJsonPath,
+        [string]$AuthorizationHandoffReadinessJsonPath,
+        [string]$AuthorizationHandoffReadinessMdPath,
         [string]$LiveValidationJsonPath,
         [string]$RepositoryCleanlinessJsonPath,
         [string]$WindowsPackagePreflightJsonPath,
@@ -372,6 +374,8 @@ function Write-AcceptanceSummary {
             no_submit = if ($authorizationHandoff) { [bool]$authorizationHandoff.no_submit } else { $true }
             bundle_path = if ($authorizationHandoff) { [string]$authorizationHandoff.bundle_path } else { "" }
             readiness_status = if ($authorizationHandoff) { [string]$authorizationHandoff.readiness_status } else { "" }
+            readiness_report_path = if (Test-Path $AuthorizationHandoffReadinessMdPath) { $AuthorizationHandoffReadinessMdPath } else { "" }
+            readiness_json_path = if (Test-Path $AuthorizationHandoffReadinessJsonPath) { $AuthorizationHandoffReadinessJsonPath } else { "" }
             json_path = if (Test-Path $AuthorizationHandoffJsonPath) { $AuthorizationHandoffJsonPath } else { "" }
         }
         live_preflight = [ordered]@{
@@ -813,7 +817,7 @@ if ($RunLiveSubmit) {
     Write-Step "Skipping controlled live submit: RunLiveSubmit not set"
 }
 
-Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveAcceptanceStatusJsonPath $liveAcceptanceStatusJson -AuthorizationHandoffJsonPath $authorizationHandoffJson -LiveValidationJsonPath $liveValidationJson -RepositoryCleanlinessJsonPath $repositoryCleanlinessJson -WindowsPackagePreflightJsonPath $windowsPackagePreflightJson -ClientDeliveryJsonPath $clientDeliveryJson -IssueClosureJsonPath $issueClosureJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
+Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveAcceptanceStatusJsonPath $liveAcceptanceStatusJson -AuthorizationHandoffJsonPath $authorizationHandoffJson -AuthorizationHandoffReadinessJsonPath $authorizationHandoffReadinessJson -AuthorizationHandoffReadinessMdPath $authorizationHandoffReadinessMd -LiveValidationJsonPath $liveValidationJson -RepositoryCleanlinessJsonPath $repositoryCleanlinessJson -WindowsPackagePreflightJsonPath $windowsPackagePreflightJson -ClientDeliveryJsonPath $clientDeliveryJson -IssueClosureJsonPath $issueClosureJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
 
 Write-Step "ReachOps goal status report"
 Invoke-PythonCapture -StepName "ReachOps goal status report" -StdoutPath $goalStatusStdout -Arguments @("tools\reachops_goal_status_report.py", "--audit-json", $auditJson, "--acceptance-summary", $acceptanceSummaryJson, "--json")

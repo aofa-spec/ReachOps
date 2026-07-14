@@ -330,6 +330,14 @@ def verify_summary(
         summary_path,
         authorization_handoff.get("json_path") if isinstance(authorization_handoff, dict) else "",
     )
+    authorization_handoff_readiness_report = report_path_status(
+        summary_path,
+        authorization_handoff.get("readiness_report_path") if isinstance(authorization_handoff, dict) else "",
+    )
+    authorization_handoff_readiness_json = report_path_status(
+        summary_path,
+        authorization_handoff.get("readiness_json_path") if isinstance(authorization_handoff, dict) else "",
+    )
     if status == STATUS_PASSED and not authorization_handoff:
         failures.append("authorization_handoff_missing")
     if authorization_handoff:
@@ -346,6 +354,10 @@ def verify_summary(
             failures.append("authorization_handoff_bundle_path_missing")
         if status == STATUS_PASSED and not str(authorization_handoff.get("json_path") or "").strip():
             failures.append("authorization_handoff_json_path_missing")
+        if status == STATUS_PASSED and not str(authorization_handoff.get("readiness_report_path") or "").strip():
+            failures.append("authorization_handoff_readiness_report_path_missing")
+        if status == STATUS_PASSED and not str(authorization_handoff.get("readiness_json_path") or "").strip():
+            failures.append("authorization_handoff_readiness_json_path_missing")
         if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("json_path") or "").strip():
             if not authorization_handoff_json["exists"]:
                 failures.append("authorization_handoff_json_missing")
@@ -353,6 +365,20 @@ def verify_summary(
                 failures.append("authorization_handoff_json_empty")
             elif not bool(authorization_handoff_json.get("inside_summary_dir")):
                 failures.append("authorization_handoff_json_outside_summary_dir")
+        if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("readiness_report_path") or "").strip():
+            if not authorization_handoff_readiness_report["exists"]:
+                failures.append("authorization_handoff_readiness_report_missing")
+            elif int(authorization_handoff_readiness_report.get("size") or 0) <= 0:
+                failures.append("authorization_handoff_readiness_report_empty")
+            elif not bool(authorization_handoff_readiness_report.get("inside_summary_dir")):
+                failures.append("authorization_handoff_readiness_report_outside_summary_dir")
+        if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("readiness_json_path") or "").strip():
+            if not authorization_handoff_readiness_json["exists"]:
+                failures.append("authorization_handoff_readiness_json_missing")
+            elif int(authorization_handoff_readiness_json.get("size") or 0) <= 0:
+                failures.append("authorization_handoff_readiness_json_empty")
+            elif not bool(authorization_handoff_readiness_json.get("inside_summary_dir")):
+                failures.append("authorization_handoff_readiness_json_outside_summary_dir")
     else:
         authorization_handoff_status = ""
 
@@ -731,6 +757,14 @@ def verify_summary(
             "no_submit": bool(authorization_handoff.get("no_submit", True)),
             "bundle_path": str(authorization_handoff.get("bundle_path") or ""),
             "readiness_status": str(authorization_handoff.get("readiness_status") or ""),
+            "readiness_report_path": str(authorization_handoff.get("readiness_report_path") or ""),
+            "readiness_report_exists": bool(authorization_handoff_readiness_report.get("exists")),
+            "readiness_report_size": int(authorization_handoff_readiness_report.get("size") or 0),
+            "readiness_report_inside_summary_dir": bool(authorization_handoff_readiness_report.get("inside_summary_dir")),
+            "readiness_json_path": str(authorization_handoff.get("readiness_json_path") or ""),
+            "readiness_json_exists": bool(authorization_handoff_readiness_json.get("exists")),
+            "readiness_json_size": int(authorization_handoff_readiness_json.get("size") or 0),
+            "readiness_json_inside_summary_dir": bool(authorization_handoff_readiness_json.get("inside_summary_dir")),
             "json_path": str(authorization_handoff.get("json_path") or ""),
             "json_exists": bool(authorization_handoff_json.get("exists")),
             "json_size": int(authorization_handoff_json.get("size") or 0),
