@@ -67,6 +67,42 @@ def update_manifest(**overrides) -> dict:
             "allow_downgrade": False,
             "minimum_version": "0.0.0",
         },
+        "evidence": {
+            "schema_version": "reachops.update_manifest_evidence.v1",
+            "release_evidence_required": True,
+            "acceptance_summary_required": True,
+            "final_package_check_required": True,
+            "final_acceptance_gate_required": True,
+            "issue_closure_required": True,
+            "release_evidence_dir": "reports/reachops_release",
+            "release_evidence_name": "reachops-release-evidence.json",
+            "rollback_note_name": "reachops-rollback-note.md",
+            "acceptance_summary_path": "reports/reachops_acceptance/acceptance_summary.json",
+            "required_report_files": [
+                "delivery_audit",
+                "operator_pressure",
+                "installer_smoke",
+                "ui_startup",
+                "activation_status",
+                "live_acceptance_status",
+                "authorization_handoff",
+                "live_validation",
+                "repository_cleanliness",
+                "windows_package_preflight",
+                "client_delivery",
+                "live_readiness",
+                "live_preflight",
+                "goal_status",
+                "live_submit",
+                "issue_closure",
+                "final_acceptance_gate",
+            ],
+            "verification_commands": [
+                "python tools\\reachops_delivery_package_check.py --json",
+                "python tools\\reachops_issue_closure_audit.py --json",
+                "python tools\\reachops_final_acceptance_gate.py --json",
+            ],
+        },
     }
     manifest.update(overrides)
     return manifest
@@ -308,6 +344,14 @@ class CommercialSecurityContractTest(unittest.TestCase):
 
         self.assertEqual(loaded, signed)
         self.assertTrue(manager.check_manifest(loaded).available)
+
+    def test_update_manifest_requires_evidence_contract(self):
+        manager = ReachOpsUpdateManager(current_version="0.4.0")
+        manifest = update_manifest()
+        manifest.pop("evidence", None)
+
+        with self.assertRaisesRegex(ValueError, "manifest evidence contract is required"):
+            manager.validate_manifest(manifest)
 
     def test_remote_https_update_manifest_rejects_tampered_signature(self):
         manager = ReachOpsUpdateManager(current_version="0.4.0", manifest_key_ring={"k1": "secret"})

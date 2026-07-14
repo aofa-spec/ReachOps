@@ -12,6 +12,27 @@ from typing import Any
 from .security_signing import load_key_ring, verify_signed_payload
 from .version import BUILD_CHANNEL, PRODUCT_ID, VERSION
 
+MANIFEST_EVIDENCE_SCHEMA_VERSION = "reachops.update_manifest_evidence.v1"
+REQUIRED_FINAL_REPORT_FILES = {
+    "delivery_audit",
+    "operator_pressure",
+    "installer_smoke",
+    "ui_startup",
+    "activation_status",
+    "live_acceptance_status",
+    "authorization_handoff",
+    "live_validation",
+    "repository_cleanliness",
+    "windows_package_preflight",
+    "client_delivery",
+    "live_readiness",
+    "live_preflight",
+    "goal_status",
+    "live_submit",
+    "issue_closure",
+    "final_acceptance_gate",
+}
+
 
 @dataclass
 class ReachOpsUpdateInfo:
@@ -85,6 +106,7 @@ class ReachOpsUpdateManager:
             raise ValueError("manifest rollback_policy.minimum_version is required")
         if self.compare_versions(self.current_version, minimum_version) < 0:
             raise ValueError("manifest rollback policy blocks this client version")
+        self.validate_evidence_contract(manifest)
         if require_signature:
             signature_ok, signature_reason = verify_signed_payload(
                 manifest,
@@ -93,6 +115,44 @@ class ReachOpsUpdateManager:
             )
             if not signature_ok:
                 raise ValueError(f"manifest signature invalid: {signature_reason}")
+
+    def validate_evidence_contract(self, manifest: dict[str, Any]) -> None:
+        evidence = manifest.get("evidence")
+        if not isinstance(evidence, dict):
+            raise ValueError("manifest evidence contract is required")
+        if str(evidence.get("schema_version") or "") != MANIFEST_EVIDENCE_SCHEMA_VERSION:
+            raise ValueError("manifest evidence schema_version mismatch")
+        required_flags = [
+            "release_evidence_required",
+            "acceptance_summary_required",
+            "final_package_check_required",
+            "final_acceptance_gate_required",
+            "issue_closure_required",
+        ]
+        for flag in required_flags:
+            if evidence.get(flag) is not True:
+                raise ValueError(f"manifest evidence.{flag} must be true")
+        required_paths = [
+            "release_evidence_dir",
+            "release_evidence_name",
+            "rollback_note_name",
+            "acceptance_summary_path",
+        ]
+        for field in required_paths:
+            if not str(evidence.get(field) or "").strip():
+                raise ValueError(f"manifest evidence.{field} is required")
+        report_files = {str(item) for item in evidence.get("required_report_files") or [] if str(item)}
+        missing_reports = sorted(REQUIRED_FINAL_REPORT_FILES - report_files)
+        if missing_reports:
+            raise ValueError("manifest evidence.required_report_files missing: " + ", ".join(missing_reports))
+        commands = "\n".join(str(item) for item in evidence.get("verification_commands") or [])
+        for required in [
+            "reachops_delivery_package_check.py --json",
+            "reachops_issue_closure_audit.py --json",
+            "reachops_final_acceptance_gate.py --json",
+        ]:
+            if required not in commands:
+                raise ValueError(f"manifest evidence verification command missing: {required}")
 
     def check_manifest(self, manifest: dict[str, Any]) -> ReachOpsUpdateInfo:
         self.validate_manifest(manifest)

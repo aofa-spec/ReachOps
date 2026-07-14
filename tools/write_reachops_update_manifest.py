@@ -16,6 +16,27 @@ if str(ROOT_DIR) not in sys.path:
 from ReachOps.security_signing import sign_payload
 from ReachOps.version import BUILD_CHANNEL, PRODUCT_ID, PRODUCT_NAME, VERSION
 
+MANIFEST_EVIDENCE_SCHEMA_VERSION = "reachops.update_manifest_evidence.v1"
+REQUIRED_FINAL_REPORT_FILES = [
+    "delivery_audit",
+    "operator_pressure",
+    "installer_smoke",
+    "ui_startup",
+    "activation_status",
+    "live_acceptance_status",
+    "authorization_handoff",
+    "live_validation",
+    "repository_cleanliness",
+    "windows_package_preflight",
+    "client_delivery",
+    "live_readiness",
+    "live_preflight",
+    "goal_status",
+    "live_submit",
+    "issue_closure",
+    "final_acceptance_gate",
+]
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -60,6 +81,24 @@ def build_manifest(
         "rollback_policy": {
             "allow_downgrade": False,
             "minimum_version": "0.0.0",
+        },
+        "evidence": {
+            "schema_version": MANIFEST_EVIDENCE_SCHEMA_VERSION,
+            "release_evidence_required": True,
+            "acceptance_summary_required": True,
+            "final_package_check_required": True,
+            "final_acceptance_gate_required": True,
+            "issue_closure_required": True,
+            "release_evidence_dir": "reports/reachops_release",
+            "release_evidence_name": "reachops-release-evidence.json",
+            "rollback_note_name": "reachops-rollback-note.md",
+            "acceptance_summary_path": "reports/reachops_acceptance/acceptance_summary.json",
+            "required_report_files": list(REQUIRED_FINAL_REPORT_FILES),
+            "verification_commands": [
+                "python tools\\reachops_delivery_package_check.py --json",
+                "python tools\\reachops_issue_closure_audit.py --json",
+                "python tools\\reachops_final_acceptance_gate.py --json",
+            ],
         },
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     }

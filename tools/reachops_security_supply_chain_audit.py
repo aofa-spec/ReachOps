@@ -172,6 +172,7 @@ def run_update_manifest_matrix() -> dict[str, Any]:
         signature_ok, signature_reason = verify_signed_payload(manifest, {"manifest-v2": "manifest-secret"}, signature_field="manifest_signature")
         manager.validate_manifest(manifest, require_signature=True)
         installer_verified = manager.verify_installer(installer, manifest)
+        evidence_contract = manifest.get("evidence") if isinstance(manifest.get("evidence"), dict) else {}
         tampered = {**manifest, "version": "9.9.10"}
         try:
             manager.validate_manifest(tampered, require_signature=True)
@@ -180,6 +181,23 @@ def run_update_manifest_matrix() -> dict[str, Any]:
         except Exception as exc:
             tampered_rejected = "signature invalid" in str(exc)
             tampered_error = str(exc)
+        missing_evidence = dict(manifest)
+        missing_evidence.pop("evidence", None)
+        try:
+            manager.validate_manifest(missing_evidence, require_signature=False)
+            missing_evidence_rejected = False
+            missing_evidence_error = ""
+        except Exception as exc:
+            missing_evidence_rejected = "evidence contract is required" in str(exc)
+            missing_evidence_error = str(exc)
+        incomplete_evidence = {**manifest, "evidence": {**evidence_contract, "required_report_files": ["final_acceptance_gate"]}}
+        try:
+            manager.validate_manifest(incomplete_evidence, require_signature=False)
+            incomplete_evidence_rejected = False
+            incomplete_evidence_error = ""
+        except Exception as exc:
+            incomplete_evidence_rejected = "required_report_files missing" in str(exc)
+            incomplete_evidence_error = str(exc)
         bad_installer = base / "ReachOps-Setup-audit-bad.exe"
         bad_installer.write_bytes(b"tampered")
         bad_installer_rejected = not manager.verify_installer(bad_installer, manifest)
@@ -205,6 +223,8 @@ def run_update_manifest_matrix() -> dict[str, Any]:
         and signature_reason == "signature_valid"
         and installer_verified
         and tampered_rejected
+        and missing_evidence_rejected
+        and incomplete_evidence_rejected
         and bad_installer_rejected
         and http_rejected
         and https_loaded == manifest
@@ -218,6 +238,17 @@ def run_update_manifest_matrix() -> dict[str, Any]:
         "signature_valid": signature_ok,
         "signature_reason": signature_reason,
         "installer_verified": installer_verified,
+        "evidence_contract_schema": evidence_contract.get("schema_version"),
+        "release_evidence_required": evidence_contract.get("release_evidence_required") is True,
+        "acceptance_summary_required": evidence_contract.get("acceptance_summary_required") is True,
+        "final_package_check_required": evidence_contract.get("final_package_check_required") is True,
+        "final_acceptance_gate_required": evidence_contract.get("final_acceptance_gate_required") is True,
+        "issue_closure_required": evidence_contract.get("issue_closure_required") is True,
+        "required_report_files": list(evidence_contract.get("required_report_files") or []),
+        "missing_evidence_contract_rejected": missing_evidence_rejected,
+        "missing_evidence_contract_error": missing_evidence_error,
+        "incomplete_evidence_contract_rejected": incomplete_evidence_rejected,
+        "incomplete_evidence_contract_error": incomplete_evidence_error,
         "tampered_manifest_rejected": tampered_rejected,
         "tampered_manifest_error": tampered_error,
         "bad_installer_hash_or_size_rejected": bad_installer_rejected,
@@ -226,7 +257,20 @@ def run_update_manifest_matrix() -> dict[str, Any]:
         "https_signed_manifest_loaded": https_loaded == manifest,
         "downgrade_without_rollback_blocked": downgrade_blocked,
         "explicit_rollback_available": rollback_available,
-        "verified_fields": ["product_id", "platform", "channel", "version", "installer.sha256", "installer.size_bytes", "manifest_signature", "rollback_policy"],
+        "verified_fields": [
+            "product_id",
+            "platform",
+            "channel",
+            "version",
+            "installer.sha256",
+            "installer.size_bytes",
+            "manifest_signature",
+            "rollback_policy",
+            "evidence.release_evidence_required",
+            "evidence.acceptance_summary_required",
+            "evidence.required_report_files",
+            "evidence.verification_commands",
+        ],
     }
 
 
