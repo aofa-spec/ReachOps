@@ -1382,6 +1382,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
             "failed_checks": [],
             "json_path": "reports/reachops_acceptance/current/final_acceptance_gate.json",
         }
+        passed_summary["issue_closure"] = {
+            "schema_version": "reachops.issue_closure_audit.v1",
+            "status": "passed",
+            "passed": True,
+            "github_issues": {"closure_requires_external_validation": False},
+            "summary": {
+                "issues_total": 7,
+                "acceptance_criteria_total": 53,
+                "acceptance_criteria_external_pending": 0,
+                "acceptance_criteria_unclassified": 0,
+                "external_pending_count": 0,
+            },
+            "external_acceptance_pending": [],
+            "json_path": "reports/reachops_acceptance/current/issue_closure_payload.json",
+        }
         passed_summary["live_readiness"] = {
             "status": "ready",
             "ready": True,
@@ -1481,6 +1496,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(passed["final_acceptance_gate"]["status"], "passed")
         self.assertTrue(passed["final_acceptance_gate"]["final_delivery_ready"])
         self.assertTrue(passed["final_acceptance_gate"]["json_path"].endswith("final_acceptance_gate.json"))
+        self.assertEqual(passed["issue_closure"]["status"], "passed")
+        self.assertTrue(passed["issue_closure"]["passed"])
+        self.assertEqual(passed["issue_closure"]["issues_total"], 7)
+        self.assertEqual(passed["issue_closure"]["acceptance_criteria_total"], 53)
+        self.assertEqual(passed["issue_closure"]["acceptance_criteria_external_pending"], 0)
+        self.assertEqual(passed["issue_closure"]["external_pending_count"], 0)
+        self.assertIs(passed["issue_closure"]["closure_requires_external_validation"], False)
+        self.assertTrue(passed["issue_closure"]["json_path"].endswith("issue_closure_payload.json"))
         self.assertEqual(passed["live_acceptance_status"]["status"], "passed")
         self.assertTrue(passed["live_acceptance_status"]["final_delivery_ready"])
         self.assertTrue(passed["live_acceptance_status"]["ready_for_live_submit"])
@@ -1633,6 +1656,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(missing_final_gate_path["passed"])
         self.assertIn("final_acceptance_gate_json_path_missing", missing_final_gate_path["failures"])
 
+        missing_issue_closure_summary = json.loads(json.dumps(passed_summary))
+        missing_issue_closure_summary.pop("issue_closure")
+        missing_issue_closure = verify_reachops_acceptance_summary(missing_issue_closure_summary)
+        self.assertFalse(missing_issue_closure["passed"])
+        self.assertIn("issue_closure_missing", missing_issue_closure["failures"])
+
+        pending_issue_closure_summary = json.loads(json.dumps(passed_summary))
+        pending_issue_closure_summary["issue_closure"]["summary"]["acceptance_criteria_external_pending"] = 1
+        pending_issue_closure_summary["issue_closure"]["summary"]["external_pending_count"] = 2
+        pending_issue_closure_summary["issue_closure"]["github_issues"]["closure_requires_external_validation"] = True
+        pending_issue_closure_summary["issue_closure"]["external_acceptance_pending"] = ["issue_3_100_real_no_submit_runs_three_industries"]
+        pending_issue_closure = verify_reachops_acceptance_summary(pending_issue_closure_summary)
+        self.assertFalse(pending_issue_closure["passed"])
+        self.assertIn("issue_closure_external_pending", pending_issue_closure["failures"])
+        self.assertIn("issue_closure_external_pending_items", pending_issue_closure["failures"])
+        self.assertIn("issue_closure_external_acceptance_pending", pending_issue_closure["failures"])
+        self.assertIn("issue_closure_requires_external_validation", pending_issue_closure["failures"])
+
         with tempfile.TemporaryDirectory() as tmp:
             report_dir = Path(tmp) / "acceptance"
             report_dir.mkdir()
@@ -1641,12 +1682,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (report_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (report_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
+            (report_dir / "issue_closure_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             path_checked_summary = json.loads(json.dumps(passed_summary))
             path_checked_summary["repository_cleanliness"]["json_path"] = "repository_cleanliness_payload.json"
             path_checked_summary["windows_package_preflight"]["json_path"] = "windows_package_preflight.json"
             path_checked_summary["client_delivery"]["json_path"] = "client_delivery.json"
             path_checked_summary["final_acceptance_gate"]["json_path"] = "final_acceptance_gate.json"
+            path_checked_summary["issue_closure"]["json_path"] = "issue_closure_payload.json"
             path_checked_summary["authorization_handoff"]["json_path"] = "authorization_handoff_payload.json"
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
@@ -1654,11 +1697,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["windows_package_preflight"]["json_exists"])
             self.assertTrue(path_checked["client_delivery"]["json_exists"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_exists"])
+            self.assertTrue(path_checked["issue_closure"]["json_exists"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["client_delivery"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["issue_closure"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["authorization_handoff"]["json_inside_summary_dir"])
 
             (report_dir / "repository_cleanliness_payload.json").unlink()
@@ -1685,6 +1730,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("final_acceptance_gate_json_empty", empty_final_gate_file["failures"])
 
             (report_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
+            (report_dir / "issue_closure_payload.json").unlink()
+            missing_issue_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_issue_file["passed"])
+            self.assertIn("issue_closure_json_missing", missing_issue_file["failures"])
+
+            (report_dir / "issue_closure_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "authorization_handoff_payload.json").unlink()
             missing_handoff_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_handoff_file["passed"])
@@ -1696,12 +1747,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (outside_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (outside_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (outside_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "issue_closure_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             outside_summary = json.loads(json.dumps(path_checked_summary))
             outside_summary["repository_cleanliness"]["json_path"] = str(outside_dir / "repository_cleanliness_payload.json")
             outside_summary["windows_package_preflight"]["json_path"] = "../outside/windows_package_preflight.json"
             outside_summary["client_delivery"]["json_path"] = "../outside/client_delivery.json"
             outside_summary["final_acceptance_gate"]["json_path"] = "../outside/final_acceptance_gate.json"
+            outside_summary["issue_closure"]["json_path"] = "../outside/issue_closure_payload.json"
             outside_summary["authorization_handoff"]["json_path"] = "../outside/authorization_handoff_payload.json"
             outside_report_file = verify_reachops_acceptance_summary(outside_summary, summary_path=summary_path)
             self.assertFalse(outside_report_file["passed"])
@@ -1709,11 +1762,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("windows_package_preflight_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("client_delivery_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("final_acceptance_gate_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("issue_closure_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("authorization_handoff_json_outside_summary_dir", outside_report_file["failures"])
             self.assertFalse(outside_report_file["repository_cleanliness"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["windows_package_preflight"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["client_delivery"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["final_acceptance_gate"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["issue_closure"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["authorization_handoff"]["json_inside_summary_dir"])
 
         missing_readiness_summary = json.loads(json.dumps(passed_summary))
@@ -2595,8 +2650,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "checks": final_acceptance_gate_payload()["checks"],
                     "json_path": str(report_dir / "final_acceptance_gate.json"),
                 },
+                "issue_closure": {
+                    **final_issue_closure_payload(),
+                    "json_path": str(report_dir / "issue_closure_payload.json"),
+                },
             }
             (report_dir / "client_delivery.json").write_text(json.dumps(summary["client_delivery"]), encoding="utf-8")
+            (report_dir / "issue_closure_payload.json").write_text(json.dumps(summary["issue_closure"]), encoding="utf-8")
             (report_dir / "final_acceptance_gate.json").write_text(json.dumps(summary["final_acceptance_gate"]), encoding="utf-8")
             acceptance_summary = report_dir / "acceptance_summary.json"
             acceptance_summary.write_text(json.dumps(summary), encoding="utf-8")
@@ -2615,6 +2675,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["report_files"]["repository_cleanliness"]["exists"])
             self.assertTrue(result["report_files"]["windows_package_preflight"]["exists"])
             self.assertTrue(result["report_files"]["client_delivery"]["exists"])
+            self.assertTrue(result["report_files"]["issue_closure"]["exists"])
             self.assertTrue(result["report_files"]["final_acceptance_gate"]["exists"])
             self.assertEqual(result["final_gate_report"]["status"], "passed")
             self.assertEqual(result["final_gate_report"]["missing_required_checks"], [])
@@ -5853,8 +5914,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("tools\\reachops_delivery_audit.py", acceptance_script)
         self.assertIn("tools\\reachops_operator_pressure.py", acceptance_script)
         self.assertIn("tools\\reachops_goal_status_report.py", acceptance_script)
+        self.assertIn("tools\\reachops_issue_closure_audit.py", acceptance_script)
         self.assertIn("tools\\reachops_delivery_package_check.py", acceptance_script)
         self.assertIn("tools\\reachops_final_acceptance_gate.py", acceptance_script)
+        self.assertIn("--issue-closure-json", acceptance_script)
         self.assertIn("--allow-missing-final-gate", acceptance_script)
         self.assertIn("--allow-final-gate-convergence", acceptance_script)
         self.assertIn("ReachOps delivery package convergence evidence check", acceptance_script)
@@ -5888,6 +5951,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("client_delivery.json", acceptance_script)
         self.assertIn("CLIENT_DELIVERY_JSON", acceptance_script)
         self.assertIn("client_delivery", acceptance_script)
+        self.assertIn("issue_closure_payload.json", acceptance_script)
+        self.assertIn("ISSUE_CLOSURE_JSON", acceptance_script)
+        self.assertIn("issue_closure", acceptance_script)
         self.assertIn("Filter __pycache__", sync_script)
         self.assertIn("*.pyc,*.pyo", sync_script)
         self.assertIn("Remove-Item -Recurse -Force", sync_script)

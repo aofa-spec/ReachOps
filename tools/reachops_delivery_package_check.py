@@ -182,6 +182,7 @@ def _report_sections(summary: dict[str, Any], final_required: bool, require_fina
         "repository_cleanliness",
         "windows_package_preflight",
         "client_delivery",
+        "issue_closure",
         "live_readiness",
         "live_preflight",
         "goal_status",

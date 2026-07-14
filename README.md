@@ -261,7 +261,7 @@ python tools\reachops_delivery_package_check.py --json
 python tools\reachops_final_acceptance_gate.py --json
 ```
 
-最终交付必须同时让 package check 返回 `status=passed`、`final_delivery_ready=true`，并让 final acceptance gate 返回 `status=passed`、`final_delivery_ready=true`。最终 package check 默认必须验证 `final_acceptance_gate.json`、`repository_cleanliness_payload.json` 和 `windows_package_preflight.json`；`--allow-missing-final-gate` 只允许 Windows acceptance 脚本首次 bootstrap 包检查使用，此时 JSON 会标记 `bootstrap_only=true`、`final_delivery_ready=false`，不能作为最终交付标准。`ready_for_external_validation`、`blocked_by_environment` 或缺少 `exe/installer/manifest/acceptance_summary/final_acceptance_gate/repository_cleanliness/windows_package_preflight` 都不是最终交付通过。
+最终交付必须同时让 package check 返回 `status=passed`、`final_delivery_ready=true`，并让 final acceptance gate 返回 `status=passed`、`final_delivery_ready=true`。最终 package check 默认必须验证 `final_acceptance_gate.json`、`issue_closure_payload.json`、`repository_cleanliness_payload.json` 和 `windows_package_preflight.json`；`--allow-missing-final-gate` 只允许 Windows acceptance 脚本首次 bootstrap 包检查使用，此时 JSON 会标记 `bootstrap_only=true`、`final_delivery_ready=false`，不能作为最终交付标准。`ready_for_external_validation`、`blocked_by_environment` 或缺少 `exe/installer/manifest/acceptance_summary/final_acceptance_gate/issue_closure/repository_cleanliness/windows_package_preflight` 都不是最终交付通过。
 
 中间态检查允许外部真实平台 pending：
 
