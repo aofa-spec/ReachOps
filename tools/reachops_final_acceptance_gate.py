@@ -427,6 +427,7 @@ def build_final_delivery_evidence_plan(
                 "client_delivery.failed_checks=[]",
             ],
             blocker_codes=[str(item) for item in (client_delivery.get("failed_checks") or [])],
+            blocker_summary=client_delivery.get("account_blocker_resolution") or {},
             next_action="复跑 tools\\reachops_client_delivery_check.py --json，直到 status=passed、final_delivery_ready=true、failed_checks=[]。",
         ),
         _evidence_item(

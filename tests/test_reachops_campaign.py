@@ -3911,6 +3911,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         plan_items = {row["scope"]: row for row in evidence_plan["items"]}
         self.assertIn("goal_status.pending_external_validation=[]", plan_items["external_authorized_execution"]["proof_fields"])
         self.assertIn("client_delivery.final_delivery_ready=true", plan_items["client_delivery_gate"]["proof_fields"])
+        self.assertEqual(
+            plan_items["client_delivery_gate"]["blocker_summary"]["priority_action"],
+            "apply_latest_account_repair_plan",
+        )
+        self.assertTrue(
+            plan_items["client_delivery_gate"]["blocker_summary"]["requires_latest_repair_apply"]
+        )
         self.assertIn("delivery_package.final_delivery_ready=true", plan_items["windows_final_artifacts"]["proof_fields"])
         self.assertIn("dist\\ReachOps\\ReachOps.exe", plan_items["windows_final_artifacts"]["required_artifacts"])
         self.assertIn("issue_closure.summary.acceptance_criteria_external_pending=0", plan_items["commercial_issue_closure"]["proof_fields"])
