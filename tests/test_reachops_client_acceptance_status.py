@@ -3830,6 +3830,10 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
 
         self.assertIn("tools/reachops_apply_account_repair_plan.py --json", script)
         self.assertIn("tools/reachops_apply_account_repair_plan.py --apply --json", script)
+        self.assertIn("PREVIEW_JSON", script)
+        self.assertIn("no_applicable_profiles", script)
+        self.assertIn("最新账号修复计划没有默认可自动隔离的账号", script)
+        self.assertIn("exit 2", script)
         self.assertIn("CONFIRM", script)
         self.assertIn("APPLY", script)
         self.assertIn("tools/reachops_client_delivery_check.py", script)
@@ -4138,6 +4142,54 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertIn("latest_apply_stale", payload["real_pilot_evidence"]["account_pool_remediation"])
         self.assertTrue(payload["real_pilot_evidence"]["account_pool_remediation"]["latest_apply_stale"])
 
+    def test_delivery_check_explains_no_applicable_account_repair_apply(self):
+        batch = {"id": "gb_no_auto", "status": "failed", "profile_group": "United States", "config_json": "{}"}
+        acceptance = {
+            "readiness": "blocked_by_accounts",
+            "checks": {"profile_available_count": 0},
+            "blockers": ["账号预检没有可用账号，无法进入真实采集/触达。"],
+            "next_actions": ["先修复 United States 分组账号。"],
+            "profile_preflight_details": [
+                {
+                    "profile_id": "slow-1",
+                    "status": "不可用",
+                    "error": "PROFILE_PREFLIGHT_TIMEOUT",
+                    "message": "profile preflight exceeded 21.0s",
+                }
+            ],
+        }
+        with TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            report_dir = base_dir / "reports" / "acceptance_remediation"
+            report_dir.mkdir(parents=True)
+            (report_dir / "latest_account_repair_apply.json").write_text(
+                json.dumps(
+                    {
+                        "status": "no_applicable_profiles",
+                        "batch_id": "gb_no_auto",
+                        "profile_group": "United States",
+                        "selected_count": 0,
+                        "moved_count": 0,
+                        "failed_count": 0,
+                        "no_applicable_profiles": True,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with patch("tools.reachops_client_delivery_check.latest_batch", return_value=batch):
+                with patch("tools.reachops_client_delivery_check.latest_profile_preflight", return_value={"checked": 1, "available": 0}):
+                    with patch("tools.reachops_client_delivery_check.read_lines", return_value=[]):
+                        with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
+                            with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
+                                payload = build_delivery_check(base_dir)
+
+        self.assertEqual(payload["account_repair_apply"]["status"], "no_applicable_profiles")
+        self.assertFalse(payload["account_repair_apply"]["pending_recheck"])
+        self.assertFalse(payload["account_repair_apply"].get("stale", False))
+        self.assertIn("没有默认可自动隔离的账号", payload["blockers"][0])
+        self.assertIn("手动打开受影响账号", payload["next_actions"][0])
+
     def test_delivery_check_human_output_formats_account_repair_summary(self):
         payload = {
             "account_repair_summary": {
@@ -4242,6 +4294,43 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertTrue(applied["safety_contract"]["no_submit"])
         self.assertTrue(applied["safety_contract"]["no_ai_token_used"])
         self.assertEqual(manager.moves, [("24909", "IXBROWSER_KERNEL_MISMATCH"), ("24910", "IXBROWSER_KERNEL_MISMATCH")])
+
+    def test_apply_account_repair_plan_rejects_apply_when_no_auto_profiles_selected(self):
+        class Manager:
+            def move_profile_to_quarantine(self, profile_id, reason=""):
+                raise AssertionError("no profile should be moved")
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "latest_account_repair_plan.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "batch_id": "gb_1",
+                        "profile_group": "United States",
+                        "groups": [
+                            {"error": "PROFILE_PREFLIGHT_TIMEOUT", "profile_ids": ["slow-1"]},
+                            {"error": "PAGE_OPEN_FAILED", "profile_ids": []},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            dry = apply_account_repair_plan(path, apply=False, manager_factory=Manager)
+            applied = apply_account_repair_plan(path, apply=True, manager_factory=Manager)
+
+        self.assertEqual(dry["status"], "dry_run")
+        self.assertTrue(dry["no_applicable_profiles"])
+        self.assertEqual(dry["selected_count"], 0)
+        self.assertEqual(applied["status"], "no_applicable_profiles")
+        self.assertFalse(applied["ok"])
+        self.assertEqual(applied["selected_count"], 0)
+        self.assertEqual(applied["moved_count"], 0)
+        self.assertIn("PROFILE_PREFLIGHT_TIMEOUT", applied["non_auto_error_codes"])
+        self.assertTrue(applied["next_actions"])
+        self.assertTrue(applied["no_browser_started"])
+        self.assertTrue(applied["no_submit"])
 
     def test_web_account_repair_apply_uses_latest_plan_and_blocks_running_task(self):
         old_process = reachops_web_ui.RUN_PROCESS

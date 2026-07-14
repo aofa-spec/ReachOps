@@ -53,6 +53,17 @@ def profile_ids_for_errors(plan: dict, error_codes: set[str]) -> list[dict]:
     return rows
 
 
+def plan_error_codes_with_profiles(plan: dict) -> set[str]:
+    codes: set[str] = set()
+    for group in plan.get("groups") or []:
+        if not isinstance(group, dict):
+            continue
+        error = str(group.get("error") or "").strip()
+        if error and group.get("profile_ids"):
+            codes.add(error)
+    return codes
+
+
 def apply_account_repair_plan(
     plan_path: Path,
     apply: bool = False,
@@ -63,7 +74,10 @@ def apply_account_repair_plan(
     plan = load_plan(plan_path)
     if plan.get("status") == "error":
         return {"status": "error", "ok": False, "plan_path": str(plan_path), **plan}
-    selected = profile_ids_for_errors(plan, error_codes or DEFAULT_APPLY_ERRORS)
+    allowed_errors = error_codes or DEFAULT_APPLY_ERRORS
+    selected = profile_ids_for_errors(plan, allowed_errors)
+    plan_profile_errors = plan_error_codes_with_profiles(plan)
+    non_auto_error_codes = sorted(plan_profile_errors - set(allowed_errors))
     results: list[dict] = []
     if apply and selected:
         if manager_factory is None:
@@ -118,9 +132,27 @@ def apply_account_repair_plan(
     moved = [row for row in results if row.get("ok")]
     failed = [row for row in results if row.get("attempted") and not row.get("ok")]
     selected_error_codes = sorted({str(row.get("reason") or "") for row in selected if str(row.get("reason") or "")})
-    allowed_error_codes = sorted(error_codes or DEFAULT_APPLY_ERRORS)
+    allowed_error_codes = sorted(allowed_errors)
+    status = "dry_run"
+    if apply and failed:
+        status = "failed"
+    elif apply and selected:
+        status = "applied"
+    elif apply and not selected:
+        status = "no_applicable_profiles"
+    next_commands = [
+        "python tools/reachops_client_delivery_check.py --json",
+        "python tools/reachops_mac_self_check.py --json",
+    ]
+    next_actions: list[str] = []
+    if not selected:
+        next_actions = [
+            "最新账号修复计划没有默认可自动隔离的账号，未移动任何 ixBrowser 配置。",
+            "手动打开受影响账号，确认登录状态、内核版本、代理和 TikTok 页面加载；不可用账号再移入封禁账号分组。",
+            "至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑真实执行复测。",
+        ]
     return {
-        "status": "applied" if apply and not failed else ("failed" if apply and failed else "dry_run"),
+        "status": status,
         "ok": bool(apply and selected and not failed),
         "apply": bool(apply),
         "plan_path": str(plan_path),
@@ -129,6 +161,8 @@ def apply_account_repair_plan(
         "selected_count": len(selected),
         "moved_count": len(moved),
         "failed_count": len(failed),
+        "no_applicable_profiles": bool(not selected),
+        "non_auto_error_codes": non_auto_error_codes,
         "results": results,
         "safety_contract": {
             "schema_version": "reachops.account_repair_safety_contract.v1",
@@ -145,10 +179,8 @@ def apply_account_repair_plan(
         "no_browser_started": True,
         "no_submit": True,
         "no_ai_token_used": True,
-        "next_commands": [
-            "python tools/reachops_client_delivery_check.py --json",
-            "python tools/reachops_mac_self_check.py --json",
-        ],
+        "next_commands": next_commands,
+        "next_actions": next_actions,
     }
 
 

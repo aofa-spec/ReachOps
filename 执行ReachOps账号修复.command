@@ -14,7 +14,37 @@ echo "用途: 将最新修复计划中的硬失败账号移入 ixBrowser 的封�
 echo "前提: ixBrowser 客户端已启动，Local API 端口可连接。"
 echo ""
 echo "先预览待处理账号:"
-"$PYTHON_BIN" tools/reachops_apply_account_repair_plan.py --json
+PREVIEW_JSON="$(mktemp /tmp/reachops_account_repair_preview.XXXXXX.json)"
+"$PYTHON_BIN" tools/reachops_apply_account_repair_plan.py --json > "$PREVIEW_JSON"
+cat "$PREVIEW_JSON"
+NO_APPLICABLE="$("$PYTHON_BIN" - "$PREVIEW_JSON" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    payload = {}
+print("1" if payload.get("no_applicable_profiles") else "0")
+PY
+)"
+if [ "$NO_APPLICABLE" = "1" ]; then
+  "$PYTHON_BIN" - "$PREVIEW_JSON" <<'PY'
+import json, sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print("")
+print("最新账号修复计划没有默认可自动隔离的账号，未移动任何 ixBrowser 配置。")
+if payload.get("non_auto_error_codes"):
+    print("需要人工处理的错误类型: " + ", ".join(payload.get("non_auto_error_codes") or []))
+for action in payload.get("next_actions") or []:
+    print("下一步: " + str(action))
+print("本次不会启动浏览器，也不会提交任何平台动作。")
+PY
+  echo ""
+  echo "按任意键关闭此窗口。"
+  read -k 1
+  exit 2
+fi
 echo ""
 echo "确认执行请输入 APPLY 后回车；直接回车取消。"
 read "CONFIRM?>"

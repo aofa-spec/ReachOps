@@ -585,7 +585,18 @@ def build_delivery_check(
         str(batch.get("profile_group") or ""),
         str(batch.get("id") or ""),
     )
-    if account_repair_apply.get("stale") and acceptance.get("readiness") == "blocked_by_accounts":
+    if (
+        str(account_repair_apply.get("status") or "") == "no_applicable_profiles"
+        and acceptance.get("readiness") == "blocked_by_accounts"
+    ):
+        acceptance["blockers"] = [
+            "最新账号修复计划没有默认可自动隔离的账号，不能把账号修复视为完成。"
+        ] + list(acceptance.get("blockers") or [])
+        acceptance["next_actions"] = [
+            "手动打开受影响账号，确认登录状态、内核版本、代理和 TikTok 页面加载；不可用账号再移入封禁账号分组。",
+            "至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑真实执行复测。",
+        ] + list(acceptance.get("next_actions") or [])
+    elif account_repair_apply.get("stale") and acceptance.get("readiness") == "blocked_by_accounts":
         group = str(batch.get("profile_group") or account_repair_apply.get("profile_group") or "当前分组")
         acceptance["blockers"] = [
             f"旧账号修复结果已失效：{group} 分组已经产生新的账号阻断批次，不能继续用旧修复结果复测。"
