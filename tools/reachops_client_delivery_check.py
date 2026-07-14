@@ -119,9 +119,13 @@ def build_real_pilot_evidence_boundary(
     status: str,
     contract_ok: bool,
     acceptance_ready: bool,
+    account_repair_summary: dict | None = None,
+    account_repair_apply: dict | None = None,
 ) -> dict:
     counts = operations.get("counts") if isinstance(operations, dict) else {}
     counts = counts if isinstance(counts, dict) else {}
+    repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
+    repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
     profile_available = int((acceptance.get("checks") or {}).get("profile_available_count") or 0)
     candidates = int(counts.get("candidates") or 0)
     actions = int(counts.get("actions") or 0)
@@ -156,6 +160,18 @@ def build_real_pilot_evidence_boundary(
             "candidates": candidates,
             "actions": actions,
             "touched": touched,
+        },
+        "account_pool_remediation": {
+            "repair_plan_available": repair_summary.get("status") == "ok",
+            "repair_plan_path": str(repair_summary.get("path") or ""),
+            "repair_plan_batch_id": str(repair_summary.get("batch_id") or ""),
+            "repair_plan_profile_group": str(repair_summary.get("profile_group") or ""),
+            "total_unique_profiles_by_error": int(repair_summary.get("total_unique_profiles_by_error") or 0),
+            "operator_steps": list(repair_summary.get("operator_steps") or [])[:5],
+            "latest_apply_status": str(repair_apply.get("status") or ""),
+            "latest_apply_stale": bool(repair_apply.get("stale")),
+            "latest_apply_stale_reason": str(repair_apply.get("stale_reason") or ""),
+            "latest_apply_pending_recheck": bool(repair_apply.get("pending_recheck")),
         },
         "external_acceptance_pending": blockers,
     }
@@ -757,6 +773,8 @@ def build_delivery_check(
         status=status,
         contract_ok=contract_ok,
         acceptance_ready=acceptance_ready,
+        account_repair_summary=account_repair_summary,
+        account_repair_apply=account_repair_apply,
     )
 
     return {

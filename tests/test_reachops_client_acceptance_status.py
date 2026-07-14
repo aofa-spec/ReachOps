@@ -4296,6 +4296,44 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertIn("candidate_count_zero", boundary["external_acceptance_pending"])
         self.assertIn("client_delivery_status_blocked_by_accounts", boundary["external_acceptance_pending"])
 
+    def test_real_pilot_evidence_boundary_includes_account_repair_remediation(self):
+        boundary = build_real_pilot_evidence_boundary(
+            {
+                "readiness": "blocked_by_accounts",
+                "checks": {"profile_available_count": 0},
+            },
+            {"counts": {"candidates": 0, "actions": 0, "touched": 0}},
+            status="blocked_by_accounts",
+            contract_ok=True,
+            acceptance_ready=False,
+            account_repair_summary={
+                "status": "ok",
+                "path": "/tmp/latest_account_repair_plan.json",
+                "batch_id": "gb_current",
+                "profile_group": "United States",
+                "total_unique_profiles_by_error": 25,
+                "operator_steps": ["修复内核不匹配账号。", "补充已登录账号。"],
+            },
+            account_repair_apply={
+                "status": "applied",
+                "stale": True,
+                "stale_reason": "newer_account_repair_plan_for_current_batch",
+                "pending_recheck": False,
+            },
+        )
+
+        remediation = boundary["account_pool_remediation"]
+        self.assertTrue(remediation["repair_plan_available"])
+        self.assertEqual(remediation["repair_plan_path"], "/tmp/latest_account_repair_plan.json")
+        self.assertEqual(remediation["repair_plan_batch_id"], "gb_current")
+        self.assertEqual(remediation["repair_plan_profile_group"], "United States")
+        self.assertEqual(remediation["total_unique_profiles_by_error"], 25)
+        self.assertEqual(remediation["operator_steps"], ["修复内核不匹配账号。", "补充已登录账号。"])
+        self.assertEqual(remediation["latest_apply_status"], "applied")
+        self.assertTrue(remediation["latest_apply_stale"])
+        self.assertEqual(remediation["latest_apply_stale_reason"], "newer_account_repair_plan_for_current_batch")
+        self.assertFalse(remediation["latest_apply_pending_recheck"])
+
     def test_real_pilot_evidence_boundary_allows_real_ready_only_with_accounts_and_candidates(self):
         boundary = build_real_pilot_evidence_boundary(
             {
