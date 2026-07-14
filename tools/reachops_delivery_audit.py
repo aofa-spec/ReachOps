@@ -29,6 +29,7 @@ from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_ci_release_baseline_audit import build_report as build_ci_release_baseline_report
 from tools.reachops_account_readiness_audit import build_report as build_account_readiness_report
 from tools.reachops_control_plane_audit import build_report as build_control_plane_report
+from tools.reachops_issue_closure_audit import build_report as build_issue_closure_report
 from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
 from tools.reachops_data_governance import build_report as build_data_governance_report
@@ -1763,6 +1764,7 @@ def run_audit(args) -> dict:
     ci_release_baseline_fixture = build_ci_release_baseline_report(ROOT_DIR)
     account_readiness_fixture = build_account_readiness_report(ROOT_DIR)
     control_plane_fixture = build_control_plane_report(ROOT_DIR)
+    issue_closure_fixture = build_issue_closure_report(ROOT_DIR, run_pip=False)
 
     repository_cleanup = clean_generated_redundant_paths(ROOT_DIR)
     repository_cleanliness = scan_repository_cleanliness(ROOT_DIR)
@@ -1864,6 +1866,20 @@ def run_audit(args) -> dict:
                 and "web_ui_http_api_service_connector_module_split" in (control_plane_fixture.get("external_control_plane_pending") or [])
             ),
             control_plane_fixture,
+        ),
+        check(
+            "Issues #1-#7 商业交付闭环证据索引可审计",
+            bool(
+                issue_closure_fixture.get("passed")
+                and issue_closure_fixture.get("schema_version") == "reachops.issue_closure_audit.v1"
+                and issue_closure_fixture.get("status") == "passed_with_external_acceptance_pending"
+                and (issue_closure_fixture.get("summary") or {}).get("issues_total") == 7
+                and (issue_closure_fixture.get("summary") or {}).get("local_contracts_passed") == 7
+                and (issue_closure_fixture.get("summary") or {}).get("external_pending_count", 0) >= 1
+                and (issue_closure_fixture.get("summary") or {}).get("does_not_claim_all_issues_closed") is True
+                and (issue_closure_fixture.get("github_issues") or {}).get("closure_requires_external_validation") is True
+            ),
+            issue_closure_fixture,
         ),
         check(
             "AI/规则能生成产品分析",

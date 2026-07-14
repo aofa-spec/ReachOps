@@ -76,6 +76,7 @@ from tools.reachops_release_evidence import build_release_evidence as build_reac
 from tools.reachops_ci_release_baseline_audit import build_report as build_reachops_ci_release_baseline_report
 from tools.reachops_account_readiness_audit import build_report as build_reachops_account_readiness_report
 from tools.reachops_control_plane_audit import build_report as build_reachops_control_plane_report
+from tools.reachops_issue_closure_audit import build_report as build_reachops_issue_closure_report
 from tools.reachops_data_governance import build_report as build_reachops_data_governance_report
 from tools.reachops_security_supply_chain_audit import build_report as build_reachops_security_supply_chain_report
 from tools.reachops_start_contract_audit import build_report as build_reachops_start_contract_report
@@ -886,6 +887,28 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("non_tiktok_connector_contract_implementation", report["external_control_plane_pending"])
         self.assertIn("web_ui_http_api_service_connector_module_split", report["external_control_plane_pending"])
 
+    def test_reachops_issue_closure_audit_maps_issues_to_evidence_and_external_acceptance(self):
+        report = build_reachops_issue_closure_report(run_pip=False)
+
+        self.assertEqual(report["schema_version"], "reachops.issue_closure_audit.v1")
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["status"], "passed_with_external_acceptance_pending")
+        self.assertEqual(report["github_issues"]["range"], "#1-#7")
+        self.assertTrue(report["github_issues"]["closure_requires_external_validation"])
+        self.assertEqual(report["summary"]["issues_total"], 7)
+        self.assertEqual(report["summary"]["local_contracts_passed"], 7)
+        self.assertGreaterEqual(report["summary"]["external_pending_count"], 1)
+        self.assertTrue(report["summary"]["does_not_claim_all_issues_closed"])
+        issues = {row["issue_number"]: row for row in report["issues"]}
+        self.assertEqual(sorted(issues), [1, 2, 3, 4, 5, 6, 7])
+        self.assertTrue(all(row["local_contract_passed"] for row in issues.values()))
+        self.assertIn("main_branch_protection_requires_pr_review", issues[1]["external_pending"])
+        self.assertIn("certified_30_controlled_profiles", issues[3]["external_pending"])
+        self.assertIn("server_side_rbac_enforcement_and_audit", issues[7]["external_pending"])
+        self.assertTrue(issues[1]["does_not_claim_issue_closed"])
+        self.assertTrue(issues[3]["does_not_claim_issue_closed"])
+        self.assertTrue(issues[7]["does_not_claim_issue_closed"])
+
     def test_reachops_delivery_audit_reports_local_passes_and_external_pending(self):
         class Args:
             target = "anti aging serum"
@@ -916,6 +939,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(checks["商业控制面和 connector 解耦边界可审计"]["status"], "passed")
         self.assertTrue(checks["商业控制面和 connector 解耦边界可审计"]["evidence"]["does_not_claim_server_side_rbac"])
         self.assertIn("web_ui_http_api_service_connector_module_split", checks["商业控制面和 connector 解耦边界可审计"]["evidence"]["external_control_plane_pending"])
+        self.assertEqual(checks["Issues #1-#7 商业交付闭环证据索引可审计"]["status"], "passed")
+        self.assertEqual(checks["Issues #1-#7 商业交付闭环证据索引可审计"]["evidence"]["summary"]["issues_total"], 7)
+        self.assertEqual(checks["Issues #1-#7 商业交付闭环证据索引可审计"]["evidence"]["summary"]["local_contracts_passed"], 7)
+        self.assertTrue(checks["Issues #1-#7 商业交付闭环证据索引可审计"]["evidence"]["summary"]["does_not_claim_all_issues_closed"])
         self.assertEqual(checks["升级清单和安装校验机制可用"]["status"], "passed")
         self.assertTrue(checks["升级清单和安装校验机制可用"]["evidence"]["hash_ok"])
         self.assertEqual(checks["客户端交付验收门禁不会把环境阻断当通过"]["status"], "pending_external_validation")
@@ -5618,6 +5645,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         ci_release_baseline_audit = (root / "tools" / "reachops_ci_release_baseline_audit.py").read_text(encoding="utf-8")
         account_readiness_audit = (root / "tools" / "reachops_account_readiness_audit.py").read_text(encoding="utf-8")
         control_plane_audit = (root / "tools" / "reachops_control_plane_audit.py").read_text(encoding="utf-8")
+        issue_closure_audit = (root / "tools" / "reachops_issue_closure_audit.py").read_text(encoding="utf-8")
         data_governance = (root / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
         security_supply_chain_audit = (root / "tools" / "reachops_security_supply_chain_audit.py").read_text(encoding="utf-8")
         start_contract_audit = (root / "tools" / "reachops_start_contract_audit.py").read_text(encoding="utf-8")
@@ -6037,6 +6065,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("web_ui_http_api_service_connector_module_split", control_plane_audit)
         self.assertIn("does_not_claim_server_side_rbac", control_plane_audit)
         self.assertIn("does_not_claim_non_tiktok_connector_ga", control_plane_audit)
+        self.assertIn("reachops.issue_closure_audit.v1", issue_closure_audit)
+        self.assertIn("passed_with_external_acceptance_pending", issue_closure_audit)
+        self.assertIn("issues_total", issue_closure_audit)
+        self.assertIn("local_contracts_passed", issue_closure_audit)
+        self.assertIn("does_not_claim_all_issues_closed", issue_closure_audit)
+        self.assertIn("closure_requires_external_validation", issue_closure_audit)
+        self.assertIn("[P0] Enforce CI, PR review, and deterministic release baseline", issue_closure_audit)
+        self.assertIn("[P0] Freeze the /api/start contract and restore a zero-failure test baseline", issue_closure_audit)
+        self.assertIn("[P0] Certify a real account-readiness pool and no-submit evidence pack", issue_closure_audit)
+        self.assertIn("[P0] Harden licensing, entitlement, and the update supply chain", issue_closure_audit)
+        self.assertIn("[P0] Add versioned migrations, backup/restore, retention, and privacy controls", issue_closure_audit)
+        self.assertIn("[P0] Instrument WAQO and the full lead-to-revenue outcome funnel", issue_closure_audit)
+        self.assertIn("[P1] Build the commercial control plane and decouple channel connectors", issue_closure_audit)
         self.assertIn("reachops.data_governance.v1", data_governance)
         self.assertIn("backup_and_restore_verify", data_governance)
         self.assertIn("SUPPORT_BUNDLE_EXCLUDE_PATTERNS", data_governance)
@@ -6145,6 +6186,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops_control_plane_audit.py --json", readme)
         self.assertIn("server-side RBAC", readme)
         self.assertIn("非 TikTok connector", readme)
+        self.assertIn("reachops_issue_closure_audit.py --json", readme)
+        self.assertIn("Issues #1-#7", readme)
+        self.assertIn("closure_requires_external_validation", readme)
         self.assertIn("init_reachops_acceptance_inputs.py --json", readme)
         self.assertIn("init_reachops_acceptance_inputs_windows.ps1", readme)
         self.assertIn("-InputFile .\\tools\\reachops_acceptance_inputs.local.ps1", readme)

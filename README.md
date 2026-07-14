@@ -109,6 +109,14 @@ python tools/reachops_control_plane_audit.py --json
 
 该审计只证明当前本地客户端已有可审计的执行计划/RunSession 控制面边界、collector/action executor contract、CSV/Webhook outcome ingestion、packaged entitlement remote disable 和 redacted support bundle 策略。organization/workspace/member/role/seat 服务端控制面、server-side RBAC、plan/seat metering、非 TikTok connector、Web UI/API/服务拆分和产品 telemetry/crash reporting 仍是外部/后续交付项，不能用本地 JSON 代替。
 
+Issues #1-#7 商业交付闭环索引审计：
+
+```bash
+python tools/reachops_issue_closure_audit.py --json
+```
+
+该审计把 Issues #1-#7 映射到现有本地证据：CI/release baseline、`/api/start` contract、账号 readiness、授权/升级供应链、数据治理、WAQO/outcome funnel 和商业控制面边界。输出中的 `closure_requires_external_validation=true` 和 `does_not_claim_all_issues_closed=true` 表示本地合同可重复验收，但仍不能替代 GitHub issue 关闭、真实账号/真实平台试点、服务端 RBAC、connector GA 等外部验收。
+
 ## Windows 客户端
 
 启动 UI：
