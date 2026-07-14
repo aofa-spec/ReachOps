@@ -112,6 +112,55 @@ def delivery_status(contract_ok: bool, acceptance_ready: bool, readiness: str) -
     return "failed"
 
 
+def build_real_pilot_evidence_boundary(
+    acceptance: dict,
+    operations: dict,
+    *,
+    status: str,
+    contract_ok: bool,
+    acceptance_ready: bool,
+) -> dict:
+    counts = operations.get("counts") if isinstance(operations, dict) else {}
+    counts = counts if isinstance(counts, dict) else {}
+    profile_available = int((acceptance.get("checks") or {}).get("profile_available_count") or 0)
+    candidates = int(counts.get("candidates") or 0)
+    actions = int(counts.get("actions") or 0)
+    touched = int(counts.get("touched") or 0)
+    real_pilot_ready = bool(
+        status == "passed"
+        and contract_ok
+        and acceptance_ready
+        and profile_available > 0
+        and candidates > 0
+    )
+    blockers: list[str] = []
+    if profile_available <= 0:
+        blockers.append("profile_available_zero")
+    if candidates <= 0:
+        blockers.append("candidate_count_zero")
+    if not acceptance_ready:
+        blockers.append("acceptance_not_ready")
+    if status != "passed":
+        blockers.append(f"client_delivery_status_{status}")
+    return {
+        "schema_version": "reachops.real_pilot_evidence_boundary.v1",
+        "real_pilot_ready": real_pilot_ready,
+        "status": "ready" if real_pilot_ready else "external_validation_pending",
+        "fixture_or_dry_run_claimed": False,
+        "no_submit_preserved": True,
+        "requires_real_account_pool": profile_available <= 0,
+        "requires_real_collection_evidence": candidates <= 0,
+        "requires_human_labeled_quality_evidence": True,
+        "profile_available": profile_available,
+        "operation_counts": {
+            "candidates": candidates,
+            "actions": actions,
+            "touched": touched,
+        },
+        "external_acceptance_pending": blockers,
+    }
+
+
 def build_autonomous_product_contract_check() -> dict:
     plan = build_execution_plan(
         target="anti aging serum",
@@ -702,6 +751,13 @@ def build_delivery_check(
     failed_checks = [str(item.get("name") or "") for item in checks if not item.get("ok")]
     ok = contract_ok and acceptance_ready
     status = delivery_status(contract_ok, acceptance_ready, str(acceptance.get("readiness") or ""))
+    real_pilot_evidence = build_real_pilot_evidence_boundary(
+        acceptance,
+        operations,
+        status=status,
+        contract_ok=contract_ok,
+        acceptance_ready=acceptance_ready,
+    )
 
     return {
         "root_dir": str(ROOT_DIR),
@@ -718,6 +774,7 @@ def build_delivery_check(
         "next_actions": acceptance.get("next_actions") or [],
         "no_action_reason": acceptance.get("no_action_reason") or {},
         "operation_counts": (operations.get("counts") if isinstance(operations, dict) else {}) or {},
+        "real_pilot_evidence": real_pilot_evidence,
         "remediation_report": remediation,
         "account_repair_summary": account_repair_summary,
         "account_repair_apply": account_repair_apply,

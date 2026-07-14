@@ -40,6 +40,7 @@ from tools import reachops_mac_loop_acceptance
 from tools.reachops_client_delivery_check import (
     account_repair_summary_lines,
     build_delivery_check,
+    build_real_pilot_evidence_boundary,
     latest_account_repair_apply_status,
     main as run_delivery_check,
     profile_remediation_csv_quality,
@@ -4271,6 +4272,49 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(payload["no_action_reason"]["candidate_count"], 2)
         self.assertEqual(payload["operation_counts"]["actions"], 0)
         self.assertTrue(any("评分未达到触达线" in item for item in payload["next_actions"]))
+
+    def test_real_pilot_evidence_boundary_blocks_zero_account_claims(self):
+        boundary = build_real_pilot_evidence_boundary(
+            {
+                "readiness": "blocked_by_accounts",
+                "checks": {"profile_available_count": 0},
+            },
+            {"counts": {"candidates": 0, "actions": 0, "touched": 0}},
+            status="blocked_by_accounts",
+            contract_ok=True,
+            acceptance_ready=False,
+        )
+
+        self.assertEqual(boundary["schema_version"], "reachops.real_pilot_evidence_boundary.v1")
+        self.assertFalse(boundary["real_pilot_ready"])
+        self.assertEqual(boundary["status"], "external_validation_pending")
+        self.assertFalse(boundary["fixture_or_dry_run_claimed"])
+        self.assertTrue(boundary["no_submit_preserved"])
+        self.assertTrue(boundary["requires_real_account_pool"])
+        self.assertTrue(boundary["requires_real_collection_evidence"])
+        self.assertIn("profile_available_zero", boundary["external_acceptance_pending"])
+        self.assertIn("candidate_count_zero", boundary["external_acceptance_pending"])
+        self.assertIn("client_delivery_status_blocked_by_accounts", boundary["external_acceptance_pending"])
+
+    def test_real_pilot_evidence_boundary_allows_real_ready_only_with_accounts_and_candidates(self):
+        boundary = build_real_pilot_evidence_boundary(
+            {
+                "readiness": "pass",
+                "checks": {"profile_available_count": 2},
+            },
+            {"counts": {"candidates": 5, "actions": 0, "touched": 0}},
+            status="passed",
+            contract_ok=True,
+            acceptance_ready=True,
+        )
+
+        self.assertTrue(boundary["real_pilot_ready"])
+        self.assertEqual(boundary["status"], "ready")
+        self.assertFalse(boundary["fixture_or_dry_run_claimed"])
+        self.assertTrue(boundary["no_submit_preserved"])
+        self.assertFalse(boundary["requires_real_account_pool"])
+        self.assertFalse(boundary["requires_real_collection_evidence"])
+        self.assertEqual(boundary["external_acceptance_pending"], [])
 
     def test_mac_loop_acceptance_requires_start_contract_evidence(self):
         def fake_read_json_url(url, timeout=20):
