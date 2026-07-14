@@ -289,6 +289,29 @@ def final_gate_authorized_live_submit_ready(final_gate: dict[str, Any]) -> bool:
     return not any(str(row.get("scope") or "") == "external_authorized_execution" for row in blockers if isinstance(row, dict))
 
 
+def final_gate_blocker_summary(final_gate: dict[str, Any], scope: str) -> dict[str, Any]:
+    blockers = final_gate.get("final_delivery_blockers") if isinstance(final_gate.get("final_delivery_blockers"), list) else []
+    for row in blockers:
+        if not isinstance(row, dict) or str(row.get("scope") or "") != scope:
+            continue
+        summary = row.get("blocker_summary") if isinstance(row.get("blocker_summary"), dict) else {}
+        if summary:
+            return summary
+    evidence_plan = (
+        final_gate.get("final_delivery_evidence_plan")
+        if isinstance(final_gate.get("final_delivery_evidence_plan"), dict)
+        else {}
+    )
+    items = evidence_plan.get("items") if isinstance(evidence_plan.get("items"), list) else []
+    for row in items:
+        if not isinstance(row, dict) or str(row.get("scope") or "") != scope:
+            continue
+        summary = row.get("blocker_summary") if isinstance(row.get("blocker_summary"), dict) else {}
+        if summary:
+            return summary
+    return {}
+
+
 def build_deliverable_index(
     *,
     local_ready: bool,
@@ -305,6 +328,11 @@ def build_deliverable_index(
 ) -> dict[str, Any]:
     blocker_by_scope = {str(row.get("scope") or ""): row for row in blockers if isinstance(row, dict)}
     windows_blocker = blocker_by_scope.get("windows_final_artifacts", {})
+    windows_blocker_summary = (
+        windows_blocker.get("blocker_summary")
+        if isinstance(windows_blocker.get("blocker_summary"), dict)
+        else {}
+    ) or final_gate_blocker_summary(final_gate, "windows_final_artifacts")
     windows_missing_artifacts = sorted(
         {
             str(item)
@@ -358,6 +386,7 @@ def build_deliverable_index(
             "missing_artifacts": windows_missing_artifacts,
             "artifacts": package.get("artifacts") or {},
             "remediation_plan": windows_blocker.get("remediation_plan") or package.get("remediation_plan") or {},
+            "blocker_summary": windows_blocker_summary,
             "blocking_scope": "" if str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready")) else "windows_final_artifacts",
         },
         "authorized_live_submit": {
@@ -554,12 +583,14 @@ def build_report() -> dict[str, Any]:
         )
     if package.get("missing_artifacts"):
         remediation = package.get("remediation_plan") if isinstance(package.get("remediation_plan"), dict) else {}
+        package_blocker_summary = final_gate_blocker_summary(final_gate, "windows_final_artifacts")
         blockers.append(
             {
                 "scope": "windows_final_artifacts",
                 "status": package.get("status"),
                 "missing_artifacts": package.get("missing_artifacts") or [],
                 "remediation_plan": remediation,
+                "blocker_summary": package_blocker_summary,
                 "action": "在 Windows 实机运行 build 和 acceptance，生成 exe、installer、manifest、acceptance_summary。",
             }
         )

@@ -2571,6 +2571,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
                                 "scope": "windows_final_artifacts",
                                 "status": "failed",
                                 "required_artifacts": ["exe", "installer", "manifest", "acceptance_summary"],
+                                "blocker_summary": {
+                                    "schema_version": "reachops.windows_final_artifacts_blocker_summary.v1",
+                                    "status": "failed",
+                                    "final_delivery_ready": False,
+                                    "missing_artifacts": ["acceptance_summary"],
+                                    "failures": ["acceptance_summary_missing"],
+                                    "acceptance_verification_passed": False,
+                                    "acceptance_verification_failures": ["acceptance_summary_missing"],
+                                    "next_required_command": "python tools\\reachops_delivery_package_check.py --json",
+                                    "does_not_claim_final_delivery_ready": True,
+                                },
                             },
                         ],
                     },
@@ -2616,6 +2627,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("acceptance_summary", remediation["artifact_actions"])
         self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(remediation["commands"]))
         self.assertIn("tools\\reachops_final_acceptance_gate.py --json", "\n".join(remediation["commands"]))
+        self.assertEqual(
+            windows_blocker["blocker_summary"]["schema_version"],
+            "reachops.windows_final_artifacts_blocker_summary.v1",
+        )
+        self.assertIn("acceptance_summary_missing", windows_blocker["blocker_summary"]["failures"])
         self.assertIn("mvp_acceptance", report["sections"])
         self.assertIn("mac_loop_acceptance", report["sections"])
         self.assertIn("windows_package_preflight", report["sections"])
@@ -2623,6 +2639,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("final_gate", report["sections"])
         windows_deliverable = next(row for row in report["deliverables"] if row["name"] == "Windows 最终交付包")
         self.assertIn("issue_closure_payload", windows_deliverable["acceptance"])
+        self.assertEqual(
+            report["deliverable_index"]["windows_final_package"]["blocker_summary"]["next_required_command"],
+            "python tools\\reachops_delivery_package_check.py --json",
+        )
         local_evidence = report["local_mvp_evidence"]
         self.assertIn("operation_counts", local_evidence)
         self.assertIn("no_action_reason", local_evidence)
