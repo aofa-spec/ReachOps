@@ -229,6 +229,87 @@ def _external_pending_summary(issue_closure: dict[str, Any] | None, limit: int =
     }
 
 
+def _issue_closure_blocker_summary(issue_closure: dict[str, Any] | None, limit: int = 20) -> dict[str, Any]:
+    if not isinstance(issue_closure, dict) or not issue_closure:
+        return {
+            "schema_version": "reachops.commercial_issue_closure_blocker_summary.v1",
+            "status": FAILED,
+            "closure_ready": False,
+            "issue_gaps": [],
+            "issue_gap_count": 0,
+            "next_required_command": "python tools\\reachops_issue_closure_audit.py --json",
+            "does_not_claim_all_issues_closed": True,
+        }
+    embedded = issue_closure.get("closure_blocker_summary")
+    if isinstance(embedded, dict) and embedded.get("schema_version") == "reachops.commercial_issue_closure_blocker_summary.v1":
+        return embedded
+    summary = issue_closure.get("summary") if isinstance(issue_closure.get("summary"), dict) else {}
+    issues = issue_closure.get("issues") if isinstance(issue_closure.get("issues"), list) else []
+    external_pending = [
+        str(item)
+        for item in (issue_closure.get("external_acceptance_pending") or [])
+        if str(item or "").strip()
+    ]
+    shown_pending = external_pending[:limit]
+    issue_gaps = []
+    for issue in issues:
+        if not isinstance(issue, dict) or not issue.get("external_pending"):
+            continue
+        criteria = issue.get("acceptance_criteria") if isinstance(issue.get("acceptance_criteria"), list) else []
+        issue_gaps.append(
+            {
+                "issue_number": int(issue.get("issue_number") or 0),
+                "title": str(issue.get("title") or ""),
+                "local_contract_passed": bool(issue.get("local_contract_passed")),
+                "local_status": str(issue.get("local_status") or ""),
+                "acceptance_criteria_total": int(issue.get("acceptance_criteria_total") or 0),
+                "acceptance_criteria_local_passed": int(issue.get("acceptance_criteria_local_passed") or 0),
+                "acceptance_criteria_external_pending": int(issue.get("acceptance_criteria_external_pending") or 0),
+                "acceptance_criteria_unclassified": int(issue.get("acceptance_criteria_unclassified") or 0),
+                "external_pending_count": len(issue.get("external_pending") or []),
+                "external_pending": [str(item) for item in (issue.get("external_pending") or [])[:limit]],
+                "external_criteria": [
+                    str(row.get("id"))
+                    for row in criteria
+                    if row.get("status") == "external_pending" and str(row.get("id") or "").strip()
+                ],
+                "next_actions": list(
+                    dict.fromkeys(
+                        str(row.get("next_action"))
+                        for row in criteria
+                        if row.get("status") == "external_pending" and str(row.get("next_action") or "").strip()
+                    )
+                ),
+                "does_not_claim_issue_closed": bool(issue.get("does_not_claim_issue_closed")),
+            }
+        )
+    return {
+        "schema_version": "reachops.commercial_issue_closure_blocker_summary.v1",
+        "status": str(issue_closure.get("status") or FAILED),
+        "closure_ready": _issue_closure_ready(issue_closure),
+        "issues_total": int(summary.get("issues_total") or 0),
+        "local_contracts_passed": int(summary.get("local_contracts_passed") or 0),
+        "acceptance_criteria_total": int(summary.get("acceptance_criteria_total") or 0),
+        "acceptance_criteria_local_passed": int(summary.get("acceptance_criteria_local_passed") or 0),
+        "acceptance_criteria_external_pending": int(summary.get("acceptance_criteria_external_pending") or 0),
+        "acceptance_criteria_unclassified": int(summary.get("acceptance_criteria_unclassified") or 0),
+        "external_pending_count": len(external_pending),
+        "external_acceptance_pending": shown_pending,
+        "external_acceptance_pending_total": len(external_pending),
+        "external_acceptance_pending_displayed": len(shown_pending),
+        "external_acceptance_pending_remaining": max(0, len(external_pending) - len(shown_pending)),
+        "issue_gap_count": len(issue_gaps),
+        "issue_gaps": issue_gaps,
+        "next_required_command": "python tools\\reachops_issue_closure_audit.py --json",
+        "required_final_state": {
+            "acceptance_criteria_external_pending": 0,
+            "external_pending_count": 0,
+            "closure_requires_external_validation": False,
+        },
+        "does_not_claim_all_issues_closed": bool(summary.get("does_not_claim_all_issues_closed", True)),
+    }
+
+
 def _package_blocker_summary(package_check: dict[str, Any]) -> dict[str, Any]:
     acceptance_verification = (
         package_check.get("acceptance_verification")
@@ -405,6 +486,7 @@ def build_final_delivery_evidence_plan(
         else {}
     )
     issue_pending_summary = _external_pending_summary(issue_closure)
+    issue_blocker_summary = _issue_closure_blocker_summary(issue_closure)
     items = [
         _evidence_item(
             scope="current_stage_gate",
@@ -540,7 +622,7 @@ def build_final_delivery_evidence_plan(
                     else []
                 ),
             ],
-            blocker_summary=issue_pending_summary,
+            blocker_summary=issue_blocker_summary,
             next_action="完成 Issues #1-#7 中仍标记 external_pending 的验收标准，并复跑 tools\\reachops_issue_closure_audit.py --json。",
         ),
         _evidence_item(
@@ -883,12 +965,14 @@ def build_final_acceptance_gate(
         next_actions.append("在 Windows 实机生成 exe、installer、update manifest 和通过的 acceptance_summary.json，然后复跑 tools\\reachops_delivery_package_check.py --json。")
     if issue_closure is not None and not _issue_closure_ready(issue_closure):
         issue_pending_summary = _external_pending_summary(issue_closure)
+        issue_blocker_summary = _issue_closure_blocker_summary(issue_closure)
         final_delivery_blockers.append(
             {
                 "scope": "commercial_issue_closure",
                 "status": str(issue_closure.get("status") or FAILED),
                 "summary": issue_summary,
                 **issue_pending_summary,
+                "blocker_summary": issue_blocker_summary,
                 "required_evidence": [
                     "acceptance_criteria_total=53",
                     "acceptance_criteria_unclassified=0",

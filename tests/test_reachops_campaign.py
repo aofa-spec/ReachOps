@@ -1073,6 +1073,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(issues[6]["does_not_claim_issue_closed"])
         self.assertTrue(issues[7]["does_not_claim_issue_closed"])
         self.assertEqual(issues[6]["local_status"], "local_contract_passed_external_pending")
+        blocker_summary = report["closure_blocker_summary"]
+        self.assertEqual(
+            blocker_summary["schema_version"],
+            "reachops.commercial_issue_closure_blocker_summary.v1",
+        )
+        self.assertFalse(blocker_summary["closure_ready"])
+        self.assertEqual(blocker_summary["acceptance_criteria_external_pending"], 17)
+        self.assertEqual(blocker_summary["external_pending_count"], report["summary"]["external_pending_count"])
+        self.assertEqual(blocker_summary["next_required_command"], "python tools\\reachops_issue_closure_audit.py --json")
+        issue_gaps = {row["issue_number"]: row for row in blocker_summary["issue_gaps"]}
+        self.assertIn(3, issue_gaps)
+        self.assertIn(7, issue_gaps)
+        self.assertIn("issue_3_100_real_no_submit_runs_three_industries", issue_gaps[3]["external_criteria"])
+        self.assertIn("server_side_rbac_enforcement_and_audit", issue_gaps[7]["external_pending"])
+        self.assertEqual(blocker_summary["required_final_state"]["acceptance_criteria_external_pending"], 0)
+        self.assertFalse(blocker_summary["required_final_state"]["closure_requires_external_validation"])
         issue_2_criteria = {row["id"]: row for row in issues[2]["acceptance_criteria"]}
         self.assertEqual(
             issue_2_criteria["issue_2_unittest_zero_failures_linux_windows"]["evidence_key"],
@@ -3886,6 +3902,46 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "external_acceptance_pending": [
                     f"issue_external_pending_{index:02d}" for index in range(1, 23)
                 ],
+                "issues": [
+                    {
+                        "issue_number": 3,
+                        "title": "[P0] Certify a real account-readiness pool and no-submit evidence pack",
+                        "local_contract_passed": True,
+                        "local_status": "local_contract_passed_external_pending",
+                        "acceptance_criteria_total": 9,
+                        "acceptance_criteria_local_passed": 1,
+                        "acceptance_criteria_external_pending": 8,
+                        "acceptance_criteria_unclassified": 0,
+                        "external_pending": ["issue_3_100_real_no_submit_runs_three_industries"],
+                        "acceptance_criteria": [
+                            {
+                                "id": "issue_3_100_real_no_submit_runs_three_industries",
+                                "status": "external_pending",
+                                "next_action": "Run the controlled real no-submit pilot across three industries.",
+                            }
+                        ],
+                        "does_not_claim_issue_closed": True,
+                    },
+                    {
+                        "issue_number": 7,
+                        "title": "[P1] Build the commercial control plane and decouple channel connectors",
+                        "local_contract_passed": True,
+                        "local_status": "local_contract_passed_external_pending",
+                        "acceptance_criteria_total": 8,
+                        "acceptance_criteria_local_passed": 4,
+                        "acceptance_criteria_external_pending": 4,
+                        "acceptance_criteria_unclassified": 0,
+                        "external_pending": ["server_side_rbac_enforcement_and_audit"],
+                        "acceptance_criteria": [
+                            {
+                                "id": "issue_7_server_side_roles_permissions_audited",
+                                "status": "external_pending",
+                                "next_action": "Implement and audit server-side organization/workspace/member/role enforcement.",
+                            }
+                        ],
+                        "does_not_claim_issue_closed": True,
+                    },
+                ],
             },
             delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 41, "pending_external_validation": 3}},
             operator_pressure={"status": "ok", "summary": {"customer_leads": 108, "outreach_actions": 216}},
@@ -3950,6 +4006,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_displayed"], 20)
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_remaining"], 2)
         self.assertEqual(len(blockers["commercial_issue_closure"]["external_acceptance_pending"]), 20)
+        commercial_blocker_summary = blockers["commercial_issue_closure"]["blocker_summary"]
+        self.assertEqual(
+            commercial_blocker_summary["schema_version"],
+            "reachops.commercial_issue_closure_blocker_summary.v1",
+        )
+        self.assertFalse(commercial_blocker_summary["closure_ready"])
+        self.assertEqual(commercial_blocker_summary["issue_gap_count"], 2)
+        commercial_issue_gaps = {row["issue_number"]: row for row in commercial_blocker_summary["issue_gaps"]}
+        self.assertIn("issue_3_100_real_no_submit_runs_three_industries", commercial_issue_gaps[3]["external_criteria"])
+        self.assertIn("server_side_rbac_enforcement_and_audit", commercial_issue_gaps[7]["external_pending"])
+        self.assertEqual(
+            commercial_blocker_summary["next_required_command"],
+            "python tools\\reachops_issue_closure_audit.py --json",
+        )
+        self.assertEqual(commercial_blocker_summary["required_final_state"]["external_pending_count"], 0)
         evidence_plan = gate["final_delivery_evidence_plan"]
         self.assertEqual(evidence_plan["schema_version"], "reachops.final_delivery_evidence_plan.v1")
         self.assertFalse(evidence_plan["ready"])
@@ -3980,6 +4051,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("issue_closure.summary.acceptance_criteria_external_pending=0", plan_items["commercial_issue_closure"]["proof_fields"])
         self.assertEqual(plan_items["commercial_issue_closure"]["blocker_summary"]["external_acceptance_pending_total"], 22)
         self.assertEqual(plan_items["commercial_issue_closure"]["blocker_summary"]["external_acceptance_pending_remaining"], 2)
+        self.assertEqual(
+            plan_items["commercial_issue_closure"]["blocker_summary"]["schema_version"],
+            "reachops.commercial_issue_closure_blocker_summary.v1",
+        )
+        self.assertEqual(plan_items["commercial_issue_closure"]["blocker_summary"]["issue_gap_count"], 2)
         self.assertTrue(any("Windows 实机生成" in item for item in gate["next_actions"]))
 
     def test_reachops_final_acceptance_gate_passes_only_when_all_final_evidence_is_ready(self):

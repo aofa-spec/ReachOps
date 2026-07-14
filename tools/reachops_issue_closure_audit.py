@@ -72,6 +72,71 @@ def _percent(part: int, total: int) -> float:
     return round((part / total) * 100, 1)
 
 
+def _issue_gap(issue: dict[str, Any]) -> dict[str, Any]:
+    criteria = issue.get("acceptance_criteria") if isinstance(issue.get("acceptance_criteria"), list) else []
+    external_criteria = [
+        str(row.get("id"))
+        for row in criteria
+        if row.get("status") == "external_pending" and str(row.get("id") or "").strip()
+    ]
+    next_actions = [
+        str(row.get("next_action"))
+        for row in criteria
+        if row.get("status") == "external_pending" and str(row.get("next_action") or "").strip()
+    ]
+    return {
+        "issue_number": int(issue.get("issue_number") or 0),
+        "title": str(issue.get("title") or ""),
+        "local_contract_passed": bool(issue.get("local_contract_passed")),
+        "local_status": str(issue.get("local_status") or ""),
+        "acceptance_criteria_total": int(issue.get("acceptance_criteria_total") or 0),
+        "acceptance_criteria_local_passed": int(issue.get("acceptance_criteria_local_passed") or 0),
+        "acceptance_criteria_external_pending": int(issue.get("acceptance_criteria_external_pending") or 0),
+        "acceptance_criteria_unclassified": int(issue.get("acceptance_criteria_unclassified") or 0),
+        "external_pending_count": len(issue.get("external_pending") or []),
+        "external_pending": [str(item) for item in (issue.get("external_pending") or [])],
+        "external_criteria": external_criteria,
+        "next_actions": list(dict.fromkeys(next_actions)),
+        "does_not_claim_issue_closed": bool(issue.get("does_not_claim_issue_closed")),
+    }
+
+
+def _closure_blocker_summary(
+    *,
+    status: str,
+    summary: dict[str, Any],
+    issues: list[dict[str, Any]],
+    external_pending: list[str],
+) -> dict[str, Any]:
+    issue_gaps = [_issue_gap(issue) for issue in issues if issue.get("external_pending")]
+    shown_pending = external_pending[:20]
+    return {
+        "schema_version": "reachops.commercial_issue_closure_blocker_summary.v1",
+        "status": status,
+        "closure_ready": False,
+        "issues_total": int(summary.get("issues_total") or 0),
+        "local_contracts_passed": int(summary.get("local_contracts_passed") or 0),
+        "acceptance_criteria_total": int(summary.get("acceptance_criteria_total") or 0),
+        "acceptance_criteria_local_passed": int(summary.get("acceptance_criteria_local_passed") or 0),
+        "acceptance_criteria_external_pending": int(summary.get("acceptance_criteria_external_pending") or 0),
+        "acceptance_criteria_unclassified": int(summary.get("acceptance_criteria_unclassified") or 0),
+        "external_pending_count": len(external_pending),
+        "external_acceptance_pending": shown_pending,
+        "external_acceptance_pending_total": len(external_pending),
+        "external_acceptance_pending_displayed": len(shown_pending),
+        "external_acceptance_pending_remaining": max(0, len(external_pending) - len(shown_pending)),
+        "issue_gap_count": len(issue_gaps),
+        "issue_gaps": issue_gaps,
+        "next_required_command": "python tools\\reachops_issue_closure_audit.py --json",
+        "required_final_state": {
+            "acceptance_criteria_external_pending": 0,
+            "external_pending_count": 0,
+            "closure_requires_external_validation": False,
+        },
+        "does_not_claim_all_issues_closed": bool(summary.get("does_not_claim_all_issues_closed")),
+    }
+
+
 def _run_data_governance_fixture(root: Path) -> dict[str, Any]:
     base_dir = Path(tempfile.mkdtemp(prefix="reachops-issue-governance-"))
     return build_data_governance_report(
@@ -700,9 +765,25 @@ def build_report(root: str | Path = ROOT_DIR, *, run_pip: bool = False) -> dict[
         and bool(external_pending)
         and does_not_claim_all_issues_closed
     )
+    status = STATUS_EXTERNAL_PENDING if passed else "failed"
+    summary = {
+        "issues_total": len(issues),
+        "local_contracts_passed": local_contracts_passed,
+        "local_contracts_passed_percent": _percent(local_contracts_passed, len(issues)),
+        "acceptance_criteria_total": criteria_total,
+        "acceptance_criteria_local_passed": criteria_local_passed,
+        "acceptance_criteria_local_passed_percent": _percent(criteria_local_passed, criteria_total),
+        "acceptance_criteria_external_pending": criteria_external_pending,
+        "acceptance_criteria_external_pending_percent": _percent(criteria_external_pending, criteria_total),
+        "acceptance_criteria_unclassified": criteria_unclassified,
+        "acceptance_criteria_unclassified_percent": _percent(criteria_unclassified, criteria_total),
+        "external_pending_count": len(external_pending),
+        "does_not_claim_all_issues_closed": does_not_claim_all_issues_closed,
+        "completion_basis": "local_contracts_and_issue_acceptance_criteria_not_final_delivery",
+    }
     return {
         "schema_version": SCHEMA_VERSION,
-        "status": STATUS_EXTERNAL_PENDING if passed else "failed",
+        "status": status,
         "passed": passed,
         "root": str(root),
         "github_issues": {
@@ -710,23 +791,15 @@ def build_report(root: str | Path = ROOT_DIR, *, run_pip: bool = False) -> dict[
             "expected_open_until_external_acceptance": True,
             "closure_requires_external_validation": True,
         },
-        "summary": {
-            "issues_total": len(issues),
-            "local_contracts_passed": local_contracts_passed,
-            "local_contracts_passed_percent": _percent(local_contracts_passed, len(issues)),
-            "acceptance_criteria_total": criteria_total,
-            "acceptance_criteria_local_passed": criteria_local_passed,
-            "acceptance_criteria_local_passed_percent": _percent(criteria_local_passed, criteria_total),
-            "acceptance_criteria_external_pending": criteria_external_pending,
-            "acceptance_criteria_external_pending_percent": _percent(criteria_external_pending, criteria_total),
-            "acceptance_criteria_unclassified": criteria_unclassified,
-            "acceptance_criteria_unclassified_percent": _percent(criteria_unclassified, criteria_total),
-            "external_pending_count": len(external_pending),
-            "does_not_claim_all_issues_closed": does_not_claim_all_issues_closed,
-            "completion_basis": "local_contracts_and_issue_acceptance_criteria_not_final_delivery",
-        },
+        "summary": summary,
         "issues": issues,
         "external_acceptance_pending": external_pending,
+        "closure_blocker_summary": _closure_blocker_summary(
+            status=status,
+            summary=summary,
+            issues=issues,
+            external_pending=external_pending,
+        ),
     }
 
 
