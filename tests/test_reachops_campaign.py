@@ -1218,6 +1218,42 @@ class ReachOpsCampaignTests(unittest.TestCase):
             ]
         )
 
+    def test_reachops_goal_status_exposes_current_stage_external_gate(self):
+        class Args:
+            target = "anti aging serum"
+            base_dir = ""
+
+        audit_result = run_reachops_delivery_audit(Args())
+        client_delivery = {
+            "status": "blocked_by_accounts",
+            "readiness": "blocked_by_accounts",
+            "acceptance_ready": False,
+            "final_delivery_ready": False,
+            "blockers": ["账号预检没有可用账号，无法进入真实采集/触达。"],
+            "real_pilot_evidence": {
+                "schema_version": "reachops.real_pilot_evidence_boundary.v1",
+                "real_pilot_ready": False,
+                "status": "external_validation_pending",
+                "fixture_or_dry_run_claimed": False,
+                "no_submit_preserved": True,
+                "profile_available": 0,
+                "operation_counts": {"candidates": 0, "actions": 0, "touched": 0},
+                "external_acceptance_pending": ["profile_available_zero", "candidate_count_zero"],
+            },
+        }
+
+        report = build_goal_status_report(audit_result, client_delivery=client_delivery)
+
+        gate = report["current_stage_gate"]
+        self.assertEqual(gate["schema_version"], "reachops.current_stage_gate.v1")
+        self.assertEqual(gate["status"], "ready_for_external_validation")
+        self.assertTrue(gate["local_passed"])
+        self.assertTrue(gate["local_checks"]["delivery_audit_has_no_local_failures"])
+        self.assertTrue(gate["local_checks"]["client_delivery_reports_real_pilot_boundary"])
+        self.assertTrue(gate["does_not_claim_real_pilot_when_blocked"])
+        self.assertIn("profile_available_zero", gate["external_validation_pending"])
+        self.assertFalse(gate["real_pilot_evidence"]["real_pilot_ready"])
+
     def test_reachops_goal_status_cli_uses_current_client_delivery_gate(self):
         class Args:
             target = "anti aging serum"
