@@ -136,6 +136,19 @@ def build_report(root_dir: str | Path | None = None) -> dict[str, Any]:
                 "不能复用旧账号可用性",
             ],
         ),
+        "client_delivery_exposes_real_pilot_evidence_boundary": has_all(
+            client_delivery_check,
+            [
+                "reachops.real_pilot_evidence_boundary.v1",
+                "real_pilot_ready",
+                "fixture_or_dry_run_claimed",
+                "no_submit_preserved",
+                "requires_real_account_pool",
+                "requires_real_collection_evidence",
+                "account_pool_remediation",
+                "latest_apply_stale",
+            ],
+        ),
         "live_no_submit_preflight_covers_comment_follow_dm": has_all(
             live_preflight,
             [
