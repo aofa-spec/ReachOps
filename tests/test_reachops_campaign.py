@@ -3897,6 +3897,20 @@ class ReachOpsCampaignTests(unittest.TestCase):
             ]
         )
         self.assertIn("acceptance_summary", blockers["windows_final_artifacts"]["missing_artifacts"])
+        self.assertEqual(
+            blockers["windows_final_artifacts"]["blocker_summary"]["schema_version"],
+            "reachops.windows_final_artifacts_blocker_summary.v1",
+        )
+        self.assertIn(
+            "acceptance_summary",
+            blockers["windows_final_artifacts"]["blocker_summary"]["missing_artifacts"],
+        )
+        self.assertFalse(
+            blockers["windows_final_artifacts"]["blocker_summary"]["acceptance_verification_passed"]
+        )
+        self.assertTrue(
+            blockers["windows_final_artifacts"]["blocker_summary"]["does_not_claim_final_delivery_ready"]
+        )
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_total"], 22)
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_displayed"], 20)
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_remaining"], 2)
@@ -3920,6 +3934,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
         )
         self.assertIn("delivery_package.final_delivery_ready=true", plan_items["windows_final_artifacts"]["proof_fields"])
         self.assertIn("dist\\ReachOps\\ReachOps.exe", plan_items["windows_final_artifacts"]["required_artifacts"])
+        self.assertEqual(
+            plan_items["windows_final_artifacts"]["blocker_summary"]["next_required_command"],
+            "python tools\\reachops_delivery_package_check.py --json",
+        )
+        self.assertIn(
+            "acceptance_summary_missing",
+            plan_items["windows_final_artifacts"]["blocker_summary"]["failures"],
+        )
         self.assertIn("issue_closure.summary.acceptance_criteria_external_pending=0", plan_items["commercial_issue_closure"]["proof_fields"])
         self.assertEqual(plan_items["commercial_issue_closure"]["blocker_summary"]["external_acceptance_pending_total"], 22)
         self.assertEqual(plan_items["commercial_issue_closure"]["blocker_summary"]["external_acceptance_pending_remaining"], 2)

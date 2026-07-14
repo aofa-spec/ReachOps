@@ -229,6 +229,55 @@ def _external_pending_summary(issue_closure: dict[str, Any] | None, limit: int =
     }
 
 
+def _package_blocker_summary(package_check: dict[str, Any]) -> dict[str, Any]:
+    acceptance_verification = (
+        package_check.get("acceptance_verification")
+        if isinstance(package_check.get("acceptance_verification"), dict)
+        else {}
+    )
+    report_files = package_check.get("report_files") if isinstance(package_check.get("report_files"), dict) else {}
+    artifacts = package_check.get("artifacts") if isinstance(package_check.get("artifacts"), dict) else {}
+    missing_reports = [
+        name
+        for name, payload in sorted(report_files.items())
+        if isinstance(payload, dict) and not bool(payload.get("exists"))
+    ]
+    missing_artifact_paths = {
+        name: str(payload.get("path") or "")
+        for name, payload in sorted(artifacts.items())
+        if isinstance(payload, dict) and not bool(payload.get("exists"))
+    }
+    failures = [str(item) for item in (package_check.get("failures") or []) if str(item or "").strip()]
+    acceptance_failures = [
+        str(item)
+        for item in (acceptance_verification.get("failures") or [])
+        if str(item or "").strip()
+    ]
+    acceptance_pending = [
+        str(item)
+        for item in (acceptance_verification.get("pending") or [])
+        if str(item or "").strip()
+    ]
+    return {
+        "schema_version": "reachops.windows_final_artifacts_blocker_summary.v1",
+        "status": str(package_check.get("status") or FAILED),
+        "final_delivery_ready": bool(package_check.get("final_delivery_ready")),
+        "bootstrap_only": bool(package_check.get("bootstrap_only")),
+        "missing_artifacts": [
+            str(item) for item in (package_check.get("missing_artifacts") or []) if str(item or "").strip()
+        ],
+        "missing_artifact_paths": missing_artifact_paths,
+        "failures": failures,
+        "acceptance_verification_passed": bool(acceptance_verification.get("passed")),
+        "acceptance_verification_failures": acceptance_failures,
+        "acceptance_verification_pending": acceptance_pending,
+        "missing_report_files": missing_reports,
+        "next_required_command": "python tools\\reachops_delivery_package_check.py --json",
+        "windows_acceptance_command": "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_acceptance_windows.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
+        "does_not_claim_final_delivery_ready": not bool(package_check.get("final_delivery_ready")),
+    }
+
+
 def _percent(part: int, total: int) -> float:
     if total <= 0:
         return 0.0
@@ -458,6 +507,7 @@ def build_final_delivery_evidence_plan(
                 *[str(item) for item in (package_check.get("failures") or [])],
                 *[str(item) for item in (acceptance_verification.get("failures") or [])],
             ],
+            blocker_summary=_package_blocker_summary(package_check),
             next_action="在 Windows 实机生成 exe、installer、update manifest 和通过的 acceptance_summary.json，然后复跑 tools\\reachops_delivery_package_check.py --json。",
         ),
         _evidence_item(
@@ -813,12 +863,14 @@ def build_final_acceptance_gate(
     if not _package_ready(package_check):
         missing = [str(item) for item in (package_check.get("missing_artifacts") or []) if str(item or "").strip()]
         failures = [str(item) for item in (package_check.get("failures") or []) if str(item or "").strip()]
+        package_blocker_summary = _package_blocker_summary(package_check)
         final_delivery_blockers.append(
             {
                 "scope": "windows_final_artifacts",
                 "status": str(package_check.get("status") or FAILED),
                 "missing_artifacts": missing,
                 "failures": failures,
+                "blocker_summary": package_blocker_summary,
                 "required_artifacts": [
                     "dist\\ReachOps\\ReachOps.exe",
                     "dist\\installer\\ReachOps-Setup-0.4.0.exe",
