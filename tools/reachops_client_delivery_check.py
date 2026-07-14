@@ -471,8 +471,11 @@ def latest_account_repair_apply_status(base_dir: Path, log_lines: list[str], pro
     payload_group = str(payload.get("profile_group") or "").strip().lower()
     payload["same_group"] = bool(not wanted_group or not payload_group or wanted_group == payload_group)
     payload_batch_id = str(payload.get("batch_id") or "").strip()
+    current_batch_id = str(batch_id or "").strip()
     stale_reason = ""
-    if batch_id and not payload_batch_id and payload.get("source") == "latest_account_repair_apply.json":
+    if current_batch_id and payload_batch_id and payload_batch_id != current_batch_id:
+        stale_reason = "account_repair_apply_batch_mismatch"
+    elif current_batch_id and not payload_batch_id and payload.get("source") == "latest_account_repair_apply.json":
         plan_path = base_dir / "reports" / "acceptance_remediation" / "latest_account_repair_plan.json"
         try:
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -481,12 +484,12 @@ def latest_account_repair_apply_status(base_dir: Path, log_lines: list[str], pro
         except Exception:
             plan_batch_id = ""
             plan_mtime = 0
-        if plan_batch_id == str(batch_id or "") and plan_mtime > float(payload.get("mtime") or 0):
+        if plan_batch_id == current_batch_id and plan_mtime > float(payload.get("mtime") or 0):
             stale_reason = "newer_account_repair_plan_for_current_batch"
     payload["same_batch"] = bool(
-        not batch_id
+        not current_batch_id
         or (not payload_batch_id and not stale_reason)
-        or payload_batch_id == str(batch_id or "")
+        or payload_batch_id == current_batch_id
     )
     if stale_reason:
         payload["stale"] = True

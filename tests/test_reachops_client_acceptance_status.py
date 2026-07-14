@@ -4096,6 +4096,42 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(payload["effective_status"], "stale")
         self.assertIn("旧账号修复结果已失效", payload["effective_message"])
 
+    def test_account_repair_apply_status_rejects_previous_batch_apply(self):
+        with TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            report_dir = base_dir / "reports" / "acceptance_remediation"
+            report_dir.mkdir(parents=True)
+            apply_path = report_dir / "latest_account_repair_apply.json"
+            apply_path.write_text(
+                json.dumps(
+                    {
+                        "status": "applied",
+                        "batch_id": "gb_previous_failed",
+                        "profile_group": "United States",
+                        "selected_count": 1,
+                        "moved_count": 1,
+                        "failed_count": 0,
+                        "results": [{"profile_id": "24909", "attempted": True, "ok": True}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            payload = latest_account_repair_apply_status(
+                base_dir,
+                [],
+                profile_group="United States",
+                batch_id="gb_current_failed",
+            )
+
+        self.assertFalse(payload["same_batch"])
+        self.assertTrue(payload["stale"])
+        self.assertEqual(payload["stale_reason"], "account_repair_apply_batch_mismatch")
+        self.assertFalse(payload["pending_recheck"])
+        self.assertEqual(payload["effective_status"], "stale")
+        self.assertIn("旧账号修复结果已失效", payload["effective_message"])
+
     def test_delivery_check_blocks_stale_account_repair_apply_before_retest(self):
         batch = {"id": "gb_new_failed", "status": "failed", "profile_group": "United States", "config_json": "{}"}
         acceptance = {
