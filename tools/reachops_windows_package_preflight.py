@@ -17,6 +17,7 @@ from ReachOps.version import VERSION
 REQUIRED_FILES = {
     "dependency_lock": "requirements.lock",
     "ci_release_baseline_audit": "tools/reachops_ci_release_baseline_audit.py",
+    "account_readiness_audit": "tools/reachops_account_readiness_audit.py",
     "dependency_baseline_verifier": "tools/verify_reachops_dependency_baseline.py",
     "dependency_license_inventory": "ReachOps/packaging/dependency-license-inventory.json",
     "data_governance": "tools/reachops_data_governance.py",
@@ -134,6 +135,16 @@ SCRIPT_EXPECTATIONS = {
         "reachops-rollback-note.md",
         "does_not_claim_branch_protection",
         "does_not_claim_ten_green_ci_runs",
+    ],
+    "tools/reachops_account_readiness_audit.py": [
+        "reachops.account_readiness_audit.v1",
+        "passed_with_external_account_pilot_pending",
+        "certified_30_controlled_profiles",
+        "100_real_no_submit_runs_across_three_industries",
+        "does_not_claim_certified_30_profiles",
+        "does_not_claim_100_real_no_submit_runs",
+        "fixture_data_excluded_by_default",
+        "preflight_actions_do_not_submit",
     ],
     "tools/reachops_data_governance.py": [
         "reachops.data_governance.v1",

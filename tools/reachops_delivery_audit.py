@@ -27,6 +27,7 @@ from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.action_router import ActionRouterConfig, FixtureActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_ci_release_baseline_audit import build_report as build_ci_release_baseline_report
+from tools.reachops_account_readiness_audit import build_report as build_account_readiness_report
 from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
 from tools.reachops_data_governance import build_report as build_data_governance_report
@@ -1759,6 +1760,7 @@ def run_audit(args) -> dict:
     product_link_campaign = run_product_link_campaign_fixture()
     creator_topic_inputs = run_creator_and_topic_input_fixture()
     ci_release_baseline_fixture = build_ci_release_baseline_report(ROOT_DIR)
+    account_readiness_fixture = build_account_readiness_report(ROOT_DIR)
 
     repository_cleanup = clean_generated_redundant_paths(ROOT_DIR)
     repository_cleanliness = scan_repository_cleanliness(ROOT_DIR)
@@ -1823,6 +1825,24 @@ def run_audit(args) -> dict:
                 and ci_release_baseline_fixture.get("does_not_claim_ten_green_ci_runs") is True
             ),
             ci_release_baseline_fixture,
+        ),
+        check(
+            "账号 readiness 和 no-submit 证据包本地合同可审计",
+            bool(
+                account_readiness_fixture.get("passed")
+                and account_readiness_fixture.get("schema_version") == "reachops.account_readiness_audit.v1"
+                and account_readiness_fixture.get("status") == "passed_with_external_account_pilot_pending"
+                and (account_readiness_fixture.get("local_checks") or {}).get("lifecycle_signal_coverage_complete")
+                and (account_readiness_fixture.get("local_checks") or {}).get("profile_preflight_records_evidence_and_quarantine")
+                and (account_readiness_fixture.get("local_checks") or {}).get("live_no_submit_preflight_covers_comment_follow_dm")
+                and (account_readiness_fixture.get("no_submit_contract") or {}).get("preflight_actions_do_not_submit")
+                and (account_readiness_fixture.get("real_vs_fixture_boundary") or {}).get("external_pilot_required")
+                and account_readiness_fixture.get("does_not_claim_certified_30_profiles") is True
+                and account_readiness_fixture.get("does_not_claim_100_real_no_submit_runs") is True
+                and "certified_30_controlled_profiles" in (account_readiness_fixture.get("external_acceptance_pending") or [])
+                and "100_real_no_submit_runs_across_three_industries" in (account_readiness_fixture.get("external_acceptance_pending") or [])
+            ),
+            account_readiness_fixture,
         ),
         check(
             "AI/规则能生成产品分析",
