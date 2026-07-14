@@ -2580,6 +2580,28 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         "final_delivery_ready": False,
                         "missing_artifacts": ["exe", "installer", "manifest", "acceptance_summary"],
                         "remediation_plan": remediation_plan,
+                        "windows_acceptance_handoff_path": "reports/support/windows_acceptance_handoff.json",
+                        "windows_acceptance_handoff": {
+                            "schema_version": "reachops.windows_acceptance_handoff.v1",
+                            "support_required": True,
+                            "support_case": "windows_acceptance_not_final_ready",
+                            "final_delivery_ready": False,
+                            "does_not_claim_final_delivery_ready": True,
+                            "acceptance_summary_path": "reports/reachops_acceptance/acceptance_summary.json",
+                            "manifest_path": "dist/installer/reachops-update-manifest.json",
+                            "missing_artifacts": ["acceptance_summary"],
+                            "failure_codes": ["acceptance_summary_missing"],
+                            "pending_external_validation": ["windows_real_acceptance"],
+                            "retest_commands": [
+                                "python tools\\reachops_delivery_package_check.py --json",
+                                "python tools\\reachops_final_acceptance_gate.py --json",
+                            ],
+                            "acceptance_required": ["windows_real_machine_acceptance_summary_passed"],
+                            "safety_contract": {
+                                "does_not_create_acceptance_summary": True,
+                                "requires_windows_real_acceptance": True,
+                            },
+                        },
                     },
                     returncode=1,
                 )
@@ -2667,6 +2689,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             "reachops.windows_final_artifacts_blocker_summary.v1",
         )
         self.assertIn("acceptance_summary_missing", windows_blocker["blocker_summary"]["failures"])
+        self.assertEqual(
+            windows_blocker["blocker_summary"]["windows_acceptance_handoff"]["schema_version"],
+            "reachops.windows_acceptance_handoff.v1",
+        )
+        self.assertEqual(
+            windows_blocker["blocker_summary"]["windows_acceptance_handoff_path"],
+            "reports/support/windows_acceptance_handoff.json",
+        )
+        self.assertTrue(
+            windows_blocker["blocker_summary"]["windows_acceptance_handoff"][
+                "requires_windows_real_acceptance"
+            ]
+        )
         self.assertIn("mvp_acceptance", report["sections"])
         self.assertIn("mac_loop_acceptance", report["sections"])
         self.assertIn("windows_package_preflight", report["sections"])
@@ -2677,6 +2712,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(
             report["deliverable_index"]["windows_final_package"]["blocker_summary"]["next_required_command"],
             "python tools\\reachops_delivery_package_check.py --json",
+        )
+        self.assertEqual(
+            report["deliverable_index"]["windows_final_package"]["blocker_summary"]["windows_acceptance_handoff"][
+                "support_case"
+            ],
+            "windows_acceptance_not_final_ready",
         )
         local_evidence = report["local_mvp_evidence"]
         self.assertIn("operation_counts", local_evidence)
@@ -4147,6 +4188,28 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "failures": ["exe_missing", "installer_missing", "manifest_missing", "acceptance_summary_missing"],
                 "artifacts": {"acceptance_summary": {"path": "reports/reachops_acceptance/acceptance_summary.json", "exists": False}},
                 "report_files": {"final_acceptance_gate": {"path": "", "exists": False}},
+                "windows_acceptance_handoff_path": "reports/support/windows_acceptance_handoff.json",
+                "windows_acceptance_handoff": {
+                    "schema_version": "reachops.windows_acceptance_handoff.v1",
+                    "support_required": True,
+                    "support_case": "windows_acceptance_not_final_ready",
+                    "final_delivery_ready": False,
+                    "does_not_claim_final_delivery_ready": True,
+                    "acceptance_summary_path": "reports/reachops_acceptance/acceptance_summary.json",
+                    "manifest_path": "dist/installer/reachops-update-manifest.json",
+                    "missing_artifacts": ["acceptance_summary"],
+                    "failure_codes": ["acceptance_summary_missing"],
+                    "pending_external_validation": ["windows_real_acceptance"],
+                    "retest_commands": [
+                        "python tools\\reachops_delivery_package_check.py --json",
+                        "python tools\\reachops_final_acceptance_gate.py --json",
+                    ],
+                    "acceptance_required": ["windows_real_machine_acceptance_summary_passed"],
+                    "safety_contract": {
+                        "does_not_create_acceptance_summary": True,
+                        "requires_windows_real_acceptance": True,
+                    },
+                },
             },
             issue_closure={
                 "schema_version": "reachops.issue_closure_audit.v1",
@@ -4265,6 +4328,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(
             blockers["windows_final_artifacts"]["blocker_summary"]["does_not_claim_final_delivery_ready"]
         )
+        windows_handoff = blockers["windows_final_artifacts"]["blocker_summary"]["windows_acceptance_handoff"]
+        self.assertEqual(windows_handoff["schema_version"], "reachops.windows_acceptance_handoff.v1")
+        self.assertEqual(windows_handoff["path"], "reports/support/windows_acceptance_handoff.json")
+        self.assertEqual(windows_handoff["support_case"], "windows_acceptance_not_final_ready")
+        self.assertTrue(windows_handoff["does_not_create_acceptance_summary"])
+        self.assertTrue(windows_handoff["requires_windows_real_acceptance"])
+        self.assertIn("windows_real_acceptance", windows_handoff["pending_external_validation"])
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_total"], 22)
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_displayed"], 20)
         self.assertEqual(blockers["commercial_issue_closure"]["external_acceptance_pending_remaining"], 2)
@@ -4310,6 +4380,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn(
             "acceptance_summary_missing",
             plan_items["windows_final_artifacts"]["blocker_summary"]["failures"],
+        )
+        self.assertEqual(
+            plan_items["windows_final_artifacts"]["blocker_summary"]["windows_acceptance_handoff"]["support_case"],
+            "windows_acceptance_not_final_ready",
+        )
+        self.assertTrue(
+            plan_items["windows_final_artifacts"]["blocker_summary"]["windows_acceptance_handoff"][
+                "requires_windows_real_acceptance"
+            ]
         )
         self.assertIn("issue_closure.summary.acceptance_criteria_external_pending=0", plan_items["commercial_issue_closure"]["proof_fields"])
         self.assertEqual(plan_items["commercial_issue_closure"]["blocker_summary"]["external_acceptance_pending_total"], 22)

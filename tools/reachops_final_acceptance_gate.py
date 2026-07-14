@@ -310,6 +310,47 @@ def _issue_closure_blocker_summary(issue_closure: dict[str, Any] | None, limit: 
     }
 
 
+def _windows_acceptance_handoff_summary(package_check: dict[str, Any]) -> dict[str, Any]:
+    handoff = (
+        package_check.get("windows_acceptance_handoff")
+        if isinstance(package_check.get("windows_acceptance_handoff"), dict)
+        else {}
+    )
+    if not handoff:
+        return {}
+    safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    return {
+        "schema_version": str(handoff.get("schema_version") or ""),
+        "path": str(package_check.get("windows_acceptance_handoff_path") or ""),
+        "support_required": bool(handoff.get("support_required")),
+        "support_case": str(handoff.get("support_case") or ""),
+        "final_delivery_ready": bool(handoff.get("final_delivery_ready")),
+        "does_not_claim_final_delivery_ready": bool(handoff.get("does_not_claim_final_delivery_ready", True)),
+        "acceptance_summary_path": str(handoff.get("acceptance_summary_path") or ""),
+        "manifest_path": str(handoff.get("manifest_path") or ""),
+        "missing_artifacts": [
+            str(item) for item in (handoff.get("missing_artifacts") or []) if str(item or "").strip()
+        ],
+        "failure_codes": [
+            str(item) for item in (handoff.get("failure_codes") or []) if str(item or "").strip()
+        ],
+        "pending_external_validation": [
+            str(item)
+            for item in (handoff.get("pending_external_validation") or [])
+            if str(item or "").strip()
+        ],
+        "retest_commands": [
+            str(item) for item in (handoff.get("retest_commands") or []) if str(item or "").strip()
+        ],
+        "acceptance_required": [
+            str(item) for item in (handoff.get("acceptance_required") or []) if str(item or "").strip()
+        ],
+        "does_not_create_acceptance_summary": bool(safety_contract.get("does_not_create_acceptance_summary")),
+        "requires_windows_real_acceptance": bool(safety_contract.get("requires_windows_real_acceptance")),
+        "safety_contract": safety_contract,
+    }
+
+
 def _package_blocker_summary(package_check: dict[str, Any]) -> dict[str, Any]:
     acceptance_verification = (
         package_check.get("acceptance_verification")
@@ -339,7 +380,7 @@ def _package_blocker_summary(package_check: dict[str, Any]) -> dict[str, Any]:
         for item in (acceptance_verification.get("pending") or [])
         if str(item or "").strip()
     ]
-    return {
+    summary = {
         "schema_version": "reachops.windows_final_artifacts_blocker_summary.v1",
         "status": str(package_check.get("status") or FAILED),
         "final_delivery_ready": bool(package_check.get("final_delivery_ready")),
@@ -357,6 +398,11 @@ def _package_blocker_summary(package_check: dict[str, Any]) -> dict[str, Any]:
         "windows_acceptance_command": "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_acceptance_windows.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
         "does_not_claim_final_delivery_ready": not bool(package_check.get("final_delivery_ready")),
     }
+    handoff_summary = _windows_acceptance_handoff_summary(package_check)
+    if handoff_summary:
+        summary["windows_acceptance_handoff"] = handoff_summary
+        summary["windows_acceptance_handoff_path"] = handoff_summary["path"]
+    return summary
 
 
 def _percent(part: int, total: int) -> float:

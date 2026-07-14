@@ -464,6 +464,74 @@ def final_gate_blocker_summary(final_gate: dict[str, Any], scope: str) -> dict[s
     return {}
 
 
+def windows_acceptance_handoff_summary(package: dict[str, Any]) -> dict[str, Any]:
+    handoff = (
+        package.get("windows_acceptance_handoff")
+        if isinstance(package.get("windows_acceptance_handoff"), dict)
+        else {}
+    )
+    if not handoff:
+        return {}
+    safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    return {
+        "schema_version": str(handoff.get("schema_version") or ""),
+        "path": str(package.get("windows_acceptance_handoff_path") or ""),
+        "support_required": bool(handoff.get("support_required")),
+        "support_case": str(handoff.get("support_case") or ""),
+        "final_delivery_ready": bool(handoff.get("final_delivery_ready")),
+        "does_not_claim_final_delivery_ready": bool(handoff.get("does_not_claim_final_delivery_ready", True)),
+        "acceptance_summary_path": str(handoff.get("acceptance_summary_path") or ""),
+        "manifest_path": str(handoff.get("manifest_path") or ""),
+        "missing_artifacts": [
+            str(item) for item in (handoff.get("missing_artifacts") or []) if str(item or "").strip()
+        ],
+        "failure_codes": [
+            str(item) for item in (handoff.get("failure_codes") or []) if str(item or "").strip()
+        ],
+        "pending_external_validation": [
+            str(item)
+            for item in (handoff.get("pending_external_validation") or [])
+            if str(item or "").strip()
+        ],
+        "retest_commands": [
+            str(item) for item in (handoff.get("retest_commands") or []) if str(item or "").strip()
+        ],
+        "acceptance_required": [
+            str(item) for item in (handoff.get("acceptance_required") or []) if str(item or "").strip()
+        ],
+        "does_not_create_acceptance_summary": bool(safety_contract.get("does_not_create_acceptance_summary")),
+        "requires_windows_real_acceptance": bool(safety_contract.get("requires_windows_real_acceptance")),
+        "safety_contract": safety_contract,
+    }
+
+
+def with_windows_acceptance_handoff(
+    blocker_summary: dict[str, Any],
+    package: dict[str, Any],
+) -> dict[str, Any]:
+    handoff_summary = windows_acceptance_handoff_summary(package)
+    if not handoff_summary:
+        return blocker_summary
+    summary = dict(blocker_summary)
+    if not summary:
+        summary = {
+            "schema_version": "reachops.windows_final_artifacts_blocker_summary.v1",
+            "status": str(package.get("status") or "failed"),
+            "final_delivery_ready": bool(package.get("final_delivery_ready")),
+            "missing_artifacts": [
+                str(item) for item in (package.get("missing_artifacts") or []) if str(item or "").strip()
+            ],
+            "failures": [
+                str(item) for item in (package.get("failures") or []) if str(item or "").strip()
+            ],
+            "next_required_command": "python tools\\reachops_delivery_package_check.py --json",
+            "does_not_claim_final_delivery_ready": not bool(package.get("final_delivery_ready")),
+        }
+    summary.setdefault("windows_acceptance_handoff", handoff_summary)
+    summary.setdefault("windows_acceptance_handoff_path", handoff_summary["path"])
+    return summary
+
+
 def build_deliverable_index(
     *,
     local_ready: bool,
@@ -485,6 +553,7 @@ def build_deliverable_index(
         if isinstance(windows_blocker.get("blocker_summary"), dict)
         else {}
     ) or final_gate_blocker_summary(final_gate, "windows_final_artifacts")
+    windows_blocker_summary = with_windows_acceptance_handoff(windows_blocker_summary, package)
     windows_missing_artifacts = sorted(
         {
             str(item)
@@ -823,7 +892,10 @@ def build_report() -> dict[str, Any]:
         )
     if package.get("missing_artifacts"):
         remediation = package.get("remediation_plan") if isinstance(package.get("remediation_plan"), dict) else {}
-        package_blocker_summary = final_gate_blocker_summary(final_gate, "windows_final_artifacts")
+        package_blocker_summary = with_windows_acceptance_handoff(
+            final_gate_blocker_summary(final_gate, "windows_final_artifacts"),
+            package,
+        )
         blockers.append(
             {
                 "scope": "windows_final_artifacts",
