@@ -223,6 +223,10 @@ def _rollback_note(payload: dict[str, Any]) -> str:
             f"- Client delivery status: {payload['acceptance']['summary'].get('client_delivery', {}).get('status', 'unknown')}",
             f"- Issue closure evidence: {payload['artifacts']['issue_closure']['path']}",
             f"- Issue closure status: {payload['acceptance']['summary'].get('issue_closure', {}).get('status', 'unknown')}",
+            f"- Final acceptance gate evidence: {payload['artifacts']['final_acceptance_gate']['path']}",
+            f"- Final acceptance gate status: {payload['acceptance']['summary'].get('final_acceptance_gate', {}).get('status', 'unknown')}",
+            f"- Final acceptance gate ready: {str(bool(payload['acceptance']['summary'].get('final_acceptance_gate', {}).get('final_delivery_ready'))).lower()}",
+            f"- Final acceptance gate failed checks: {', '.join(payload['acceptance']['summary'].get('final_acceptance_gate', {}).get('failed_checks') or []) or 'none'}",
             "",
         ]
     )
@@ -305,6 +309,13 @@ def build_release_evidence(
             "preserve_activation_status": bool(runtime_policy.get("preserve_activation_status", True)),
             "requires_previous_verified_manifest": True,
             "forbid_exe_only_final_rollback": True,
+            "final_acceptance_gate": {
+                "path": report_artifacts["final_acceptance_gate"]["path"],
+                "exists": bool(report_artifacts["final_acceptance_gate"]["exists"]),
+                "status": summary_sections["final_acceptance_gate"].get("status"),
+                "final_delivery_ready": bool(summary_sections["final_acceptance_gate"].get("final_delivery_ready")),
+                "failed_checks": list(summary_sections["final_acceptance_gate"].get("failed_checks") or []),
+            },
             "verification_commands": [
                 "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_installer_smoke_windows.ps1",
                 "python tools\\reachops_activation_status_check.py --json",

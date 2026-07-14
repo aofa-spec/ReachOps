@@ -3197,6 +3197,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("authorization_handoff", evidence["package_report_files"])
             self.assertIn("client_delivery", evidence["package_report_files"])
             self.assertEqual(evidence["missing_package_report_files"], [])
+            self.assertTrue(evidence["rollback"]["final_acceptance_gate"]["exists"])
+            self.assertEqual(evidence["rollback"]["final_acceptance_gate"]["status"], "passed")
+            self.assertTrue(evidence["rollback"]["final_acceptance_gate"]["final_delivery_ready"])
+            self.assertEqual(evidence["rollback"]["final_acceptance_gate"]["failed_checks"], [])
             self.assertIn("python tools\\reachops_issue_closure_audit.py --json", evidence["rollback"]["verification_commands"])
             self.assertTrue(Path(evidence["evidence_path"]).exists())
             rollback_note = Path(evidence["rollback_note_path"]).read_text(encoding="utf-8")
@@ -3208,6 +3212,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("Authorization handoff readiness report", rollback_note)
             self.assertIn("Client delivery evidence", rollback_note)
             self.assertIn("issue_closure", rollback_note)
+            self.assertIn("Final acceptance gate evidence", rollback_note)
+            self.assertIn("Final acceptance gate status: passed", rollback_note)
+            self.assertIn("Final acceptance gate ready: true", rollback_note)
+            self.assertIn("Final acceptance gate failed checks: none", rollback_note)
 
             (report_dir / "live_submit.json").unlink()
             missing_report_evidence = build_reachops_release_evidence(
