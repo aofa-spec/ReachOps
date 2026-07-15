@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -94,6 +95,92 @@ def scenario_from_source(source: dict[str, Any], index: int) -> dict[str, str] |
         "source_type": source_type,
         "description": str(source.get("reason") or source.get("description") or "项目配置获客入口"),
     }
+
+
+def scenario_identity(scenario: dict[str, str]) -> tuple[str, str]:
+    return (str(scenario.get("source_type") or "").strip(), str(scenario.get("target") or "").strip())
+
+
+def creator_url_from_tiktok_url(value: str) -> str:
+    try:
+        parsed = urlparse(str(value or "").strip())
+        host = str(parsed.netloc or "").lower()
+        if "tiktok.com" not in host:
+            return ""
+        for part in [item for item in parsed.path.split("/") if item]:
+            if part.startswith("@"):
+                return f"https://www.tiktok.com/{part}"
+    except Exception:
+        return ""
+    return ""
+
+
+def should_expand_related_sources(row: dict[str, Any]) -> bool:
+    funnel = row.get("funnel") if isinstance(row.get("funnel"), dict) else {}
+    if int(funnel.get("customer_leads") or 0) > 0 or int(funnel.get("outreach_actions") or 0) > 0:
+        return False
+    no_action = row.get("no_action_reason") if isinstance(row.get("no_action_reason"), dict) else {}
+    code = str(no_action.get("code") or "").strip()
+    diagnosis = str(row.get("diagnosis_status") or "").strip()
+    return code in {"low_intent_candidates", "no_candidates"} or diagnosis in {
+        "comment_users_found",
+        "content_found_no_comments",
+        "opened_but_no_results",
+    }
+
+
+def related_source_expansions(scenario: dict[str, str], next_index: int) -> list[dict[str, str]]:
+    if str(scenario.get("source_type") or "").strip() != "content_url":
+        return []
+    target = str(scenario.get("target") or "").strip()
+    creator_url = creator_url_from_tiktok_url(target)
+    if not creator_url or creator_url == target:
+        return []
+    return [
+        {
+            "name": f"{next_index:02d}_creator_url_{safe_name(creator_url)[:36]}",
+            "target": creator_url,
+            "source_type": "creator_url",
+            "description": "自动扩展：content_url 低意向或无候选后，回退到同达人主页继续 no-submit 采集。",
+        }
+    ]
+
+
+def append_related_source_expansions(
+    scenarios: list[dict[str, str]],
+    scenario: dict[str, str],
+    final_row: dict[str, Any],
+    scenario_plan: dict[str, Any],
+    max_sources: int,
+) -> list[dict[str, str]]:
+    if not should_expand_related_sources(final_row):
+        return []
+    max_total = max(1, int(max_sources or 1))
+    if len(scenarios) >= max_total:
+        return []
+    existing = {scenario_identity(item) for item in scenarios}
+    appended: list[dict[str, str]] = []
+    for expansion in related_source_expansions(scenario, len(scenarios) + 1):
+        if len(scenarios) >= max_total:
+            break
+        if scenario_identity(expansion) in existing:
+            continue
+        scenarios.append(expansion)
+        existing.add(scenario_identity(expansion))
+        appended.append(expansion)
+    if appended:
+        auto_expansions = scenario_plan.setdefault("auto_expansions", [])
+        no_action = final_row.get("no_action_reason") if isinstance(final_row.get("no_action_reason"), dict) else {}
+        for expansion in appended:
+            auto_expansions.append(
+                {
+                    "from": list(scenario_identity(scenario)),
+                    "to": list(scenario_identity(expansion)),
+                    "reason": str(no_action.get("code") or final_row.get("diagnosis_status") or ""),
+                }
+            )
+        scenario_plan["auto_expanded_source_count"] = len(auto_expansions)
+    return appended
 
 
 def build_scenarios(args: argparse.Namespace, run_dir: Path) -> tuple[list[dict[str, str]], dict[str, Any]]:
@@ -697,7 +784,10 @@ def main() -> int:
                 }
             )
             scenario_details.append({"scenario": {"name": "no_formal_scenarios"}, "attempts": [], "summary": summary_rows[-1]})
-        for scenario in scenario_iterable:
+        scenario_index = 0
+        while scenario_index < len(scenario_iterable):
+            scenario = scenario_iterable[scenario_index]
+            scenario_index += 1
             scenario_dir = run_dir / safe_name(scenario["name"])
             scenario_attempts = []
             final_row = None
@@ -842,10 +932,24 @@ def main() -> int:
                 }
                 summary_rows.append(row)
                 scenario_details.append({"scenario": scenario, "command": [], "summary": row})
+                append_related_source_expansions(
+                    scenario_iterable,
+                    scenario,
+                    row,
+                    scenario_plan,
+                    max(1, int(args.max_sources or 1)),
+                )
                 continue
             final_row["attempts"] = [dict(attempt["summary"]) for attempt in scenario_attempts]
             summary_rows.append(final_row)
             scenario_details.append({"scenario": scenario, "attempts": scenario_attempts, "summary": final_row})
+            append_related_source_expansions(
+                scenario_iterable,
+                scenario,
+                final_row,
+                scenario_plan,
+                max(1, int(args.max_sources or 1)),
+            )
     except KeyboardInterrupt:
         interrupted = True
         summary_rows.append(

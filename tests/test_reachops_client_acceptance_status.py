@@ -56,6 +56,8 @@ from tools.reachops_web_panel_dom_smoke import run_dom_smoke
 from tools.reachops_web_panel_runtime_smoke import run_runtime_smoke
 from tools.run_reachops_headless_macos import DummyRoot
 from tools.run_reachops_real_flow_macos import acceptance as real_flow_acceptance
+from tools.run_reachops_real_flow_macos import append_related_source_expansions
+from tools.run_reachops_real_flow_macos import creator_url_from_tiktok_url
 from tools.run_reachops_real_flow_macos import summarize_scenario as summarize_real_flow_scenario
 from tools.reachops_web_ui import (
     DEFAULT_TARGET,
@@ -6285,6 +6287,55 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(row["no_action_reason"]["code"], "low_intent_candidates")
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["no_action_reason"]["code"], "low_intent_candidates")
+
+    def test_real_flow_expands_content_url_to_creator_after_low_intent(self):
+        scenarios = [
+            {
+                "name": "01_content",
+                "target": "https://www.tiktok.com/@ayieinaussie/photo/7646939533241601301",
+                "source_type": "content_url",
+                "description": "direct content",
+            }
+        ]
+        plan = {}
+        row = {
+            "diagnosis_status": "comment_users_found",
+            "funnel": {"customer_leads": 0, "outreach_actions": 0},
+            "no_action_reason": {"code": "low_intent_candidates"},
+        }
+
+        appended = append_related_source_expansions(scenarios, scenarios[0], row, plan, max_sources=3)
+
+        self.assertEqual(creator_url_from_tiktok_url(scenarios[0]["target"]), "https://www.tiktok.com/@ayieinaussie")
+        self.assertEqual(len(appended), 1)
+        self.assertEqual(scenarios[1]["source_type"], "creator_url")
+        self.assertEqual(scenarios[1]["target"], "https://www.tiktok.com/@ayieinaussie")
+        self.assertEqual(plan["auto_expanded_source_count"], 1)
+        self.assertEqual(plan["auto_expansions"][0]["reason"], "low_intent_candidates")
+
+    def test_real_flow_does_not_expand_when_leads_exist_or_budget_exhausted(self):
+        scenario = {
+            "name": "01_content",
+            "target": "https://www.tiktok.com/@creator/video/1",
+            "source_type": "content_url",
+            "description": "direct content",
+        }
+        passed_row = {
+            "diagnosis_status": "leads_found",
+            "funnel": {"customer_leads": 1, "outreach_actions": 1},
+            "no_action_reason": {},
+        }
+        blocked_row = {
+            "diagnosis_status": "comment_users_found",
+            "funnel": {"customer_leads": 0, "outreach_actions": 0},
+            "no_action_reason": {"code": "low_intent_candidates"},
+        }
+
+        scenarios = [dict(scenario)]
+        self.assertEqual(append_related_source_expansions(scenarios, scenarios[0], passed_row, {}, max_sources=3), [])
+        self.assertEqual(len(scenarios), 1)
+        self.assertEqual(append_related_source_expansions(scenarios, scenarios[0], blocked_row, {}, max_sources=1), [])
+        self.assertEqual(len(scenarios), 1)
 
     def test_real_pilot_evidence_boundary_blocks_zero_account_claims(self):
         boundary = build_real_pilot_evidence_boundary(
