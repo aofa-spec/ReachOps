@@ -38,6 +38,7 @@ from tools import reachops_mvp_acceptance_summary
 from tools import reachops_web_ui
 from tools import reachops_mac_loop_acceptance
 from tools.reachops_client_delivery_check import (
+    account_repair_progress_summary,
     account_repair_summary_lines,
     build_account_blocker_resolution,
     build_account_support_handoff,
@@ -4782,6 +4783,102 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertTrue(resolution["ready_for_retest"])
         self.assertFalse(resolution["requires_latest_repair_apply"])
         self.assertTrue(resolution["does_not_claim_real_account_pool_ready"])
+
+    def test_delivery_check_summarizes_profile_probe_repair_progress_with_runtime_apply(self):
+        batch = {"id": "gb_accounts", "status": "failed", "profile_group": "United States", "config_json": "{}"}
+        acceptance = {
+            "readiness": "blocked_by_accounts",
+            "checks": {"profile_available_count": 0},
+            "blockers": ["账号预检没有可用账号，无法进入真实采集/触达。"],
+            "next_actions": ["先修复 United States 分组账号。"],
+            "profile_preflight_details": [
+                {
+                    "profile_id": "4521",
+                    "status": "不可用",
+                    "error": "LOGIN_REQUIRED",
+                    "message": "LOGIN_REQUIRED",
+                }
+            ],
+        }
+        profile_handoff = {
+            "schema_version": "reachops.profile_readiness_handoff.v1",
+            "source_exists": True,
+            "status": "blocked_by_accounts",
+            "terminal_state": "BLOCKED",
+            "profile_group": "United States",
+            "run_id": "20260715T093653Z",
+            "checked": 5,
+            "available": 0,
+            "failed_profile_count": 5,
+            "profile_repair_apply": {
+                "status": "applied",
+                "source": "profile_readiness_probe/latest_account_repair_apply.json",
+                "path": "/tmp/profile_probe/latest_account_repair_apply.json",
+                "profile_group": "United States",
+                "selected_count": 4,
+                "moved_count": 4,
+                "failed_count": 0,
+                "pending_recheck": True,
+            },
+            "does_not_claim_real_account_pool_ready": True,
+        }
+        with TemporaryDirectory() as tmpdir:
+            log_lines = [
+                "CONFIG account_repair_apply status=applied group=United States selected=1 moved=1 failed=0"
+            ]
+            with patch("tools.reachops_client_delivery_check.latest_batch", return_value=batch):
+                with patch("tools.reachops_client_delivery_check.latest_profile_preflight", return_value={"checked": 1, "available": 0}):
+                    with patch("tools.reachops_client_delivery_check.read_lines", return_value=log_lines):
+                        with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
+                            with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
+                                with patch(
+                                    "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
+                                    return_value=profile_handoff,
+                                ):
+                                    payload = build_delivery_check(Path(tmpdir))
+
+        self.assertEqual(payload["status"], "blocked_by_accounts")
+        self.assertIn("已隔离 5 个硬失败账号", payload["blockers"][0])
+        self.assertFalse(payload["final_delivery_ready"])
+        progress = payload["account_blocker_resolution"]["repair_progress"]
+        self.assertEqual(progress["pending_recheck_moved_count"], 5)
+        self.assertEqual(progress["total_moved_count"], 5)
+        self.assertTrue(progress["has_profile_readiness_apply"])
+        self.assertTrue(progress["does_not_claim_real_account_pool_ready"])
+        self.assertTrue(progress["apply_alone_is_not_acceptance"])
+        self.assertEqual(
+            payload["real_pilot_evidence"]["account_pool_remediation"]["repair_progress"]["pending_recheck_moved_count"],
+            5,
+        )
+        self.assertEqual(
+            payload["account_support_handoff"]["latest_apply"]["repair_progress"]["pending_recheck_moved_count"],
+            5,
+        )
+        self.assertEqual(
+            payload["account_support_handoff"]["profile_readiness_probe"]["profile_repair_apply"]["moved_count"],
+            4,
+        )
+
+    def test_account_repair_progress_summary_dedupes_same_apply_source(self):
+        apply_payload = {
+            "status": "applied",
+            "source": "latest_account_repair_apply.json",
+            "path": "/tmp/latest_account_repair_apply.json",
+            "profile_group": "United States",
+            "selected_count": 2,
+            "moved_count": 2,
+            "failed_count": 0,
+            "pending_recheck": True,
+        }
+        progress = account_repair_progress_summary(
+            apply_payload,
+            {"profile_repair_apply": dict(apply_payload)},
+        )
+
+        self.assertEqual(progress["source_count"], 1)
+        self.assertEqual(progress["pending_recheck_moved_count"], 2)
+        self.assertEqual(progress["total_moved_count"], 2)
+        self.assertTrue(progress["apply_alone_is_not_acceptance"])
 
     def test_account_blocker_resolution_prioritizes_manual_account_work_when_no_apply_candidates(self):
         resolution = build_account_blocker_resolution(

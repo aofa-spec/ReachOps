@@ -147,6 +147,68 @@ def account_repair_apply_effective_message(repair_apply: dict) -> str:
     return ""
 
 
+def account_repair_progress_summary(
+    account_repair_apply: dict | None = None,
+    profile_readiness_handoff: dict | None = None,
+) -> dict:
+    runtime_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
+    profile_readiness = profile_readiness_handoff if isinstance(profile_readiness_handoff, dict) else {}
+    profile_apply = (
+        profile_readiness.get("profile_repair_apply")
+        if isinstance(profile_readiness.get("profile_repair_apply"), dict)
+        else {}
+    )
+    source_rows: list[dict] = []
+    seen_sources: set[str] = set()
+    for source_kind, payload in [
+        ("runtime_account_repair_apply", runtime_apply),
+        ("profile_readiness_probe_apply", profile_apply),
+    ]:
+        if not isinstance(payload, dict) or not payload:
+            continue
+        source_key = str(payload.get("path") or payload.get("source") or source_kind)
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        moved_count = int(payload.get("moved_count") or 0)
+        failed_count = int(payload.get("failed_count") or 0)
+        selected_count = int(payload.get("selected_count") or 0)
+        effective_status = account_repair_apply_effective_status(payload)
+        source_rows.append(
+            {
+                "source_kind": source_kind,
+                "source": str(payload.get("source") or ""),
+                "path": str(payload.get("path") or ""),
+                "status": str(payload.get("status") or ""),
+                "effective_status": effective_status,
+                "profile_group": str(payload.get("profile_group") or ""),
+                "selected_count": selected_count,
+                "moved_count": moved_count,
+                "failed_count": failed_count,
+                "pending_recheck": bool(payload.get("pending_recheck")),
+                "stale": bool(payload.get("stale")),
+                "same_group": payload.get("same_group"),
+                "same_batch": payload.get("same_batch"),
+            }
+        )
+    pending_rows = [row for row in source_rows if row.get("pending_recheck")]
+    applied_rows = [row for row in source_rows if row.get("status") == "applied" and not row.get("stale")]
+    return {
+        "schema_version": "reachops.account_repair_progress.v1",
+        "source_count": len(source_rows),
+        "sources": source_rows,
+        "applied_source_count": len(applied_rows),
+        "pending_recheck_source_count": len(pending_rows),
+        "total_selected_count": sum(int(row.get("selected_count") or 0) for row in applied_rows),
+        "total_moved_count": sum(int(row.get("moved_count") or 0) for row in applied_rows),
+        "total_failed_count": sum(int(row.get("failed_count") or 0) for row in applied_rows),
+        "pending_recheck_moved_count": sum(int(row.get("moved_count") or 0) for row in pending_rows),
+        "has_profile_readiness_apply": any(row.get("source_kind") == "profile_readiness_probe_apply" for row in source_rows),
+        "does_not_claim_real_account_pool_ready": True,
+        "apply_alone_is_not_acceptance": True,
+    }
+
+
 def build_real_pilot_evidence_boundary(
     acceptance: dict,
     operations: dict,
@@ -156,12 +218,14 @@ def build_real_pilot_evidence_boundary(
     acceptance_ready: bool,
     account_repair_summary: dict | None = None,
     account_repair_apply: dict | None = None,
+    profile_readiness_handoff: dict | None = None,
 ) -> dict:
     counts = operations.get("counts") if isinstance(operations, dict) else {}
     counts = counts if isinstance(counts, dict) else {}
     repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
     repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
     repair_apply_effective_status = account_repair_apply_effective_status(repair_apply)
+    repair_progress = account_repair_progress_summary(repair_apply, profile_readiness_handoff)
     profile_available = int((acceptance.get("checks") or {}).get("profile_available_count") or 0)
     candidates = int(counts.get("candidates") or 0)
     actions = int(counts.get("actions") or 0)
@@ -212,6 +276,7 @@ def build_real_pilot_evidence_boundary(
             "latest_apply_stale": bool(repair_apply.get("stale")),
             "latest_apply_stale_reason": str(repair_apply.get("stale_reason") or ""),
             "latest_apply_pending_recheck": bool(repair_apply.get("pending_recheck")),
+            "repair_progress": repair_progress,
         },
         "external_acceptance_pending": blockers,
     }
@@ -223,6 +288,7 @@ def build_account_blocker_resolution(
     batch: dict | None = None,
     account_repair_summary: dict | None = None,
     account_repair_apply: dict | None = None,
+    profile_readiness_handoff: dict | None = None,
 ) -> dict:
     batch = batch if isinstance(batch, dict) else {}
     repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
@@ -231,6 +297,7 @@ def build_account_blocker_resolution(
     checks = (acceptance.get("checks") if isinstance(acceptance, dict) else {}) or {}
     profile_available = int(checks.get("profile_available_count") or 0)
     effective_status = account_repair_apply_effective_status(repair_apply)
+    repair_progress = account_repair_progress_summary(repair_apply, profile_readiness_handoff)
     repair_plan_available = repair_summary.get("status") == "ok"
     repair_plan_profiles = int(repair_summary.get("total_unique_profiles_by_error") or 0)
     error_groups = [row for row in (repair_summary.get("error_groups") or []) if isinstance(row, dict)]
@@ -319,6 +386,7 @@ def build_account_blocker_resolution(
         "non_auto_error_codes": non_auto_error_codes,
         "latest_apply_effective_status": effective_status,
         "latest_apply_effective_message": account_repair_apply_effective_message(repair_apply),
+        "repair_progress": repair_progress,
         "ready_for_retest": ready_for_retest,
         "requires_latest_repair_apply": requires_latest_repair_apply,
         "requires_manual_account_work": requires_manual_account_work,
@@ -566,6 +634,7 @@ def build_account_support_handoff(
             "pending_recheck": bool(repair_apply.get("pending_recheck")),
             "moved_count": int(repair_apply.get("moved_count") or 0),
             "failed_count": int(repair_apply.get("failed_count") or 0),
+            "repair_progress": account_repair_progress_summary(repair_apply, profile_readiness),
         },
         "impacted_accounts": {
             "error_group_count": len(error_groups),
@@ -1145,7 +1214,8 @@ def build_delivery_check(
         ] + list(acceptance.get("next_actions") or [])
     elif account_repair_apply.get("pending_recheck") and acceptance.get("readiness") == "blocked_by_accounts":
         group = str(batch.get("profile_group") or account_repair_apply.get("profile_group") or "当前分组")
-        moved = int(account_repair_apply.get("moved_count") or 0)
+        repair_progress = account_repair_progress_summary(account_repair_apply, profile_readiness_handoff)
+        moved = int(repair_progress.get("pending_recheck_moved_count") or account_repair_apply.get("moved_count") or 0)
         acceptance["blockers"] = [
             f"账号修复已执行：已隔离 {moved} 个硬失败账号，当前状态为等待重新预检，不应继续读取旧失败批次作为最终结论。"
         ] + list(acceptance.get("blockers") or [])
@@ -1365,12 +1435,14 @@ def build_delivery_check(
         acceptance_ready=acceptance_ready,
         account_repair_summary=account_repair_summary,
         account_repair_apply=account_repair_apply,
+        profile_readiness_handoff=profile_readiness_handoff,
     )
     account_blocker_resolution = build_account_blocker_resolution(
         acceptance,
         batch=batch,
         account_repair_summary=account_repair_summary,
         account_repair_apply=account_repair_apply,
+        profile_readiness_handoff=profile_readiness_handoff,
     )
     account_support_handoff = build_account_support_handoff(
         acceptance,
