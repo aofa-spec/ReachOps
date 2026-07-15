@@ -2589,8 +2589,77 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("kernel", failed["recommended_action"].lower())
         self.assertEqual(payload["attempted_profile_ids"], ["10001", "10002"])
         self.assertEqual(payload["hard_failed_profile_ids"], ["10002"])
+        self.assertTrue(payload["account_pool_automation"]["runtime_auto_grouping"])
+        self.assertTrue(payload["account_pool_automation"]["normal_logged_in_profiles_continue"])
+        self.assertEqual(payload["account_pool_automation"]["ready_profile_ids"], ["10001"])
+        self.assertEqual(payload["account_pool_automation"]["failed_profile_ids"], ["10002"])
+        self.assertFalse(payload["account_pool_automation"]["remote_group_update_enabled"])
+        self.assertEqual(
+            payload["account_pool_automation"]["remote_group_update_mode"],
+            "requires_explicit_account_repair_mode",
+        )
         self.assertEqual(payload["repair_checklist"]["status"], "ready_profiles_available")
         self.assertIn("--profile-ids", payload["repair_checklist"]["retest_command"])
+
+    def test_profile_readiness_probe_account_repair_mode_allows_remote_quarantine_group_update(self):
+        def fake_metadata_builder(**_kwargs):
+            return {
+                "status": "ok",
+                "safe_read_only": True,
+                "open_profile_called": False,
+                "group_name_filter": "United States",
+                "group_count": 1,
+                "known_group_count": 1,
+                "selected_group_id": "257999",
+                "selected_profile_count": 1,
+                "selected_profiles": [
+                    {"profile": {"profile_id": "logged-out", "group_id": "257999", "group_name": "United States"}},
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "tools.reachops_profile_readiness_probe.ProfilePreflightChecker.run",
+                return_value={
+                    "requested": 1,
+                    "checked": 1,
+                    "available": 0,
+                    "unavailable": 1,
+                    "errors": {"LOGIN_REQUIRED": 1},
+                    "results": [
+                        {
+                            "profile_id": "logged-out",
+                            "group_name": "United States",
+                            "ok": False,
+                            "error_code": "LOGIN_REQUIRED",
+                            "error_message": "login dialog",
+                            "duration_seconds": 0.2,
+                            "quarantine_move": {"attempted": True, "ok": True},
+                        },
+                    ],
+                },
+            ):
+                payload = run_reachops_profile_readiness_probe(
+                    base_dir=tmpdir,
+                    profile_group="United States",
+                    profile_limit=1,
+                    max_workers=1,
+                    page_timeout_seconds=1,
+                    wait_after_open_seconds=0,
+                    total_timeout_seconds=10,
+                    quarantine_failed_profiles=True,
+                    metadata_builder=fake_metadata_builder,
+                )
+
+        automation = payload["account_pool_automation"]
+        self.assertEqual(payload["status"], "blocked_by_accounts")
+        self.assertTrue(automation["automatic_local_grouping_enabled"])
+        self.assertEqual(automation["local_grouping_action"], "classify_failed_profiles_and_continue_with_ready_pool")
+        self.assertFalse(automation["normal_logged_in_profiles_continue"])
+        self.assertTrue(automation["remote_group_update_enabled"])
+        self.assertEqual(automation["remote_group_update_mode"], "account_repair_mode")
+        self.assertEqual(automation["account_repair_queue_profile_ids"], ["logged-out"])
+        self.assertFalse(payload["repair_checklist"]["does_not_modify_ixbrowser_groups"])
 
     def test_profile_readiness_probe_auto_selection_excludes_recent_failed_profiles(self):
         def fake_metadata_builder(**_kwargs):

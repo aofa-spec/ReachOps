@@ -4081,6 +4081,87 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertTrue(calls[0]["apply_cleanup"])
         self.assertEqual(calls[0]["confirm_cleanup"], "")
 
+    def test_control_runtime_cleanup_apply_passes_confirmation_token_without_active_run(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_log_path = reachops_web_ui.LOG_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            calls = []
+            server = None
+            thread = None
+
+            def fake_audit(**kwargs):
+                calls.append(kwargs)
+                return {
+                    "schema_version": "reachops.runtime_process_audit.v1",
+                    "status": "ok",
+                    "cleanup_candidate_count": 1,
+                    "cleanup_result": {
+                        "schema_version": "reachops.runtime_process_cleanup.v1",
+                        "status": "applied",
+                        "applied": True,
+                        "attempted": [
+                            {
+                                "pid": 12345,
+                                "classification": "chromedriver",
+                                "reason": "orphan_chromedriver_candidate",
+                                "signal": "SIGTERM",
+                                "ok": True,
+                            }
+                        ],
+                        "no_process_killed": False,
+                    },
+                    "no_browser_started": True,
+                    "no_submit": True,
+                }
+
+            try:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RUN_PROCESS = None
+                server = reachops_web_ui.ThreadingHTTPServer(("127.0.0.1", 0), reachops_web_ui.Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+
+                host, port = server.server_address
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                request = urllib.request.Request(
+                    f"http://{host}:{port}/api/control",
+                    data=json.dumps(
+                        {
+                            "action": "runtime_cleanup_apply",
+                            "confirm": reachops_web_ui.RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+                        }
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch("tools.reachops_web_ui.build_runtime_process_audit", side_effect=fake_audit):
+                    with opener.open(request, timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                        status_code = response.status
+                audit_file_exists = (Path(tmpdir) / "reports" / "support" / "runtime_process_audit.json").is_file()
+            finally:
+                if server is not None:
+                    server.shutdown()
+                    server.server_close()
+                if thread is not None:
+                    thread.join(timeout=2)
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.LOG_PATH = old_log_path
+                reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(payload["status"], "applied")
+        self.assertEqual(payload["cleanup_candidate_count"], 1)
+        self.assertTrue(payload["cleanup_result"]["applied"])
+        self.assertEqual(len(payload["cleanup_result"]["attempted"]), 1)
+        self.assertTrue(payload["no_browser_started"])
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(audit_file_exists)
+        self.assertTrue(calls[0]["apply_cleanup"])
+        self.assertEqual(calls[0]["confirm_cleanup"], reachops_web_ui.RUNTIME_PROCESS_CLEANUP_CONFIRMATION)
+
     def test_control_http_endpoint_reports_signal_failure_as_json(self):
         class FakeProcess:
             pid = 43212

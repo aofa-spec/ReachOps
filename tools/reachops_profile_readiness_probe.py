@@ -345,6 +345,40 @@ def readiness_status(summary: dict[str, Any], selected_profiles: list[dict[str, 
     return "passed", TERMINAL_COMPLETED
 
 
+def build_account_pool_automation(payload: dict[str, Any]) -> dict[str, Any]:
+    results = [row for row in payload.get("results") or [] if isinstance(row, dict)]
+    ready_profile_ids = [
+        str(row.get("profile_id") or "")
+        for row in results
+        if row.get("ok") and str(row.get("profile_id") or "")
+    ]
+    failed_profile_ids = [
+        str(row.get("profile_id") or "")
+        for row in results
+        if not row.get("ok") and str(row.get("profile_id") or "")
+    ]
+    error_groups = (payload.get("repair_checklist") or {}).get("error_groups") or []
+    quarantine_failed_profiles = bool(payload.get("quarantine_failed_profiles"))
+    return {
+        "schema_version": "reachops.account_pool_automation.v1",
+        "runtime_auto_grouping": True,
+        "automatic_local_grouping_enabled": True,
+        "local_grouping_action": "classify_failed_profiles_and_continue_with_ready_pool",
+        "normal_logged_in_profiles_continue": bool(ready_profile_ids),
+        "unavailable_profiles_excluded_from_execution_pool": True,
+        "ready_profile_ids": ready_profile_ids,
+        "failed_profile_ids": failed_profile_ids,
+        "account_repair_queue_profile_ids": failed_profile_ids,
+        "error_groups": error_groups,
+        "remote_group_update_enabled": quarantine_failed_profiles,
+        "remote_group_update_mode": "account_repair_mode"
+        if quarantine_failed_profiles
+        else "requires_explicit_account_repair_mode",
+        "account_repair_mode_required_for_remote_group_update": not quarantine_failed_profiles,
+        "no_submit": bool(payload.get("no_submit", True)),
+    }
+
+
 def build_repair_checklist(payload: dict[str, Any]) -> dict[str, Any]:
     grouped: dict[str, dict[str, Any]] = {}
     for row in payload.get("results") or []:
@@ -448,6 +482,12 @@ def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
     repair_checklist = payload.get("repair_checklist") if isinstance(payload.get("repair_checklist"), dict) else build_repair_checklist(payload)
     payload["repair_checklist"] = repair_checklist
+    account_pool_automation = (
+        payload.get("account_pool_automation")
+        if isinstance(payload.get("account_pool_automation"), dict)
+        else build_account_pool_automation(payload)
+    )
+    payload["account_pool_automation"] = account_pool_automation
     repair_json_path.write_text(json.dumps(repair_checklist, ensure_ascii=False, indent=2), encoding="utf-8")
     with repair_csv_path.open("w", encoding="utf-8", newline="") as handle:
         fieldnames = ["error_code", "count", "profile_ids", "recommended_action", "evidence_paths"]
@@ -494,6 +534,8 @@ def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
         f"- quarantine_failed_profiles: {str(bool(payload.get('quarantine_failed_profiles'))).lower()}",
         f"- exclude_recent_failed: {str(bool(payload.get('exclude_recent_failed'))).lower()}",
         f"- recent_failed_profile_ids_count: {int(payload.get('recent_failed_profile_ids_count') or 0)}",
+        f"- runtime_auto_grouping: {str(bool(account_pool_automation.get('runtime_auto_grouping'))).lower()}",
+        f"- remote_group_update_mode: {account_pool_automation.get('remote_group_update_mode')}",
         "",
         "## Error Counts",
     ]
@@ -529,6 +571,7 @@ def enrich_existing_report(path: str | Path) -> dict[str, Any]:
     payload.setdefault("schema_version", SCHEMA_VERSION)
     payload.setdefault("mode", "profile_readiness_probe")
     payload["repair_checklist"] = build_repair_checklist(payload)
+    payload["account_pool_automation"] = build_account_pool_automation(payload)
     payload["report_dir"] = str(report_dir)
     write_outputs(report_dir, payload)
     return payload
@@ -647,6 +690,7 @@ def run_probe(
     }
     payload["report_dir"] = str(run_dir)
     payload["repair_checklist"] = build_repair_checklist(payload)
+    payload["account_pool_automation"] = build_account_pool_automation(payload)
     write_outputs(run_dir, payload)
     return payload
 
