@@ -414,12 +414,14 @@ def build_account_support_handoff(
     batch: dict | None = None,
     remediation: dict | None = None,
     account_repair_summary: dict | None = None,
+    profile_readiness_handoff: dict | None = None,
     account_repair_apply: dict | None = None,
     account_blocker_resolution: dict | None = None,
 ) -> dict:
     batch = batch if isinstance(batch, dict) else {}
     remediation = remediation if isinstance(remediation, dict) else {}
     repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
+    profile_readiness = profile_readiness_handoff if isinstance(profile_readiness_handoff, dict) else {}
     repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
     resolution = account_blocker_resolution if isinstance(account_blocker_resolution, dict) else {}
     acceptance = acceptance if isinstance(acceptance, dict) else {}
@@ -443,12 +445,55 @@ def build_account_support_handoff(
     support_status = str(resolution.get("status") or ("blocked_by_accounts" if support_required else "not_required"))
     priority_action = str(resolution.get("priority_action") or "")
     blocker_codes = [str(item) for item in (resolution.get("blocker_codes") or []) if str(item).strip()]
+    if support_required and profile_readiness.get("source_exists"):
+        blocker_code = "profile_readiness_probe_manual_repair_required"
+        if blocker_code not in blocker_codes and int(profile_readiness.get("available") or 0) <= 0:
+            blocker_codes.append(blocker_code)
     if support_required and not priority_action:
         priority_action = "create_or_repair_real_account_pool"
     retest_checklist = build_account_retest_checklist(resolution, repair_summary)
+    profile_retest_command = str(profile_readiness.get("retest_command") or "").strip()
+    if support_required and profile_retest_command:
+        retest_checklist.insert(
+            0,
+            {
+                "id": "profile_readiness_probe_retest",
+                "kind": "profile_readiness_probe",
+                "required": True,
+                "title": "复跑 P0-5 Profile readiness probe",
+                "profile_group": str(profile_readiness.get("profile_group") or ""),
+                "command": profile_retest_command,
+                "expected": "至少 1 个 READY profile；如仍 blocked_by_accounts，继续使用 profile_repair_checklist 修复或替换账号。",
+                "blocks_retest_until_done": True,
+                "no_browser_started_by_reachops": False,
+                "no_submit": True,
+            },
+        )
     operator_steps = account_operator_steps(error_groups) if support_required and error_groups else [
         str(item) for item in (repair_summary.get("operator_steps") or [])
     ][:8]
+    if support_required and profile_readiness.get("source_exists") and profile_readiness.get("next_action"):
+        operator_steps = [str(profile_readiness.get("next_action"))] + operator_steps
+    profile_error_groups = []
+    for row in profile_readiness.get("error_groups") or []:
+        if isinstance(row, dict):
+            profile_error_groups.append(
+                {
+                    "error_code": str(row.get("error_code") or ""),
+                    "count": int(row.get("count") or 0),
+                    "profile_ids_sample": [str(item) for item in (row.get("profile_ids_sample") or [])[:8]],
+                    "profile_ids_total": int(row.get("profile_ids_total") or 0),
+                    "recommended_action": str(row.get("recommended_action") or ""),
+                    "evidence_paths_sample": [str(item) for item in (row.get("evidence_paths_sample") or [])[:4]],
+                }
+            )
+    retest_commands = [
+        "python tools/reachops_client_delivery_check.py --json",
+        "python tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json",
+        "python tools/reachops_goal_delivery_runner.py --json",
+    ]
+    if profile_retest_command:
+        retest_commands.insert(0, profile_retest_command)
     return {
         "schema_version": "reachops.account_support_handoff.v1",
         "status": support_status,
@@ -482,6 +527,29 @@ def build_account_support_handoff(
             "auto_apply_profile_count": int(resolution.get("repair_plan_auto_apply_profile_count") or 0),
             "non_auto_error_codes": list(resolution.get("non_auto_error_codes") or []),
         },
+        "profile_readiness_probe": {
+            "available": bool(profile_readiness.get("source_exists")),
+            "schema_version": str(profile_readiness.get("schema_version") or ""),
+            "status": str(profile_readiness.get("status") or ""),
+            "terminal_state": str(profile_readiness.get("terminal_state") or ""),
+            "path": str(profile_readiness.get("path") or ""),
+            "repair_json_path": str(profile_readiness.get("repair_json_path") or ""),
+            "repair_markdown_path": str(profile_readiness.get("repair_markdown_path") or ""),
+            "profile_group": str(profile_readiness.get("profile_group") or ""),
+            "run_id": str(profile_readiness.get("run_id") or ""),
+            "checked": int(profile_readiness.get("checked") or 0),
+            "ready_profile_count": int(profile_readiness.get("ready_profile_count") or 0),
+            "failed_profile_count": int(profile_readiness.get("failed_profile_count") or 0),
+            "error_groups": profile_error_groups,
+            "retest_command": profile_retest_command,
+            "no_submit": bool(profile_readiness.get("no_submit", True)),
+            "no_browser_collection": bool(profile_readiness.get("no_browser_collection", True)),
+            "no_action_execution": bool(profile_readiness.get("no_action_execution", True)),
+            "does_not_modify_ixbrowser_groups": bool(profile_readiness.get("does_not_modify_ixbrowser_groups", True)),
+            "does_not_claim_real_account_pool_ready": bool(
+                profile_readiness.get("does_not_claim_real_account_pool_ready", True)
+            ),
+        },
         "latest_apply": {
             "status": str(repair_apply.get("status") or ""),
             "effective_status": str(resolution.get("latest_apply_effective_status") or account_repair_apply_effective_status(repair_apply)),
@@ -499,11 +567,7 @@ def build_account_support_handoff(
             "error_groups": error_groups,
         },
         "operator_steps": operator_steps[:8],
-        "retest_commands": [
-            "python tools/reachops_client_delivery_check.py --json",
-            "python tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json",
-            "python tools/reachops_goal_delivery_runner.py --json",
-        ],
+        "retest_commands": retest_commands,
         "retest_checklist": retest_checklist,
         "acceptance_required": [
             "client_delivery.status=passed",
@@ -883,6 +947,90 @@ def summarize_optional_account_repair_plan(path_value: str | Path) -> dict:
     return summarize_account_repair_plan(path)
 
 
+def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
+    probe_root = root / "reports" / "reachops" / "profile_readiness_probe"
+    candidates = sorted(
+        probe_root.glob("*/reports/profile_readiness_probe.json"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True,
+    )
+    if not candidates:
+        return {
+            "schema_version": "reachops.profile_readiness_handoff.v1",
+            "source_exists": False,
+            "status": "not_available",
+            "reason": "profile_readiness_probe_not_generated",
+            "does_not_claim_real_account_pool_ready": True,
+        }
+    report_path = candidates[0]
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "schema_version": "reachops.profile_readiness_handoff.v1",
+            "source_exists": False,
+            "status": "read_failed",
+            "path": str(report_path),
+            "reason": f"{type(exc).__name__}: {exc}",
+            "does_not_claim_real_account_pool_ready": True,
+        }
+    if not isinstance(payload, dict):
+        payload = {}
+    outputs = payload.get("outputs") if isinstance(payload.get("outputs"), dict) else {}
+    repair_path = Path(str(outputs.get("repair_json") or report_path.with_name("profile_repair_checklist.json")))
+    repair = payload.get("repair_checklist") if isinstance(payload.get("repair_checklist"), dict) else {}
+    if repair_path.is_file():
+        try:
+            loaded_repair = json.loads(repair_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_repair, dict):
+                repair = loaded_repair
+        except Exception:
+            pass
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    error_groups = []
+    for row in repair.get("error_groups") or []:
+        if not isinstance(row, dict):
+            continue
+        profile_ids = [str(item) for item in (row.get("profile_ids") or []) if str(item).strip()]
+        evidence_paths = [str(item) for item in (row.get("evidence_paths") or []) if str(item).strip()]
+        error_groups.append(
+            {
+                "error_code": str(row.get("error_code") or ""),
+                "count": int(row.get("count") or 0),
+                "profile_ids_sample": profile_ids[:8],
+                "profile_ids_total": len(profile_ids),
+                "recommended_action": str(row.get("recommended_action") or ""),
+                "evidence_paths_sample": evidence_paths[:4],
+            }
+        )
+    ready_ids = [str(item) for item in (repair.get("ready_profile_ids") or []) if str(item).strip()]
+    failed_ids = [str(item) for item in (repair.get("failed_profile_ids") or []) if str(item).strip()]
+    return {
+        "schema_version": "reachops.profile_readiness_handoff.v1",
+        "source_exists": True,
+        "status": str(payload.get("status") or repair.get("status") or ""),
+        "terminal_state": str(payload.get("terminal_state") or ""),
+        "path": str(report_path),
+        "repair_json_path": str(repair_path),
+        "repair_markdown_path": str(outputs.get("repair_markdown") or report_path.with_name("profile_repair_checklist.md")),
+        "profile_group": str(payload.get("profile_group") or repair.get("profile_group") or ""),
+        "run_id": str(payload.get("run_id") or ""),
+        "checked": int(summary.get("checked") or 0),
+        "available": int(summary.get("available") or 0),
+        "unavailable": int(summary.get("unavailable") or 0),
+        "ready_profile_count": len(ready_ids),
+        "failed_profile_count": len(failed_ids),
+        "error_groups": error_groups,
+        "retest_command": str(repair.get("retest_command") or ""),
+        "next_action": str(repair.get("next_action") or payload.get("next_action") or ""),
+        "no_submit": bool(payload.get("no_submit", True) and repair.get("no_submit", True)),
+        "no_browser_collection": bool(payload.get("no_browser_collection", True)),
+        "no_action_execution": bool(payload.get("no_action_execution", True)),
+        "does_not_modify_ixbrowser_groups": bool(repair.get("does_not_modify_ixbrowser_groups", True)),
+        "does_not_claim_real_account_pool_ready": int(summary.get("available") or 0) <= 0,
+    }
+
+
 def build_delivery_check(
     base_dir: Path = DEFAULT_BASE_DIR,
     ixbrowser_metadata: dict | None = None,
@@ -931,6 +1079,7 @@ def build_delivery_check(
     account_repair_summary = summarize_optional_account_repair_plan(
         remediation.get("latest_account_plan_json_path") or remediation.get("account_plan_json_path") or ""
     )
+    profile_readiness_handoff = latest_profile_readiness_probe_handoff(ROOT_DIR)
     account_repair_apply = latest_account_repair_apply_status(
         base_dir,
         log_lines,
@@ -1200,6 +1349,7 @@ def build_delivery_check(
         batch=batch,
         remediation=remediation,
         account_repair_summary=account_repair_summary,
+        profile_readiness_handoff=profile_readiness_handoff,
         account_repair_apply=account_repair_apply,
         account_blocker_resolution=account_blocker_resolution,
     )
@@ -1223,6 +1373,7 @@ def build_delivery_check(
         "real_pilot_evidence": real_pilot_evidence,
         "account_blocker_resolution": account_blocker_resolution,
         "account_support_handoff": account_support_handoff,
+        "profile_readiness_handoff": profile_readiness_handoff,
         "remediation_report": remediation,
         "account_repair_summary": account_repair_summary,
         "account_repair_apply": account_repair_apply,
@@ -1241,6 +1392,13 @@ def build_account_support_handoff_diagnostic(payload: dict) -> dict:
         else {}
     )
     safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    profile_readiness = (
+        handoff.get("profile_readiness_probe")
+        if isinstance(handoff.get("profile_readiness_probe"), dict)
+        else payload.get("profile_readiness_handoff")
+        if isinstance(payload.get("profile_readiness_handoff"), dict)
+        else {}
+    )
     return {
         "schema_version": "reachops.account_support_handoff_diagnostic.v1",
         "generated_from": "reachops_client_delivery_check",
@@ -1261,6 +1419,7 @@ def build_account_support_handoff_diagnostic(payload: dict) -> dict:
         "does_not_claim_real_account_pool_ready": bool(handoff.get("does_not_claim_real_account_pool_ready", True)),
         "account_blocker_resolution": blocker_resolution,
         "account_support_handoff": handoff,
+        "profile_readiness_probe": profile_readiness,
         "retest_commands": [str(item) for item in (handoff.get("retest_commands") or [])],
         "retest_checklist": [
             item for item in (handoff.get("retest_checklist") or []) if isinstance(item, dict)

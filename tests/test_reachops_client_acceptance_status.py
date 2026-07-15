@@ -45,6 +45,7 @@ from tools.reachops_client_delivery_check import (
     build_delivery_check,
     build_real_pilot_evidence_boundary,
     latest_account_repair_apply_status,
+    latest_profile_readiness_probe_handoff,
     main as run_delivery_check,
     profile_remediation_csv_quality,
     write_delivery_check,
@@ -4470,10 +4471,11 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
             support["impacted_accounts"]["error_groups"][0]["profile_ids_sample"],
             ["21644"],
         )
-        self.assertEqual(support["retest_checklist"][0]["id"], "apply_latest_account_repair_plan")
-        self.assertEqual(support["retest_checklist"][1]["id"], "client_delivery_retest")
-        self.assertTrue(support["retest_checklist"][0]["no_submit"])
-        self.assertIn("pending_recheck=true", support["retest_checklist"][0]["expected"])
+        checklist_by_id = {row["id"]: row for row in support["retest_checklist"]}
+        self.assertIn("apply_latest_account_repair_plan", checklist_by_id)
+        self.assertIn("client_delivery_retest", checklist_by_id)
+        self.assertTrue(checklist_by_id["apply_latest_account_repair_plan"]["no_submit"])
+        self.assertIn("pending_recheck=true", checklist_by_id["apply_latest_account_repair_plan"]["expected"])
         self.assertIn("python tools/reachops_goal_delivery_runner.py --json", support["retest_commands"])
         self.assertTrue(support["safety_contract"]["apply_alone_is_not_acceptance"])
 
@@ -4702,6 +4704,38 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
             },
             account_repair_apply={"status": "applied", "stale": True, "moved_count": 2},
             account_blocker_resolution=resolution,
+            profile_readiness_handoff={
+                "schema_version": "reachops.profile_readiness_handoff.v1",
+                "source_exists": True,
+                "status": "blocked_by_accounts",
+                "terminal_state": "BLOCKED",
+                "path": "/tmp/profile_readiness_probe.json",
+                "repair_json_path": "/tmp/profile_repair_checklist.json",
+                "repair_markdown_path": "/tmp/profile_repair_checklist.md",
+                "profile_group": "United States",
+                "run_id": "20260715T000000Z",
+                "checked": 2,
+                "available": 0,
+                "ready_profile_count": 0,
+                "failed_profile_count": 2,
+                "error_groups": [
+                    {
+                        "error_code": "LOGIN_REQUIRED",
+                        "count": 1,
+                        "profile_ids_sample": ["23912"],
+                        "profile_ids_total": 1,
+                        "recommended_action": "Log in to TikTok for this profile, then rerun readiness probe.",
+                        "evidence_paths_sample": ["/tmp/23912.png"],
+                    }
+                ],
+                "retest_command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_profile_readiness_probe.py --profile-group \"United States\" --profile-ids \"23912\" --profile-limit 1 --max-workers 1 --allow-fail --json",
+                "next_action": "Repair listed profiles or provide a different candidate list, then rerun the retest command.",
+                "no_submit": True,
+                "no_browser_collection": True,
+                "no_action_execution": True,
+                "does_not_modify_ixbrowser_groups": True,
+                "does_not_claim_real_account_pool_ready": True,
+            },
         )
 
         self.assertEqual(handoff["schema_version"], "reachops.account_support_handoff.v1")
@@ -4724,8 +4758,14 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertNotIn("IXBROWSER_KERNEL_MISMATCH", operator_steps)
         self.assertNotIn("LOGIN_REQUIRED", operator_steps)
         self.assertIn("client_delivery.profile_available>=1", handoff["acceptance_required"])
-        self.assertEqual(handoff["retest_checklist"][0]["id"], "manual_repair_or_replace_accounts")
-        self.assertEqual(handoff["retest_checklist"][1]["id"], "client_delivery_retest")
+        self.assertEqual(handoff["profile_readiness_probe"]["schema_version"], "reachops.profile_readiness_handoff.v1")
+        self.assertEqual(handoff["profile_readiness_probe"]["repair_json_path"], "/tmp/profile_repair_checklist.json")
+        self.assertEqual(handoff["profile_readiness_probe"]["error_groups"][0]["error_code"], "LOGIN_REQUIRED")
+        self.assertTrue(handoff["profile_readiness_probe"]["does_not_modify_ixbrowser_groups"])
+        self.assertIn("profile_readiness_probe_manual_repair_required", handoff["blocker_codes"])
+        self.assertEqual(handoff["retest_checklist"][0]["id"], "profile_readiness_probe_retest")
+        self.assertEqual(handoff["retest_checklist"][1]["id"], "manual_repair_or_replace_accounts")
+        self.assertEqual(handoff["retest_checklist"][2]["id"], "client_delivery_retest")
         self.assertTrue(handoff["retest_checklist"][0]["blocks_retest_until_done"])
         self.assertTrue(handoff["retest_checklist"][0]["no_submit"])
         self.assertTrue(handoff["safety_contract"]["no_submit"])
@@ -4744,7 +4784,69 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         )
         self.assertIn("account_repair_apply_stale", diagnostic["blocker_codes"])
         self.assertIn("account_repair_plan_has_no_auto_applicable_profiles", diagnostic["blocker_codes"])
-        self.assertEqual(diagnostic["retest_checklist"][0]["id"], "manual_repair_or_replace_accounts")
+        self.assertEqual(diagnostic["profile_readiness_probe"]["repair_json_path"], "/tmp/profile_repair_checklist.json")
+        self.assertEqual(diagnostic["retest_checklist"][0]["id"], "profile_readiness_probe_retest")
+
+    def test_latest_profile_readiness_probe_handoff_reads_latest_repair_checklist(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            report_dir = root / "reports" / "reachops" / "profile_readiness_probe" / "20260715T000000Z" / "reports"
+            report_dir.mkdir(parents=True)
+            report_path = report_dir / "profile_readiness_probe.json"
+            repair_path = report_dir / "profile_repair_checklist.json"
+            repair_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.profile_repair_checklist.v1",
+                        "status": "manual_repair_required",
+                        "profile_group": "United States",
+                        "ready_profile_ids": [],
+                        "failed_profile_ids": ["10001"],
+                        "error_groups": [
+                            {
+                                "error_code": "LOGIN_REQUIRED",
+                                "count": 1,
+                                "profile_ids": ["10001"],
+                                "recommended_action": "Log in to TikTok.",
+                                "evidence_paths": ["/tmp/evidence.png"],
+                            }
+                        ],
+                        "no_submit": True,
+                        "does_not_modify_ixbrowser_groups": True,
+                        "retest_command": "python tools/reachops_profile_readiness_probe.py --profile-ids 10001 --allow-fail --json",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.profile_readiness_probe.v1",
+                        "status": "blocked_by_accounts",
+                        "terminal_state": "BLOCKED",
+                        "profile_group": "United States",
+                        "run_id": "20260715T000000Z",
+                        "no_submit": True,
+                        "no_browser_collection": True,
+                        "no_action_execution": True,
+                        "summary": {"checked": 1, "available": 0, "unavailable": 1},
+                        "outputs": {"repair_json": str(repair_path)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            handoff = latest_profile_readiness_probe_handoff(root)
+
+        self.assertEqual(handoff["schema_version"], "reachops.profile_readiness_handoff.v1")
+        self.assertTrue(handoff["source_exists"])
+        self.assertEqual(handoff["status"], "blocked_by_accounts")
+        self.assertEqual(handoff["repair_json_path"], str(repair_path))
+        self.assertEqual(handoff["failed_profile_count"], 1)
+        self.assertEqual(handoff["error_groups"][0]["error_code"], "LOGIN_REQUIRED")
+        self.assertEqual(handoff["error_groups"][0]["profile_ids_sample"], ["10001"])
+        self.assertTrue(handoff["does_not_modify_ixbrowser_groups"])
+        self.assertTrue(handoff["does_not_claim_real_account_pool_ready"])
 
     def test_account_repair_apply_status_normalizes_counts_from_results(self):
         with TemporaryDirectory() as tmpdir:

@@ -612,6 +612,7 @@ def build_account_support_handoff_summary(base_dir: str | Path) -> dict[str, Any
     delivery_check = _read_json(delivery_check_path) if delivery_check_path.is_file() else {}
     handoff = delivery_check.get("account_support_handoff") if isinstance(delivery_check.get("account_support_handoff"), dict) else {}
     repair_plan = handoff.get("repair_plan") if isinstance(handoff.get("repair_plan"), dict) else {}
+    profile_readiness = handoff.get("profile_readiness_probe") if isinstance(handoff.get("profile_readiness_probe"), dict) else {}
     impacted_accounts = handoff.get("impacted_accounts") if isinstance(handoff.get("impacted_accounts"), dict) else {}
     safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
     return {
@@ -634,6 +635,15 @@ def build_account_support_handoff_summary(base_dir: str | Path) -> dict[str, Any
         "repair_plan_profile_count": int(repair_plan.get("profile_count") or 0),
         "repair_plan_auto_apply_profile_count": int(repair_plan.get("auto_apply_profile_count") or 0),
         "repair_plan_non_auto_error_codes": [str(item) for item in (repair_plan.get("non_auto_error_codes") or [])[:12]],
+        "profile_readiness_probe_available": bool(profile_readiness.get("available")),
+        "profile_readiness_probe_status": _safe_text(profile_readiness.get("status")),
+        "profile_readiness_probe_path": _safe_text(profile_readiness.get("path")),
+        "profile_readiness_repair_json_path": _safe_text(profile_readiness.get("repair_json_path")),
+        "profile_readiness_ready_profile_count": int(profile_readiness.get("ready_profile_count") or 0),
+        "profile_readiness_failed_profile_count": int(profile_readiness.get("failed_profile_count") or 0),
+        "profile_readiness_does_not_modify_ixbrowser_groups": bool(
+            profile_readiness.get("does_not_modify_ixbrowser_groups", True)
+        ),
         "impacted_error_group_count": int(impacted_accounts.get("error_group_count") or 0),
         "error_groups": [
             {
@@ -2787,6 +2797,16 @@ def render_evidence_markdown(bundle: dict[str, Any]) -> str:
         non_auto = account_support_handoff.get("repair_plan_non_auto_error_codes") or []
         if non_auto:
             lines.append(f"- Non-auto errors: {', '.join(str(item) for item in non_auto)}")
+        if account_support_handoff.get("profile_readiness_probe_available"):
+            lines.extend(
+                [
+                    f"- Profile readiness probe: {account_support_handoff.get('profile_readiness_probe_status') or '-'}",
+                    f"- Profile readiness probe path: {account_support_handoff.get('profile_readiness_probe_path') or '-'}",
+                    f"- Profile repair checklist: {account_support_handoff.get('profile_readiness_repair_json_path') or '-'}",
+                    f"- Profile readiness ready/failed: {account_support_handoff.get('profile_readiness_ready_profile_count', 0)}/{account_support_handoff.get('profile_readiness_failed_profile_count', 0)}",
+                    f"- Does not modify ixBrowser groups: {str(bool(account_support_handoff.get('profile_readiness_does_not_modify_ixbrowser_groups', True))).lower()}",
+                ]
+            )
         for row in account_support_handoff.get("error_groups") or []:
             if isinstance(row, dict):
                 sample = ", ".join(str(item) for item in row.get("profile_ids_sample") or [])
