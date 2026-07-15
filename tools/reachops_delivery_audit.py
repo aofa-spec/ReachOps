@@ -722,7 +722,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_api_control_handles_cross_platform_pause_resume": "cooperative_control" in web_ui and "pause.request" in web_ui and "resume.request" in web_ui and "PAUSE_SIGNAL" in web_ui and "RESUME_SIGNAL" in web_ui and "WEB_UI_COOPERATIVE_PAUSE_REQUESTED" in web_ui and "WEB_UI_COOPERATIVE_RESUME_REQUESTED" in web_ui and "parser.add_argument(\"--control-dir\"" in headless and "wait_if_cooperatively_paused" in headless and "cooperative_pause_waiting" in headless,
         "web_api_stop_keeps_state_on_signal_failure": "web_ui_stop_signal_failed" in web_ui and '"running": True' in web_ui,
         "web_api_stop_keeps_state_when_process_survives": "web_ui_stop_process_still_running" in web_ui and "RUN_PROCESS.poll() is None" in web_ui,
-        "web_api_controls_runtime": "parsed.path == \"/api/control\"" in web_ui and "SIGSTOP" in web_ui and "SIGCONT" in web_ui and "current_progress_path" in web_ui and "current_heartbeat_path" in web_ui and "current_control_dir" in web_ui and "current_web_settings_path" in web_ui and "current_latest_groups_path" in web_ui,
+        "web_api_controls_runtime": "parsed.path == \"/api/control\"" in web_ui and "SIGSTOP" in web_ui and "SIGCONT" in web_ui and "current_log_path" in web_ui and "current_progress_path" in web_ui and "current_heartbeat_path" in web_ui and "current_control_dir" in web_ui and "current_web_settings_path" in web_ui and "current_latest_groups_path" in web_ui,
         "web_ui_controls_are_real_api_bound": all(
             token in web_ui
             for token in [

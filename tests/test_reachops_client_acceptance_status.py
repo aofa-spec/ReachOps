@@ -867,6 +867,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
             old_default_data_dir = reachops_web_ui.DEFAULT_DATA_DIR
+            old_log_path = reachops_web_ui.LOG_PATH
+            old_default_log_path = reachops_web_ui.DEFAULT_LOG_PATH
             old_progress_path = reachops_web_ui.PROGRESS_PATH
             old_default_progress_path = reachops_web_ui.DEFAULT_PROGRESS_PATH
             old_heartbeat_path = reachops_web_ui.HEARTBEAT_PATH
@@ -881,6 +883,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                 root = Path(tmpdir)
                 default_data_dir = root / "default-runtime"
                 redirected_data_dir = root / "isolated-runtime"
+                default_log = default_data_dir / "logs" / "growth_ops_runtime.log"
+                redirected_log = redirected_data_dir / "logs" / "growth_ops_runtime.log"
                 default_progress = default_data_dir / "reachops_web_ui_progress.json"
                 redirected_progress = redirected_data_dir / "reachops_web_ui_progress.json"
                 default_heartbeat = default_data_dir / "reachops_web_ui_heartbeat.json"
@@ -893,12 +897,14 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                 redirected_groups = redirected_data_dir / "config" / "latest_ixbrowser_groups.json"
 
                 reachops_web_ui.DEFAULT_DATA_DIR = default_data_dir
+                reachops_web_ui.DEFAULT_LOG_PATH = default_log
                 reachops_web_ui.DEFAULT_PROGRESS_PATH = default_progress
                 reachops_web_ui.DEFAULT_HEARTBEAT_PATH = default_heartbeat
                 reachops_web_ui.DEFAULT_CONTROL_DIR = default_control
                 reachops_web_ui.DEFAULT_WEB_SETTINGS_PATH = default_settings
                 reachops_web_ui.DEFAULT_LATEST_GROUPS_PATH = default_groups
                 reachops_web_ui.DATA_DIR = redirected_data_dir
+                reachops_web_ui.LOG_PATH = default_log
                 reachops_web_ui.PROGRESS_PATH = default_progress
                 reachops_web_ui.HEARTBEAT_PATH = default_heartbeat
                 reachops_web_ui.CONTROL_DIR = default_control
@@ -906,8 +912,12 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                 reachops_web_ui.LATEST_GROUPS_PATH = default_groups
 
                 default_progress.parent.mkdir(parents=True)
+                default_log.parent.mkdir(parents=True)
+                default_log.write_text("default log\n", encoding="utf-8")
                 default_progress.write_text(json.dumps({"status": "default"}), encoding="utf-8")
                 redirected_progress.parent.mkdir(parents=True)
+                redirected_log.parent.mkdir(parents=True)
+                redirected_log.write_text("redirected log\n", encoding="utf-8")
                 redirected_progress.write_text(json.dumps({"status": "redirected"}), encoding="utf-8")
                 default_heartbeat.write_text(json.dumps({"status": "default"}), encoding="utf-8")
                 redirected_heartbeat.write_text(json.dumps({"status": "redirected"}), encoding="utf-8")
@@ -915,6 +925,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                 progress = reachops_web_ui.read_runtime_progress_payload()
                 heartbeat = reachops_web_ui.read_runtime_heartbeat_payload()
                 heartbeat_payload = reachops_web_ui.build_runtime_heartbeat_payload()
+                log_path = reachops_web_ui.current_log_path()
+                log_lines = reachops_web_ui.read_lines(log_path)
+                reachops_web_ui.append_web_log("runtime_singleton_log_path_isolated")
                 reachops_web_ui.write_cooperative_control(
                     "pause.request",
                     {"schema_version": "reachops.cooperative_control.v1", "action": "pause"},
@@ -936,6 +949,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
 
                 default_control_exists = (default_control / "pause.request").exists()
                 redirected_control_exists = (redirected_control / "pause.request").exists()
+                default_log_text = default_log.read_text(encoding="utf-8")
+                redirected_log_text = redirected_log.read_text(encoding="utf-8")
                 default_settings_exists = default_settings.exists()
                 redirected_settings_exists = redirected_settings.exists()
                 default_groups_exists = default_groups.exists()
@@ -943,6 +958,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             finally:
                 reachops_web_ui.DATA_DIR = old_data_dir
                 reachops_web_ui.DEFAULT_DATA_DIR = old_default_data_dir
+                reachops_web_ui.LOG_PATH = old_log_path
+                reachops_web_ui.DEFAULT_LOG_PATH = old_default_log_path
                 reachops_web_ui.PROGRESS_PATH = old_progress_path
                 reachops_web_ui.DEFAULT_PROGRESS_PATH = old_default_progress_path
                 reachops_web_ui.HEARTBEAT_PATH = old_heartbeat_path
@@ -957,6 +974,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(progress["status"], "redirected")
         self.assertEqual(heartbeat["status"], "redirected")
         self.assertEqual(heartbeat_payload["path"], str(redirected_heartbeat))
+        self.assertEqual(log_path, redirected_log)
+        self.assertEqual(log_lines, ["redirected log"])
+        self.assertEqual(default_log_text, "default log\n")
+        self.assertIn("runtime_singleton_log_path_isolated", redirected_log_text)
         self.assertFalse(default_control_exists)
         self.assertTrue(redirected_control_exists)
         self.assertFalse(default_settings_exists)

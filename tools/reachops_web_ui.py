@@ -52,6 +52,7 @@ HEARTBEAT_PATH = DATA_DIR / "reachops_web_ui_heartbeat.json"
 LATEST_EXECUTION_PLAN_PATH = DATA_DIR / "plans/latest_execution_plan.json"
 LATEST_RUN_SESSION_PATH = DATA_DIR / "runs/latest_run_session.json"
 DEFAULT_DATA_DIR = DATA_DIR
+DEFAULT_LOG_PATH = LOG_PATH
 DEFAULT_PROGRESS_PATH = PROGRESS_PATH
 DEFAULT_HEARTBEAT_PATH = HEARTBEAT_PATH
 DEFAULT_RESULT_PATH = RESULT_PATH
@@ -547,6 +548,13 @@ def run_session_path_for(session: dict) -> Path:
     return DATA_DIR / "runs" / f"{session_id}.json"
 
 
+def current_log_path() -> Path:
+    log_path = Path(LOG_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and log_path == Path(DEFAULT_LOG_PATH):
+        return Path(DATA_DIR) / "logs" / "growth_ops_runtime.log"
+    return log_path
+
+
 def current_result_path() -> Path:
     result_path = Path(RESULT_PATH)
     if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and result_path == Path(DEFAULT_RESULT_PATH):
@@ -761,8 +769,8 @@ def persist_precheck_blocked_start(
         execution_plan,
         execution_plan_path=str(plan_path),
         result_path=str(current_result_path()),
-        log_path=str(LOG_PATH),
-        log_offset=len(read_lines(LOG_PATH)),
+        log_path=str(current_log_path()),
+        log_offset=len(read_lines(current_log_path())),
     )
     result = {
         "status": "blocked",
@@ -888,9 +896,10 @@ def persist_precheck_blocked_start(
 
 def append_web_log(message: str):
     try:
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        log_path = current_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with LOG_PATH.open("a", encoding="utf-8") as fh:
+        with log_path.open("a", encoding="utf-8") as fh:
             fh.write(f"{ts}  {message}\n")
     except Exception:
         pass
@@ -2146,7 +2155,7 @@ def build_current_evidence_bundle() -> dict:
             candidate_execution_plan_path = latest_execution_plan_path
         execution_plan_path = str(candidate_execution_plan_path if candidate_execution_plan_path.is_file() else "")
         result_payload = read_run_result_payload()
-        log_path = str(result_payload.get("log_path") or (run_session.get("evidence") or {}).get("log_path") or LOG_PATH)
+        log_path = str(result_payload.get("log_path") or (run_session.get("evidence") or {}).get("log_path") or current_log_path())
         bundle = build_evidence_bundle(
             base_dir=DATA_DIR,
             execution_plan_path=execution_plan_path,
@@ -5410,7 +5419,7 @@ def build_acceptance_payload() -> dict:
             if isinstance(runtime_progress.get("profile_preflight_progress"), dict)
             else {}
         )
-        acceptance = derive_acceptance(batch, preflight, read_acceptance_lines(LOG_PATH))
+        acceptance = derive_acceptance(batch, preflight, read_acceptance_lines(current_log_path()))
         db_details = load_batch_profile_preflight_details(db_path, batch)
         acceptance["profile_preflight_details"] = db_details or enrich_profile_quarantine_moves(
             db_path,
@@ -5427,7 +5436,7 @@ def build_acceptance_payload() -> dict:
             or remediation_report.get("account_plan_json_path")
             or ""
         )
-        operations = build_operations_payload(db_path, batch, acceptance, read_acceptance_lines(LOG_PATH, limit=800))
+        operations = build_operations_payload(db_path, batch, acceptance, read_acceptance_lines(current_log_path(), limit=800))
         annotate_acceptance_with_operations(acceptance, operations, batch)
         from tools.reachops_client_delivery_check import build_delivery_check, write_delivery_check
 
@@ -6711,7 +6720,7 @@ class Handler(BaseHTTPRequestHandler):
             running = run_is_active()
             if not running:
                 RUN_PAUSED = False
-            all_lines = read_lines(LOG_PATH)
+            all_lines = read_lines(current_log_path())
             lines = all_lines[RUN_LOG_OFFSET:] if RUN_LOG_OFFSET and RUN_LOG_OFFSET <= len(all_lines) else all_lines[-80:]
             last_stage = ""
             for line in reversed(lines):
@@ -7302,7 +7311,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"status": "already_running", "pid": RUN_PROCESS.pid})
                 return
             RUN_PAUSED = False
-            RUN_LOG_OFFSET = len(read_lines(LOG_PATH))
+            RUN_LOG_OFFSET = len(read_lines(current_log_path()))
             timeout_seconds = headless_timeout_seconds(volume, profile_limit, max_videos, max_comments)
             execution_plan = dict(replay_execution_plan) if replay_execution_plan else build_execution_plan(
                 target=target,
@@ -7358,7 +7367,7 @@ class Handler(BaseHTTPRequestHandler):
                 execution_plan,
                 execution_plan_path=str(plan_path),
                 result_path=str(current_result_path()),
-                log_path=str(LOG_PATH),
+                log_path=str(current_log_path()),
                 log_offset=RUN_LOG_OFFSET,
             )
             run_session_path = run_session_path_for(run_session)
