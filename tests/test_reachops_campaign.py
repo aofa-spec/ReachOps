@@ -71,6 +71,7 @@ from tools.reachops_live_submit_acceptance import run_acceptance as run_reachops
 from tools.reachops_live_environment_blocker_report import build_report as build_reachops_live_environment_blocker_report
 from tools.reachops_live_environment_blocker_report import main as reachops_live_environment_blocker_main
 from tools.reachops_ixbrowser_profile_metadata_report import build_report as build_ixbrowser_profile_metadata_report
+from tools.reachops_profile_readiness_probe import run_probe as run_reachops_profile_readiness_probe
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
@@ -2489,6 +2490,85 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(groups["United States"]["count_known"])
         self.assertEqual(groups["United States"]["count_source"], "selected_group_profile_list")
         self.assertEqual(groups["Canada"]["profile_count"], 0)
+
+    def test_profile_readiness_probe_runs_bounded_no_submit_preflight_without_quarantine(self):
+        def fake_metadata_builder(**_kwargs):
+            return {
+                "status": "ok",
+                "safe_read_only": True,
+                "open_profile_called": False,
+                "group_name_filter": "United States",
+                "group_count": 1,
+                "known_group_count": 1,
+                "selected_group_id": "257999",
+                "selected_profile_count": 2,
+                "selected_profiles": [
+                    {"profile": {"profile_id": "10001", "group_id": "257999", "group_name": "United States"}},
+                    {"profile": {"profile_id": "10002", "group_id": "257999", "group_name": "United States"}},
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "tools.reachops_profile_readiness_probe.ProfilePreflightChecker.run",
+                return_value={
+                    "requested": 2,
+                    "checked": 2,
+                    "available": 1,
+                    "unavailable": 1,
+                    "errors": {"IXBROWSER_KERNEL_MISMATCH": 1},
+                    "results": [
+                        {
+                            "profile_id": "10001",
+                            "group_name": "United States",
+                            "ok": True,
+                            "duration_seconds": 1.0,
+                            "evidence_path": "/tmp/10001_ok.png",
+                        },
+                        {
+                            "profile_id": "10002",
+                            "group_name": "United States",
+                            "ok": False,
+                            "error_code": "IXBROWSER_KERNEL_MISMATCH",
+                            "error_message": "kernel missing",
+                            "duration_seconds": 1.0,
+                            "quarantine_move": {"attempted": False},
+                        },
+                    ],
+                },
+            ) as run_mock:
+                payload = run_reachops_profile_readiness_probe(
+                    base_dir=tmpdir,
+                    profile_group="United States",
+                    profile_limit=2,
+                    max_workers=1,
+                    page_timeout_seconds=1,
+                    wait_after_open_seconds=0,
+                    total_timeout_seconds=10,
+                    quarantine_failed_profiles=False,
+                    metadata_builder=fake_metadata_builder,
+                )
+            self.assertTrue(Path(payload["outputs"]["json"]).is_file())
+            self.assertTrue(Path(payload["outputs"]["csv"]).is_file())
+            self.assertTrue(Path(payload["outputs"]["markdown"]).is_file())
+
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["terminal_state"], "COMPLETED")
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(payload["no_browser_collection"])
+        self.assertTrue(payload["no_action_execution"])
+        self.assertFalse(payload["quarantine_failed_profiles"])
+        run_mock.assert_called_once()
+        self.assertEqual(payload["summary"]["checked"], 2)
+        self.assertEqual(payload["summary"]["available"], 1)
+        self.assertEqual(payload["summary"]["errors"]["IXBROWSER_KERNEL_MISMATCH"], 1)
+        self.assertGreaterEqual(payload["wall_clock_seconds"], 0)
+        self.assertGreaterEqual(payload["timeout_overrun_seconds"], 0)
+        failed = [row for row in payload["results"] if row["profile_id"] == "10002"][0]
+        self.assertFalse(failed["quarantine_attempted"])
+        self.assertIn("kernel", failed["recommended_action"].lower())
+        self.assertEqual(payload["attempted_profile_ids"], ["10001", "10002"])
+        self.assertEqual(payload["hard_failed_profile_ids"], ["10002"])
 
     def test_reachops_windows_package_preflight_validates_build_inputs_without_claiming_final_delivery(self):
         report = build_reachops_windows_package_preflight()
