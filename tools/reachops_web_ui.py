@@ -109,6 +109,11 @@ GOAL_DELIVERY_REPORT_PATH = DATA_DIR / "reports/acceptance_remediation/latest_go
 GOAL_DELIVERY_SUMMARY_PATH = DATA_DIR / "reports/acceptance_remediation/latest_goal_delivery_summary.md"
 TWO_PHASE_MATRIX_JSON_PATH = DATA_DIR / "reports/acceptance_remediation/latest_two_phase_acceptance_matrix.json"
 TWO_PHASE_MATRIX_MD_PATH = DATA_DIR / "reports/acceptance_remediation/latest_two_phase_acceptance_matrix.md"
+DEFAULT_MVP_ACCEPTANCE_SUMMARY_PATH = MVP_ACCEPTANCE_SUMMARY_PATH
+DEFAULT_GOAL_DELIVERY_REPORT_PATH = GOAL_DELIVERY_REPORT_PATH
+DEFAULT_GOAL_DELIVERY_SUMMARY_PATH = GOAL_DELIVERY_SUMMARY_PATH
+DEFAULT_TWO_PHASE_MATRIX_JSON_PATH = TWO_PHASE_MATRIX_JSON_PATH
+DEFAULT_TWO_PHASE_MATRIX_MD_PATH = TWO_PHASE_MATRIX_MD_PATH
 FINAL_VERIFICATION_COMMANDS = [
     "python tools\\reachops_client_delivery_check.py --json",
     "python tools\\reachops_goal_delivery_runner.py --json",
@@ -235,7 +240,7 @@ def read_json_file(path: Path) -> dict:
 
 
 def summarize_mvp_acceptance(path: Path | None = None) -> dict:
-    path = path or MVP_ACCEPTANCE_SUMMARY_PATH
+    path = path or current_mvp_acceptance_summary_path()
     payload = read_json_file(path)
     return {
         "status": payload.get("status", ""),
@@ -247,10 +252,10 @@ def summarize_mvp_acceptance(path: Path | None = None) -> dict:
 
 
 def summarize_goal_delivery(path: Path | None = None) -> dict:
-    path = path or GOAL_DELIVERY_REPORT_PATH
+    path = path or current_goal_delivery_report_path()
     payload = read_json_file(path)
     evidence_files = payload.get("evidence_files") if isinstance(payload.get("evidence_files"), dict) else {}
-    summary_path = str(evidence_files.get("goal_delivery_summary") or GOAL_DELIVERY_SUMMARY_PATH)
+    summary_path = str(evidence_files.get("goal_delivery_summary") or current_goal_delivery_summary_path())
     sections = payload.get("sections") if isinstance(payload.get("sections"), dict) else {}
     windows_section = sections.get("windows_package_preflight") if isinstance(sections.get("windows_package_preflight"), dict) else {}
     windows_payload = windows_section.get("payload") if isinstance(windows_section.get("payload"), dict) else {}
@@ -293,8 +298,9 @@ def summarize_goal_delivery(path: Path | None = None) -> dict:
 
 
 def summarize_two_phase_acceptance(path: Path | None = None) -> dict:
-    path = path or TWO_PHASE_MATRIX_JSON_PATH
+    path = path or current_two_phase_matrix_json_path()
     payload = read_json_file(path)
+    markdown_path = current_two_phase_matrix_md_path()
     return {
         "status": payload.get("status", ""),
         "local_mvp_ready": bool(payload.get("local_mvp_ready")),
@@ -302,7 +308,7 @@ def summarize_two_phase_acceptance(path: Path | None = None) -> dict:
         "failed_items": payload.get("failed_items") or [],
         "blocking_scopes": payload.get("blocking_scopes") or [],
         "path": str(path) if path.is_file() else "",
-        "markdown_path": str(TWO_PHASE_MATRIX_MD_PATH) if TWO_PHASE_MATRIX_MD_PATH.is_file() else "",
+        "markdown_path": str(markdown_path) if markdown_path.is_file() else "",
     }
 
 
@@ -623,6 +629,41 @@ def current_latest_evidence_bundle_md_path() -> Path:
     if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_EVIDENCE_BUNDLE_MD_PATH):
         return Path(DATA_DIR) / "evidence_bundles" / "latest_evidence_bundle.md"
     return latest_path
+
+
+def current_mvp_acceptance_summary_path() -> Path:
+    path = Path(MVP_ACCEPTANCE_SUMMARY_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_MVP_ACCEPTANCE_SUMMARY_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_mvp_acceptance_summary.json"
+    return path
+
+
+def current_goal_delivery_report_path() -> Path:
+    path = Path(GOAL_DELIVERY_REPORT_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_GOAL_DELIVERY_REPORT_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_goal_delivery_report.json"
+    return path
+
+
+def current_goal_delivery_summary_path() -> Path:
+    path = Path(GOAL_DELIVERY_SUMMARY_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_GOAL_DELIVERY_SUMMARY_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_goal_delivery_summary.md"
+    return path
+
+
+def current_two_phase_matrix_json_path() -> Path:
+    path = Path(TWO_PHASE_MATRIX_JSON_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_TWO_PHASE_MATRIX_JSON_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_two_phase_acceptance_matrix.json"
+    return path
+
+
+def current_two_phase_matrix_md_path() -> Path:
+    path = Path(TWO_PHASE_MATRIX_MD_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_TWO_PHASE_MATRIX_MD_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_two_phase_acceptance_matrix.md"
+    return path
 
 
 def read_current_run_session() -> dict:
@@ -2164,9 +2205,9 @@ def build_current_evidence_bundle() -> dict:
             log_path=log_path,
             offline_learning_path=str(DATA_DIR / "offline_learning" / "unknown_states.json"),
             extra_artifacts=[
-                {"kind": "mvp_acceptance", "label": "MVP acceptance", "path": str(MVP_ACCEPTANCE_SUMMARY_PATH)},
-                {"kind": "goal_delivery", "label": "Goal delivery report", "path": str(GOAL_DELIVERY_REPORT_PATH)},
-                {"kind": "two_phase_matrix", "label": "Two phase matrix", "path": str(TWO_PHASE_MATRIX_JSON_PATH)},
+                {"kind": "mvp_acceptance", "label": "MVP acceptance", "path": str(current_mvp_acceptance_summary_path())},
+                {"kind": "goal_delivery", "label": "Goal delivery report", "path": str(current_goal_delivery_report_path())},
+                {"kind": "two_phase_matrix", "label": "Two phase matrix", "path": str(current_two_phase_matrix_json_path())},
             ],
         )
         session_id = str(bundle.get("session_id") or "latest_evidence_bundle")
@@ -6918,11 +6959,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"status": "rejected", "error": error}, 400)
                 return
             try:
-                from tools.reachops_mvp_acceptance_summary import OUT_PATH, build_summary
+                from tools.reachops_mvp_acceptance_summary import build_summary
 
                 summary = build_summary()
-                OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-                OUT_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+                mvp_summary_path = current_mvp_acceptance_summary_path()
+                mvp_summary_path.parent.mkdir(parents=True, exist_ok=True)
+                mvp_summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
                 append_web_log(
                     f"CHECK  mvp_acceptance_refresh status={summary.get('status')} mvp_local_ready={str(bool(summary.get('mvp_local_ready'))).lower()}"
                 )
@@ -6941,18 +6983,22 @@ class Handler(BaseHTTPRequestHandler):
                 from tools.reachops_two_phase_acceptance_matrix import build_matrix, render_markdown
 
                 report = build_report()
-                report.setdefault("execution_contract", {})["authoritative_report"] = str(GOAL_DELIVERY_REPORT_PATH)
-                report.setdefault("execution_contract", {})["operator_summary"] = str(GOAL_DELIVERY_SUMMARY_PATH)
-                report.setdefault("evidence_files", {})["goal_delivery_report"] = str(GOAL_DELIVERY_REPORT_PATH)
-                report.setdefault("evidence_files", {})["goal_delivery_summary"] = str(GOAL_DELIVERY_SUMMARY_PATH)
-                GOAL_DELIVERY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-                GOAL_DELIVERY_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-                GOAL_DELIVERY_SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
-                GOAL_DELIVERY_SUMMARY_PATH.write_text(render_markdown_summary(report), encoding="utf-8")
+                goal_report_path = current_goal_delivery_report_path()
+                goal_summary_path = current_goal_delivery_summary_path()
+                two_phase_json_path = current_two_phase_matrix_json_path()
+                two_phase_md_path = current_two_phase_matrix_md_path()
+                report.setdefault("execution_contract", {})["authoritative_report"] = str(goal_report_path)
+                report.setdefault("execution_contract", {})["operator_summary"] = str(goal_summary_path)
+                report.setdefault("evidence_files", {})["goal_delivery_report"] = str(goal_report_path)
+                report.setdefault("evidence_files", {})["goal_delivery_summary"] = str(goal_summary_path)
+                goal_report_path.parent.mkdir(parents=True, exist_ok=True)
+                goal_report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+                goal_summary_path.parent.mkdir(parents=True, exist_ok=True)
+                goal_summary_path.write_text(render_markdown_summary(report), encoding="utf-8")
                 matrix = build_matrix(report)
-                TWO_PHASE_MATRIX_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
-                TWO_PHASE_MATRIX_JSON_PATH.write_text(json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8")
-                TWO_PHASE_MATRIX_MD_PATH.write_text(render_markdown(matrix), encoding="utf-8")
+                two_phase_json_path.parent.mkdir(parents=True, exist_ok=True)
+                two_phase_json_path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8")
+                two_phase_md_path.write_text(render_markdown(matrix), encoding="utf-8")
                 append_web_log(
                     f"CHECK  goal_delivery_refresh status={report.get('status')} local_mvp_ready={str(bool(report.get('local_mvp_ready'))).lower()} windows_build_ready={str(bool(report.get('windows_build_ready'))).lower()} final_delivery_ready={str(bool(report.get('final_delivery_ready'))).lower()} two_phase={matrix.get('status')}"
                 )

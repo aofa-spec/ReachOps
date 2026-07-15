@@ -985,6 +985,98 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertFalse(default_groups_exists)
         self.assertTrue(redirected_groups_exists)
 
+    def test_acceptance_remediation_paths_follow_redirected_data_dir(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_default_data_dir = reachops_web_ui.DEFAULT_DATA_DIR
+            old_mvp_path = reachops_web_ui.MVP_ACCEPTANCE_SUMMARY_PATH
+            old_default_mvp_path = reachops_web_ui.DEFAULT_MVP_ACCEPTANCE_SUMMARY_PATH
+            old_goal_report_path = reachops_web_ui.GOAL_DELIVERY_REPORT_PATH
+            old_default_goal_report_path = reachops_web_ui.DEFAULT_GOAL_DELIVERY_REPORT_PATH
+            old_goal_summary_path = reachops_web_ui.GOAL_DELIVERY_SUMMARY_PATH
+            old_default_goal_summary_path = reachops_web_ui.DEFAULT_GOAL_DELIVERY_SUMMARY_PATH
+            old_two_phase_json_path = reachops_web_ui.TWO_PHASE_MATRIX_JSON_PATH
+            old_default_two_phase_json_path = reachops_web_ui.DEFAULT_TWO_PHASE_MATRIX_JSON_PATH
+            old_two_phase_md_path = reachops_web_ui.TWO_PHASE_MATRIX_MD_PATH
+            old_default_two_phase_md_path = reachops_web_ui.DEFAULT_TWO_PHASE_MATRIX_MD_PATH
+            try:
+                root = Path(tmpdir)
+                default_data_dir = root / "default-runtime"
+                redirected_data_dir = root / "isolated-runtime"
+                default_reports = default_data_dir / "reports" / "acceptance_remediation"
+                redirected_reports = redirected_data_dir / "reports" / "acceptance_remediation"
+                default_mvp = default_reports / "latest_mvp_acceptance_summary.json"
+                redirected_mvp = redirected_reports / "latest_mvp_acceptance_summary.json"
+                default_goal_report = default_reports / "latest_goal_delivery_report.json"
+                redirected_goal_report = redirected_reports / "latest_goal_delivery_report.json"
+                default_goal_summary = default_reports / "latest_goal_delivery_summary.md"
+                redirected_goal_summary = redirected_reports / "latest_goal_delivery_summary.md"
+                default_two_phase_json = default_reports / "latest_two_phase_acceptance_matrix.json"
+                redirected_two_phase_json = redirected_reports / "latest_two_phase_acceptance_matrix.json"
+                default_two_phase_md = default_reports / "latest_two_phase_acceptance_matrix.md"
+                redirected_two_phase_md = redirected_reports / "latest_two_phase_acceptance_matrix.md"
+
+                reachops_web_ui.DEFAULT_DATA_DIR = default_data_dir
+                reachops_web_ui.DEFAULT_MVP_ACCEPTANCE_SUMMARY_PATH = default_mvp
+                reachops_web_ui.DEFAULT_GOAL_DELIVERY_REPORT_PATH = default_goal_report
+                reachops_web_ui.DEFAULT_GOAL_DELIVERY_SUMMARY_PATH = default_goal_summary
+                reachops_web_ui.DEFAULT_TWO_PHASE_MATRIX_JSON_PATH = default_two_phase_json
+                reachops_web_ui.DEFAULT_TWO_PHASE_MATRIX_MD_PATH = default_two_phase_md
+                reachops_web_ui.DATA_DIR = redirected_data_dir
+                reachops_web_ui.MVP_ACCEPTANCE_SUMMARY_PATH = default_mvp
+                reachops_web_ui.GOAL_DELIVERY_REPORT_PATH = default_goal_report
+                reachops_web_ui.GOAL_DELIVERY_SUMMARY_PATH = default_goal_summary
+                reachops_web_ui.TWO_PHASE_MATRIX_JSON_PATH = default_two_phase_json
+                reachops_web_ui.TWO_PHASE_MATRIX_MD_PATH = default_two_phase_md
+
+                default_reports.mkdir(parents=True)
+                redirected_reports.mkdir(parents=True)
+                default_mvp.write_text(json.dumps({"status": "default", "mvp_local_ready": False}), encoding="utf-8")
+                redirected_mvp.write_text(json.dumps({"status": "redirected", "mvp_local_ready": True}), encoding="utf-8")
+                default_goal_report.write_text(json.dumps({"status": "default"}), encoding="utf-8")
+                redirected_goal_report.write_text(
+                    json.dumps({"status": "redirected", "local_mvp_ready": True}),
+                    encoding="utf-8",
+                )
+                default_goal_summary.write_text("default summary", encoding="utf-8")
+                redirected_goal_summary.write_text("redirected summary", encoding="utf-8")
+                default_two_phase_json.write_text(json.dumps({"status": "default"}), encoding="utf-8")
+                redirected_two_phase_json.write_text(
+                    json.dumps({"status": "redirected", "local_mvp_ready": True}),
+                    encoding="utf-8",
+                )
+                default_two_phase_md.write_text("default matrix", encoding="utf-8")
+                redirected_two_phase_md.write_text("redirected matrix", encoding="utf-8")
+
+                mvp = reachops_web_ui.summarize_mvp_acceptance()
+                goal = reachops_web_ui.summarize_goal_delivery()
+                two_phase = reachops_web_ui.summarize_two_phase_acceptance()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.DEFAULT_DATA_DIR = old_default_data_dir
+                reachops_web_ui.MVP_ACCEPTANCE_SUMMARY_PATH = old_mvp_path
+                reachops_web_ui.DEFAULT_MVP_ACCEPTANCE_SUMMARY_PATH = old_default_mvp_path
+                reachops_web_ui.GOAL_DELIVERY_REPORT_PATH = old_goal_report_path
+                reachops_web_ui.DEFAULT_GOAL_DELIVERY_REPORT_PATH = old_default_goal_report_path
+                reachops_web_ui.GOAL_DELIVERY_SUMMARY_PATH = old_goal_summary_path
+                reachops_web_ui.DEFAULT_GOAL_DELIVERY_SUMMARY_PATH = old_default_goal_summary_path
+                reachops_web_ui.TWO_PHASE_MATRIX_JSON_PATH = old_two_phase_json_path
+                reachops_web_ui.DEFAULT_TWO_PHASE_MATRIX_JSON_PATH = old_default_two_phase_json_path
+                reachops_web_ui.TWO_PHASE_MATRIX_MD_PATH = old_two_phase_md_path
+                reachops_web_ui.DEFAULT_TWO_PHASE_MATRIX_MD_PATH = old_default_two_phase_md_path
+
+        self.assertEqual(mvp["status"], "redirected")
+        self.assertTrue(mvp["mvp_local_ready"])
+        self.assertEqual(mvp["path"], str(redirected_mvp))
+        self.assertEqual(goal["status"], "redirected")
+        self.assertTrue(goal["local_mvp_ready"])
+        self.assertEqual(goal["path"], str(redirected_goal_report))
+        self.assertEqual(goal["summary_path"], str(redirected_goal_summary))
+        self.assertEqual(two_phase["status"], "redirected")
+        self.assertTrue(two_phase["local_mvp_ready"])
+        self.assertEqual(two_phase["path"], str(redirected_two_phase_json))
+        self.assertEqual(two_phase["markdown_path"], str(redirected_two_phase_md))
+
     def test_run_session_latest_path_follows_redirected_data_dir(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
