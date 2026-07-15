@@ -81,6 +81,7 @@ from tools.reachops_issue_closure_audit import build_report as build_reachops_is
 from tools.reachops_data_governance import (
     build_report as build_reachops_data_governance_report,
     build_support_bundle_policy as build_reachops_support_bundle_policy,
+    materialize_support_diagnostics as materialize_reachops_support_diagnostics,
 )
 from tools.reachops_security_supply_chain_audit import build_report as build_reachops_security_supply_chain_report
 from tools.reachops_start_contract_audit import build_report as build_reachops_start_contract_report
@@ -3924,6 +3925,66 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(all(item["included_in_manifest"] for item in ready["required_diagnostic_files"]))
             self.assertTrue(ready["dry_run_manifest"]["required_diagnostics_present"])
             self.assertEqual(ready["dry_run_manifest"]["missing_required_diagnostics"], [])
+
+    def test_support_diagnostics_materialization_writes_required_support_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "runtime"
+            root = Path(tmp) / "repo"
+            (root / "tools").mkdir(parents=True)
+            calls = []
+
+            def fake_runner(command, **_kwargs):
+                calls.append(command)
+                script = Path(command[1]).name
+                payload = {
+                    "schema_version": f"fixture.{script}.v1",
+                    "status": "failed" if script in {"reachops_delivery_package_check.py", "reachops_final_acceptance_gate.py"} else "passed",
+                    "final_delivery_ready": False,
+                }
+                if script != "reachops_delivery_package_check.py":
+                    payload["does_not_claim_final_delivery_ready"] = True
+                if script == "reachops_client_delivery_check.py":
+                    handoff_path = base / "reports" / "support" / "account_support_handoff.json"
+                    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+                    handoff_path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": "reachops.account_support_handoff_diagnostic.v1",
+                                "support_required": True,
+                                "support_case": "account_pool_blocked",
+                                "does_not_claim_real_account_pool_ready": True,
+                            },
+                            sort_keys=True,
+                        ),
+                        encoding="utf-8",
+                    )
+                    return subprocess.CompletedProcess(command, 1, json.dumps(payload), "")
+                return subprocess.CompletedProcess(command, 1 if payload["status"] == "failed" else 0, json.dumps(payload), "")
+
+            result = materialize_reachops_support_diagnostics(base, root=root, command_runner=fake_runner)
+            support = build_reachops_support_bundle_policy(base)
+
+            self.assertEqual(result["schema_version"], "reachops.support_diagnostics_materialization.v1")
+            self.assertEqual(result["status"], "passed")
+            self.assertTrue(result["required_diagnostics_present"])
+            self.assertEqual(result["missing_required_diagnostics"], [])
+            self.assertTrue(result["does_not_claim_final_delivery_ready"])
+            command_statuses = {row["relative_path"]: row for row in result["commands"]}
+            self.assertEqual(command_statuses["reports/support/delivery_package_check.json"]["payload_status"], "failed")
+            self.assertFalse(command_statuses["reports/support/delivery_package_check.json"]["payload_final_delivery_ready"])
+            self.assertTrue(support["required_diagnostics_present"])
+            self.assertEqual(support["missing_required_diagnostics"], [])
+            self.assertEqual(len(calls), 6)
+
+            diagnostics = json.loads((base / "reports" / "support" / "diagnostics.json").read_text(encoding="utf-8"))
+            self.assertEqual(diagnostics["status"], "passed")
+            self.assertTrue(diagnostics["does_not_claim_final_delivery_ready"])
+            account = json.loads((base / "reports" / "support" / "account_support_handoff.json").read_text(encoding="utf-8"))
+            self.assertEqual(account["schema_version"], "reachops.account_support_handoff_diagnostic.v1")
+            delivery_package = json.loads((base / "reports" / "support" / "delivery_package_check.json").read_text(encoding="utf-8"))
+            self.assertEqual(delivery_package["support_diagnostic_returncode"], 1)
+            self.assertEqual(delivery_package["status"], "failed")
+            self.assertTrue(delivery_package["does_not_claim_final_delivery_ready"])
 
     def test_reachops_data_governance_verifies_backup_restore_and_redaction_policy(self):
         with tempfile.TemporaryDirectory() as tmp:

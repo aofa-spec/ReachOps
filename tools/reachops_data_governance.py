@@ -5,8 +5,10 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -137,6 +139,8 @@ SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS = [
     "reports/support/windows_package_preflight.json",
 ]
 
+SUPPORT_DIAGNOSTICS_MATERIALIZATION_SCHEMA_VERSION = "reachops.support_diagnostics_materialization.v1"
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -257,6 +261,159 @@ def build_support_bundle_manifest(base_dir: Path, candidate_paths: list[Path] | 
         "missing_required_diagnostics": missing_required_diagnostics,
         "passed": not forbidden_included and not outside_base,
     }
+
+
+def _parse_json_stdout(stdout: str) -> tuple[dict[str, Any], str]:
+    text = (stdout or "").strip()
+    if not text:
+        return {}, "stdout_empty"
+    try:
+        payload = json.loads(text)
+    except Exception as exc:
+        return {}, f"stdout_json_parse_failed:{exc.__class__.__name__}"
+    if not isinstance(payload, dict):
+        return {}, "stdout_json_not_object"
+    return payload, ""
+
+
+def _run_support_diagnostic_command(
+    command: list[str],
+    *,
+    root: Path,
+    command_runner: Any = None,
+) -> subprocess.CompletedProcess[str]:
+    runner = command_runner or subprocess.run
+    env = {
+        **{str(key): str(value) for key, value in os.environ.items()},
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    return runner(
+        command,
+        cwd=str(root),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _write_support_payload(path: Path, payload: dict[str, Any], *, command: list[str], returncode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    materialized_payload = dict(payload)
+    materialized_payload.setdefault("support_diagnostic", True)
+    if materialized_payload.get("final_delivery_ready") is not True:
+        materialized_payload.setdefault("does_not_claim_final_delivery_ready", True)
+    materialized_payload["support_diagnostic_command"] = " ".join(command)
+    materialized_payload["support_diagnostic_returncode"] = int(returncode)
+    path.write_text(json.dumps(materialized_payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def materialize_support_diagnostics(
+    base_dir: str | Path,
+    *,
+    root: str | Path = ROOT_DIR,
+    command_runner: Any = None,
+) -> dict[str, Any]:
+    root = Path(root).resolve()
+    base_dir = Path(base_dir).resolve()
+    support_dir = base_dir / "reports" / "support"
+    support_dir.mkdir(parents=True, exist_ok=True)
+    python = sys.executable
+    commands: dict[str, list[str]] = {
+        "reports/support/account_support_handoff.json": [
+            python,
+            str(root / "tools" / "reachops_client_delivery_check.py"),
+            "--base-dir",
+            str(base_dir),
+            "--json",
+        ],
+        "reports/support/delivery_package_check.json": [
+            python,
+            str(root / "tools" / "reachops_delivery_package_check.py"),
+            "--root",
+            str(root),
+            "--json",
+        ],
+        "reports/support/final_acceptance_gate.json": [
+            python,
+            str(root / "tools" / "reachops_final_acceptance_gate.py"),
+            "--root",
+            str(root),
+            "--base-dir",
+            str(base_dir),
+            "--json",
+        ],
+        "reports/support/issue_closure_payload.json": [
+            python,
+            str(root / "tools" / "reachops_issue_closure_audit.py"),
+            "--root",
+            str(root),
+            "--json",
+        ],
+        "reports/support/repository_cleanliness_payload.json": [
+            python,
+            str(root / "tools" / "reachops_repository_cleanliness_check.py"),
+            "--clean",
+            "--json",
+        ],
+        "reports/support/windows_package_preflight.json": [
+            python,
+            str(root / "tools" / "reachops_windows_package_preflight.py"),
+            "--root",
+            str(root),
+            "--json",
+        ],
+    }
+    command_results: list[dict[str, Any]] = []
+    command_errors: list[str] = []
+    for relative_path, command in commands.items():
+        output_path = base_dir / relative_path
+        completed = _run_support_diagnostic_command(command, root=root, command_runner=command_runner)
+        payload, parse_error = _parse_json_stdout(completed.stdout)
+        if relative_path == "reports/support/account_support_handoff.json":
+            if not output_path.is_file() and payload:
+                _write_support_payload(output_path, payload, command=command, returncode=completed.returncode)
+        elif payload:
+            _write_support_payload(output_path, payload, command=command, returncode=completed.returncode)
+        if parse_error:
+            command_errors.append(f"{relative_path}:{parse_error}")
+        command_results.append(
+            {
+                "relative_path": relative_path,
+                "path": str(output_path),
+                "command": " ".join(command),
+                "returncode": int(completed.returncode),
+                "stdout_json_valid": not parse_error,
+                "payload_status": str(payload.get("status") or "") if payload else "",
+                "payload_final_delivery_ready": payload.get("final_delivery_ready") if payload else None,
+                "stderr": (completed.stderr or "").strip()[:4000],
+                "exists": output_path.is_file(),
+                "size_bytes": output_path.stat().st_size if output_path.is_file() else 0,
+            }
+        )
+    manifest = build_support_bundle_manifest(base_dir)
+    diagnostics = {
+        "schema_version": SUPPORT_DIAGNOSTICS_MATERIALIZATION_SCHEMA_VERSION,
+        "generated_at": utc_now_iso(),
+        "root": str(root),
+        "base_dir": str(base_dir),
+        "support_dir": str(support_dir),
+        "commands": command_results,
+        "command_errors": command_errors,
+        "required_diagnostics_present": bool(manifest.get("required_diagnostics_present")),
+        "missing_required_diagnostics": manifest.get("missing_required_diagnostics") or [],
+        "does_not_claim_final_delivery_ready": True,
+        "support_bundle_redacted_by_default": True,
+    }
+    diagnostics["status"] = "passed" if diagnostics["required_diagnostics_present"] and not command_errors else "failed"
+    diagnostics_path = support_dir / "diagnostics.json"
+    diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    final_manifest = build_support_bundle_manifest(base_dir)
+    diagnostics["required_diagnostics_present"] = bool(final_manifest.get("required_diagnostics_present"))
+    diagnostics["missing_required_diagnostics"] = final_manifest.get("missing_required_diagnostics") or []
+    diagnostics["status"] = "passed" if diagnostics["required_diagnostics_present"] and not command_errors else "failed"
+    diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return diagnostics
 
 
 def ensure_schema(db_path: Path) -> None:
@@ -596,6 +753,7 @@ def build_report(
     create_missing_db: bool = False,
     verify_backup: bool = False,
     verify_privacy_ops: bool = False,
+    support_diagnostics_materialization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(root).resolve()
     runtime_paths = RuntimePaths.build()
@@ -654,6 +812,13 @@ def build_report(
         "retention_classes": RETENTION_CLASSES,
         "data_catalog": DATA_CATALOG,
         "support_bundle": support_bundle,
+        "support_diagnostics_materialization": support_diagnostics_materialization
+        or {
+            "schema_version": SUPPORT_DIAGNOSTICS_MATERIALIZATION_SCHEMA_VERSION,
+            "status": "not_run",
+            "required_diagnostics_present": support_bundle.get("required_diagnostics_present"),
+            "missing_required_diagnostics": support_bundle.get("missing_required_diagnostics") or [],
+        },
         "privacy_operations": {
             "schema_version": PRIVACY_OPERATION_SCHEMA_VERSION,
             "audit_table": DATA_PRIVACY_AUDIT_TABLE,
@@ -676,6 +841,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--create-missing-db", action="store_true", help="Create the database if missing and apply idempotent schema migrations.")
     parser.add_argument("--verify-backup", action="store_true")
     parser.add_argument("--verify-privacy-ops", action="store_true")
+    parser.add_argument(
+        "--sync-support-diagnostics",
+        action="store_true",
+        help="Materialize required reports/support/*.json diagnostics under the runtime base dir before building the report.",
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -684,6 +854,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     with tempfile.TemporaryDirectory() as tmp:
         output_dir = args.output_dir or tmp
+        runtime_paths = RuntimePaths.build()
+        support_diagnostics_materialization = (
+            materialize_support_diagnostics(runtime_paths.base_dir, root=args.root)
+            if args.sync_support_diagnostics
+            else None
+        )
         payload = build_report(
             root=args.root,
             db_path=args.db_path or None,
@@ -691,6 +867,7 @@ def main(argv: list[str] | None = None) -> int:
             create_missing_db=args.create_missing_db,
             verify_backup=args.verify_backup,
             verify_privacy_ops=args.verify_privacy_ops,
+            support_diagnostics_materialization=support_diagnostics_materialization,
         )
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))

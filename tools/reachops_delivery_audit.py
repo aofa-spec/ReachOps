@@ -2325,6 +2325,9 @@ def run_audit(args) -> dict:
                 and isinstance(data_governance_fixture.get("support_bundle", {}).get("missing_required_diagnostics"), list)
                 and "required_diagnostics_present" in data_governance_fixture.get("support_bundle", {})
                 and "does_not_claim_required_diagnostics_present" in data_governance_fixture.get("support_bundle", {})
+                and data_governance_fixture.get("support_diagnostics_materialization", {}).get("schema_version") == "reachops.support_diagnostics_materialization.v1"
+                and "sync-support-diagnostics" in (ROOT_DIR / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
+                and "materialize_support_diagnostics" in (ROOT_DIR / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
                 and "reports/support/account_support_handoff.json" in (data_governance_fixture.get("support_bundle", {}).get("required_diagnostics") or [])
                 and "reports/support/account_support_handoff.json" in {
                     str(item.get("relative_path") or "")
