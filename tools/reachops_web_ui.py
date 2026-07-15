@@ -1719,18 +1719,16 @@ def build_start_preview(payload: dict | None) -> dict:
     comment_text = str(payload.get("comment_text") or payload.get("commentText") or "")
     live_confirmed = truthy(payload.get("live_confirm", payload.get("liveConfirm")))
     account_repair_confirmed = truthy(payload.get("account_repair_confirmed", payload.get("accountRepairConfirmed")))
-    force_account_recheck = (
-        account_repair_confirmed
-        and truthy(payload.get("account_gate_blocked", payload.get("accountGateBlocked")))
-    )
+    account_gate_blocked = truthy(payload.get("account_gate_blocked", payload.get("accountGateBlocked")))
+    force_account_recheck = account_gate_blocked
     submit_policy = "真实评论提交" if mode == "live_comment" and live_confirmed else "预检，不提交"
     gate_state = "分组未刷新"
     if payload.get("group_list_ready") or payload.get("groupListReady"):
         gate_state = "可启动"
     if mode == "live_comment" and not live_confirmed:
         gate_state = "需确认真实评论"
-    if (payload.get("account_gate_blocked") or payload.get("accountGateBlocked")) and not account_repair_confirmed:
-        gate_state = "账号修复后启动"
+    if account_gate_blocked and (payload.get("group_list_ready") or payload.get("groupListReady")):
+        gate_state = "自动重检账号"
     blockers: list[str] = []
     next_actions: list[str] = []
     if not target.strip():
@@ -1742,9 +1740,8 @@ def build_start_preview(payload: dict | None) -> dict:
     if mode == "live_comment" and not live_confirmed:
         blockers.append("live_comment_confirmation_required")
         next_actions.append("真实评论前必须勾选授权确认。")
-    if (payload.get("account_gate_blocked") or payload.get("accountGateBlocked")) and not account_repair_confirmed:
-        blockers.append("account_repair_required")
-        next_actions.append("执行账号修复计划或勾选已修复账号后重新预检。")
+    if account_gate_blocked and (payload.get("group_list_ready") or payload.get("groupListReady")):
+        next_actions.append("启动后会重新读取配置列表，自动跳过或移组未登录账号，并继续尝试后续账号。")
     start_allowed = not blockers
     preflight_decision = {
         "schema_version": "reachops.start_preflight_decision.v1",
@@ -6516,26 +6513,29 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
         account_repair_summary = summarize_account_repair_plan(plan_paths[3] or plan_paths[1])
         stale_repair = account_repair_apply.get("stale") is True
         append_web_log(
-            f"WARN   web_ui_account_gate_blocked group={profile_group} "
-            "policy=repair_required_before_start"
+            f"WARN   web_ui_account_gate_auto_recheck group={profile_group} "
+            "policy=runtime_preflight_auto_grouping"
         )
-        return False, {
-            "status": "rejected",
-            "error": "account_repair_required",
-            "message": (
-                "旧账号修复结果已失效；请先执行最新账号修复计划并重新预检。"
-                if stale_repair
-                else "当前分组最近一次预检没有可用账号；请先修复账号并重新预检。"
-            ),
+        payload = {
+            "status": status,
             "profile_group": profile_group,
             "profile_available": profile_available,
             "same_group": same_group,
-            "force_account_recheck": False,
+            "force_account_recheck": True,
+            "auto_account_recheck": True,
+            "runtime_auto_grouping": True,
+            "previous_error": "account_repair_required",
+            "message": (
+                "旧账号修复结果已失效；本次不阻断启动，将由运行时重新筛选账号并自动移组。"
+                if stale_repair
+                else "当前分组最近一次预检没有可用账号；本次不阻断启动，将由运行时重新筛选账号并自动移组。"
+            ),
             "blockers": blockers,
             "next_actions": next_actions
             or [
-                "在 ixBrowser 中修复该分组账号登录状态、内核版本和代理可用性。",
-                "确认至少 1 个账号可正常打开 TikTok 后再次启动；程序会重新筛选可用账号。",
+                "程序会在执行中打开候选配置并检测 TikTok 登录态。",
+                "未登录、验证码、代理失败或访问门禁账号会按运行时策略移入隔离分组。",
+                "如果没有任何可用账号，任务会有界终止为 blocked_by_accounts。",
             ],
             "account_repair_apply": account_repair_apply,
             "account_repair_plan_paths": visible_paths,
@@ -6547,6 +6547,7 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
             "no_browser_started": True,
             "no_submit": True,
         }
+        return True, payload
     if blocked and account_repair_confirmed:
         append_web_log(
             f"WARN   web_ui_account_recheck_confirmed group={profile_group} "

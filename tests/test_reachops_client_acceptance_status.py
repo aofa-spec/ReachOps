@@ -2133,7 +2133,81 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         popen.assert_not_called()
         self.assertFalse(Path(tmpdir, "reachops_web_ui_last_run.json").exists())
 
-    def test_start_handler_rejects_account_gate_without_launching_process(self):
+    def test_start_handler_allows_account_gate_runtime_recheck(self):
+        body = json.dumps(
+            {
+                "target": "anti aging serum",
+                "mode": "preflight",
+                "group": "United States",
+                "profiles": 3,
+            }
+        ).encode("utf-8")
+        headers = Message()
+        headers["Host"] = "127.0.0.1:8769"
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(body))
+        handler = object.__new__(reachops_web_ui.Handler)
+        handler.path = "/api/start"
+        handler.headers = headers
+        handler.rfile = BytesIO(body)
+        captured = {}
+
+        def capture_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler._send_json = capture_json
+        class FakeProcess:
+            pid = 43210
+
+            def poll(self):
+                return None
+
+        popen_kwargs = {}
+
+        def fake_popen(_cmd, **kwargs):
+            popen_kwargs.update(kwargs)
+            return FakeProcess()
+
+        old_data_dir = reachops_web_ui.DATA_DIR
+        old_log_path = reachops_web_ui.LOG_PATH
+        old_result_path = reachops_web_ui.RESULT_PATH
+        old_process = reachops_web_ui.RUN_PROCESS
+        try:
+            with TemporaryDirectory() as tmpdir:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RESULT_PATH = Path(tmpdir) / "reachops_web_ui_last_run.json"
+                reachops_web_ui.RUN_PROCESS = None
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch(
+                        "tools.reachops_web_ui.validate_account_repair_for_start",
+                        return_value=(
+                            True,
+                            {
+                                "status": "blocked_by_accounts",
+                                "profile_available": 0,
+                                "same_group": True,
+                                "force_account_recheck": True,
+                                "auto_account_recheck": True,
+                                "runtime_auto_grouping": True,
+                            },
+                        ),
+                    ) as account_gate:
+                        with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                            reachops_web_ui.Handler.do_POST(handler)
+        finally:
+            reachops_web_ui.DATA_DIR = old_data_dir
+            reachops_web_ui.LOG_PATH = old_log_path
+            reachops_web_ui.RESULT_PATH = old_result_path
+            reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "started")
+        account_gate.assert_called_once_with("United States", False)
+        self.assertEqual(popen_kwargs["env"]["REACHOPS_FORCE_ACCOUNT_RECHECK"], "1")
+
+    def test_start_handler_still_rejects_unrecoverable_account_gate(self):
         body = json.dumps(
             {
                 "target": "anti aging serum",
@@ -2208,9 +2282,13 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             same_ok, same_payload = reachops_web_ui.validate_account_repair_for_start("United States", False)
             other_ok, other_payload = reachops_web_ui.validate_account_repair_for_start("Canada", False)
 
-        self.assertFalse(same_ok)
-        self.assertEqual(same_payload["error"], "account_repair_required")
+        self.assertTrue(same_ok)
+        self.assertEqual(same_payload["status"], "blocked_by_accounts")
         self.assertEqual(same_payload["profile_group"], "United States")
+        self.assertTrue(same_payload["force_account_recheck"])
+        self.assertTrue(same_payload["auto_account_recheck"])
+        self.assertTrue(same_payload["runtime_auto_grouping"])
+        self.assertEqual(same_payload["previous_error"], "account_repair_required")
         self.assertEqual(same_payload["account_plan_markdown_path"], "/tmp/us_account_plan.md")
         self.assertEqual(same_payload["latest_account_plan_json_path"], "/tmp/latest_account_plan.json")
         self.assertEqual(len(same_payload["account_repair_plan_paths"]), 4)
@@ -2262,7 +2340,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             ):
                 ok, payload = reachops_web_ui.validate_account_repair_for_start("United States", False)
 
-        self.assertFalse(ok)
+        self.assertTrue(ok)
+        self.assertTrue(payload["force_account_recheck"])
+        self.assertTrue(payload["runtime_auto_grouping"])
         summary = payload["account_repair_summary"]
         self.assertEqual(summary["status"], "ok")
         self.assertEqual(summary["profile_group"], "United States")
@@ -2301,9 +2381,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         ):
             ok, payload = reachops_web_ui.validate_account_repair_for_start("United States", False)
 
-        self.assertFalse(ok)
-        self.assertEqual(payload["error"], "account_repair_required")
+        self.assertTrue(ok)
+        self.assertEqual(payload["previous_error"], "account_repair_required")
         self.assertIn("旧账号修复结果已失效", payload["message"])
+        self.assertTrue(payload["force_account_recheck"])
+        self.assertTrue(payload["runtime_auto_grouping"])
         self.assertTrue(payload["account_repair_apply"]["stale"])
         self.assertEqual(payload["account_repair_apply"]["stale_reason"], "newer_account_repair_plan_for_current_batch")
 

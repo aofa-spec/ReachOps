@@ -4484,6 +4484,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(report["contract_version"], "reachops.api_start_contract.v1")
         self.assertTrue(report["passed"])
         self.assertEqual(report["failed_cases"], [])
+        self.assertEqual(report["failed_continuation_cases"], [])
         cases = {row["name"]: row for row in report["rejection_cases"]}
         for name in [
             "missing_target",
@@ -4491,7 +4492,6 @@ class ReachOpsCampaignTests(unittest.TestCase):
             "group_list_unavailable",
             "group_not_found",
             "group_counts_incomplete",
-            "account_repair_required",
             "live_comment_confirmation_required",
             "live_submit_not_authorized",
             "already_running",
@@ -4500,6 +4500,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(cases[name]["no_browser_started"], name)
             self.assertTrue(cases[name]["no_submit"], name)
             self.assertTrue(cases[name]["next_action"], name)
+        continuation_cases = {row["name"]: row for row in report["runtime_continuation_cases"]}
+        self.assertTrue(continuation_cases["account_gate_runtime_auto_recheck"]["passed"])
+        self.assertTrue(continuation_cases["account_gate_runtime_auto_recheck"]["force_account_recheck"])
+        self.assertTrue(continuation_cases["account_gate_runtime_auto_recheck"]["runtime_auto_grouping"])
+        self.assertTrue(report["response_invariants"]["runtime_account_recheck_is_bounded_and_no_submit"])
         self.assertTrue(report["success_contract"]["execution_plan_persisted"])
         self.assertTrue(report["success_contract"]["run_session_persisted"])
         self.assertTrue(report["auditability"]["blocked_group_start_writes_execution_plan"])
@@ -7917,6 +7922,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("profile_group_list_unavailable", start_contract_audit)
         self.assertIn("profile_group_counts_incomplete", start_contract_audit)
         self.assertIn("account_repair_required", start_contract_audit)
+        self.assertIn("account_gate_runtime_auto_recheck", start_contract_audit)
+        self.assertIn("runtime_auto_grouping", start_contract_audit)
         self.assertIn("LIVE_SUBMIT_NOT_AUTHORIZED", start_contract_audit)
         self.assertIn("already_running", start_contract_audit)
         self.assertIn("SchemaMigration", data_migrations)

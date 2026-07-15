@@ -60,6 +60,30 @@ def _case(
     }
 
 
+def _continuation_case(
+    name: str,
+    *,
+    source_ok: bool,
+    test_ok: bool,
+    next_action: str,
+    evidence: list[str],
+) -> dict[str, Any]:
+    passed = bool(source_ok and test_ok)
+    return {
+        "name": name,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "next_action": next_action,
+        "previous_error_code": "account_repair_required",
+        "force_account_recheck": True,
+        "runtime_auto_grouping": True,
+        "no_submit": True,
+        "source_contract_present": bool(source_ok),
+        "test_or_smoke_evidence_present": bool(test_ok),
+        "evidence": evidence,
+    }
+
+
 def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
     root = Path(root).resolve()
     web_ui = _read(root / "tools" / "reachops_web_ui.py")
@@ -155,24 +179,6 @@ def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
             evidence=["tools/reachops_web_ui.py", "tools/reachops_web_panel_runtime_smoke.py"],
         ),
         _case(
-            "account_repair_required",
-            error_code="account_repair_required",
-            http_status=409,
-            source_ok=_contains_all(
-                web_ui,
-                [
-                    '"error": "account_repair_required"',
-                    "account_repair_plan_paths",
-                    '"no_browser_started": True',
-                    '"no_submit": True',
-                ],
-            ),
-            test_ok="test_start_handler_rejects_account_gate_without_launching_process" in http_tests
-            and "account_gate.assert_called_once_with" in http_tests,
-            next_action="Apply the latest account repair plan and rerun account precheck before starting.",
-            evidence=["tools/reachops_web_ui.py", "tests/test_reachops_client_acceptance_status.py"],
-        ),
-        _case(
             "live_comment_confirmation_required",
             error_code="live_comment_confirmation_required",
             http_status=400,
@@ -205,6 +211,27 @@ def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
             next_action="Surface the existing process id and keep the second start from spawning another process.",
             evidence=["tools/reachops_web_ui.py", "tests/test_reachops_client_acceptance_status.py"],
         ),
+    ]
+
+    runtime_continuation_cases = [
+        _continuation_case(
+            "account_gate_runtime_auto_recheck",
+            source_ok=_contains_all(
+                web_ui,
+                [
+                    "web_ui_account_gate_auto_recheck",
+                    "runtime_preflight_auto_grouping",
+                    "runtime_auto_grouping",
+                    "force_account_recheck",
+                    "REACHOPS_FORCE_ACCOUNT_RECHECK",
+                ],
+            ),
+            test_ok="test_start_handler_allows_account_gate_runtime_recheck" in http_tests
+            and "REACHOPS_FORCE_ACCOUNT_RECHECK" in http_tests
+            and "runtime_auto_grouping" in http_tests,
+            next_action="Start bounded runtime preflight so logged-in accounts continue and blocked accounts are skipped or quarantined.",
+            evidence=["tools/reachops_web_ui.py", "tests/test_reachops_client_acceptance_status.py"],
+        )
     ]
 
     success_contract = {
@@ -260,12 +287,14 @@ def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
         "prelaunch_rejections_do_not_submit": all(row["no_submit"] for row in rejection_cases),
         "success_response_is_auditable": all(success_contract.values()),
         "blocked_start_is_recoverable_and_supportable": all(auditability.values()),
+        "runtime_account_recheck_is_bounded_and_no_submit": all(row["passed"] and row["no_submit"] for row in runtime_continuation_cases),
     }
 
     passed = bool(
         request_contract["loopback_only"]
         and request_contract["json_payload_guard"]
         and all(row["passed"] for row in rejection_cases)
+        and all(row["passed"] for row in runtime_continuation_cases)
         and all(response_invariants.values())
     )
 
@@ -277,10 +306,12 @@ def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
         "root": str(root),
         "request_contract": request_contract,
         "rejection_cases": rejection_cases,
+        "runtime_continuation_cases": runtime_continuation_cases,
         "success_contract": success_contract,
         "auditability": auditability,
         "response_invariants": response_invariants,
         "failed_cases": [row["name"] for row in rejection_cases if not row["passed"]],
+        "failed_continuation_cases": [row["name"] for row in runtime_continuation_cases if not row["passed"]],
     }
 
 
@@ -300,6 +331,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ReachOps /api/start contract audit: {payload['status']}")
         if payload["failed_cases"]:
             print("Failed cases: " + ", ".join(payload["failed_cases"]))
+        if payload["failed_continuation_cases"]:
+            print("Failed continuation cases: " + ", ".join(payload["failed_continuation_cases"]))
     return 0 if payload["passed"] else 1
 
 
