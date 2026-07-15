@@ -892,6 +892,8 @@ def build_final_acceptance_gate(
                 "not_final_delivery_reasons": package_check.get("not_final_delivery_reasons") or [],
                 "pending_external_validation": package_check.get("pending_external_validation") or [],
                 "root": package_check.get("root") or "",
+                "execution_environment": package_check.get("execution_environment") or {},
+                "environment_blocker": package_check.get("environment_blocker") or {},
                 "artifacts": package_check.get("artifacts") or {},
                 "report_files": package_check.get("report_files") or {},
                 "final_gate_report": package_check.get("final_gate_report") or {},

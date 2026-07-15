@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import platform
 import sys
 from pathlib import Path
 from typing import Any
@@ -281,6 +282,38 @@ def _support_handoff_path(root: Path) -> Path:
     return root / "reports" / "support" / "windows_acceptance_handoff.json"
 
 
+def _execution_environment(root: Path, require_current_environment: bool | None = None) -> dict[str, Any]:
+    system = platform.system()
+    root_is_current_workspace = root.resolve() == ROOT_DIR.resolve()
+    strict_environment = root_is_current_workspace if require_current_environment is None else bool(require_current_environment)
+    is_windows = system.lower() == "windows"
+    environment_ready = bool(is_windows or not strict_environment)
+    return {
+        "schema_version": "reachops.delivery_package_execution_environment.v1",
+        "platform_system": system,
+        "is_windows": is_windows,
+        "root_is_current_workspace": root_is_current_workspace,
+        "strict_current_environment_required": strict_environment,
+        "requires_windows_real_acceptance": True,
+        "windows_acceptance_environment_ready": environment_ready,
+        "does_not_treat_github_windows_ci_as_packaged_client_acceptance": True,
+    }
+
+
+def _environment_blocker(execution_environment: dict[str, Any]) -> dict[str, Any]:
+    if execution_environment.get("windows_acceptance_environment_ready"):
+        return {}
+    return {
+        "schema_version": "reachops.delivery_package_environment_blocker.v1",
+        "code": "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+        "failure_code": "missing_windows_acceptance_environment",
+        "platform_system": str(execution_environment.get("platform_system") or ""),
+        "required_environment": "Windows VM or Windows machine running packaged-client acceptance",
+        "next_action": "Run the Windows build, install, activation, update, rollback, uninstall, and acceptance workflow on a real Windows environment.",
+        "does_not_claim_final_delivery_ready": True,
+    }
+
+
 def build_windows_acceptance_handoff(
     *,
     root: Path,
@@ -296,6 +329,8 @@ def build_windows_acceptance_handoff(
     acceptance_verification: dict[str, Any],
     final_gate_report: dict[str, Any],
     remediation_plan: dict[str, Any],
+    execution_environment: dict[str, Any],
+    environment_blocker: dict[str, Any],
 ) -> dict[str, Any]:
     support_required = not bool(final_delivery_ready)
     return {
@@ -306,6 +341,8 @@ def build_windows_acceptance_handoff(
         "root": str(root),
         "acceptance_summary_path": str(acceptance_path),
         "manifest_path": str(manifest_path),
+        "execution_environment": execution_environment,
+        "environment_blocker": environment_blocker,
         "final_delivery_ready": bool(final_delivery_ready),
         "does_not_claim_final_delivery_ready": not bool(final_delivery_ready),
         "missing_artifacts": list(missing_artifacts),
@@ -375,6 +412,7 @@ def _not_final_reason_lines(missing_artifacts: list[str], failures: list[str]) -
         "exe_missing": "ReachOps.exe is missing; run tools\\build_reachops_windows.ps1 on Windows.",
         "installer_missing": "ReachOps installer is missing; run tools\\build_reachops_windows.ps1 on Windows.",
         "manifest_missing": "update manifest is missing; generate reachops-update-manifest.json during the Windows build.",
+        "missing_windows_acceptance_environment": "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT: final packaged-client acceptance must run on a real Windows environment.",
     }
     reasons: list[str] = []
     for artifact in missing_artifacts:
@@ -479,8 +517,11 @@ def check_delivery_package(
     allow_external_pending: bool = False,
     allow_missing_final_gate: bool = False,
     allow_final_gate_convergence: bool = False,
+    require_current_environment: bool | None = None,
 ) -> dict[str, Any]:
     root = Path(root).resolve()
+    execution_environment = _execution_environment(root, require_current_environment=require_current_environment)
+    environment_blocker = _environment_blocker(execution_environment)
     acceptance_path = _resolve(root, acceptance_summary_path) if acceptance_summary_path else _latest_acceptance_summary(root)
     manifest = _resolve(root, manifest_path) if manifest_path else _default_manifest(root)
     exe = root / "dist" / "ReachOps" / "ReachOps.exe"
@@ -492,6 +533,8 @@ def check_delivery_package(
         failures.append("acceptance_summary_outside_root")
     if not _is_relative_to(manifest, root):
         failures.append("manifest_outside_root")
+    if environment_blocker:
+        failures.append("missing_windows_acceptance_environment")
 
     artifact_status = {
         "exe": _windows_pe_status(exe),
@@ -627,6 +670,8 @@ def check_delivery_package(
         acceptance_verification=acceptance_verification,
         final_gate_report=final_gate_report,
         remediation_plan=remediation_plan,
+        execution_environment=execution_environment,
+        environment_blocker=environment_blocker,
     )
     windows_acceptance_handoff_path = write_windows_acceptance_handoff(root, windows_acceptance_handoff)
     return {
@@ -639,6 +684,8 @@ def check_delivery_package(
         "allow_missing_final_gate": bool(allow_missing_final_gate),
         "allow_final_gate_convergence": bool(allow_final_gate_convergence),
         "root": str(root),
+        "execution_environment": execution_environment,
+        "environment_blocker": environment_blocker,
         "failures": failures,
         "pending_external_validation": external_pending,
         "pending_external_actions": pending_external_actions,

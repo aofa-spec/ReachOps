@@ -675,6 +675,15 @@ def final_package_check_payload():
         "missing_artifacts": [],
         "failures": [],
         "pending_external_validation": [],
+        "execution_environment": {
+            "schema_version": "reachops.delivery_package_execution_environment.v1",
+            "platform_system": "Windows",
+            "is_windows": True,
+            "strict_current_environment_required": True,
+            "requires_windows_real_acceptance": True,
+            "windows_acceptance_environment_ready": True,
+        },
+        "environment_blocker": {},
         "artifacts": {
             "exe": {
                 "exists": True,
@@ -3978,6 +3987,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("acceptance_summary_missing", result["failures"])
             self.assertIn("manifest_missing", result["failures"])
             self.assertEqual(result["failures"].count("manifest_missing"), 1)
+            self.assertTrue(result["execution_environment"]["requires_windows_real_acceptance"])
+            self.assertFalse(result["execution_environment"]["strict_current_environment_required"])
+            self.assertEqual(result["environment_blocker"], {})
             self.assertIn("exe", result["missing_artifacts"])
             self.assertIn("installer", result["missing_artifacts"])
             self.assertIn("manifest", result["missing_artifacts"])
@@ -4010,6 +4022,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(handoff["acceptance_verification"]["passed"])
             self.assertIn("acceptance_summary_missing", handoff["acceptance_verification"]["failures"])
             self.assertIn("reports\\reachops_acceptance\\acceptance_summary.json exists", handoff["acceptance_required"])
+            self.assertTrue(handoff["execution_environment"]["requires_windows_real_acceptance"])
+            self.assertEqual(handoff["environment_blocker"], {})
             self.assertIn("python tools\\reachops_final_acceptance_gate.py --json", handoff["retest_commands"])
             self.assertTrue(handoff["safety_contract"]["diagnostic_only"])
             self.assertTrue(handoff["safety_contract"]["no_browser_started"])
@@ -4026,6 +4040,28 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.loads(handoff_path.read_text(encoding="utf-8"))["schema_version"],
                 "reachops.windows_acceptance_handoff.v1",
             )
+
+    def test_reachops_delivery_package_check_blocks_current_non_windows_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("tools.reachops_delivery_package_check.platform.system", return_value="Darwin"):
+                result = check_reachops_delivery_package(
+                    root=root,
+                    allow_external_pending=True,
+                    require_current_environment=True,
+                )
+
+        self.assertFalse(result["passed"])
+        self.assertIn("missing_windows_acceptance_environment", result["failures"])
+        self.assertEqual(
+            result["environment_blocker"]["code"],
+            "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+        )
+        self.assertTrue(result["windows_acceptance_handoff"]["environment_blocker"])
+        self.assertIn(
+            "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+            "\n".join(result["not_final_delivery_reasons"]),
+        )
 
     def test_reachops_release_evidence_records_checksums_and_rollback_note(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -5053,6 +5089,47 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("delivery_package:passed", gate["failed_checks"])
         package_evidence = {row["name"]: row for row in gate["checks"]}["delivery_package:passed"]["evidence"]
         self.assertEqual(package_evidence["acceptance_verification"]["failures"], ["final_acceptance_gate_missing"])
+
+    def test_reachops_final_acceptance_gate_surfaces_package_environment_blocker(self):
+        package_check = final_package_check_payload()
+        package_check["status"] = "failed"
+        package_check["passed"] = False
+        package_check["final_delivery_ready"] = False
+        package_check["failures"] = ["missing_windows_acceptance_environment"]
+        package_check["execution_environment"] = {
+            "schema_version": "reachops.delivery_package_execution_environment.v1",
+            "platform_system": "Darwin",
+            "is_windows": False,
+            "strict_current_environment_required": True,
+            "requires_windows_real_acceptance": True,
+            "windows_acceptance_environment_ready": False,
+        }
+        package_check["environment_blocker"] = {
+            "schema_version": "reachops.delivery_package_environment_blocker.v1",
+            "code": "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+            "failure_code": "missing_windows_acceptance_environment",
+            "platform_system": "Darwin",
+            "does_not_claim_final_delivery_ready": True,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            client_path = Path(tmp) / "latest_delivery_check.json"
+            client_payload = write_final_client_delivery_payload(client_path)
+            gate = build_reachops_final_acceptance_gate(
+                goal_status=final_goal_status_payload(),
+                client_delivery=client_payload,
+                package_check=package_check,
+                delivery_audit={"status": "ok", "summary": {"failed": 0, "passed": 44, "pending_external_validation": 0}},
+                operator_pressure={"status": "ok", "summary": {"customer_leads": 108, "outreach_actions": 216}},
+            )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertIn("delivery_package:passed", gate["failed_checks"])
+        package_evidence = {row["name"]: row for row in gate["checks"]}["delivery_package:passed"]["evidence"]
+        self.assertEqual(package_evidence["execution_environment"]["platform_system"], "Darwin")
+        self.assertEqual(
+            package_evidence["environment_blocker"]["code"],
+            "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+        )
 
     def test_reachops_final_acceptance_gate_rejects_package_without_final_gate_report_summary(self):
         package_check = final_package_check_payload()
