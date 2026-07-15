@@ -57,6 +57,7 @@ def build_report(root_dir: str | Path | None = None) -> dict[str, Any]:
     account_health = read_text(root / "ReachOps" / "workbench" / "account_health_manager.py")
     profile_preflight = read_text(root / "ReachOps" / "workbench" / "profile_preflight.py")
     live_preflight = read_text(root / "tools" / "reachops_live_preflight.py")
+    profile_readiness_probe = read_text(root / "tools" / "reachops_profile_readiness_probe.py")
     acceptance_verifier = read_text(root / "tools" / "verify_reachops_acceptance_summary.py")
     client_delivery_check = read_text(root / "tools" / "reachops_client_delivery_check.py")
     client_acceptance_status = read_text(root / "tools" / "reachops_client_acceptance_status.py")
@@ -84,6 +85,7 @@ def build_report(root_dir: str | Path | None = None) -> dict[str, Any]:
             client_acceptance_status,
             evidence_bundle,
             web_ui,
+            profile_readiness_probe,
             outcome_metrics,
             action_router,
             standalone_app,
@@ -206,6 +208,41 @@ def build_report(root_dir: str | Path | None = None) -> dict[str, Any]:
                 "旧账号修复结果已失效",
                 "moves_only_to_quarantine_group",
                 "no_submit",
+            ],
+        ),
+        "profile_readiness_probe_emits_support_repair_handoff": has_all(
+            profile_readiness_probe,
+            [
+                "reachops.profile_readiness_probe.v1",
+                "reachops.profile_repair_checklist.v1",
+                "profile_readiness_probe.json",
+                "profile_readiness_probe.csv",
+                "profile_readiness_probe.md",
+                "profile_repair_checklist.json",
+                "profile_repair_checklist.csv",
+                "profile_repair_checklist.md",
+                "repair_checklist",
+                "retest_command",
+                "enrich_existing_report",
+                "--from-report",
+                "does_not_modify_ixbrowser_groups",
+            ],
+        ),
+        "profile_readiness_probe_is_bounded_no_submit_and_non_mutating_by_default": has_all(
+            profile_readiness_probe,
+            [
+                "no_submit",
+                "no_browser_collection",
+                "no_action_execution",
+                "quarantine_failed_profiles",
+                "quarantine_on_failure=bool(quarantine_failed_profiles)",
+                "attempted_profile_ids",
+                "hard_failed_profile_ids",
+                "max_profile_scan_count",
+                "total_timeout_seconds",
+                "profile_limit_honored",
+                "TERMINAL_BLOCKED",
+                "blocked_by_accounts",
             ],
         ),
         "fixture_and_dry_run_data_excluded_from_real_metrics": has_all(
