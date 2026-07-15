@@ -1,6 +1,7 @@
 import argparse
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -130,6 +131,51 @@ class HeadlessExecutionPlanContractTests(unittest.TestCase):
             self.assertTrue(run_session["ai_usage_ledger"]["no_ai_token_used"])
             result_files = sorted((Path(td) / "run_results").glob("*.json"))
             self.assertTrue(result_files)
+
+    def test_headless_quarantine_flag_does_not_leak_environment_after_blocked_start_gate(self):
+        with tempfile.TemporaryDirectory() as td:
+            argv = [
+                "run_reachops_headless_macos.py",
+                "--base-dir",
+                td,
+                "--target",
+                "anti aging serum",
+                "--source-type",
+                "keyword",
+                "--profile-group",
+                "United States",
+                "--mode",
+                "preflight",
+                "--timeout",
+                "30",
+                "--quarantine-failed-profiles",
+                "--json",
+            ]
+            output = io.StringIO()
+            previous = os.environ.pop("REACHOPS_QUARANTINE_FAILED_PROFILES", None)
+            try:
+                with redirect_stdout(output), patch("sys.argv", argv), patch(
+                    "tools.run_reachops_headless_macos.check_ixbrowser_start_gate",
+                    return_value={
+                        "ready": False,
+                        "error": "IXBROWSER_LOCAL_API_UNAVAILABLE",
+                        "message": "offline in unit test",
+                        "no_browser_started": True,
+                        "no_submit": True,
+                    },
+                ):
+                    code = main()
+                result = json.loads(output.getvalue())
+            finally:
+                leaked = os.environ.get("REACHOPS_QUARANTINE_FAILED_PROFILES")
+                if previous is None:
+                    os.environ.pop("REACHOPS_QUARANTINE_FAILED_PROFILES", None)
+                else:
+                    os.environ["REACHOPS_QUARANTINE_FAILED_PROFILES"] = previous
+
+        self.assertEqual(code, 2)
+        self.assertEqual(result["status"], "blocked")
+        self.assertIsNone(leaked)
 
     def test_headless_blocked_campaign_terminal_is_not_completed(self):
         lines = [

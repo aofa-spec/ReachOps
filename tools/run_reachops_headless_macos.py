@@ -631,12 +631,17 @@ def main() -> int:
             existing_no_proxy.append(item)
     os.environ["NO_PROXY"] = ",".join(existing_no_proxy)
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
+    old_quarantine_failed_profiles = os.environ.get("REACHOPS_QUARANTINE_FAILED_PROFILES")
     if args.quarantine_failed_profiles:
         os.environ["REACHOPS_QUARANTINE_FAILED_PROFILES"] = "1"
     old_ixbrowser_refresh_max_pages = os.environ.get("REACHOPS_IXBROWSER_REFRESH_MAX_PAGES")
     os.environ.setdefault("REACHOPS_IXBROWSER_REFRESH_MAX_PAGES", "1")
 
     def restore_headless_env() -> None:
+        if old_quarantine_failed_profiles is None:
+            os.environ.pop("REACHOPS_QUARANTINE_FAILED_PROFILES", None)
+        else:
+            os.environ["REACHOPS_QUARANTINE_FAILED_PROFILES"] = old_quarantine_failed_profiles
         if old_ixbrowser_refresh_max_pages is None:
             os.environ.pop("REACHOPS_IXBROWSER_REFRESH_MAX_PAGES", None)
         else:
