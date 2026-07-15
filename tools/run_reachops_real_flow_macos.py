@@ -432,6 +432,7 @@ def summarize_scenario(name: str, payload: dict[str, Any], returncode: int, stdo
     diagnosis = payload.get("operator_diagnosis") if isinstance(payload.get("operator_diagnosis"), dict) else {}
     funnel = payload.get("funnel") if isinstance(payload.get("funnel"), dict) else {}
     profile_preflight = payload.get("profile_preflight") if isinstance(payload.get("profile_preflight"), dict) else {}
+    no_action_reason = payload.get("no_action_reason") if isinstance(payload.get("no_action_reason"), dict) else {}
     return {
         "name": name,
         "returncode": returncode,
@@ -454,6 +455,7 @@ def summarize_scenario(name: str, payload: dict[str, Any], returncode: int, stdo
             "customer_leads": int(funnel.get("customer_leads") or 0),
             "outreach_actions": int(funnel.get("outreach_actions") or 0),
         },
+        "no_action_reason": no_action_reason,
         "report_path": str(payload.get("report_path") or ""),
         "stdout_lines": len((stdout or "").splitlines()),
         "stderr_lines": len((stderr or "").splitlines()),
@@ -520,8 +522,13 @@ def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
         or int(((row.get("funnel") or {}).get("outreach_actions") or 0)) > 0
         for row in summary_rows
     )
+    no_action_reasons = [
+        row.get("no_action_reason")
+        for row in summary_rows
+        if isinstance(row.get("no_action_reason"), dict) and str((row.get("no_action_reason") or {}).get("code") or "").strip()
+    ]
     all_no_submit = True
-    return {
+    result = {
         "status": "passed" if no_interruptions and any_browser_started and any_collection_completed and any_leads else "blocked",
         "no_submit": all_no_submit,
         "targets": [
@@ -552,6 +559,9 @@ def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
             },
         ],
     }
+    if no_action_reasons and not any_leads:
+        result["no_action_reason"] = no_action_reasons[0]
+    return result
 
 
 UNAVAILABLE_PROFILE_ERROR_CODES = {

@@ -102,6 +102,7 @@ def is_placeholder_comment_text(value: str) -> bool:
         "add comment",
         "add a comment",
         "write a comment",
+        "start the conversation",
         "comment",
         "adicionar comentario",
         "adicionar comentário",

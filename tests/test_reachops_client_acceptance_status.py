@@ -55,6 +55,8 @@ from tools.reachops_apply_account_repair_plan import apply_account_repair_plan
 from tools.reachops_web_panel_dom_smoke import run_dom_smoke
 from tools.reachops_web_panel_runtime_smoke import run_runtime_smoke
 from tools.run_reachops_headless_macos import DummyRoot
+from tools.run_reachops_real_flow_macos import acceptance as real_flow_acceptance
+from tools.run_reachops_real_flow_macos import summarize_scenario as summarize_real_flow_scenario
 from tools.reachops_web_ui import (
     DEFAULT_TARGET,
     MAX_JSON_PAYLOAD_BYTES,
@@ -6259,6 +6261,30 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(payload["no_action_reason"]["candidate_count"], 2)
         self.assertEqual(payload["operation_counts"]["actions"], 0)
         self.assertTrue(any("评分未达到触达线" in item for item in payload["next_actions"]))
+
+    def test_real_flow_summary_carries_no_action_reason_when_no_actions(self):
+        payload = {
+            "status": "ok",
+            "browser_started": 1,
+            "profile_preflight": {"skipped": False, "checked": 1, "available": 1, "unavailable": 0},
+            "funnel": {
+                "target_sources": 1,
+                "content_found": 1,
+                "comment_users": 1,
+                "customer_leads": 0,
+                "outreach_actions": 0,
+            },
+            "operator_diagnosis": {"status": "comment_users_found", "next_action": "检查意图分数和动作队列"},
+            "no_action_reason": {"code": "low_intent_candidates", "candidate_count": 1, "no_submit": True},
+            "report_path": "/tmp/report.json",
+        }
+
+        row = summarize_real_flow_scenario("content_url", payload, 0, "{}", "")
+        result = real_flow_acceptance([row])
+
+        self.assertEqual(row["no_action_reason"]["code"], "low_intent_candidates")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["no_action_reason"]["code"], "low_intent_candidates")
 
     def test_real_pilot_evidence_boundary_blocks_zero_account_claims(self):
         boundary = build_real_pilot_evidence_boundary(

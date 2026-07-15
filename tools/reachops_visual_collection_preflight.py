@@ -354,6 +354,33 @@ def build_operator_diagnosis(report: dict) -> dict:
     }
 
 
+def build_no_action_reason(funnel: dict) -> dict:
+    candidates = int((funnel or {}).get("comment_users") or 0)
+    leads = int((funnel or {}).get("customer_leads") or 0)
+    actions = int((funnel or {}).get("outreach_actions") or 0)
+    if actions > 0:
+        return {}
+    if candidates > 0 and leads <= 0:
+        return {
+            "code": "low_intent_candidates",
+            "message": "本轮采集到候选用户，但评分未达到触达线，系统保持 no-submit 并跳过动作生成。",
+            "candidate_count": candidates,
+            "qualified_lead_count": leads,
+            "action_count": actions,
+            "no_submit": True,
+        }
+    if candidates <= 0:
+        return {
+            "code": "no_candidates",
+            "message": "本轮没有采集到有效评论用户，系统保持 no-submit 并停止动作生成。",
+            "candidate_count": candidates,
+            "qualified_lead_count": leads,
+            "action_count": actions,
+            "no_submit": True,
+        }
+    return {}
+
+
 def run_visual_preflight(args) -> dict:
     base_dir = Path(args.base_dir).resolve()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -447,6 +474,9 @@ def run_visual_preflight(args) -> dict:
         "errors": errors,
     }
     report["operator_diagnosis"] = build_operator_diagnosis(report)
+    no_action_reason = build_no_action_reason(funnel or {})
+    if no_action_reason:
+        report["no_action_reason"] = no_action_reason
     failures = []
     if not profiles:
         failures.append("no_profile_selected")

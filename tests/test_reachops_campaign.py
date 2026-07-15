@@ -40,7 +40,7 @@ from ReachOps.workbench.tiktok_action_executor import TikTokActionExecutorConfig
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from ReachOps.workbench.risk_gate import RiskGate
 from tools.reachops_action_preflight_existing_batch import run_preflight as run_reachops_action_preflight_existing_batch
-from ReachOps.collectors.normalizer import is_comment_noise_text
+from ReachOps.collectors.normalizer import is_comment_noise_text, is_placeholder_comment_text
 from ReachOps.collectors.collector_runtime import CollectorRuntime
 from ReachOps.collectors.base import CollectorEvidence
 from ReachOps.collectors.tiktok_comment_collector import TikTokCommentCollector
@@ -14283,6 +14283,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(is_comment_noise_text("where can I buy this serum link please"))
         self.assertFalse(is_comment_noise_text("qual o link para comprar esse produto?"))
         self.assertFalse(is_comment_noise_text("precio por favor donde compro"))
+
+    def test_comment_placeholder_filter_excludes_tiktok_conversation_prompt(self):
+        self.assertTrue(is_placeholder_comment_text("Start the conversation"))
+        self.assertTrue(is_comment_noise_text("Start the conversation"))
 
     def test_tiktok_comment_collector_keeps_only_real_comment_rows(self):
         rows = [
