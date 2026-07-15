@@ -354,6 +354,7 @@ def main() -> int:
     parser.add_argument("--execution-plan", default="")
     parser.add_argument("--run-session", default="")
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--quarantine-failed-profiles", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -630,6 +631,8 @@ def main() -> int:
             existing_no_proxy.append(item)
     os.environ["NO_PROXY"] = ",".join(existing_no_proxy)
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
+    if args.quarantine_failed_profiles:
+        os.environ["REACHOPS_QUARANTINE_FAILED_PROFILES"] = "1"
     old_ixbrowser_refresh_max_pages = os.environ.get("REACHOPS_IXBROWSER_REFRESH_MAX_PAGES")
     os.environ.setdefault("REACHOPS_IXBROWSER_REFRESH_MAX_PAGES", "1")
 

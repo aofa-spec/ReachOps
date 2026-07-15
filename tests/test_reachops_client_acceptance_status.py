@@ -2346,9 +2346,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             def poll(self):
                 return None
 
+        popen_cmd = []
         popen_kwargs = {}
 
-        def fake_popen(_cmd, **kwargs):
+        def fake_popen(cmd, **kwargs):
+            popen_cmd.extend(cmd)
             popen_kwargs.update(kwargs)
             return FakeProcess()
 
@@ -2388,7 +2390,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(captured["status"], 200)
         self.assertEqual(captured["payload"]["status"], "started")
         account_gate.assert_called_once_with("United States", False)
+        self.assertIn("--quarantine-failed-profiles", popen_cmd)
         self.assertEqual(popen_kwargs["env"]["REACHOPS_FORCE_ACCOUNT_RECHECK"], "1")
+        self.assertEqual(popen_kwargs["env"]["REACHOPS_QUARANTINE_FAILED_PROFILES"], "1")
 
     def test_start_handler_still_rejects_unrecoverable_account_gate(self):
         body = json.dumps(
@@ -2602,9 +2606,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             def poll(self):
                 return None
 
+        popen_cmd = []
         popen_kwargs = {}
 
-        def fake_popen(_cmd, **kwargs):
+        def fake_popen(cmd, **kwargs):
+            popen_cmd.extend(cmd)
             popen_kwargs.update(kwargs)
             return FakeProcess()
 
@@ -2638,7 +2644,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(captured["status"], 200)
         self.assertEqual(captured["payload"]["status"], "started")
         account_gate.assert_called_once_with("Canada", True)
+        self.assertNotIn("--quarantine-failed-profiles", popen_cmd)
         self.assertNotIn("REACHOPS_FORCE_ACCOUNT_RECHECK", popen_kwargs["env"])
+        self.assertNotIn("REACHOPS_QUARANTINE_FAILED_PROFILES", popen_kwargs["env"])
 
     def test_start_http_endpoint_rejects_invalid_json_without_crashing(self):
         with TemporaryDirectory() as tmpdir:

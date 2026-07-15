@@ -9047,6 +9047,65 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(queue_skips[0]["runtime_auto_grouping"])
             self.assertFalse(queue_skips[0]["remote_group_update_enabled"])
 
+    def test_account_repair_mode_quarantines_logged_out_profile_and_continues_healthy_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            opened = []
+
+            def browser_factory(profile_id):
+                opened.append(profile_id)
+                if profile_id == "logged-out-profile":
+                    return LoginDialogDriver()
+                return FakeDriver()
+
+            service = GrowthIntelligenceService(
+                base_dir=tmp,
+                browser_factory=browser_factory,
+                collectors={
+                    "profile": StaticProfileCollector(),
+                    "video": StaticVideoCollector(),
+                    "comment": StaticCommentCollector(),
+                    "search": object(),
+                },
+            )
+            service.router.profile_group_manager = FakeProfileGroupManager()
+            service.router._wait_for_page = lambda *_args, **_kwargs: True
+
+            result = service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+                [
+                    {"profile_id": "logged-out-profile", "group_name": "US"},
+                    {"profile_id": "healthy-profile", "group_name": "US"},
+                ],
+                GrowthTaskConfig(
+                    test_mode=False,
+                    task_delay_min_seconds=0,
+                    task_delay_max_seconds=0,
+                    account_queue_enabled=True,
+                    quarantine_failed_profiles=True,
+                ),
+            )
+            completed = [
+                row for row in service.storage.list_recent_events("profile_quarantine_move_completed", limit=10)
+                if row["entity_id"] == "logged-out-profile"
+            ]
+            queue_skips = [
+                json.loads(row["payload"])
+                for row in service.storage.list_recent_events("profile_queue_skipped", limit=10)
+                if row["entity_id"] == "logged-out-profile"
+            ]
+
+            self.assertEqual(opened, ["logged-out-profile", "healthy-profile"])
+            self.assertEqual(result.processed_sources, 1)
+            self.assertEqual(result.failed_sources, 0)
+            self.assertEqual(result.errors.get("LOGIN_REQUIRED"), 1)
+            self.assertEqual(service.router.profile_group_manager.moves, [("logged-out-profile", "LOGIN_REQUIRED")])
+            self.assertEqual(len(completed), 1)
+            self.assertEqual(queue_skips[0]["reason"], "LOGIN_REQUIRED")
+            self.assertTrue(queue_skips[0]["runtime_auto_grouping"])
+            self.assertTrue(queue_skips[0]["remote_group_update_enabled"])
+            self.assertEqual(queue_skips[0]["remote_group_update_mode"], "account_repair_mode")
+            self.assertEqual(len(service.storage.list_candidates()), 1)
+
     def test_real_mode_retries_next_profile_when_page_has_empty_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = GrowthIntelligenceService(

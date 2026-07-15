@@ -7651,6 +7651,9 @@ class Handler(BaseHTTPRequestHandler):
                 str(timeout_seconds),
                 "--json",
             ]
+            remote_account_group_update = bool(force_account_recheck)
+            if remote_account_group_update:
+                cmd.append("--quarantine-failed-profiles")
             try:
                 result_path = current_result_path()
                 result_path.parent.mkdir(parents=True, exist_ok=True)
@@ -7667,6 +7670,7 @@ class Handler(BaseHTTPRequestHandler):
             env["no_proxy"] = env["NO_PROXY"]
             if force_account_recheck:
                 env["REACHOPS_FORCE_ACCOUNT_RECHECK"] = "1"
+                env["REACHOPS_QUARANTINE_FAILED_PROFILES"] = "1"
             try:
                 clear_cooperative_control()
                 process = subprocess.Popen(

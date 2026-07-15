@@ -1362,6 +1362,10 @@ class GrowthIntelligenceStandaloneApp:
             self._log(f"WARN   selected_profiles health_rank_failed error={exc}")
             return list(rank_source or [])[:limit]
 
+    def _remote_account_quarantine_enabled(self) -> bool:
+        value = str(os.environ.get("REACHOPS_QUARANTINE_FAILED_PROFILES") or "").strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
     def _recoverable_profile_candidates(self, candidate_profiles: list[dict]) -> list[dict]:
         unrecoverable_error_codes = {
             "IXBROWSER_KERNEL_MISMATCH",
@@ -2439,6 +2443,12 @@ class GrowthIntelligenceStandaloneApp:
             try:
                 retained_profile_ids: set[str] = set()
                 preflight_checkers: list[Any] = []
+                remote_account_quarantine = self._remote_account_quarantine_enabled()
+                if remote_account_quarantine:
+                    self._thread_log(
+                        "CONFIG account_repair_mode remote_group_update_enabled=true "
+                        "policy=quarantine_failed_profiles_and_continue_ready_accounts"
+                    )
                 quick_volume_key = "quick" if quick_volume_label == "快速" else "standard" if quick_volume_label == "标准" else "stress"
                 if quick_volume_key == "quick":
                     fast_preflight_limit = max(profile_limit * 2, 6)
@@ -2511,7 +2521,7 @@ class GrowthIntelligenceStandaloneApp:
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
                             retain_successful_browser_after_check=True,
-                            quarantine_on_failure=False,
+                            quarantine_on_failure=remote_account_quarantine,
                         ),
                     )
                     preflight_checkers.append(checker)
@@ -2539,7 +2549,7 @@ class GrowthIntelligenceStandaloneApp:
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
                             retain_successful_browser_after_check=True,
-                            quarantine_on_failure=False,
+                            quarantine_on_failure=remote_account_quarantine,
                         ),
                     )
                     preflight_checkers.append(checker)
@@ -2737,6 +2747,7 @@ class GrowthIntelligenceStandaloneApp:
                         max_sources_per_profile=int(range_config.get("max_sources_per_profile") or 1),
                         retain_profile_sessions_after_collection=True,
                         requested_concurrency=profile_limit,
+                        quarantine_failed_profiles=remote_account_quarantine,
                         task_delay_min_seconds=task_interval,
                         task_delay_max_seconds=task_interval,
                     ),
@@ -3084,6 +3095,7 @@ class GrowthIntelligenceStandaloneApp:
                 f"workers={workers} per_profile={per_profile_limit} min_lead_score={min_lead_score} no_submit={str(not live_submit).lower()}"
             )
             preflight_checkers: list[Any] = []
+            remote_account_quarantine = self._remote_account_quarantine_enabled()
 
             def checker_factory(batch_size: int):
                 checker = ProfilePreflightChecker(
@@ -3096,7 +3108,7 @@ class GrowthIntelligenceStandaloneApp:
                         evidence_dir=str(Path(self.service.paths.reports_dir) / "action_profile_preflight_evidence"),
                         close_browser_after_check=True,
                         retain_successful_browser_after_check=True,
-                        quarantine_on_failure=False,
+                        quarantine_on_failure=remote_account_quarantine,
                     ),
                 )
                 preflight_checkers.append(checker)
