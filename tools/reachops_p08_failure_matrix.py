@@ -223,6 +223,33 @@ def report_write_failure_summary(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def disk_space_abnormal_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    errors = Counter()
+    summary_errors = payload.get("summary", {}).get("errors") if isinstance(payload.get("summary"), dict) else {}
+    if isinstance(summary_errors, dict):
+        for code, count in summary_errors.items():
+            errors[str(code)] += int(count or 0)
+    if not errors and payload.get("error_code"):
+        errors[str(payload.get("error_code"))] += 1
+    disk_space = payload.get("disk_space") if isinstance(payload.get("disk_space"), dict) else {}
+    return {
+        "status": payload.get("status", ""),
+        "terminal_reason_code": payload.get("terminal_reason_code", ""),
+        "error_counts": dict(errors),
+        "check_attempt_count": int(disk_space.get("check_attempt_count") or 0),
+        "max_check_retries": int(disk_space.get("max_check_retries") or 0),
+        "bounded_retry_policy_enforced": bool(disk_space.get("bounded_retry_policy_enforced")),
+        "disk_usage_checked": bool(disk_space.get("disk_usage_checked")),
+        "abnormal_observed": bool(disk_space.get("abnormal_observed")),
+        "prelaunch_block_enforced": bool(disk_space.get("prelaunch_block_enforced")),
+        "free_bytes": int(disk_space.get("free_bytes") or 0),
+        "required_free_bytes": int(disk_space.get("required_free_bytes") or 0),
+        "no_browser_started": bool(payload.get("no_browser_started", True)),
+        "no_submit": bool(payload.get("no_submit", True)),
+        "report_path": str(payload.get("outputs", {}).get("json") or payload.get("report_path") or ""),
+    }
+
+
 def matrix_row(
     case_id: str,
     title: str,
@@ -265,6 +292,7 @@ def build_matrix(
     web_ui_restart_payload: dict[str, Any] | None = None,
     database_busy_payload: dict[str, Any] | None = None,
     report_write_failure_payload: dict[str, Any] | None = None,
+    disk_space_abnormal_payload: dict[str, Any] | None = None,
     pressure_summary_path: str = "",
     readiness_report_path: str = "",
     runtime_audit_path: str = "",
@@ -276,6 +304,7 @@ def build_matrix(
     web_ui_restart_report_path: str = "",
     database_busy_report_path: str = "",
     report_write_failure_report_path: str = "",
+    disk_space_abnormal_report_path: str = "",
 ) -> dict[str, Any]:
     pressure = summarize_pressure(pressure_rows)
     readiness = readiness_summary(readiness_payload)
@@ -287,12 +316,14 @@ def build_matrix(
     web_ui_restart = web_ui_restart_summary(web_ui_restart_payload or {})
     database_busy = database_busy_summary(database_busy_payload or {})
     report_write_failure = report_write_failure_summary(report_write_failure_payload or {})
+    disk_space_abnormal = disk_space_abnormal_summary(disk_space_abnormal_payload or {})
     proxy_failed_is_injected = fault_injection_enabled(proxy_failed_payload)
     page_timeout_is_injected = fault_injection_enabled(page_timeout_payload)
     group_refresh_failure_is_injected = fault_injection_enabled(group_refresh_failure_payload)
     web_ui_restart_is_injected = fault_injection_enabled(web_ui_restart_payload)
     database_busy_is_injected = fault_injection_enabled(database_busy_payload)
     report_write_failure_is_injected = fault_injection_enabled(report_write_failure_payload)
+    disk_space_abnormal_is_injected = fault_injection_enabled(disk_space_abnormal_payload)
     diagnoses = set(pressure.get("diagnosis_counts") or {})
     readiness_errors = set(readiness.get("error_counts") or {})
     profile_missing_errors = set(profile_missing.get("error_counts") or {})
@@ -303,6 +334,7 @@ def build_matrix(
     web_ui_restart_errors = set(web_ui_restart.get("error_counts") or {})
     database_busy_errors = set(database_busy.get("error_counts") or {})
     report_write_failure_errors = set(report_write_failure.get("error_counts") or {})
+    disk_space_abnormal_errors = set(disk_space_abnormal.get("error_counts") or {})
     terminal_ok = bool(
         pressure.get("row_count", 0) >= 100
         and pressure.get("terminal_ratio", 0) >= 0.98
@@ -580,9 +612,37 @@ def build_matrix(
         matrix_row(
             "disk_space_abnormal",
             "磁盘空间异常",
-            "missing",
-            [],
-            "使用磁盘空间检查/fault injection 验证低空间时预阻断且不启动浏览器。",
+            (
+                "passed_fault_injection"
+                if "DISK_SPACE_ABNORMAL" in disk_space_abnormal_errors
+                and disk_space_abnormal_is_injected
+                and disk_space_abnormal.get("disk_usage_checked")
+                and disk_space_abnormal.get("abnormal_observed")
+                and disk_space_abnormal.get("prelaunch_block_enforced")
+                and disk_space_abnormal.get("bounded_retry_policy_enforced")
+                and int(disk_space_abnormal.get("max_check_retries") or 0) <= 0
+                and disk_space_abnormal.get("no_browser_started") is True
+                and disk_space_abnormal.get("no_submit") is True
+                else "passed_real"
+                if "DISK_SPACE_ABNORMAL" in disk_space_abnormal_errors
+                and disk_space_abnormal.get("prelaunch_block_enforced")
+                else "missing"
+            ),
+            [disk_space_abnormal_report_path] if disk_space_abnormal_report_path else [],
+            (
+                "补充真实低磁盘空间运行证据后再升级为 passed_real。"
+                if disk_space_abnormal_is_injected and disk_space_abnormal_errors
+                else "保持低磁盘空间预启动阻断，不启动浏览器或 Profile。"
+                if disk_space_abnormal_errors
+                else "使用磁盘空间检查/fault injection 验证低空间时预阻断且不启动浏览器。"
+            ),
+            source=(
+                "safe_fault_injection"
+                if disk_space_abnormal_is_injected and disk_space_abnormal_errors
+                else "real_runtime_disk_check"
+                if disk_space_abnormal_errors
+                else "local_audit"
+            ),
         ),
     ]
     status_counts = Counter(row["status"] for row in rows)
@@ -603,6 +663,7 @@ def build_matrix(
         "web_ui_restart_summary": web_ui_restart,
         "database_busy_summary": database_busy,
         "report_write_failure_summary": report_write_failure,
+        "disk_space_abnormal_summary": disk_space_abnormal,
         "runtime_audit_summary": {
             "status": runtime_audit.get("status", ""),
             "cleanup_candidate_count": int(runtime_audit.get("cleanup_candidate_count") or 0),
@@ -638,6 +699,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--web-ui-restart-report", default="/tmp/reachops_web_ui_restart_probe.json")
     parser.add_argument("--database-busy-report", default="/tmp/reachops_database_busy_probe.json")
     parser.add_argument("--report-write-failure-report", default="/tmp/reachops_report_write_failure_probe.json")
+    parser.add_argument("--disk-space-abnormal-report", default="/tmp/reachops_disk_space_abnormal_probe.json")
     parser.add_argument("--runtime-audit", default="/tmp/reachops_runtime_audit_after_p08_pressure.json")
     parser.add_argument("--output", default="reports/reachops/p08_failure_matrix/latest_p08_failure_matrix.json")
     parser.add_argument("--json", action="store_true")
@@ -658,6 +720,7 @@ def main(argv: list[str] | None = None) -> int:
         web_ui_restart_payload=read_json(args.web_ui_restart_report),
         database_busy_payload=read_json(args.database_busy_report),
         report_write_failure_payload=read_json(args.report_write_failure_report),
+        disk_space_abnormal_payload=read_json(args.disk_space_abnormal_report),
         pressure_summary_path=str(Path(args.pressure_summary).expanduser()),
         readiness_report_path=str(Path(args.readiness_report).expanduser()),
         runtime_audit_path=str(Path(args.runtime_audit).expanduser()),
@@ -669,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
         web_ui_restart_report_path=str(Path(args.web_ui_restart_report).expanduser()),
         database_busy_report_path=str(Path(args.database_busy_report).expanduser()),
         report_write_failure_report_path=str(Path(args.report_write_failure_report).expanduser()),
+        disk_space_abnormal_report_path=str(Path(args.disk_space_abnormal_report).expanduser()),
     )
     write_report(args.output, payload)
     if args.json:

@@ -352,6 +352,45 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertIn("report_write_failure_summary", matrix)
         self.assertIn("补充真实运行报告写失败", by_id["report_write_failure"]["next_action"])
 
+    def test_p08_failure_matrix_marks_disk_space_abnormal_fault_injection_separately_from_real(self):
+        matrix = build_p08_failure_matrix(
+            pressure_rows=[],
+            readiness_payload={},
+            runtime_audit={},
+            disk_space_abnormal_payload={
+                "status": "blocked_by_environment",
+                "terminal_reason_code": "DISK_SPACE_ABNORMAL",
+                "error_code": "DISK_SPACE_ABNORMAL",
+                "no_browser_started": True,
+                "no_submit": True,
+                "fault_injection": {
+                    "enabled": True,
+                    "failure_code": "DISK_SPACE_ABNORMAL",
+                    "counts_as_real_acceptance": False,
+                    "real_disk_usage_checked": True,
+                },
+                "disk_space": {
+                    "check_attempt_count": 1,
+                    "max_check_retries": 0,
+                    "bounded_retry_policy_enforced": True,
+                    "disk_usage_checked": True,
+                    "abnormal_observed": True,
+                    "prelaunch_block_enforced": True,
+                    "free_bytes": 100,
+                    "required_free_bytes": 101,
+                },
+                "summary": {"errors": {"DISK_SPACE_ABNORMAL": 1}},
+            },
+            disk_space_abnormal_report_path="/tmp/reachops_disk_space_abnormal_probe.json",
+        )
+
+        by_id = {row["id"]: row for row in matrix["rows"]}
+        self.assertEqual(by_id["disk_space_abnormal"]["status"], "passed_fault_injection")
+        self.assertTrue(by_id["disk_space_abnormal"]["passed"])
+        self.assertEqual(by_id["disk_space_abnormal"]["source"], "safe_fault_injection")
+        self.assertIn("disk_space_abnormal_summary", matrix)
+        self.assertIn("补充真实低磁盘空间", by_id["disk_space_abnormal"]["next_action"])
+
     def test_headless_dummy_root_executes_delayed_callbacks(self):
         calls = []
 

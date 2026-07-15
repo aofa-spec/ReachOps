@@ -77,6 +77,7 @@ from tools.reachops_group_refresh_failure_probe import build_probe as build_reac
 from tools.reachops_web_ui_restart_probe import build_probe as build_reachops_web_ui_restart_probe
 from tools.reachops_database_busy_probe import build_probe as build_reachops_database_busy_probe
 from tools.reachops_report_write_failure_probe import build_probe as build_reachops_report_write_failure_probe
+from tools.reachops_disk_space_abnormal_probe import build_probe as build_reachops_disk_space_abnormal_probe
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
@@ -2866,6 +2867,37 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(payload["report_write_failure"]["write_attempt_count"], 1)
         self.assertEqual(payload["report_write_failure"]["max_write_retries"], 0)
         self.assertEqual(payload["summary"]["errors"], {"REPORT_WRITE_FAILURE": 1})
+        self.assertEqual(written_payload["outputs"]["json"], str(output))
+
+    def test_disk_space_abnormal_probe_records_prelaunch_block_without_writing_payload(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "disk_space_abnormal.json"
+            check_path = Path(tmpdir)
+            payload = build_reachops_disk_space_abnormal_probe(
+                output=output,
+                check_path=check_path,
+                required_free_bytes=0,
+            )
+            written_payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "blocked_by_environment")
+        self.assertEqual(payload["terminal_state"], "BLOCKED")
+        self.assertEqual(payload["terminal_reason_code"], "DISK_SPACE_ABNORMAL")
+        self.assertEqual(payload["error_code"], "DISK_SPACE_ABNORMAL")
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(payload["no_browser_started"])
+        self.assertTrue(payload["fault_injection"]["enabled"])
+        self.assertTrue(payload["fault_injection"]["real_disk_usage_checked"])
+        self.assertTrue(payload["fault_injection"]["required_free_bytes_injected"])
+        self.assertFalse(payload["fault_injection"]["counts_as_real_acceptance"])
+        self.assertTrue(payload["disk_space"]["disk_usage_checked"])
+        self.assertTrue(payload["disk_space"]["abnormal_observed"])
+        self.assertTrue(payload["disk_space"]["prelaunch_block_enforced"])
+        self.assertTrue(payload["disk_space"]["bounded_retry_policy_enforced"])
+        self.assertEqual(payload["disk_space"]["check_attempt_count"], 1)
+        self.assertEqual(payload["disk_space"]["max_check_retries"], 0)
+        self.assertGreater(payload["disk_space"]["required_free_bytes"], payload["disk_space"]["free_bytes"])
+        self.assertEqual(payload["summary"]["errors"], {"DISK_SPACE_ABNORMAL": 1})
         self.assertEqual(written_payload["outputs"]["json"], str(output))
 
     def test_profile_readiness_probe_reports_us_group_not_found_terminal_reason(self):
