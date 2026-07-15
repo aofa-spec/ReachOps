@@ -73,6 +73,7 @@ from tools.reachops_live_environment_blocker_report import main as reachops_live
 from tools.reachops_ixbrowser_profile_metadata_report import build_report as build_ixbrowser_profile_metadata_report
 from tools.reachops_profile_readiness_probe import enrich_existing_report as enrich_reachops_profile_readiness_report
 from tools.reachops_profile_readiness_probe import run_probe as run_reachops_profile_readiness_probe
+from tools.reachops_group_refresh_failure_probe import build_probe as build_reachops_group_refresh_failure_probe
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
@@ -2762,6 +2763,30 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(summary["errors"], {"PAGE_TIMEOUT": 1})
         self.assertEqual(health["page-timeout"]["last_error_code"], "PAGE_TIMEOUT")
         self.assertEqual(group_manager.moves, [])
+
+    def test_group_refresh_failure_probe_records_bounded_no_browser_block(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "group_refresh_failure.json"
+            payload = build_reachops_group_refresh_failure_probe(
+                output=output,
+                profile_group="获客分组测试",
+                injected_error="ixBrowser Local API 读取超时",
+                injected_error_detail="profile_group_list_timeout_after_10s",
+            )
+            written_payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "blocked_by_environment")
+        self.assertEqual(payload["terminal_state"], "BLOCKED")
+        self.assertEqual(payload["terminal_reason_code"], "GROUP_REFRESH_FAILURE")
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(payload["no_browser_started"])
+        self.assertTrue(payload["fault_injection"]["enabled"])
+        self.assertFalse(payload["fault_injection"]["counts_as_real_acceptance"])
+        self.assertEqual(payload["group_refresh"]["refresh_attempt_count"], 2)
+        self.assertEqual(payload["group_refresh"]["max_refresh_retries"], 1)
+        self.assertTrue(payload["group_refresh"]["bounded_retry_policy_enforced"])
+        self.assertEqual(payload["summary"]["errors"], {"GROUP_REFRESH_FAILURE": 1})
+        self.assertEqual(written_payload["outputs"]["json"], str(output))
 
     def test_profile_readiness_probe_reports_us_group_not_found_terminal_reason(self):
         def fake_metadata_builder(**_kwargs):
