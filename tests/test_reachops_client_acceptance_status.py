@@ -59,6 +59,7 @@ from tools.run_reachops_real_flow_macos import acceptance as real_flow_acceptanc
 from tools.run_reachops_real_flow_macos import append_related_source_expansions
 from tools.run_reachops_real_flow_macos import creator_url_from_tiktok_url
 from tools.run_reachops_real_flow_macos import summarize_scenario as summarize_real_flow_scenario
+from tools.reachops_run_id import unique_run_dir
 from tools.reachops_web_ui import (
     DEFAULT_TARGET,
     MAX_JSON_PAYLOAD_BYTES,
@@ -74,6 +75,16 @@ from tools.reachops_web_ui import (
 
 
 class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
+    def test_unique_run_dir_adds_suffix_when_timestamp_directory_exists(self):
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "20260715T220235Z").mkdir()
+
+            run_id, run_dir = unique_run_dir(base, "20260715T220235Z")
+
+            self.assertEqual(run_id, "20260715T220235Z_001")
+            self.assertTrue(run_dir.is_dir())
+
     def test_headless_dummy_root_executes_delayed_callbacks(self):
         calls = []
 

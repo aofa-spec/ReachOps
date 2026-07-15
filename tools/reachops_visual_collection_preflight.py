@@ -19,6 +19,7 @@ from ReachOps.intelligence import GrowthIntelligenceService, GrowthTaskConfig
 from ReachOps.workbench.profile_preflight import ProfilePreflightChecker, ProfilePreflightConfig
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_live_validation_manifest import load_profile_snapshot, select_numeric_profiles, split_csv
+from tools.reachops_run_id import unique_run_dir
 
 
 def utc_stamp() -> str:
@@ -383,8 +384,7 @@ def build_no_action_reason(funnel: dict) -> dict:
 
 def run_visual_preflight(args) -> dict:
     base_dir = Path(args.base_dir).resolve()
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    evidence_dir = base_dir / "evidence" / run_id
+    run_id, evidence_dir = unique_run_dir(base_dir / "evidence")
     profiles, profile_snapshot = select_profiles(args)
     factory = VisualEvidenceBrowserFactory(evidence_dir)
     service = GrowthIntelligenceService(base_dir=str(base_dir), browser_factory=factory)

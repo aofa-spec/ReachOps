@@ -17,6 +17,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from tools.reachops_run_id import unique_run_dir
+
 
 DEMO_SCENARIOS = [
     {
@@ -741,8 +743,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     base_dir = Path(args.base_dir).resolve()
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = base_dir / run_id
+    run_id, run_dir = unique_run_dir(base_dir)
     env = configure_localhost_proxy_bypass()
     scenarios, scenario_plan = build_scenarios(args, run_dir)
     ledger_path, launch_ledger = load_launch_ledger(base_dir)
