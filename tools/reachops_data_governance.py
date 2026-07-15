@@ -309,6 +309,107 @@ def _write_support_payload(path: Path, payload: dict[str, Any], *, command: list
     path.write_text(json.dumps(materialized_payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _load_support_payload(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
+    if path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            return payload
+    return fallback if isinstance(fallback, dict) else {}
+
+
+def _first_nested_dict(payload: Any, key: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    value = payload.get(key)
+    if isinstance(value, dict):
+        return value
+    for nested in payload.values():
+        if isinstance(nested, dict):
+            found = _first_nested_dict(nested, key)
+            if found:
+                return found
+        elif isinstance(nested, list):
+            for item in nested:
+                found = _first_nested_dict(item, key)
+                if found:
+                    return found
+    return {}
+
+
+def _support_payload_list(payload: dict[str, Any], key: str) -> list[str]:
+    value = payload.get(key)
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()]
+    return []
+
+
+def _support_payload_int(payload: dict[str, Any], key: str) -> int:
+    try:
+        return int(payload.get(key) or 0)
+    except Exception:
+        return 0
+
+
+def _support_payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    blocker_summary = payload.get("blocker_summary") if isinstance(payload.get("blocker_summary"), dict) else {}
+    account_circuit = _first_nested_dict(payload, "account_pool_circuit_breaker")
+    environment_blocker = _first_nested_dict(payload, "environment_blocker")
+    blocker_codes = set(_support_payload_list(payload, "blocker_codes"))
+    blocker_codes.update(_support_payload_list(blocker_summary, "blocker_codes"))
+    blocker_codes.update(_support_payload_list(payload, "failures"))
+    blocker_codes.update(_support_payload_list(payload, "failed_checks"))
+    return {
+        "payload_status": str(payload.get("status") or ""),
+        "payload_final_delivery_ready": payload.get("final_delivery_ready"),
+        "payload_readiness": str(payload.get("readiness") or ""),
+        "payload_support_case": str(payload.get("support_case") or blocker_summary.get("support_case") or ""),
+        "payload_priority_action": str(payload.get("priority_action") or blocker_summary.get("priority_action") or ""),
+        "payload_blocking_scopes": _support_payload_list(payload, "blocking_scopes"),
+        "payload_blocker_codes": sorted(blocker_codes),
+        "payload_environment_blocker_code": str(environment_blocker.get("code") or ""),
+        "payload_environment_blocker_failure_code": str(environment_blocker.get("failure_code") or ""),
+        "payload_account_pool_circuit_breaker_triggered": (
+            bool(account_circuit.get("triggered")) if account_circuit else None
+        ),
+        "payload_account_pool_circuit_breaker_threshold": _support_payload_int(account_circuit, "threshold") if account_circuit else 0,
+        "payload_account_pool_circuit_breaker_hard_failure_count": _support_payload_int(account_circuit, "hard_failure_count") if account_circuit else 0,
+        "payload_does_not_claim_final_delivery_ready": bool(payload.get("does_not_claim_final_delivery_ready")),
+        "payload_does_not_claim_real_account_pool_ready": bool(payload.get("does_not_claim_real_account_pool_ready")),
+    }
+
+
+def _support_blocker_index(command_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    index: list[dict[str, Any]] = []
+    for row in command_results:
+        if not (
+            row.get("payload_blocker_codes")
+            or row.get("payload_blocking_scopes")
+            or row.get("payload_environment_blocker_code")
+            or row.get("payload_account_pool_circuit_breaker_triggered") is True
+            or row.get("payload_support_case")
+            or row.get("payload_priority_action")
+        ):
+            continue
+        index.append(
+            {
+                "relative_path": row.get("relative_path"),
+                "payload_status": row.get("payload_status"),
+                "payload_final_delivery_ready": row.get("payload_final_delivery_ready"),
+                "payload_support_case": row.get("payload_support_case"),
+                "payload_priority_action": row.get("payload_priority_action"),
+                "payload_blocking_scopes": row.get("payload_blocking_scopes") or [],
+                "payload_blocker_codes": row.get("payload_blocker_codes") or [],
+                "payload_environment_blocker_code": row.get("payload_environment_blocker_code"),
+                "payload_account_pool_circuit_breaker_triggered": row.get("payload_account_pool_circuit_breaker_triggered"),
+                "payload_account_pool_circuit_breaker_hard_failure_count": row.get("payload_account_pool_circuit_breaker_hard_failure_count"),
+            }
+        )
+    return index
+
+
 def materialize_support_diagnostics(
     base_dir: str | Path,
     *,
@@ -383,6 +484,8 @@ def materialize_support_diagnostics(
             _write_support_payload(output_path, payload, command=command, returncode=completed.returncode)
         if parse_error:
             command_errors.append(f"{relative_path}:{parse_error}")
+        materialized_payload = _load_support_payload(output_path, payload)
+        payload_summary = _support_payload_summary(materialized_payload)
         command_results.append(
             {
                 "relative_path": relative_path,
@@ -390,14 +493,14 @@ def materialize_support_diagnostics(
                 "command": " ".join(command),
                 "returncode": int(completed.returncode),
                 "stdout_json_valid": not parse_error,
-                "payload_status": str(payload.get("status") or "") if payload else "",
-                "payload_final_delivery_ready": payload.get("final_delivery_ready") if payload else None,
                 "stderr": (completed.stderr or "").strip()[:4000],
                 "exists": output_path.is_file(),
                 "size_bytes": output_path.stat().st_size if output_path.is_file() else 0,
+                **payload_summary,
             }
         )
     manifest = build_support_bundle_manifest(base_dir)
+    blocker_index = _support_blocker_index(command_results)
     diagnostics = {
         "schema_version": SUPPORT_DIAGNOSTICS_MATERIALIZATION_SCHEMA_VERSION,
         "generated_at": utc_now_iso(),
@@ -409,6 +512,8 @@ def materialize_support_diagnostics(
         "required_diagnostics_present": bool(manifest.get("required_diagnostics_present")),
         "missing_required_diagnostics": manifest.get("missing_required_diagnostics") or [],
         "does_not_claim_final_delivery_ready": True,
+        "blocker_index": blocker_index,
+        "blocker_index_count": len(blocker_index),
         "support_bundle_redacted_by_default": True,
     }
     diagnostics["status"] = "passed" if diagnostics["required_diagnostics_present"] and not command_errors else "failed"

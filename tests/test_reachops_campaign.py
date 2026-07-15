@@ -4401,6 +4401,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
                             ],
                         }
                     )
+                if script == "reachops_delivery_package_check.py":
+                    payload.update(
+                        {
+                            "environment_blocker": {
+                                "schema_version": "reachops.delivery_package_environment_blocker.v1",
+                                "code": "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+                                "failure_code": "missing_windows_acceptance_environment",
+                            },
+                            "failures": ["missing_windows_acceptance_environment", "acceptance_summary_missing"],
+                        }
+                    )
                 if script != "reachops_delivery_package_check.py":
                     payload["does_not_claim_final_delivery_ready"] = True
                 if script == "reachops_client_delivery_check.py":
@@ -4412,6 +4423,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
                                 "schema_version": "reachops.account_support_handoff_diagnostic.v1",
                                 "support_required": True,
                                 "support_case": "account_pool_blocked",
+                                "priority_action": "manually_repair_or_replace_accounts",
+                                "account_pool_circuit_breaker": {
+                                    "schema_version": "reachops.account_pool_circuit_breaker.v1",
+                                    "triggered": True,
+                                    "threshold": 10,
+                                    "hard_failure_count": 26,
+                                },
+                                "blocker_codes": ["account_pool_circuit_breaker_no_ready_profiles"],
                                 "does_not_claim_real_account_pool_ready": True,
                             },
                             sort_keys=True,
@@ -4432,8 +4451,20 @@ class ReachOpsCampaignTests(unittest.TestCase):
             command_statuses = {row["relative_path"]: row for row in result["commands"]}
             self.assertEqual(command_statuses["reports/support/delivery_package_check.json"]["payload_status"], "failed")
             self.assertFalse(command_statuses["reports/support/delivery_package_check.json"]["payload_final_delivery_ready"])
+            self.assertEqual(
+                command_statuses["reports/support/delivery_package_check.json"]["payload_environment_blocker_code"],
+                "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+            )
+            self.assertIn(
+                "missing_windows_acceptance_environment",
+                command_statuses["reports/support/delivery_package_check.json"]["payload_blocker_codes"],
+            )
+            self.assertTrue(command_statuses["reports/support/account_support_handoff.json"]["payload_account_pool_circuit_breaker_triggered"])
+            self.assertEqual(command_statuses["reports/support/account_support_handoff.json"]["payload_account_pool_circuit_breaker_hard_failure_count"], 26)
+            self.assertEqual(command_statuses["reports/support/account_support_handoff.json"]["payload_support_case"], "account_pool_blocked")
             self.assertEqual(command_statuses["reports/support/goal_delivery_report.json"]["payload_status"], "not_ready")
             self.assertFalse(command_statuses["reports/support/goal_delivery_report.json"]["payload_final_delivery_ready"])
+            self.assertIn("local_mvp", command_statuses["reports/support/goal_delivery_report.json"]["payload_blocking_scopes"])
             self.assertTrue(support["required_diagnostics_present"])
             self.assertEqual(support["missing_required_diagnostics"], [])
             self.assertEqual(len(calls), 7)
@@ -4441,6 +4472,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             diagnostics = json.loads((base / "reports" / "support" / "diagnostics.json").read_text(encoding="utf-8"))
             self.assertEqual(diagnostics["status"], "passed")
             self.assertTrue(diagnostics["does_not_claim_final_delivery_ready"])
+            self.assertGreaterEqual(diagnostics["blocker_index_count"], 3)
+            blocker_index = {row["relative_path"]: row for row in diagnostics["blocker_index"]}
+            self.assertEqual(
+                blocker_index["reports/support/delivery_package_check.json"]["payload_environment_blocker_code"],
+                "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+            )
+            self.assertTrue(blocker_index["reports/support/account_support_handoff.json"]["payload_account_pool_circuit_breaker_triggered"])
             account = json.loads((base / "reports" / "support" / "account_support_handoff.json").read_text(encoding="utf-8"))
             self.assertEqual(account["schema_version"], "reachops.account_support_handoff_diagnostic.v1")
             delivery_package = json.loads((base / "reports" / "support" / "delivery_package_check.json").read_text(encoding="utf-8"))
