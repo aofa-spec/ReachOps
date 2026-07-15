@@ -1352,6 +1352,13 @@ class GrowthIntelligenceStandaloneApp:
             if ranked:
                 return ranked
             if rank_source:
+                transient_recheck = self._transient_recheck_profile_candidates(rank_source, limit)
+                if transient_recheck:
+                    self._log(
+                        f"WARN   selected_profiles transient_recheck_candidates count={len(transient_recheck)} "
+                        "reason=only_retryable_start_failures_remain policy=bounded_runtime_preflight"
+                    )
+                    return transient_recheck
                 self._log(
                     "WARN   selected_profiles health_rank_empty selected=0 "
                     "policy=avoid_restarting_known_unusable_profiles"
@@ -1384,6 +1391,63 @@ class GrowthIntelligenceStandaloneApp:
                 continue
             recoverable.append(profile)
         return recoverable
+
+    def _transient_recheck_profile_candidates(self, candidate_profiles: list[dict], limit: int) -> list[dict]:
+        transient_error_codes = {
+            "PAGE_OPEN_FAILED",
+            "PROFILE_PREFLIGHT_TIMEOUT",
+            "IXBROWSER_NETWORK_ERROR",
+            "IXBROWSER_SERVER_BUSY",
+        }
+        hard_error_codes = {
+            "PROFILE_MISSING",
+            "LOGIN_REQUIRED",
+            "IXBROWSER_KERNEL_MISMATCH",
+            "CAPTCHA_DETECTED",
+            "PROXY_FAILED",
+            "ACCOUNT_RESTRICTED",
+            "COMMENT_ACCESS_GATED",
+            "BROWSER_CRASHED",
+        }
+        try:
+            health_rows = {
+                str(row.get("profile_id") or ""): row
+                for row in self.service.storage.list_profile_health(limit=10000)
+            }
+        except Exception:
+            health_rows = {}
+        rows: list[dict] = []
+        for profile in candidate_profiles or []:
+            profile_id = self._profile_id(profile)
+            if not profile_id:
+                continue
+            health = health_rows.get(profile_id, {})
+            code = str(health.get("last_error_code") or profile.get("last_error_code") or "")
+            status = str(health.get("status") or profile.get("status") or "").lower()
+            if code in hard_error_codes:
+                continue
+            if status == "cooldown" and code not in transient_error_codes:
+                continue
+            if code not in transient_error_codes:
+                continue
+            row = dict(profile)
+            row["_transient_recheck"] = True
+            row["_transient_error_code"] = code
+            row["_health_score"] = int(health.get("health_score") or profile.get("health_score") or 0)
+            row["_consecutive_failures"] = int(
+                health.get("consecutive_failures") or profile.get("consecutive_failures") or 0
+            )
+            rows.append(row)
+        rows = sorted(
+            rows,
+            key=lambda row: (
+                int(row.get("_consecutive_failures") or 0),
+                -int(row.get("_health_score") or 0),
+                str(row.get("_transient_error_code") or ""),
+                self._profile_id(row),
+            ),
+        )
+        return rows[: max(1, int(limit or 1))]
 
     def _exclude_recent_hard_failed_profiles(self, candidate_profiles: list[dict]) -> tuple[list[dict], int]:
         hard_error_codes = {

@@ -13102,6 +13102,57 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
         self.assertEqual([row["profile_id"] for row in selected], ["fresh-unknown"])
 
+    def test_standalone_rank_profiles_allows_bounded_recheck_when_only_transient_start_failures_remain(self):
+        class Storage:
+            def connect(self):
+                raise RuntimeError("event history unavailable")
+
+            def list_profile_health(self, limit=10000):
+                return [
+                    {
+                        "profile_id": "ready-again",
+                        "status": "degraded",
+                        "health_score": 80,
+                        "consecutive_failures": 1,
+                        "last_error_code": "PROFILE_PREFLIGHT_TIMEOUT",
+                        "last_error_message": "profile preflight exceeded 36.0s",
+                    },
+                    {
+                        "profile_id": "page-open-transient",
+                        "status": "degraded",
+                        "health_score": 60,
+                        "consecutive_failures": 2,
+                        "last_error_code": "PAGE_OPEN_FAILED",
+                        "last_error_message": "Timed out receiving message from renderer",
+                    },
+                    {
+                        "profile_id": "bad-login",
+                        "status": "cooldown",
+                        "health_score": 20,
+                        "consecutive_failures": 3,
+                        "last_error_code": "LOGIN_REQUIRED",
+                        "last_error_message": "LOGIN_REQUIRED",
+                    },
+                ]
+
+        app = GrowthIntelligenceStandaloneApp.__new__(GrowthIntelligenceStandaloneApp)
+        app.service = type("Service", (), {"storage": Storage()})()
+        logs = []
+        app._log = logs.append
+
+        selected = app._rank_profile_candidates(
+            [
+                {"profile_id": "bad-login", "group_name": "获客分组测试"},
+                {"profile_id": "page-open-transient", "group_name": "获客分组测试"},
+                {"profile_id": "ready-again", "group_name": "获客分组测试"},
+            ],
+            2,
+        )
+
+        self.assertEqual([row["profile_id"] for row in selected], ["ready-again", "page-open-transient"])
+        self.assertTrue(all(row.get("_transient_recheck") for row in selected))
+        self.assertTrue(any("transient_recheck_candidates count=2" in row for row in logs))
+
     def test_standalone_rank_profiles_excludes_latest_account_repair_plan_profiles(self):
         class Storage:
             def connect(self):
