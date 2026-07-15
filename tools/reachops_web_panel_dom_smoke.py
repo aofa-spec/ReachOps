@@ -123,6 +123,36 @@ async function fetchMock(url, options = {{}}) {{
   }}
   if (url === '/api/control') {{
     const action = body && body.action;
+    if (action === 'runtime_cleanup_preview') {{
+      return {{ok:true, status:200, json: async () => ({{
+        status:'runtime_cleanup_preview',
+        runtime_process_audit:{{
+          schema_version:'reachops.runtime_process_audit.v1',
+          status:'attention_required',
+          cleanup_candidate_count:13,
+          path:'/tmp/runtime_process_audit.json',
+          cleanup_result:{{
+            schema_version:'reachops.runtime_process_cleanup.v1',
+            status:'dry_run',
+            applied:false,
+            attempted:[],
+            no_process_killed:true
+          }},
+          no_browser_started:true,
+          no_submit:true
+        }},
+        cleanup_result:{{
+          schema_version:'reachops.runtime_process_cleanup.v1',
+          status:'dry_run',
+          applied:false,
+          attempted:[],
+          no_process_killed:true
+        }},
+        cleanup_candidate_count:13,
+        no_browser_started:true,
+        no_submit:true
+      }})}};
+    }}
     const status = action === 'pause' ? 'paused' : (action === 'resume' ? 'running' : (action === 'stop' ? 'stopped' : 'rejected'));
     return {{ok: status !== 'rejected', status: status === 'rejected' ? 400 : 200, json: async () => ({{status, pid:54321, error: status === 'rejected' ? 'unknown_action' : ''}})}};
   }}
@@ -333,6 +363,19 @@ vm.createContext(context);
   const accountRepairPendingRecheckStartDisabled = elements.start.disabled;
   const accountRepairPendingRecheckStartTitle = elements.start.title;
   const accountRepairPendingRecheckGateStateText = elements.accountGateState.textContent;
+  const startCallsBeforeRuntimeCleanupPreview = calls.filter(call => call.url === '/api/start').length;
+  const runtimeCleanupPreviewCallsBefore = calls.filter(call => call.url === '/api/control' && (call.body || {{}}).action === 'runtime_cleanup_preview').length;
+  await elements.previewRuntimeCleanup.onclick();
+  const startCallsAfterRuntimeCleanupPreview = calls.filter(call => call.url === '/api/start').length;
+  const runtimeCleanupPreviewCallsAfter = calls.filter(call => call.url === '/api/control' && (call.body || {{}}).action === 'runtime_cleanup_preview').length;
+  const runtimeCleanupApplyCallsAfterPreview = calls.filter(call => call.url === '/api/control' && (call.body || {{}}).action === 'runtime_cleanup_apply').length;
+  const runtimeCleanupPreviewTitle = elements.operatorDecisionTitle.textContent;
+  const runtimeCleanupPreviewBody = elements.operatorDecisionBody.textContent;
+  const runtimeCleanupStatus = elements.runtimeCleanupStatus.textContent;
+  const runtimeCleanupCandidates = elements.runtimeCleanupCandidates.textContent;
+  const runtimeCleanupDetails = elements.runtimeCleanupDetails.innerHTML;
+  const runtimeCleanupStatusBoxClass = elements.runtimeCleanupStatusBox.className;
+  const runtimeCleanupCandidatesBoxClass = elements.runtimeCleanupCandidatesBox.className;
 	  await elements.pause.onclick();
   await elements.resume.onclick();
   await elements.stop.onclick();
@@ -534,6 +577,16 @@ vm.createContext(context);
 	    accountRepairPendingRecheckStartDisabled,
 	    accountRepairPendingRecheckStartTitle,
 	    accountRepairPendingRecheckGateStateText,
+	    runtimeCleanupPreviewDelta:runtimeCleanupPreviewCallsAfter - runtimeCleanupPreviewCallsBefore,
+	    runtimeCleanupPreviewStartDelta:startCallsAfterRuntimeCleanupPreview - startCallsBeforeRuntimeCleanupPreview,
+	    runtimeCleanupApplyCallsAfterPreview,
+	    runtimeCleanupPreviewTitle,
+	    runtimeCleanupPreviewBody,
+	    runtimeCleanupStatus,
+	    runtimeCleanupCandidates,
+	    runtimeCleanupDetails,
+	    runtimeCleanupStatusBoxClass,
+	    runtimeCleanupCandidatesBoxClass,
 	    accountRepairPendingRecheckDebug: context.__reachopsAccountRepairDebug,
 	  }};
   console.log(JSON.stringify(result));
@@ -851,6 +904,37 @@ vm.createContext(context);
         for row in post_calls
         if row.get("url") == "/api/control"
     } >= {"pause", "resume", "stop"}
+    checks["runtime_cleanup_controls_are_operator_visible"] = (
+        'id="runtimeAutomationPanel"' in html
+        and 'id="previewRuntimeCleanup"' in html
+        and 'id="applyRuntimeCleanup"' in html
+        and 'id="runtimeCleanupConfirm"' in html
+        and "未登录自动冷却，健康账号继续" in html
+        and "需账号修复确认" in html
+        and "输入 CLEANUP_RUNTIME_PROCESSES 才会执行" in html
+    )
+    checks["runtime_cleanup_preview_posts_control_api"] = (
+        payload.get("runtimeCleanupPreviewDelta") == 1
+        and any(
+            row.get("url") == "/api/control"
+            and row.get("method") == "POST"
+            and (row.get("body") or {}).get("action") == "runtime_cleanup_preview"
+            for row in post_calls
+        )
+    )
+    checks["runtime_cleanup_preview_is_dry_run_no_submit"] = (
+        payload.get("runtimeCleanupPreviewStartDelta") == 0
+        and payload.get("runtimeCleanupApplyCallsAfterPreview") == 0
+        and payload.get("runtimeCleanupPreviewTitle") == "运行时清理预览已生成"
+        and "runtime_cleanup_preview" in str(payload.get("runtimeCleanupPreviewBody") or "")
+        and payload.get("runtimeCleanupStatus") == "dry_run"
+        and payload.get("runtimeCleanupCandidates") == "13"
+        and "no_browser_started=true" in str(payload.get("runtimeCleanupDetails") or "")
+        and "no_submit=true" in str(payload.get("runtimeCleanupDetails") or "")
+        and "runtime_process_audit.json" in str(payload.get("runtimeCleanupDetails") or "")
+        and payload.get("runtimeCleanupStatusBoxClass") == "previewItem warn"
+        and payload.get("runtimeCleanupCandidatesBoxClass") == "previewItem warn"
+    )
     checks["click_account_repair_apply_posts_api"] = any(
         row.get("url") == "/api/account-repair-apply"
         and row.get("method") == "POST"
