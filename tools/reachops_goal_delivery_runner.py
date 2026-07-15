@@ -955,6 +955,7 @@ def build_report() -> dict[str, Any]:
         authorized_live_ready=authorized_live_ready,
         blockers=blockers,
     )
+    blocking_scopes = [str(scope) for scope in (delivery_boundary.get("blocking_scopes") or []) if str(scope)]
     deliverable_index = build_deliverable_index(
         local_ready=local_ready,
         windows_build_ready=windows_build_ready,
@@ -987,6 +988,8 @@ def build_report() -> dict[str, Any]:
         "windows_build_ready": windows_build_ready,
         "final_delivery_ready": final_ready,
         "delivery_boundary": delivery_boundary,
+        "blocking_scopes": blocking_scopes,
+        "blocking_scope_count": len(blocking_scopes),
         "deliverable_index": deliverable_index,
         "local_mvp_evidence": local_mvp_evidence,
         "failed_checks": final_gate.get("failed_checks") or [],

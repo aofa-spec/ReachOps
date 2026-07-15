@@ -2677,6 +2677,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("windows_final_artifacts", scopes)
         self.assertIn("external_authorized_execution", scopes)
         self.assertIn("commercial_issue_closure", scopes)
+        self.assertEqual(report["blocking_scopes"], report["delivery_boundary"]["blocking_scopes"])
+        self.assertEqual(report["blocking_scope_count"], len(report["blocking_scopes"]))
+        self.assertIn("windows_final_artifacts", report["blocking_scopes"])
+        self.assertIn("external_authorized_execution", report["blocking_scopes"])
         final_blockers = {row["scope"]: row for row in report["final_delivery_blockers"]}
         self.assertIn("windows_final_artifacts", final_blockers)
         self.assertIn("external_authorized_execution", final_blockers)

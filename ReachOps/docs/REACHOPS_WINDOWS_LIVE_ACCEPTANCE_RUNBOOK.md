@@ -263,7 +263,7 @@ Expected result:
 
 `tools\run_reachops_acceptance_windows.ps1` performs this as a strict sequence: bootstrap package check, final gate, write `final_acceptance_gate` back to `acceptance_summary.json`, package final evidence check, then final gate final evidence check. The bootstrap check is the only place that may use `--allow-missing-final-gate`; that interim package JSON is `bootstrap_only=true` and `final_delivery_ready=false`. The final evidence check must validate `final_acceptance_gate.json` before final delivery is accepted.
 
-When recovering a background acceptance run, `tools\get_reachops_acceptance_background_status_windows.ps1 -Json` must show `final_delivery_ready=true` and an empty `final_delivery_blockers` list before the run can be treated as final delivery.
+When recovering a background acceptance run, `tools\get_reachops_acceptance_background_status_windows.ps1 -Json` must show `final_delivery_ready=true`, `blocking_scope_count=0`, and an empty `final_delivery_blockers` list before the run can be treated as final delivery.
 
 For an intermediate package before live submit, use:
 

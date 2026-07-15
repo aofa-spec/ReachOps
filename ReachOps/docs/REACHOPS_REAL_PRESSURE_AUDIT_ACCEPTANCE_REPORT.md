@@ -468,6 +468,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_goal_delivery_runner.p
 - `final_delivery_ready=false`
 - failed_checks：`client_delivery:acceptance:ready`、`delivery_package:passed`
 - blockers：`local_mvp`、`windows_final_artifacts`、`external_authorized_execution`
+- `blocking_scope_count` 必须等于 `delivery_boundary.blocking_scopes` 的数量，供支持人员快速确认剩余阻断范围。
 - `delivery_boundary.overall_final_delivery_scope_ready=false`
 - `deliverable_index.web_operator_panel.ready=false`
 - `deliverable_index.local_mvp_acceptance.ready=false`

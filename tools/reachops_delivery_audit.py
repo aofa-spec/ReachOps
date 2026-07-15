@@ -882,7 +882,11 @@ def run_final_delivery_contract_docs_fixture() -> dict:
         if name in {"root_readme", "windows_runbook", "operator_matrix"}:
             missing.extend(token for token in gate_tokens.values() if token not in text)
         if name in {"windows_runbook", "handoff", "pressure_audit_report"}:
-            missing.extend(token for token in ["final_delivery_ready", "final_delivery_blockers"] if token not in text)
+            missing.extend(
+                token
+                for token in ["final_delivery_ready", "final_delivery_blockers", "blocking_scope_count"]
+                if token not in text
+            )
         if name in {"root_readme", "windows_runbook", "handoff", "pressure_audit_report"}:
             missing.extend(token for token in ["--allow-missing-final-gate", "bootstrap_only=true"] if token not in text)
         if name in {"handoff", "pressure_audit_report"}:
