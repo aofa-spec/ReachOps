@@ -103,6 +103,7 @@ from tools.reachops_goal_delivery_runner import build_deliverable_index as build
 from tools.reachops_goal_delivery_runner import build_local_mvp_blocker as build_reachops_local_mvp_blocker
 from tools.reachops_goal_delivery_runner import render_markdown_summary as render_reachops_goal_delivery_summary
 from tools.reachops_repository_cleanliness_check import scan_repository_cleanliness
+from tools.reachops_runtime_process_audit import build_runtime_process_audit as build_reachops_runtime_process_audit
 from tools.reachops_windows_package_preflight import build_preflight as build_reachops_windows_package_preflight
 from tools.write_reachops_update_manifest import build_manifest
 
@@ -4373,6 +4374,66 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(ready["dry_run_manifest"]["required_diagnostics_present"])
             self.assertEqual(ready["dry_run_manifest"]["missing_required_diagnostics"], [])
 
+    def test_runtime_process_audit_surfaces_orphan_browser_workers_without_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp) / "latest_run_session.json"
+            rows = [
+                {
+                    "pid": 101,
+                    "ppid": 1,
+                    "stat": "S",
+                    "etime": "02:00:00",
+                    "command": "/Users/aofa/Library/Application Support/ixBrowser-Resources/chrome/142/chromedriver --port=62000",
+                },
+                {
+                    "pid": 201,
+                    "ppid": 1,
+                    "stat": "S+",
+                    "etime": "01:00:00",
+                    "command": "/bin/zsh /Users/aofa/Documents/New project/启动ReachOps原生MacUI.command",
+                },
+                {
+                    "pid": 202,
+                    "ppid": 1,
+                    "stat": "S+",
+                    "etime": "00:50:00",
+                    "command": "/bin/zsh /Users/aofa/Documents/New project/启动ReachOps原生MacUI.command",
+                },
+                {
+                    "pid": 301,
+                    "ppid": 202,
+                    "stat": "S+",
+                    "etime": "00:50:00",
+                    "command": ".venv/bin/python ReachOpsApp.py",
+                },
+                {
+                    "pid": 401,
+                    "ppid": 1,
+                    "stat": "S",
+                    "etime": "04:00:00",
+                    "command": "/Applications/ixBrowser.app/Contents/MacOS/ixBrowser",
+                },
+            ]
+
+            report = build_reachops_runtime_process_audit(
+                process_rows=rows,
+                latest_session_path=latest,
+                base_dir=Path(tmp),
+            )
+
+            self.assertEqual(report["schema_version"], "reachops.runtime_process_audit.v1")
+            self.assertEqual(report["status"], "attention_required")
+            self.assertTrue(report["read_only"])
+            self.assertTrue(report["no_process_killed"])
+            self.assertTrue(report["no_browser_started"])
+            self.assertTrue(report["no_submit"])
+            self.assertEqual(report["orphan_chromedriver_candidate_count"], 1)
+            self.assertEqual(report["stale_native_client_launcher_count"], 2)
+            self.assertIn("orphan_chromedriver_candidates_present", report["blocker_codes"])
+            self.assertIn("multiple_native_client_launchers_present", report["blocker_codes"])
+            self.assertEqual(report["process_counts"]["chromedriver"], 1)
+            self.assertEqual(report["process_counts"]["reachops_native_client_launcher"], 2)
+
     def test_support_diagnostics_materialization_writes_required_support_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "runtime"
@@ -4414,6 +4475,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     )
                 if script != "reachops_delivery_package_check.py":
                     payload["does_not_claim_final_delivery_ready"] = True
+                if script == "reachops_runtime_process_audit.py":
+                    payload.update(
+                        {
+                            "schema_version": "reachops.runtime_process_audit.v1",
+                            "status": "attention_required",
+                            "orphan_chromedriver_candidate_count": 1,
+                            "blocker_codes": ["orphan_chromedriver_candidates_present"],
+                            "read_only": True,
+                            "no_process_killed": True,
+                        }
+                    )
                 if script == "reachops_client_delivery_check.py":
                     handoff_path = base / "reports" / "support" / "account_support_handoff.json"
                     handoff_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4465,9 +4537,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(command_statuses["reports/support/goal_delivery_report.json"]["payload_status"], "not_ready")
             self.assertFalse(command_statuses["reports/support/goal_delivery_report.json"]["payload_final_delivery_ready"])
             self.assertIn("local_mvp", command_statuses["reports/support/goal_delivery_report.json"]["payload_blocking_scopes"])
+            self.assertEqual(command_statuses["reports/support/runtime_process_audit.json"]["payload_status"], "attention_required")
+            self.assertIn(
+                "orphan_chromedriver_candidates_present",
+                command_statuses["reports/support/runtime_process_audit.json"]["payload_blocker_codes"],
+            )
             self.assertTrue(support["required_diagnostics_present"])
             self.assertEqual(support["missing_required_diagnostics"], [])
-            self.assertEqual(len(calls), 7)
+            self.assertEqual(len(calls), 8)
 
             diagnostics = json.loads((base / "reports" / "support" / "diagnostics.json").read_text(encoding="utf-8"))
             self.assertEqual(diagnostics["status"], "passed")
@@ -4479,8 +4556,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
             )
             self.assertTrue(blocker_index["reports/support/account_support_handoff.json"]["payload_account_pool_circuit_breaker_triggered"])
+            self.assertIn(
+                "orphan_chromedriver_candidates_present",
+                blocker_index["reports/support/runtime_process_audit.json"]["payload_blocker_codes"],
+            )
             account = json.loads((base / "reports" / "support" / "account_support_handoff.json").read_text(encoding="utf-8"))
             self.assertEqual(account["schema_version"], "reachops.account_support_handoff_diagnostic.v1")
+            runtime_process = json.loads((base / "reports" / "support" / "runtime_process_audit.json").read_text(encoding="utf-8"))
+            self.assertEqual(runtime_process["schema_version"], "reachops.runtime_process_audit.v1")
+            self.assertTrue(runtime_process["read_only"])
+            self.assertTrue(runtime_process["no_process_killed"])
             delivery_package = json.loads((base / "reports" / "support" / "delivery_package_check.json").read_text(encoding="utf-8"))
             self.assertEqual(delivery_package["support_diagnostic_returncode"], 1)
             self.assertEqual(delivery_package["status"], "failed")

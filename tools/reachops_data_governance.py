@@ -137,6 +137,7 @@ SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS = [
     "reports/support/goal_delivery_report.json",
     "reports/support/issue_closure_payload.json",
     "reports/support/repository_cleanliness_payload.json",
+    "reports/support/runtime_process_audit.json",
     "reports/support/windows_package_preflight.json",
 ]
 
@@ -461,6 +462,13 @@ def materialize_support_diagnostics(
             python,
             str(root / "tools" / "reachops_repository_cleanliness_check.py"),
             "--clean",
+            "--json",
+        ],
+        "reports/support/runtime_process_audit.json": [
+            python,
+            str(root / "tools" / "reachops_runtime_process_audit.py"),
+            "--base-dir",
+            str(base_dir),
             "--json",
         ],
         "reports/support/windows_package_preflight.json": [
