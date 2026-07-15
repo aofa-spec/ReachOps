@@ -3901,14 +3901,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(support["required_diagnostics_present"])
             self.assertTrue(support["does_not_claim_required_diagnostics_present"])
             self.assertIn("reports/support/account_support_handoff.json", support["missing_required_diagnostics"])
+            self.assertIn("reports/support/goal_delivery_report.json", support["missing_required_diagnostics"])
             diagnostic_status = {
                 item["relative_path"]: item
                 for item in support["required_diagnostic_files"]
             }
             self.assertIn("reports/support/account_support_handoff.json", diagnostic_status)
+            self.assertIn("reports/support/goal_delivery_report.json", diagnostic_status)
             self.assertFalse(diagnostic_status["reports/support/account_support_handoff.json"]["exists"])
+            self.assertFalse(diagnostic_status["reports/support/goal_delivery_report.json"]["exists"])
             self.assertTrue(diagnostic_status["reports/support/account_support_handoff.json"]["included_in_manifest"])
+            self.assertTrue(diagnostic_status["reports/support/goal_delivery_report.json"]["included_in_manifest"])
             self.assertEqual(diagnostic_status["reports/support/account_support_handoff.json"]["excluded_reason"], "")
+            self.assertEqual(diagnostic_status["reports/support/goal_delivery_report.json"]["excluded_reason"], "")
             self.assertEqual(
                 support["dry_run_manifest"]["missing_required_diagnostics"],
                 support["missing_required_diagnostics"],
@@ -3945,6 +3950,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "status": "failed" if script in {"reachops_delivery_package_check.py", "reachops_final_acceptance_gate.py"} else "passed",
                     "final_delivery_ready": False,
                 }
+                if script == "reachops_goal_delivery_runner.py":
+                    payload.update(
+                        {
+                            "status": "not_ready",
+                            "blocking_scope_count": 4,
+                            "blocking_scopes": [
+                                "local_mvp",
+                                "windows_final_artifacts",
+                                "external_authorized_execution",
+                                "commercial_issue_closure",
+                            ],
+                        }
+                    )
                 if script != "reachops_delivery_package_check.py":
                     payload["does_not_claim_final_delivery_ready"] = True
                 if script == "reachops_client_delivery_check.py":
@@ -3976,9 +3994,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
             command_statuses = {row["relative_path"]: row for row in result["commands"]}
             self.assertEqual(command_statuses["reports/support/delivery_package_check.json"]["payload_status"], "failed")
             self.assertFalse(command_statuses["reports/support/delivery_package_check.json"]["payload_final_delivery_ready"])
+            self.assertEqual(command_statuses["reports/support/goal_delivery_report.json"]["payload_status"], "not_ready")
+            self.assertFalse(command_statuses["reports/support/goal_delivery_report.json"]["payload_final_delivery_ready"])
             self.assertTrue(support["required_diagnostics_present"])
             self.assertEqual(support["missing_required_diagnostics"], [])
-            self.assertEqual(len(calls), 6)
+            self.assertEqual(len(calls), 7)
 
             diagnostics = json.loads((base / "reports" / "support" / "diagnostics.json").read_text(encoding="utf-8"))
             self.assertEqual(diagnostics["status"], "passed")
@@ -3989,6 +4009,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(delivery_package["support_diagnostic_returncode"], 1)
             self.assertEqual(delivery_package["status"], "failed")
             self.assertTrue(delivery_package["does_not_claim_final_delivery_ready"])
+            goal_delivery = json.loads((base / "reports" / "support" / "goal_delivery_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(goal_delivery["status"], "not_ready")
+            self.assertEqual(goal_delivery["blocking_scope_count"], 4)
+            self.assertTrue(goal_delivery["does_not_claim_final_delivery_ready"])
 
     def test_reachops_data_governance_verifies_backup_restore_and_redaction_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4042,6 +4066,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("reports/support/account_support_handoff.json", support["required_diagnostics"])
             self.assertIn("reports/support/delivery_package_check.json", support["required_diagnostics"])
             self.assertIn("reports/support/final_acceptance_gate.json", support["required_diagnostics"])
+            self.assertIn("reports/support/goal_delivery_report.json", support["required_diagnostics"])
             self.assertIn("reports/support/issue_closure_payload.json", support["required_diagnostics"])
             support_manifest = support["dry_run_manifest"]
             self.assertTrue(support["dry_run_manifest_passed"])
@@ -4057,6 +4082,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("reports/support/account_support_handoff.json", included_support_paths)
             self.assertIn("reports/support/delivery_package_check.json", included_support_paths)
             self.assertIn("reports/support/final_acceptance_gate.json", included_support_paths)
+            self.assertIn("reports/support/goal_delivery_report.json", included_support_paths)
             self.assertIn("reports/support/issue_closure_payload.json", included_support_paths)
             self.assertIn("reports/support/repository_cleanliness_payload.json", included_support_paths)
             self.assertIn("reports/support/windows_package_preflight.json", included_support_paths)
