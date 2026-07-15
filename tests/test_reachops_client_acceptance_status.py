@@ -186,6 +186,31 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertIn("proxy_failed_summary", matrix)
         self.assertIn("补充真实代理故障", by_id["proxy_failed"]["next_action"])
 
+    def test_p08_failure_matrix_marks_page_timeout_fault_injection_separately_from_real(self):
+        matrix = build_p08_failure_matrix(
+            pressure_rows=[],
+            readiness_payload={},
+            runtime_audit={},
+            page_timeout_payload={
+                "status": "blocked_by_accounts",
+                "fault_injection": {
+                    "enabled": True,
+                    "failure_code": "PAGE_TIMEOUT",
+                    "counts_as_real_acceptance": False,
+                },
+                "results": [{"profile_id": "page-timeout-injection-1", "error_code": "PAGE_TIMEOUT"}],
+                "summary": {"errors": {"PAGE_TIMEOUT": 1}},
+            },
+            page_timeout_report_path="/tmp/reachops_page_timeout_probe.json",
+        )
+
+        by_id = {row["id"]: row for row in matrix["rows"]}
+        self.assertEqual(by_id["page_timeout"]["status"], "passed_fault_injection")
+        self.assertTrue(by_id["page_timeout"]["passed"])
+        self.assertEqual(by_id["page_timeout"]["source"], "safe_fault_injection")
+        self.assertIn("page_timeout_summary", matrix)
+        self.assertIn("补充真实短 timeout", by_id["page_timeout"]["next_action"])
+
     def test_headless_dummy_root_executes_delayed_callbacks(self):
         calls = []
 

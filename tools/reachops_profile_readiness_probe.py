@@ -824,7 +824,8 @@ def run_probe(
     wall_clock_seconds = round(max(0.0, time.monotonic() - started_monotonic), 3)
     configured_total_timeout = max(5, int(total_timeout_seconds or 60))
     timeout_overrun_seconds = round(max(0.0, wall_clock_seconds - configured_total_timeout), 3)
-    timeout_triggered = bool((summary.get("errors") or {}).get("PROFILE_PREFLIGHT_TIMEOUT"))
+    summary_errors = summary.get("errors") or {}
+    timeout_triggered = bool(summary_errors.get("PROFILE_PREFLIGHT_TIMEOUT") or summary_errors.get("PAGE_TIMEOUT"))
     payload = {
         "schema_version": SCHEMA_VERSION,
         "status": status,

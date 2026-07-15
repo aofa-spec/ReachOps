@@ -2710,6 +2710,59 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(payload["repair_checklist"]["error_groups"][0]["error_code"], "PROXY_FAILED")
         self.assertEqual(written_payload["fault_injection"]["failure_code"], "PROXY_FAILED")
 
+    def test_profile_readiness_probe_can_safely_inject_page_timeout_as_bounded_exit(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("tools.reachops_profile_readiness_probe.ProfilePreflightChecker.run") as run_mock:
+                payload = run_reachops_profile_readiness_probe(
+                    base_dir=tmpdir,
+                    profile_group="获客分组测试",
+                    profile_limit=1,
+                    max_workers=1,
+                    page_timeout_seconds=1,
+                    wait_after_open_seconds=0,
+                    total_timeout_seconds=10,
+                    inject_failure_code="PAGE_TIMEOUT",
+                    inject_profile_ids=["page-timeout-injection-1"],
+                )
+
+        run_mock.assert_not_called()
+        self.assertEqual(payload["status"], "blocked_by_accounts")
+        self.assertEqual(payload["summary"]["errors"], {"PAGE_TIMEOUT": 1})
+        self.assertTrue(payload["timeout_triggered"])
+        self.assertEqual(payload["bounded_exit_status"], "terminated_after_timeout")
+        self.assertTrue(payload["fault_injection"]["enabled"])
+        self.assertFalse(payload["fault_injection"]["counts_as_real_acceptance"])
+        self.assertFalse(payload["fault_injection"]["real_ixbrowser_opened"])
+        self.assertEqual(payload["repair_checklist"]["error_groups"][0]["error_code"], "PAGE_TIMEOUT")
+
+    def test_profile_preflight_classifies_driver_get_timeout_as_page_timeout(self):
+        class PageTimeoutDriver(FakeProfilePreflightDriver):
+            def get(self, url):
+                raise TimeoutError("Timed out receiving message from renderer")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = GrowthIntelligenceService(base_dir=tmp)
+            group_manager = FakeProfileGroupManager()
+            checker = ProfilePreflightChecker(
+                service.storage,
+                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0),
+                driver_factory=lambda _profile: (
+                    PageTimeoutDriver(),
+                    (FakeReleaseManager(), "page-timeout"),
+                    "",
+                ),
+                group_manager=group_manager,
+            )
+            checker._executor._release = lambda _handle: None
+
+            available, summary = checker.available_profiles([{"profile_id": "page-timeout", "group_name": "US"}])
+            health = {row["profile_id"]: row for row in service.storage.list_profile_health(limit=10)}
+
+        self.assertEqual(available, [])
+        self.assertEqual(summary["errors"], {"PAGE_TIMEOUT": 1})
+        self.assertEqual(health["page-timeout"]["last_error_code"], "PAGE_TIMEOUT")
+        self.assertEqual(group_manager.moves, [])
+
     def test_profile_readiness_probe_reports_us_group_not_found_terminal_reason(self):
         def fake_metadata_builder(**_kwargs):
             return {

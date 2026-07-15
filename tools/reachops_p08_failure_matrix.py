@@ -148,6 +148,14 @@ def matrix_row(
     }
 
 
+def fault_injection_enabled(payload: dict[str, Any] | None) -> bool:
+    return bool(
+        isinstance(payload, dict)
+        and isinstance(payload.get("fault_injection"), dict)
+        and payload.get("fault_injection", {}).get("enabled")
+    )
+
+
 def build_matrix(
     *,
     pressure_rows: list[dict[str, Any]],
@@ -156,28 +164,29 @@ def build_matrix(
     profile_missing_payload: dict[str, Any] | None = None,
     kernel_mismatch_payload: dict[str, Any] | None = None,
     proxy_failed_payload: dict[str, Any] | None = None,
+    page_timeout_payload: dict[str, Any] | None = None,
     pressure_summary_path: str = "",
     readiness_report_path: str = "",
     runtime_audit_path: str = "",
     profile_missing_report_path: str = "",
     kernel_mismatch_report_path: str = "",
     proxy_failed_report_path: str = "",
+    page_timeout_report_path: str = "",
 ) -> dict[str, Any]:
     pressure = summarize_pressure(pressure_rows)
     readiness = readiness_summary(readiness_payload)
     profile_missing = readiness_summary(profile_missing_payload or {})
     kernel_mismatch = readiness_summary(kernel_mismatch_payload or {})
     proxy_failed = readiness_summary(proxy_failed_payload or {})
-    proxy_failed_is_injected = bool(
-        isinstance(proxy_failed_payload, dict)
-        and isinstance(proxy_failed_payload.get("fault_injection"), dict)
-        and proxy_failed_payload.get("fault_injection", {}).get("enabled")
-    )
+    page_timeout = readiness_summary(page_timeout_payload or {})
+    proxy_failed_is_injected = fault_injection_enabled(proxy_failed_payload)
+    page_timeout_is_injected = fault_injection_enabled(page_timeout_payload)
     diagnoses = set(pressure.get("diagnosis_counts") or {})
     readiness_errors = set(readiness.get("error_counts") or {})
     profile_missing_errors = set(profile_missing.get("error_counts") or {})
     kernel_mismatch_errors = set(kernel_mismatch.get("error_counts") or {})
     proxy_failed_errors = set(proxy_failed.get("error_counts") or {})
+    page_timeout_errors = set(page_timeout.get("error_counts") or {})
     terminal_ok = bool(
         pressure.get("row_count", 0) >= 100
         and pressure.get("terminal_ratio", 0) >= 0.98
@@ -291,9 +300,28 @@ def build_matrix(
         matrix_row(
             "page_timeout",
             "页面超时",
-            "missing",
-            [],
-            "用短 timeout 或受控慢页面验证 PAGE_TIMEOUT 有界退出和截图/sidecar。",
+            (
+                "passed_fault_injection"
+                if "PAGE_TIMEOUT" in page_timeout_errors and page_timeout_is_injected
+                else "passed_real"
+                if "PAGE_TIMEOUT" in page_timeout_errors
+                else "missing"
+            ),
+            [page_timeout_report_path] if page_timeout_report_path else [],
+            (
+                "补充真实短 timeout 或受控慢页面证据后再升级为 passed_real。"
+                if page_timeout_is_injected and page_timeout_errors
+                else "保持 PAGE_TIMEOUT 有界退出和修复清单。"
+                if page_timeout_errors
+                else "用短 timeout 或受控慢页面验证 PAGE_TIMEOUT 有界退出和截图/sidecar。"
+            ),
+            source=(
+                "safe_fault_injection"
+                if page_timeout_is_injected and page_timeout_errors
+                else "real_profile_readiness"
+                if page_timeout_errors
+                else "local_audit"
+            ),
         ),
         matrix_row(
             "group_refresh_failure",
@@ -344,6 +372,7 @@ def build_matrix(
         "profile_missing_summary": profile_missing,
         "kernel_mismatch_summary": kernel_mismatch,
         "proxy_failed_summary": proxy_failed,
+        "page_timeout_summary": page_timeout,
         "runtime_audit_summary": {
             "status": runtime_audit.get("status", ""),
             "cleanup_candidate_count": int(runtime_audit.get("cleanup_candidate_count") or 0),
@@ -374,6 +403,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--profile-missing-report", default="/tmp/reachops_profile_missing_probe.json")
     parser.add_argument("--kernel-mismatch-report", default="/tmp/reachops_kernel_mismatch_probe.json")
     parser.add_argument("--proxy-failed-report", default="/tmp/reachops_proxy_failed_probe.json")
+    parser.add_argument("--page-timeout-report", default="/tmp/reachops_page_timeout_probe.json")
     parser.add_argument("--runtime-audit", default="/tmp/reachops_runtime_audit_after_p08_pressure.json")
     parser.add_argument("--output", default="reports/reachops/p08_failure_matrix/latest_p08_failure_matrix.json")
     parser.add_argument("--json", action="store_true")
@@ -389,12 +419,14 @@ def main(argv: list[str] | None = None) -> int:
         profile_missing_payload=read_json(args.profile_missing_report),
         kernel_mismatch_payload=read_json(args.kernel_mismatch_report),
         proxy_failed_payload=read_json(args.proxy_failed_report),
+        page_timeout_payload=read_json(args.page_timeout_report),
         pressure_summary_path=str(Path(args.pressure_summary).expanduser()),
         readiness_report_path=str(Path(args.readiness_report).expanduser()),
         runtime_audit_path=str(Path(args.runtime_audit).expanduser()),
         profile_missing_report_path=str(Path(args.profile_missing_report).expanduser()),
         kernel_mismatch_report_path=str(Path(args.kernel_mismatch_report).expanduser()),
         proxy_failed_report_path=str(Path(args.proxy_failed_report).expanduser()),
+        page_timeout_report_path=str(Path(args.page_timeout_report).expanduser()),
     )
     write_report(args.output, payload)
     if args.json:

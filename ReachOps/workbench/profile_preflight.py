@@ -138,6 +138,8 @@ class ProfilePreflightChecker:
                 time.sleep(max(0.0, float(self.config.wait_after_open_seconds or 0)))
             except Exception as exc:
                 code = self._executor._classify_exception(exc)
+                if code == "PAGE_OPEN_FAILED" and self._is_page_timeout_exception(exc):
+                    code = "PAGE_TIMEOUT"
                 evidence = self._capture(driver, profile_id, code)
                 return self._record(profile, False, code, str(exc), evidence, started_at)
             try:
@@ -330,6 +332,10 @@ class ProfilePreflightChecker:
         if any(token in text for token in ["invalid session id", "chrome not reachable", "no such window", "target window already closed"]):
             return "BROWSER_CRASHED"
         return "PROFILE_START_FAILED"
+
+    def _is_page_timeout_exception(self, exc: Exception) -> bool:
+        text = str(exc or "").lower()
+        return "timeout" in text or "timed out" in text
 
     def _move_profile_to_quarantine(self, profile_id: str, error_code: str, message: str = "") -> dict[str, Any]:
         try:
