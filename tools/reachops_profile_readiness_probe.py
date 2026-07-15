@@ -401,6 +401,36 @@ def terminal_reason_code(
     return str(status or "UNKNOWN_PAGE_STATE").upper()
 
 
+def build_profile_scan_counts(
+    *,
+    summary: dict[str, Any],
+    selected_profiles: list[dict[str, str]],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        metadata_total = int(metadata.get("selected_profile_count") or 0)
+    except Exception:
+        metadata_total = 0
+    selected_count = len(selected_profiles)
+    requested = int(summary.get("requested") or selected_count or 0)
+    scanned = int(summary.get("checked") or 0)
+    available = int(summary.get("available") or 0)
+    unavailable = int(summary.get("unavailable") or 0)
+    candidate_total = max(metadata_total, requested, selected_count, scanned)
+    return {
+        "schema_version": "reachops.profile_scan_counts.v1",
+        "candidate_profile_count": candidate_total,
+        "selected_for_scan_count": selected_count,
+        "requested_profile_count": requested,
+        "scanned_profile_count": scanned,
+        "available_profile_count": available,
+        "unavailable_profile_count": unavailable,
+        "unscanned_profile_count": max(0, candidate_total - scanned),
+        "metadata_selected_profile_count": metadata_total,
+        "profile_limit_honored": bool((metadata or {}).get("profile_limit_honored", True)),
+    }
+
+
 def build_account_pool_automation(payload: dict[str, Any]) -> dict[str, Any]:
     results = [row for row in payload.get("results") or [] if isinstance(row, dict)]
     ready_profile_ids = [
@@ -414,11 +444,13 @@ def build_account_pool_automation(payload: dict[str, Any]) -> dict[str, Any]:
         if not row.get("ok") and str(row.get("profile_id") or "")
     ]
     error_groups = (payload.get("repair_checklist") or {}).get("error_groups") or []
+    profile_counts = payload.get("profile_counts") if isinstance(payload.get("profile_counts"), dict) else {}
     quarantine_failed_profiles = bool(payload.get("quarantine_failed_profiles"))
     return {
         "schema_version": "reachops.account_pool_automation.v1",
         "runtime_auto_grouping": True,
         "terminal_reason_code": str(payload.get("terminal_reason_code") or ""),
+        "profile_counts": profile_counts,
         "automatic_local_grouping_enabled": True,
         "local_grouping_action": "classify_failed_profiles_and_continue_with_ready_pool",
         "normal_logged_in_profiles_continue": bool(ready_profile_ids),
@@ -546,6 +578,12 @@ def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
             selected_profiles=[],
             metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
         )
+    if not isinstance(payload.get("profile_counts"), dict):
+        payload["profile_counts"] = build_profile_scan_counts(
+            summary=payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
+            selected_profiles=[],
+            metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        )
     account_pool_automation = (
         payload.get("account_pool_automation")
         if isinstance(payload.get("account_pool_automation"), dict)
@@ -595,6 +633,7 @@ def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
         f"- checked: {(payload.get('summary') or {}).get('checked', 0)}",
         f"- available: {(payload.get('summary') or {}).get('available', 0)}",
         f"- unavailable: {(payload.get('summary') or {}).get('unavailable', 0)}",
+        f"- unscanned: {(payload.get('profile_counts') or {}).get('unscanned_profile_count', 0)}",
         f"- no_submit: {str(bool(payload.get('no_submit'))).lower()}",
         f"- quarantine_failed_profiles: {str(bool(payload.get('quarantine_failed_profiles'))).lower()}",
         f"- exclude_recent_failed: {str(bool(payload.get('exclude_recent_failed'))).lower()}",
@@ -697,6 +736,11 @@ def run_probe(
     )
     summary = checker.run(profiles) if profiles else {"requested": 0, "checked": 0, "available": 0, "unavailable": 0, "errors": {}, "results": []}
     status, terminal_state = readiness_status(summary, profiles)
+    profile_counts = build_profile_scan_counts(
+        summary=summary,
+        selected_profiles=profiles,
+        metadata=metadata,
+    )
     reason_code = terminal_reason_code(
         status=status,
         summary=summary,
@@ -737,6 +781,11 @@ def run_probe(
         "recent_failed_profile_ids_sample": recent_failed_profile_ids[:12],
         "metadata": metadata,
         "selected_profiles_count": len(profiles),
+        "profile_counts": profile_counts,
+        "scanned_profile_count": profile_counts["scanned_profile_count"],
+        "available_profile_count": profile_counts["available_profile_count"],
+        "unavailable_profile_count": profile_counts["unavailable_profile_count"],
+        "unscanned_profile_count": profile_counts["unscanned_profile_count"],
         "summary": {
             "requested": int(summary.get("requested") or 0),
             "checked": int(summary.get("checked") or 0),
