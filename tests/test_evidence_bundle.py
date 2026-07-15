@@ -455,6 +455,15 @@ class EvidenceBundleTests(unittest.TestCase):
                             "requires_manual_account_work": True,
                             "blocker_codes": ["account_repair_plan_has_no_auto_applicable_profiles"],
                             "does_not_claim_real_account_pool_ready": True,
+                            "latest_apply": {
+                                "account_pool_circuit_breaker": {
+                                    "triggered": True,
+                                    "threshold": 10,
+                                    "hard_failure_count": 26,
+                                    "latest_available": 0,
+                                    "does_not_claim_real_account_pool_ready": True,
+                                },
+                            },
                             "repair_plan": {
                                 "available": True,
                                 "profile_count": 1,
@@ -636,6 +645,10 @@ class EvidenceBundleTests(unittest.TestCase):
                 bundle["account_support_handoff_summary"]["blocker_codes"],
                 ["account_repair_plan_has_no_auto_applicable_profiles"],
             )
+            self.assertTrue(bundle["account_support_handoff_summary"]["account_pool_circuit_breaker_triggered"])
+            self.assertEqual(bundle["account_support_handoff_summary"]["account_pool_circuit_breaker_threshold"], 10)
+            self.assertEqual(bundle["account_support_handoff_summary"]["account_pool_circuit_breaker_hard_failure_count"], 26)
+            self.assertEqual(bundle["account_support_handoff_summary"]["account_pool_circuit_breaker_latest_available"], 0)
             self.assertEqual(
                 bundle["account_support_handoff_summary"]["retest_checklist"][0]["id"],
                 "manual_repair_or_replace_accounts",
@@ -743,6 +756,8 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertTrue(bundle["audit"]["account_support_handoff_support_required"])
             self.assertFalse(bundle["audit"]["account_support_handoff_ready_for_retest"])
             self.assertTrue(bundle["audit"]["account_support_handoff_does_not_claim_ready"])
+            self.assertTrue(bundle["audit"]["account_support_handoff_circuit_breaker_triggered"])
+            self.assertEqual(bundle["audit"]["account_support_handoff_circuit_breaker_hard_failure_count"], 26)
             self.assertEqual(bundle["audit"]["account_repair_error_group_count"], 1)
             self.assertTrue(bundle["audit"]["account_repair_pending_recheck"])
             self.assertTrue(bundle["audit"]["account_repair_manual_apply_required"])
@@ -837,6 +852,10 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertIn("Support case: account_pool_blocked", render_evidence_markdown(bundle))
             self.assertIn("Priority action: manually_repair_or_replace_accounts", render_evidence_markdown(bundle))
             self.assertIn("Does not claim real account pool ready: true", render_evidence_markdown(bundle))
+            self.assertIn(
+                "Account pool circuit breaker: triggered hard_failures=26 threshold=10 latest_available=0",
+                render_evidence_markdown(bundle),
+            )
             self.assertIn("Non-auto errors: LOGIN_REQUIRED", render_evidence_markdown(bundle))
             self.assertIn("Retest command: python tools/reachops_client_delivery_check.py --json", render_evidence_markdown(bundle))
             self.assertIn("Retest checklist: manual_repair_or_replace_accounts", render_evidence_markdown(bundle))

@@ -4945,6 +4945,10 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertTrue(
             handoff["latest_apply"]["account_pool_circuit_breaker"]["does_not_claim_real_account_pool_ready"]
         )
+        diagnostic = build_account_support_handoff_diagnostic(payload)
+        self.assertTrue(diagnostic["account_pool_circuit_breaker"]["triggered"])
+        self.assertEqual(diagnostic["account_pool_circuit_breaker"]["hard_failure_count"], 26)
+        self.assertEqual(diagnostic["account_pool_circuit_breaker"]["latest_available"], 0)
         self.assertFalse(payload["final_delivery_ready"])
 
     def test_account_repair_progress_summary_dedupes_same_apply_source(self):
@@ -6221,6 +6225,13 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                 "account_blocker_resolution": {
                     "schema_version": "reachops.account_blocker_resolution.v1",
                     "status": "stale_repair_apply",
+                    "account_pool_circuit_breaker": {
+                        "triggered": True,
+                        "threshold": 10,
+                        "hard_failure_count": 26,
+                        "latest_available": 0,
+                        "does_not_claim_real_account_pool_ready": True,
+                    },
                     "does_not_claim_real_account_pool_ready": True,
                 },
                 "account_support_handoff": {
@@ -6257,6 +6268,8 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertTrue(diagnostic["support_required"])
         self.assertTrue(diagnostic["requires_manual_account_work"])
         self.assertTrue(diagnostic["does_not_claim_real_account_pool_ready"])
+        self.assertTrue(diagnostic["account_pool_circuit_breaker"]["triggered"])
+        self.assertEqual(diagnostic["account_pool_circuit_breaker"]["hard_failure_count"], 26)
         self.assertFalse(diagnostic["ready_for_retest"])
         self.assertTrue(diagnostic["no_browser_started"])
         self.assertTrue(diagnostic["no_submit"])

@@ -1575,6 +1575,14 @@ def build_account_support_handoff_diagnostic(payload: dict) -> dict:
         if isinstance(payload.get("profile_readiness_handoff"), dict)
         else {}
     )
+    latest_apply = handoff.get("latest_apply") if isinstance(handoff.get("latest_apply"), dict) else {}
+    circuit_breaker = (
+        blocker_resolution.get("account_pool_circuit_breaker")
+        if isinstance(blocker_resolution.get("account_pool_circuit_breaker"), dict)
+        else latest_apply.get("account_pool_circuit_breaker")
+        if isinstance(latest_apply.get("account_pool_circuit_breaker"), dict)
+        else {}
+    )
     return {
         "schema_version": "reachops.account_support_handoff_diagnostic.v1",
         "generated_from": "reachops_client_delivery_check",
@@ -1592,6 +1600,7 @@ def build_account_support_handoff_diagnostic(payload: dict) -> dict:
         "requires_latest_repair_apply": bool(handoff.get("requires_latest_repair_apply")),
         "requires_manual_account_work": bool(handoff.get("requires_manual_account_work")),
         "blocker_codes": [str(item) for item in (handoff.get("blocker_codes") or blocker_resolution.get("blocker_codes") or []) if str(item).strip()],
+        "account_pool_circuit_breaker": circuit_breaker,
         "does_not_claim_real_account_pool_ready": bool(handoff.get("does_not_claim_real_account_pool_ready", True)),
         "account_blocker_resolution": blocker_resolution,
         "account_support_handoff": handoff,

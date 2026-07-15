@@ -615,6 +615,12 @@ def build_account_support_handoff_summary(base_dir: str | Path) -> dict[str, Any
     profile_readiness = handoff.get("profile_readiness_probe") if isinstance(handoff.get("profile_readiness_probe"), dict) else {}
     impacted_accounts = handoff.get("impacted_accounts") if isinstance(handoff.get("impacted_accounts"), dict) else {}
     safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    latest_apply = handoff.get("latest_apply") if isinstance(handoff.get("latest_apply"), dict) else {}
+    circuit_breaker = (
+        latest_apply.get("account_pool_circuit_breaker")
+        if isinstance(latest_apply.get("account_pool_circuit_breaker"), dict)
+        else {}
+    )
     return {
         "schema_version": "reachops.account_support_handoff_summary.v1",
         "handoff_schema_version": _safe_text(handoff.get("schema_version")),
@@ -631,6 +637,11 @@ def build_account_support_handoff_summary(base_dir: str | Path) -> dict[str, Any
         "requires_manual_account_work": bool(handoff.get("requires_manual_account_work")),
         "blocker_codes": [str(item) for item in (handoff.get("blocker_codes") or [])[:12]],
         "does_not_claim_real_account_pool_ready": bool(handoff.get("does_not_claim_real_account_pool_ready", True)),
+        "account_pool_circuit_breaker": circuit_breaker,
+        "account_pool_circuit_breaker_triggered": bool(circuit_breaker.get("triggered")),
+        "account_pool_circuit_breaker_threshold": int(circuit_breaker.get("threshold") or 0),
+        "account_pool_circuit_breaker_hard_failure_count": int(circuit_breaker.get("hard_failure_count") or 0),
+        "account_pool_circuit_breaker_latest_available": int(circuit_breaker.get("latest_available") or 0),
         "repair_plan_available": bool(repair_plan.get("available")),
         "repair_plan_profile_count": int(repair_plan.get("profile_count") or 0),
         "repair_plan_auto_apply_profile_count": int(repair_plan.get("auto_apply_profile_count") or 0),
@@ -2264,6 +2275,12 @@ def build_evidence_bundle(
         "account_support_handoff_does_not_claim_ready": bool(
             account_support_handoff_summary.get("does_not_claim_real_account_pool_ready", True)
         ),
+        "account_support_handoff_circuit_breaker_triggered": bool(
+            account_support_handoff_summary.get("account_pool_circuit_breaker_triggered")
+        ),
+        "account_support_handoff_circuit_breaker_hard_failure_count": int(
+            account_support_handoff_summary.get("account_pool_circuit_breaker_hard_failure_count") or 0
+        ),
         "account_repair_error_group_count": int(account_repair_summary.get("error_group_count") or 0),
         "account_repair_pending_recheck": bool(account_repair_summary.get("pending_recheck")),
         "account_repair_manual_apply_required": bool(account_repair_summary.get("manual_apply_required", True)),
@@ -2794,6 +2811,13 @@ def render_evidence_markdown(bundle: dict[str, Any]) -> str:
                 f"- Repair plan profiles: {account_support_handoff.get('repair_plan_profile_count', 0)}",
             ]
         )
+        if account_support_handoff.get("account_pool_circuit_breaker_triggered"):
+            lines.append(
+                "- Account pool circuit breaker: triggered "
+                f"hard_failures={account_support_handoff.get('account_pool_circuit_breaker_hard_failure_count', 0)} "
+                f"threshold={account_support_handoff.get('account_pool_circuit_breaker_threshold', 0)} "
+                f"latest_available={account_support_handoff.get('account_pool_circuit_breaker_latest_available', 0)}"
+            )
         non_auto = account_support_handoff.get("repair_plan_non_auto_error_codes") or []
         if non_auto:
             lines.append(f"- Non-auto errors: {', '.join(str(item) for item in non_auto)}")
