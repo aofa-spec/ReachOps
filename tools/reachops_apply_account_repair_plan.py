@@ -35,16 +35,32 @@ def load_plan(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {"status": "error", "error_code": "PLAN_INVALID", "error_message": "plan is not an object"}
 
 
-def profile_ids_for_errors(plan: dict, error_codes: set[str]) -> list[dict]:
-    rows: list[dict] = []
-    seen: set[str] = set()
+def iter_profile_error_groups(plan: dict) -> list[tuple[str, list[Any]]]:
+    rows: list[tuple[str, list[Any]]] = []
     for group in plan.get("groups") or []:
         if not isinstance(group, dict):
             continue
-        error = str(group.get("error") or "").strip()
+        error = str(group.get("error") or group.get("error_code") or "").strip()
+        profile_ids = group.get("profile_ids") if isinstance(group.get("profile_ids"), list) else []
+        if error:
+            rows.append((error, profile_ids))
+    for group in plan.get("error_groups") or []:
+        if not isinstance(group, dict):
+            continue
+        error = str(group.get("error_code") or group.get("error") or "").strip()
+        profile_ids = group.get("profile_ids") if isinstance(group.get("profile_ids"), list) else []
+        if error:
+            rows.append((error, profile_ids))
+    return rows
+
+
+def profile_ids_for_errors(plan: dict, error_codes: set[str]) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for error, profile_ids in iter_profile_error_groups(plan):
         if error not in error_codes:
             continue
-        for profile_id in group.get("profile_ids") or []:
+        for profile_id in profile_ids:
             value = str(profile_id or "").strip()
             if not value or value in seen:
                 continue
@@ -55,11 +71,8 @@ def profile_ids_for_errors(plan: dict, error_codes: set[str]) -> list[dict]:
 
 def plan_error_codes_with_profiles(plan: dict) -> set[str]:
     codes: set[str] = set()
-    for group in plan.get("groups") or []:
-        if not isinstance(group, dict):
-            continue
-        error = str(group.get("error") or "").strip()
-        if error and group.get("profile_ids"):
+    for error, profile_ids in iter_profile_error_groups(plan):
+        if error and profile_ids:
             codes.add(error)
     return codes
 

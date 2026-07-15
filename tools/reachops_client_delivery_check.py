@@ -541,6 +541,11 @@ def build_account_support_handoff(
             "ready_profile_count": int(profile_readiness.get("ready_profile_count") or 0),
             "failed_profile_count": int(profile_readiness.get("failed_profile_count") or 0),
             "error_groups": profile_error_groups,
+            "profile_repair_apply": (
+                profile_readiness.get("profile_repair_apply")
+                if isinstance(profile_readiness.get("profile_repair_apply"), dict)
+                else {}
+            ),
             "retest_command": profile_retest_command,
             "no_submit": bool(profile_readiness.get("no_submit", True)),
             "no_browser_collection": bool(profile_readiness.get("no_browser_collection", True)),
@@ -986,6 +991,26 @@ def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
                 repair = loaded_repair
         except Exception:
             pass
+    apply_path = report_path.with_name("latest_account_repair_apply.json")
+    repair_apply: dict = {}
+    if apply_path.is_file():
+        try:
+            loaded_apply = json.loads(apply_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_apply, dict):
+                repair_apply = loaded_apply
+        except Exception as exc:
+            repair_apply = {"status": "read_failed", "error": f"{type(exc).__name__}: {exc}"}
+        repair_apply["source"] = "profile_readiness_probe/latest_account_repair_apply.json"
+        repair_apply["path"] = str(apply_path)
+        repair_apply["pending_recheck"] = bool(
+            str(repair_apply.get("status") or "") == "applied"
+            and int(repair_apply.get("moved_count") or 0) > 0
+            and int(repair_apply.get("failed_count") or 0) == 0
+        )
+        repair_apply["effective_status"] = account_repair_apply_effective_status(repair_apply)
+        effective_message = account_repair_apply_effective_message(repair_apply)
+        if effective_message:
+            repair_apply["effective_message"] = effective_message
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     error_groups = []
     for row in repair.get("error_groups") or []:
@@ -1005,6 +1030,8 @@ def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
         )
     ready_ids = [str(item) for item in (repair.get("ready_profile_ids") or []) if str(item).strip()]
     failed_ids = [str(item) for item in (repair.get("failed_profile_ids") or []) if str(item).strip()]
+    apply_moved_count = int(repair_apply.get("moved_count") or 0) if repair_apply else 0
+    does_not_modify_groups = bool(repair.get("does_not_modify_ixbrowser_groups", True)) and apply_moved_count <= 0
     return {
         "schema_version": "reachops.profile_readiness_handoff.v1",
         "source_exists": True,
@@ -1021,12 +1048,13 @@ def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
         "ready_profile_count": len(ready_ids),
         "failed_profile_count": len(failed_ids),
         "error_groups": error_groups,
+        "profile_repair_apply": repair_apply,
         "retest_command": str(repair.get("retest_command") or ""),
         "next_action": str(repair.get("next_action") or payload.get("next_action") or ""),
         "no_submit": bool(payload.get("no_submit", True) and repair.get("no_submit", True)),
         "no_browser_collection": bool(payload.get("no_browser_collection", True)),
         "no_action_execution": bool(payload.get("no_action_execution", True)),
-        "does_not_modify_ixbrowser_groups": bool(repair.get("does_not_modify_ixbrowser_groups", True)),
+        "does_not_modify_ixbrowser_groups": does_not_modify_groups,
         "does_not_claim_real_account_pool_ready": int(summary.get("available") or 0) <= 0,
     }
 

@@ -446,6 +446,7 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
             [
                 "CHECK  profile_preflight_detail stage=collection profile=385 status=不可用 error=IXBROWSER_KERNEL_MISMATCH evidence=- message=ixBrowser open_profile failed: code=2014",
                 "CHECK  profile_preflight_detail stage=collection profile=4 status=不可用 error=IXBROWSER_NETWORK_ERROR evidence=/tmp/e.png close_action=closed_and_skipped operator_hint=配置预检异常，已关闭并继续下一个账号 message=ECONNRESET",
+                "CHECK  profile_preflight_detail stage=collection profile=4521 status=不可用 error=LOGIN_REQUIRED evidence=/Users/aofa/Documents/New project/reports/reachops/mac_gui/runtime/data/growth_intelligence/reports/collection_profile_preflight_evidence/4521_profile_preflight_LOGIN_REQUIRED.png close_action=closed_and_switched operator_hint=TikTok登录态不足，已关闭并自动换号 message=LOGIN_REQUIRED",
             ]
         )
 
@@ -455,6 +456,10 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertEqual(details[1]["evidence"], "/tmp/e.png")
         self.assertEqual(details[1]["close_action"], "closed_and_skipped")
         self.assertIn("已关闭", details[1]["operator_hint"])
+        self.assertEqual(details[2]["profile_id"], "4521")
+        self.assertEqual(details[2]["error"], "LOGIN_REQUIRED")
+        self.assertIn("/Users/aofa/Documents/New project/", details[2]["evidence"])
+        self.assertEqual(details[2]["close_action"], "closed_and_switched")
 
     def test_derive_acceptance_keeps_full_profile_remediation_list(self):
         batch = {
@@ -488,6 +493,49 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertEqual(result["readiness"], "blocked_by_accounts")
         self.assertEqual(len(result["profile_preflight_details"]), 35)
         self.assertEqual(result["profile_preflight_details"][-1]["profile_id"], "1034")
+
+    def test_derive_acceptance_keeps_profile_ids_when_evidence_path_has_spaces(self):
+        batch = {
+            "id": "gb_spaces",
+            "campaign_id": "acq_spaces",
+            "status": "failed",
+            "profile_group": "United States",
+            "created_at": "2026-07-15T07:41:39Z",
+            "config_json": json.dumps({"quick_send": {"detected_type": "keyword"}}),
+        }
+        preflight = {
+            "checked": 9,
+            "available": 0,
+            "unavailable": 9,
+            "errors": {"LOGIN_REQUIRED": 1, "PAGE_OPEN_FAILED": 2, "PROFILE_PREFLIGHT_TIMEOUT": 6},
+            "created_at": "2026-07-15T07:43:38Z",
+        }
+        logs = [
+            "2026-07-15 15:41:39  PLAN   campaign id=acq_spaces input_type=keyword product=anti aging serum",
+            "2026-07-15 15:41:39  START  campaign id=acq_spaces batch=gb_spaces status=pending stage=profile_preflight target=anti aging serum group=United States sources=25",
+            "2026-07-15 15:42:26  CHECK  profile_preflight_detail stage=collection profile=4496 status=不可用 error=PAGE_OPEN_FAILED evidence=/Users/aofa/Documents/New project/reports/reachops/mac_gui/runtime/data/growth_intelligence/reports/collection_profile_preflight_evidence/4496_profile_preflight_PAGE_OPEN_FAILED.png close_action=closed_and_skipped operator_hint=配置预检异常，已关闭并继续下一个账号 message=Message: timeout: Timed out receiving message from renderer: 5.156",
+            "2026-07-15 15:43:38  CHECK  profile_preflight_detail stage=collection profile=4521 status=不可用 error=LOGIN_REQUIRED evidence=/Users/aofa/Documents/New project/reports/reachops/mac_gui/runtime/data/growth_intelligence/reports/collection_profile_preflight_evidence/4521_profile_preflight_LOGIN_REQUIRED.png close_action=closed_and_switched operator_hint=TikTok登录态不足，已关闭并自动换号 message=LOGIN_REQUIRED",
+            "2026-07-15 15:43:38  CHECK  profile_preflight_detail stage=collection profile=4528 status=不可用 error=PROFILE_PREFLIGHT_TIMEOUT evidence=- close_action=closed_and_skipped operator_hint=配置预检异常，已关闭并继续下一个账号 message=profile preflight exceeded 72.0s",
+            "2026-07-15 15:43:38  CHECK  profile_preflight checked=9 available=0 unavailable=9 errors=LOGIN_REQUIRED=1, PAGE_OPEN_FAILED=2, PROFILE_PREFLIGHT_TIMEOUT=6",
+            "2026-07-15 15:43:38  BLOCK  campaign failed reason=无可用账号 required=1 available=0 checked=9 auto_limit=24 error=INSUFFICIENT_LOGGED_IN_PROFILES",
+        ]
+
+        result = derive_acceptance(batch, preflight, logs)
+        plan = build_account_repair_plan(
+            batch,
+            result["profile_preflight_details"],
+            preflight_errors=result["profile_preflight_summary"]["errors"],
+        )
+
+        details_by_id = {row["profile_id"]: row for row in result["profile_preflight_details"]}
+        errors = {row["error"]: row for row in plan["groups"]}
+        self.assertEqual(details_by_id["4496"]["error"], "PAGE_OPEN_FAILED")
+        self.assertEqual(details_by_id["4521"]["error"], "LOGIN_REQUIRED")
+        self.assertEqual(errors["LOGIN_REQUIRED"]["profile_ids"], ["4521"])
+        self.assertEqual(errors["PAGE_OPEN_FAILED"]["profile_ids"], ["4496"])
+        self.assertEqual(errors["PROFILE_PREFLIGHT_TIMEOUT"]["profile_ids"], ["4528"])
+        self.assertEqual(errors["LOGIN_REQUIRED"]["summary_only_count"], 0)
+        self.assertEqual(errors["PAGE_OPEN_FAILED"]["summary_only_count"], 1)
 
     def test_write_remediation_report_exports_actionable_files(self):
         with TemporaryDirectory() as tmpdir:
@@ -5039,7 +5087,73 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(handoff["failed_profile_count"], 1)
         self.assertEqual(handoff["error_groups"][0]["error_code"], "LOGIN_REQUIRED")
         self.assertEqual(handoff["error_groups"][0]["profile_ids_sample"], ["10001"])
+        self.assertEqual(handoff["profile_repair_apply"], {})
         self.assertTrue(handoff["does_not_modify_ixbrowser_groups"])
+        self.assertTrue(handoff["does_not_claim_real_account_pool_ready"])
+
+    def test_latest_profile_readiness_probe_handoff_indexes_repair_apply_result(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            report_dir = root / "reports" / "reachops" / "profile_readiness_probe" / "20260715T000000Z" / "reports"
+            report_dir.mkdir(parents=True)
+            report_path = report_dir / "profile_readiness_probe.json"
+            repair_path = report_dir / "profile_repair_checklist.json"
+            apply_path = report_dir / "latest_account_repair_apply.json"
+            repair_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.profile_repair_checklist.v1",
+                        "status": "manual_repair_required",
+                        "profile_group": "United States",
+                        "failed_profile_ids": ["23912", "19018"],
+                        "error_groups": [
+                            {"error_code": "LOGIN_REQUIRED", "count": 1, "profile_ids": ["23912"]},
+                            {"error_code": "PROFILE_PREFLIGHT_TIMEOUT", "count": 1, "profile_ids": ["19018"]},
+                        ],
+                        "no_submit": True,
+                        "does_not_modify_ixbrowser_groups": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            apply_path.write_text(
+                json.dumps(
+                    {
+                        "status": "applied",
+                        "profile_group": "United States",
+                        "selected_count": 1,
+                        "moved_count": 1,
+                        "failed_count": 0,
+                        "results": [{"profile_id": "23912", "reason": "LOGIN_REQUIRED", "ok": True}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.profile_readiness_probe.v1",
+                        "status": "blocked_by_accounts",
+                        "terminal_state": "BLOCKED",
+                        "profile_group": "United States",
+                        "run_id": "20260715T000000Z",
+                        "no_submit": True,
+                        "no_browser_collection": True,
+                        "no_action_execution": True,
+                        "summary": {"checked": 2, "available": 0, "unavailable": 2},
+                        "outputs": {"repair_json": str(repair_path)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            handoff = latest_profile_readiness_probe_handoff(root)
+
+        self.assertFalse(handoff["does_not_modify_ixbrowser_groups"])
+        self.assertTrue(handoff["profile_repair_apply"]["pending_recheck"])
+        self.assertEqual(handoff["profile_repair_apply"]["effective_status"], "pending_recheck")
+        self.assertEqual(handoff["profile_repair_apply"]["moved_count"], 1)
+        self.assertEqual(handoff["profile_repair_apply"]["path"], str(apply_path))
         self.assertTrue(handoff["does_not_claim_real_account_pool_ready"])
 
     def test_account_repair_apply_status_normalizes_counts_from_results(self):
@@ -5519,6 +5633,60 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertFalse(applied["post_apply_verification"]["requires_recheck_after_apply"])
         self.assertTrue(applied["no_browser_started"])
         self.assertTrue(applied["no_submit"])
+
+    def test_apply_account_repair_plan_accepts_profile_readiness_checklist(self):
+        class Manager:
+            def __init__(self):
+                self.moves = []
+
+            def move_profile_to_quarantine(self, profile_id, reason=""):
+                self.moves.append((str(profile_id), str(reason)))
+                return type(
+                    "Move",
+                    (),
+                    {
+                        "ok": True,
+                        "group_id": "296456",
+                        "group_name": "封禁账号",
+                        "error_code": "",
+                        "error_message": "",
+                    },
+                )()
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "profile_repair_checklist.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.profile_repair_checklist.v1",
+                        "status": "manual_repair_required",
+                        "profile_group": "United States",
+                        "error_groups": [
+                            {"error_code": "LOGIN_REQUIRED", "profile_ids": ["23912"]},
+                            {"error_code": "PROFILE_PREFLIGHT_TIMEOUT", "profile_ids": ["19018"]},
+                        ],
+                        "no_submit": True,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            manager = Manager()
+
+            dry = apply_account_repair_plan(path, apply=False, manager_factory=lambda: manager)
+            applied = apply_account_repair_plan(path, apply=True, manager_factory=lambda: manager)
+
+        self.assertEqual(dry["status"], "dry_run")
+        self.assertEqual(dry["selected_count"], 1)
+        self.assertEqual(dry["results"][0]["profile_id"], "23912")
+        self.assertEqual(dry["results"][0]["reason"], "LOGIN_REQUIRED")
+        self.assertEqual(dry["non_auto_error_codes"], ["PROFILE_PREFLIGHT_TIMEOUT"])
+        self.assertEqual(applied["status"], "applied")
+        self.assertEqual(applied["moved_count"], 1)
+        self.assertEqual(applied["failed_count"], 0)
+        self.assertEqual(applied["profile_group"], "United States")
+        self.assertTrue(applied["safety_contract"]["hard_blocker_only"])
+        self.assertEqual(manager.moves, [("23912", "LOGIN_REQUIRED")])
 
     def test_web_account_repair_apply_uses_latest_plan_and_blocks_running_task(self):
         old_process = reachops_web_ui.RUN_PROCESS

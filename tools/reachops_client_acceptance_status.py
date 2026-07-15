@@ -308,7 +308,7 @@ def scope_log_lines(batch: dict, log_lines: list[str]) -> list[str]:
 
 PROFILE_DETAIL_RE = re.compile(
     r"profile=(?P<profile>\S+)\s+status=(?P<status>\S+)\s+error=(?P<error>\S+)\s+"
-    r"evidence=(?P<evidence>\S+)"
+    r"evidence=(?P<evidence>.*?)"
     r"(?:\s+close_action=(?P<close_action>\S+)\s+operator_hint=(?P<operator_hint>.*?))?"
     r"\s+"
     r"message=(?P<message>.*)$"
