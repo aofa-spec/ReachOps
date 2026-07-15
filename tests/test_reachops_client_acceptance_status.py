@@ -211,6 +211,35 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertIn("page_timeout_summary", matrix)
         self.assertIn("补充真实短 timeout", by_id["page_timeout"]["next_action"])
 
+    def test_p08_failure_matrix_marks_page_timeout_real_when_not_fault_injected(self):
+        matrix = build_p08_failure_matrix(
+            pressure_rows=[],
+            readiness_payload={},
+            runtime_audit={},
+            page_timeout_payload={
+                "status": "blocked_by_accounts",
+                "fault_injection": {
+                    "enabled": False,
+                    "failure_code": "",
+                    "counts_as_real_acceptance": True,
+                },
+                "results": [
+                    {
+                        "profile_id": "13708",
+                        "error_code": "PAGE_TIMEOUT",
+                        "evidence_path": "/tmp/13708_profile_preflight_PAGE_TIMEOUT.png",
+                    }
+                ],
+                "summary": {"errors": {"PAGE_TIMEOUT": 1}},
+            },
+            page_timeout_report_path="/tmp/reachops_page_timeout_probe.json",
+        )
+
+        by_id = {row["id"]: row for row in matrix["rows"]}
+        self.assertEqual(by_id["page_timeout"]["status"], "passed_real")
+        self.assertTrue(by_id["page_timeout"]["passed"])
+        self.assertEqual(by_id["page_timeout"]["source"], "real_profile_readiness")
+
     def test_p08_failure_matrix_marks_group_refresh_failure_fault_injection_separately_from_real(self):
         matrix = build_p08_failure_matrix(
             pressure_rows=[],

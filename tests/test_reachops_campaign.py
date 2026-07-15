@@ -78,6 +78,7 @@ from tools.reachops_web_ui_restart_probe import build_probe as build_reachops_we
 from tools.reachops_database_busy_probe import build_probe as build_reachops_database_busy_probe
 from tools.reachops_report_write_failure_probe import build_probe as build_reachops_report_write_failure_probe
 from tools.reachops_disk_space_abnormal_probe import build_probe as build_reachops_disk_space_abnormal_probe
+from tools.reachops_real_page_timeout_probe import build_probe as build_reachops_real_page_timeout_probe
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
@@ -2739,6 +2740,44 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(payload["fault_injection"]["counts_as_real_acceptance"])
         self.assertFalse(payload["fault_injection"]["real_ixbrowser_opened"])
         self.assertEqual(payload["repair_checklist"]["error_groups"][0]["error_code"], "PAGE_TIMEOUT")
+
+    def test_real_page_timeout_probe_extracts_headless_runtime_evidence(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            evidence_path = Path(tmpdir) / "13708_profile_preflight_PAGE_TIMEOUT.png"
+            evidence_path.write_bytes(b"png")
+            result_path = Path(tmpdir) / "run_result.json"
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "target": "https://www.tiktok.com/@target/photo/1",
+                        "profile_group": "获客分组测试",
+                        "execution_plan": {"plan_id": "plan-real"},
+                        "run_session": {"path": "/tmp/run-real.json"},
+                        "evidence_bundle": {"bundle_id": "bundle-real"},
+                        "tail": [
+                            "CHECK  profile_preflight_detail stage=collection profile=13708 status=不可用 "
+                            f"error=PAGE_TIMEOUT evidence={evidence_path} close_action=closed_and_skipped "
+                            "operator_hint=配置预检异常 message=Timed out receiving message from renderer",
+                            "FAST   collection_result mode=collect_only used_profiles=1 processed_sources=1 failed_sources=0 no_submit=true",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output_path = Path(tmpdir) / "page_timeout_probe.json"
+            payload = build_reachops_real_page_timeout_probe(result_path=result_path, output=output_path)
+            written = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["summary"]["errors"], {"PAGE_TIMEOUT": 1})
+        self.assertFalse(payload["fault_injection"]["enabled"])
+        self.assertTrue(payload["fault_injection"]["real_ixbrowser_opened"])
+        self.assertTrue(payload["fault_injection"]["real_tiktok_opened"])
+        self.assertTrue(payload["fault_injection"]["counts_as_real_acceptance"])
+        self.assertEqual(payload["results"][0]["profile_id"], "13708")
+        self.assertTrue(payload["results"][0]["evidence_exists"])
+        self.assertEqual(written["real_evidence"]["execution_plan"]["plan_id"], "plan-real")
 
     def test_profile_preflight_classifies_driver_get_timeout_as_page_timeout(self):
         class PageTimeoutDriver(FakeProfilePreflightDriver):
