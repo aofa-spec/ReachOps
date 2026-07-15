@@ -154,17 +154,21 @@ def build_matrix(
     readiness_payload: dict[str, Any],
     runtime_audit: dict[str, Any],
     profile_missing_payload: dict[str, Any] | None = None,
+    kernel_mismatch_payload: dict[str, Any] | None = None,
     pressure_summary_path: str = "",
     readiness_report_path: str = "",
     runtime_audit_path: str = "",
     profile_missing_report_path: str = "",
+    kernel_mismatch_report_path: str = "",
 ) -> dict[str, Any]:
     pressure = summarize_pressure(pressure_rows)
     readiness = readiness_summary(readiness_payload)
     profile_missing = readiness_summary(profile_missing_payload or {})
+    kernel_mismatch = readiness_summary(kernel_mismatch_payload or {})
     diagnoses = set(pressure.get("diagnosis_counts") or {})
     readiness_errors = set(readiness.get("error_counts") or {})
     profile_missing_errors = set(profile_missing.get("error_counts") or {})
+    kernel_mismatch_errors = set(kernel_mismatch.get("error_counts") or {})
     terminal_ok = bool(
         pressure.get("row_count", 0) >= 100
         and pressure.get("terminal_ratio", 0) >= 0.98
@@ -244,9 +248,10 @@ def build_matrix(
         matrix_row(
             "kernel_mismatch",
             "ixBrowser 内核不匹配",
-            "missing",
-            [],
-            "使用已知内核不匹配 Profile 或 fault injection 证明 IXBROWSER_KERNEL_MISMATCH 分类和不重复重试。",
+            "passed_real" if "IXBROWSER_KERNEL_MISMATCH" in kernel_mismatch_errors else "missing",
+            [kernel_mismatch_report_path] if kernel_mismatch_report_path else [],
+            "保持内核不匹配账号在修复清单中，不重复消耗坏账号。" if kernel_mismatch_errors else "使用已知内核不匹配 Profile 或 fault injection 证明 IXBROWSER_KERNEL_MISMATCH 分类和不重复重试。",
+            source="real_profile_readiness" if kernel_mismatch_errors else "local_audit",
         ),
         matrix_row(
             "proxy_failed",
@@ -309,6 +314,7 @@ def build_matrix(
         "pressure_summary": pressure,
         "readiness_summary": readiness,
         "profile_missing_summary": profile_missing,
+        "kernel_mismatch_summary": kernel_mismatch,
         "runtime_audit_summary": {
             "status": runtime_audit.get("status", ""),
             "cleanup_candidate_count": int(runtime_audit.get("cleanup_candidate_count") or 0),
@@ -337,6 +343,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pressure-summary", default="/tmp/reachops_p08_100run_summary.jsonl")
     parser.add_argument("--readiness-report", default="/tmp/reachops_profile_readiness_p08_group.json")
     parser.add_argument("--profile-missing-report", default="/tmp/reachops_profile_missing_probe.json")
+    parser.add_argument("--kernel-mismatch-report", default="/tmp/reachops_kernel_mismatch_probe.json")
     parser.add_argument("--runtime-audit", default="/tmp/reachops_runtime_audit_after_p08_pressure.json")
     parser.add_argument("--output", default="reports/reachops/p08_failure_matrix/latest_p08_failure_matrix.json")
     parser.add_argument("--json", action="store_true")
@@ -350,10 +357,12 @@ def main(argv: list[str] | None = None) -> int:
         readiness_payload=read_json(args.readiness_report),
         runtime_audit=read_json(args.runtime_audit),
         profile_missing_payload=read_json(args.profile_missing_report),
+        kernel_mismatch_payload=read_json(args.kernel_mismatch_report),
         pressure_summary_path=str(Path(args.pressure_summary).expanduser()),
         readiness_report_path=str(Path(args.readiness_report).expanduser()),
         runtime_audit_path=str(Path(args.runtime_audit).expanduser()),
         profile_missing_report_path=str(Path(args.profile_missing_report).expanduser()),
+        kernel_mismatch_report_path=str(Path(args.kernel_mismatch_report).expanduser()),
     )
     write_report(args.output, payload)
     if args.json:

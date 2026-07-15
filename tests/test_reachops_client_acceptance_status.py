@@ -138,6 +138,11 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
                 "results": [{"profile_id": "999999999", "error_code": "PROFILE_MISSING"}],
                 "summary": {"errors": {"PROFILE_MISSING": 1}},
             },
+            kernel_mismatch_payload={
+                "status": "blocked_by_accounts",
+                "results": [{"profile_id": "24919", "error_code": "IXBROWSER_KERNEL_MISMATCH"}],
+                "summary": {"errors": {"IXBROWSER_KERNEL_MISMATCH": 1}},
+            },
         )
 
         self.assertEqual(matrix["status"], "partial")
@@ -145,6 +150,7 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertEqual(by_id["pressure_mode_100_real_no_submit"]["status"], "passed_real")
         self.assertEqual(by_id["account_login_invalid"]["status"], "passed_real")
         self.assertEqual(by_id["profile_deleted_or_missing"]["status"], "passed_real")
+        self.assertEqual(by_id["kernel_mismatch"]["status"], "passed_real")
         self.assertEqual(by_id["runtime_process_cleanup"]["status"], "passed_real")
         self.assertEqual(by_id["database_busy"]["status"], "missing")
         self.assertIn("database_busy", matrix["summary"]["missing_ids"])
