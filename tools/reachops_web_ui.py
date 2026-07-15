@@ -4647,6 +4647,10 @@ def html_page() -> bytes:
 	        if (localProductBoundary.boundary_note) boundaryRows.push('本地边界说明：' + localProductBoundary.boundary_note);
 	        if (boundary.summary) boundaryRows.push('交付边界：' + boundary.summary);
 	        if (goal.summary_path) boundaryRows.push('目标摘要：' + goal.summary_path);
+	        const goalBlockingScopes = data.goal_blocking_scopes || goal.blocking_scopes || boundary.blocking_scopes || [];
+	        const rawGoalBlockingCount = data.goal_blocking_scope_count ?? goal.blocking_scope_count ?? goalBlockingScopes.length;
+	        const goalBlockingCount = Number.isFinite(Number(rawGoalBlockingCount)) ? Number(rawGoalBlockingCount) : goalBlockingScopes.length;
+	        if (goalBlockingCount || goalBlockingScopes.length) boundaryRows.push(`目标阻断范围：${{goalBlockingCount}}项 / ${{goalBlockingScopes.join(', ') || '-'}}`);
 	        if (twoPhase.status) boundaryRows.push(`两阶段矩阵：${{twoPhase.status}} / 本地MVP=${{twoPhase.local_mvp_ready === true ? 'true' : 'false'}} / 最终交付=${{twoPhase.final_delivery_ready === true ? 'true' : 'false'}}`);
 	        if ((twoPhase.blocking_scopes || []).length) boundaryRows.push('两阶段阻断：' + twoPhase.blocking_scopes.join(', '));
 	        if (twoPhase.path) boundaryRows.push({{text:'两阶段矩阵JSON：' + twoPhase.path, href:safeDownload(twoPhase.path)}});
