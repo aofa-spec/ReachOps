@@ -43,6 +43,10 @@ from ReachOps.run_session import (
     write_run_session,
 )
 from ReachOps.run_recovery import recover_interrupted_run_session
+from tools.reachops_runtime_process_audit import (
+    RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+    build_runtime_process_audit,
+)
 
 DATA_DIR = ROOT_DIR / "reports/reachops/mac_gui/runtime"
 LOG_PATH = DATA_DIR / "logs/growth_ops_runtime.log"
@@ -690,12 +694,36 @@ def current_two_phase_matrix_md_path() -> Path:
     return path
 
 
+def current_runtime_process_audit_path() -> Path:
+    return Path(DATA_DIR) / "reports" / "support" / "runtime_process_audit.json"
+
+
 def read_current_run_session() -> dict:
     if CURRENT_RUN_SESSION_PATH:
         payload = read_run_session(CURRENT_RUN_SESSION_PATH)
         if payload:
             return payload
     return read_run_session(current_latest_run_session_path())
+
+
+def build_runtime_process_control_report(*, apply_cleanup: bool = False, confirm_cleanup: str = "") -> dict:
+    report = build_runtime_process_audit(
+        latest_session_path=current_latest_run_session_path(),
+        base_dir=Path(DATA_DIR),
+        apply_cleanup=bool(apply_cleanup),
+        confirm_cleanup=str(confirm_cleanup or ""),
+    )
+    path = current_runtime_process_audit_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        report["path"] = str(path)
+        report["persisted"] = True
+    except Exception as exc:
+        report["path"] = str(path)
+        report["persisted"] = False
+        report["persist_error"] = str(exc)
+    return report
 
 
 def persist_run_session(session: dict) -> dict:
@@ -7091,6 +7119,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"status": "rejected", "error": error}, 400)
                 return
             action = str(payload.get("action") or "").lower()
+            if action in {"runtime_cleanup_preview", "runtime_process_cleanup_preview"}:
+                report = build_runtime_process_control_report(apply_cleanup=False)
+                self._send_json(
+                    {
+                        "status": "runtime_cleanup_preview",
+                        "runtime_process_audit": report,
+                        "cleanup_result": report.get("cleanup_result") or {},
+                        "cleanup_candidate_count": report.get("cleanup_candidate_count", 0),
+                        "no_browser_started": True,
+                        "no_submit": True,
+                    }
+                )
+                return
+            if action in {"runtime_cleanup_apply", "runtime_process_cleanup_apply"}:
+                confirm = str(payload.get("confirm") or payload.get("confirmation") or "")
+                report = build_runtime_process_control_report(apply_cleanup=True, confirm_cleanup=confirm)
+                cleanup_result = report.get("cleanup_result") if isinstance(report.get("cleanup_result"), dict) else {}
+                status_code = 200 if cleanup_result.get("applied") else 409
+                self._send_json(
+                    {
+                        "status": str(cleanup_result.get("status") or "runtime_cleanup_apply"),
+                        "runtime_process_audit": report,
+                        "cleanup_result": cleanup_result,
+                        "cleanup_candidate_count": report.get("cleanup_candidate_count", 0),
+                        "confirmation_required": RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+                        "no_browser_started": True,
+                        "no_submit": True,
+                    },
+                    status_code,
+                )
+                return
             with RUN_STATE_LOCK:
                 if not run_is_active():
                     RUN_PAUSED = False
