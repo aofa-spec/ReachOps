@@ -76,6 +76,7 @@ from tools.reachops_profile_readiness_probe import run_probe as run_reachops_pro
 from tools.reachops_group_refresh_failure_probe import build_probe as build_reachops_group_refresh_failure_probe
 from tools.reachops_web_ui_restart_probe import build_probe as build_reachops_web_ui_restart_probe
 from tools.reachops_database_busy_probe import build_probe as build_reachops_database_busy_probe
+from tools.reachops_report_write_failure_probe import build_probe as build_reachops_report_write_failure_probe
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
@@ -2838,6 +2839,33 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(payload["database_busy"]["write_attempt_count"], 1)
         self.assertEqual(payload["database_busy"]["max_write_retries"], 0)
         self.assertEqual(payload["summary"]["errors"], {"DATABASE_BUSY": 1})
+        self.assertEqual(written_payload["outputs"]["json"], str(output))
+
+    def test_report_write_failure_probe_preserves_final_evidence_after_failed_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "report_write_failure.json"
+            failed_report_path = Path(tmpdir) / "readonly" / "blocked_report.json"
+            payload = build_reachops_report_write_failure_probe(
+                output=output,
+                failed_report_path=failed_report_path,
+            )
+            written_payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "blocked_by_environment")
+        self.assertEqual(payload["terminal_state"], "BLOCKED")
+        self.assertEqual(payload["terminal_reason_code"], "REPORT_WRITE_FAILURE")
+        self.assertEqual(payload["error_code"], "REPORT_WRITE_FAILURE")
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(payload["no_browser_started"])
+        self.assertTrue(payload["fault_injection"]["enabled"])
+        self.assertTrue(payload["fault_injection"]["real_report_write_failure_observed"])
+        self.assertFalse(payload["fault_injection"]["counts_as_real_acceptance"])
+        self.assertTrue(payload["report_write_failure"]["write_failure_observed"])
+        self.assertTrue(payload["report_write_failure"]["report_preserved_after_failure"])
+        self.assertTrue(payload["report_write_failure"]["bounded_retry_policy_enforced"])
+        self.assertEqual(payload["report_write_failure"]["write_attempt_count"], 1)
+        self.assertEqual(payload["report_write_failure"]["max_write_retries"], 0)
+        self.assertEqual(payload["summary"]["errors"], {"REPORT_WRITE_FAILURE": 1})
         self.assertEqual(written_payload["outputs"]["json"], str(output))
 
     def test_profile_readiness_probe_reports_us_group_not_found_terminal_reason(self):

@@ -316,6 +316,42 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertIn("database_busy_summary", matrix)
         self.assertIn("补充真实运行数据库 busy", by_id["database_busy"]["next_action"])
 
+    def test_p08_failure_matrix_marks_report_write_failure_fault_injection_separately_from_real(self):
+        matrix = build_p08_failure_matrix(
+            pressure_rows=[],
+            readiness_payload={},
+            runtime_audit={},
+            report_write_failure_payload={
+                "status": "blocked_by_environment",
+                "terminal_reason_code": "REPORT_WRITE_FAILURE",
+                "error_code": "REPORT_WRITE_FAILURE",
+                "no_browser_started": True,
+                "no_submit": True,
+                "fault_injection": {
+                    "enabled": True,
+                    "failure_code": "REPORT_WRITE_FAILURE",
+                    "counts_as_real_acceptance": False,
+                    "real_report_write_failure_observed": True,
+                },
+                "report_write_failure": {
+                    "write_attempt_count": 1,
+                    "max_write_retries": 0,
+                    "bounded_retry_policy_enforced": True,
+                    "write_failure_observed": True,
+                    "report_preserved_after_failure": True,
+                },
+                "summary": {"errors": {"REPORT_WRITE_FAILURE": 1}},
+            },
+            report_write_failure_report_path="/tmp/reachops_report_write_failure_probe.json",
+        )
+
+        by_id = {row["id"]: row for row in matrix["rows"]}
+        self.assertEqual(by_id["report_write_failure"]["status"], "passed_fault_injection")
+        self.assertTrue(by_id["report_write_failure"]["passed"])
+        self.assertEqual(by_id["report_write_failure"]["source"], "safe_fault_injection")
+        self.assertIn("report_write_failure_summary", matrix)
+        self.assertIn("补充真实运行报告写失败", by_id["report_write_failure"]["next_action"])
+
     def test_headless_dummy_root_executes_delayed_callbacks(self):
         calls = []
 
