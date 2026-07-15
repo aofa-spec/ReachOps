@@ -279,6 +279,43 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertIn("web_ui_restart_summary", matrix)
         self.assertIn("补充真实运行中 Web UI 重启", by_id["web_ui_restart"]["next_action"])
 
+    def test_p08_failure_matrix_marks_database_busy_fault_injection_separately_from_real(self):
+        matrix = build_p08_failure_matrix(
+            pressure_rows=[],
+            readiness_payload={},
+            runtime_audit={},
+            database_busy_payload={
+                "status": "blocked_by_environment",
+                "terminal_reason_code": "DATABASE_BUSY",
+                "error_code": "DATABASE_BUSY",
+                "no_browser_started": True,
+                "no_submit": True,
+                "fault_injection": {
+                    "enabled": True,
+                    "failure_code": "DATABASE_BUSY",
+                    "counts_as_real_acceptance": False,
+                    "real_sqlite_lock_observed": True,
+                },
+                "database_busy": {
+                    "write_attempt_count": 1,
+                    "max_write_retries": 0,
+                    "busy_timeout_ms": 25,
+                    "busy_timeout_enforced": True,
+                    "bounded_retry_policy_enforced": True,
+                    "real_sqlite_lock_observed": True,
+                },
+                "summary": {"errors": {"DATABASE_BUSY": 1}},
+            },
+            database_busy_report_path="/tmp/reachops_database_busy_probe.json",
+        )
+
+        by_id = {row["id"]: row for row in matrix["rows"]}
+        self.assertEqual(by_id["database_busy"]["status"], "passed_fault_injection")
+        self.assertTrue(by_id["database_busy"]["passed"])
+        self.assertEqual(by_id["database_busy"]["source"], "safe_fault_injection")
+        self.assertIn("database_busy_summary", matrix)
+        self.assertIn("补充真实运行数据库 busy", by_id["database_busy"]["next_action"])
+
     def test_headless_dummy_root_executes_delayed_callbacks(self):
         calls = []
 

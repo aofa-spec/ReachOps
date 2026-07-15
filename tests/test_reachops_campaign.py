@@ -75,6 +75,7 @@ from tools.reachops_profile_readiness_probe import enrich_existing_report as enr
 from tools.reachops_profile_readiness_probe import run_probe as run_reachops_profile_readiness_probe
 from tools.reachops_group_refresh_failure_probe import build_probe as build_reachops_group_refresh_failure_probe
 from tools.reachops_web_ui_restart_probe import build_probe as build_reachops_web_ui_restart_probe
+from tools.reachops_database_busy_probe import build_probe as build_reachops_database_busy_probe
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
 from tools.reachops_release_evidence import build_release_evidence as build_reachops_release_evidence
@@ -2809,6 +2810,34 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(payload["web_ui_restart"]["duplicate_task_started"])
         self.assertEqual(payload["web_ui_restart"]["max_recovery_attempts"], 1)
         self.assertEqual(payload["summary"]["errors"], {"WEB_UI_RESTART": 1})
+        self.assertEqual(written_payload["outputs"]["json"], str(output))
+
+    def test_database_busy_probe_records_real_sqlite_lock_and_bounded_timeout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "database_busy.json"
+            db_path = Path(tmpdir) / "database_busy.sqlite3"
+            payload = build_reachops_database_busy_probe(
+                output=output,
+                db_path=db_path,
+                busy_timeout_ms=25,
+            )
+            written_payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "blocked_by_environment")
+        self.assertEqual(payload["terminal_state"], "BLOCKED")
+        self.assertEqual(payload["terminal_reason_code"], "DATABASE_BUSY")
+        self.assertEqual(payload["error_code"], "DATABASE_BUSY")
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(payload["no_browser_started"])
+        self.assertTrue(payload["fault_injection"]["enabled"])
+        self.assertTrue(payload["fault_injection"]["real_sqlite_lock_observed"])
+        self.assertFalse(payload["fault_injection"]["counts_as_real_acceptance"])
+        self.assertTrue(payload["database_busy"]["real_sqlite_lock_observed"])
+        self.assertTrue(payload["database_busy"]["busy_timeout_enforced"])
+        self.assertTrue(payload["database_busy"]["bounded_retry_policy_enforced"])
+        self.assertEqual(payload["database_busy"]["write_attempt_count"], 1)
+        self.assertEqual(payload["database_busy"]["max_write_retries"], 0)
+        self.assertEqual(payload["summary"]["errors"], {"DATABASE_BUSY": 1})
         self.assertEqual(written_payload["outputs"]["json"], str(output))
 
     def test_profile_readiness_probe_reports_us_group_not_found_terminal_reason(self):

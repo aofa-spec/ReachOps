@@ -174,6 +174,31 @@ def web_ui_restart_summary(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def database_busy_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    errors = Counter()
+    summary_errors = payload.get("summary", {}).get("errors") if isinstance(payload.get("summary"), dict) else {}
+    if isinstance(summary_errors, dict):
+        for code, count in summary_errors.items():
+            errors[str(code)] += int(count or 0)
+    if not errors and payload.get("error_code"):
+        errors[str(payload.get("error_code"))] += 1
+    database_busy = payload.get("database_busy") if isinstance(payload.get("database_busy"), dict) else {}
+    return {
+        "status": payload.get("status", ""),
+        "terminal_reason_code": payload.get("terminal_reason_code", ""),
+        "error_counts": dict(errors),
+        "write_attempt_count": int(database_busy.get("write_attempt_count") or 0),
+        "max_write_retries": int(database_busy.get("max_write_retries") or 0),
+        "busy_timeout_ms": int(database_busy.get("busy_timeout_ms") or 0),
+        "busy_timeout_enforced": bool(database_busy.get("busy_timeout_enforced")),
+        "bounded_retry_policy_enforced": bool(database_busy.get("bounded_retry_policy_enforced")),
+        "real_sqlite_lock_observed": bool(database_busy.get("real_sqlite_lock_observed")),
+        "no_browser_started": bool(payload.get("no_browser_started", True)),
+        "no_submit": bool(payload.get("no_submit", True)),
+        "report_path": str(payload.get("outputs", {}).get("json") or payload.get("report_path") or ""),
+    }
+
+
 def matrix_row(
     case_id: str,
     title: str,
@@ -214,6 +239,7 @@ def build_matrix(
     page_timeout_payload: dict[str, Any] | None = None,
     group_refresh_failure_payload: dict[str, Any] | None = None,
     web_ui_restart_payload: dict[str, Any] | None = None,
+    database_busy_payload: dict[str, Any] | None = None,
     pressure_summary_path: str = "",
     readiness_report_path: str = "",
     runtime_audit_path: str = "",
@@ -223,6 +249,7 @@ def build_matrix(
     page_timeout_report_path: str = "",
     group_refresh_failure_report_path: str = "",
     web_ui_restart_report_path: str = "",
+    database_busy_report_path: str = "",
 ) -> dict[str, Any]:
     pressure = summarize_pressure(pressure_rows)
     readiness = readiness_summary(readiness_payload)
@@ -232,10 +259,12 @@ def build_matrix(
     page_timeout = readiness_summary(page_timeout_payload or {})
     group_refresh_failure = failure_probe_summary(group_refresh_failure_payload or {})
     web_ui_restart = web_ui_restart_summary(web_ui_restart_payload or {})
+    database_busy = database_busy_summary(database_busy_payload or {})
     proxy_failed_is_injected = fault_injection_enabled(proxy_failed_payload)
     page_timeout_is_injected = fault_injection_enabled(page_timeout_payload)
     group_refresh_failure_is_injected = fault_injection_enabled(group_refresh_failure_payload)
     web_ui_restart_is_injected = fault_injection_enabled(web_ui_restart_payload)
+    database_busy_is_injected = fault_injection_enabled(database_busy_payload)
     diagnoses = set(pressure.get("diagnosis_counts") or {})
     readiness_errors = set(readiness.get("error_counts") or {})
     profile_missing_errors = set(profile_missing.get("error_counts") or {})
@@ -244,6 +273,7 @@ def build_matrix(
     page_timeout_errors = set(page_timeout.get("error_counts") or {})
     group_refresh_failure_errors = set(group_refresh_failure.get("error_counts") or {})
     web_ui_restart_errors = set(web_ui_restart.get("error_counts") or {})
+    database_busy_errors = set(database_busy.get("error_counts") or {})
     terminal_ok = bool(
         pressure.get("row_count", 0) >= 100
         and pressure.get("terminal_ratio", 0) >= 0.98
@@ -451,9 +481,37 @@ def build_matrix(
         matrix_row(
             "database_busy",
             "数据库 busy",
-            "missing",
-            [],
-            "持有 SQLite 写锁并运行受控任务，验证 busy_timeout 后结构化失败或恢复。",
+            (
+                "passed_fault_injection"
+                if "DATABASE_BUSY" in database_busy_errors
+                and database_busy_is_injected
+                and database_busy.get("real_sqlite_lock_observed")
+                and database_busy.get("busy_timeout_enforced")
+                and database_busy.get("bounded_retry_policy_enforced")
+                and int(database_busy.get("max_write_retries") or 0) <= 0
+                and database_busy.get("no_browser_started") is True
+                and database_busy.get("no_submit") is True
+                else "passed_real"
+                if "DATABASE_BUSY" in database_busy_errors
+                and database_busy.get("busy_timeout_enforced")
+                and database_busy.get("bounded_retry_policy_enforced")
+                else "missing"
+            ),
+            [database_busy_report_path] if database_busy_report_path else [],
+            (
+                "补充真实运行数据库 busy 恢复/阻断证据后再升级为 passed_real。"
+                if database_busy_is_injected and database_busy_errors
+                else "保持 DATABASE_BUSY 在 busy_timeout 后结构化终止或恢复。"
+                if database_busy_errors
+                else "持有 SQLite 写锁并运行受控任务，验证 busy_timeout 后结构化失败或恢复。"
+            ),
+            source=(
+                "safe_fault_injection"
+                if database_busy_is_injected and database_busy_errors
+                else "real_runtime_database"
+                if database_busy_errors
+                else "local_audit"
+            ),
         ),
         matrix_row(
             "report_write_failure",
@@ -486,6 +544,7 @@ def build_matrix(
         "page_timeout_summary": page_timeout,
         "group_refresh_failure_summary": group_refresh_failure,
         "web_ui_restart_summary": web_ui_restart,
+        "database_busy_summary": database_busy,
         "runtime_audit_summary": {
             "status": runtime_audit.get("status", ""),
             "cleanup_candidate_count": int(runtime_audit.get("cleanup_candidate_count") or 0),
@@ -519,6 +578,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--page-timeout-report", default="/tmp/reachops_page_timeout_probe.json")
     parser.add_argument("--group-refresh-failure-report", default="/tmp/reachops_group_refresh_failure_probe.json")
     parser.add_argument("--web-ui-restart-report", default="/tmp/reachops_web_ui_restart_probe.json")
+    parser.add_argument("--database-busy-report", default="/tmp/reachops_database_busy_probe.json")
     parser.add_argument("--runtime-audit", default="/tmp/reachops_runtime_audit_after_p08_pressure.json")
     parser.add_argument("--output", default="reports/reachops/p08_failure_matrix/latest_p08_failure_matrix.json")
     parser.add_argument("--json", action="store_true")
@@ -537,6 +597,7 @@ def main(argv: list[str] | None = None) -> int:
         page_timeout_payload=read_json(args.page_timeout_report),
         group_refresh_failure_payload=read_json(args.group_refresh_failure_report),
         web_ui_restart_payload=read_json(args.web_ui_restart_report),
+        database_busy_payload=read_json(args.database_busy_report),
         pressure_summary_path=str(Path(args.pressure_summary).expanduser()),
         readiness_report_path=str(Path(args.readiness_report).expanduser()),
         runtime_audit_path=str(Path(args.runtime_audit).expanduser()),
@@ -546,6 +607,7 @@ def main(argv: list[str] | None = None) -> int:
         page_timeout_report_path=str(Path(args.page_timeout_report).expanduser()),
         group_refresh_failure_report_path=str(Path(args.group_refresh_failure_report).expanduser()),
         web_ui_restart_report_path=str(Path(args.web_ui_restart_report).expanduser()),
+        database_busy_report_path=str(Path(args.database_busy_report).expanduser()),
     )
     write_report(args.output, payload)
     if args.json:
