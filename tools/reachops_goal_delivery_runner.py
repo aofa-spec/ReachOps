@@ -473,6 +473,20 @@ def windows_acceptance_handoff_summary(package: dict[str, Any]) -> dict[str, Any
     if not handoff:
         return {}
     safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    execution_environment = (
+        handoff.get("execution_environment")
+        if isinstance(handoff.get("execution_environment"), dict)
+        else package.get("execution_environment")
+        if isinstance(package.get("execution_environment"), dict)
+        else {}
+    )
+    environment_blocker = (
+        handoff.get("environment_blocker")
+        if isinstance(handoff.get("environment_blocker"), dict)
+        else package.get("environment_blocker")
+        if isinstance(package.get("environment_blocker"), dict)
+        else {}
+    )
     return {
         "schema_version": str(handoff.get("schema_version") or ""),
         "path": str(package.get("windows_acceptance_handoff_path") or ""),
@@ -482,6 +496,8 @@ def windows_acceptance_handoff_summary(package: dict[str, Any]) -> dict[str, Any
         "does_not_claim_final_delivery_ready": bool(handoff.get("does_not_claim_final_delivery_ready", True)),
         "acceptance_summary_path": str(handoff.get("acceptance_summary_path") or ""),
         "manifest_path": str(handoff.get("manifest_path") or ""),
+        "execution_environment": execution_environment,
+        "environment_blocker": environment_blocker,
         "missing_artifacts": [
             str(item) for item in (handoff.get("missing_artifacts") or []) if str(item or "").strip()
         ],
@@ -529,6 +545,8 @@ def with_windows_acceptance_handoff(
         }
     summary.setdefault("windows_acceptance_handoff", handoff_summary)
     summary.setdefault("windows_acceptance_handoff_path", handoff_summary["path"])
+    summary.setdefault("execution_environment", handoff_summary.get("execution_environment") or package.get("execution_environment") or {})
+    summary.setdefault("environment_blocker", handoff_summary.get("environment_blocker") or package.get("environment_blocker") or {})
     return summary
 
 
@@ -613,6 +631,9 @@ def build_deliverable_index(
             "ready": str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready")),
             "status": package.get("status"),
             "missing_artifacts": windows_missing_artifacts,
+            "failures": [str(item) for item in (package.get("failures") or []) if str(item or "").strip()],
+            "execution_environment": package.get("execution_environment") if isinstance(package.get("execution_environment"), dict) else {},
+            "environment_blocker": package.get("environment_blocker") if isinstance(package.get("environment_blocker"), dict) else {},
             "artifacts": package.get("artifacts") or {},
             "remediation_plan": windows_blocker.get("remediation_plan") or package.get("remediation_plan") or {},
             "blocker_summary": windows_blocker_summary,
@@ -898,7 +919,9 @@ def build_report() -> dict[str, Any]:
                 "action": "补齐 Windows 打包输入文件和脚本合同。",
             }
         )
-    if package.get("missing_artifacts"):
+    if package.get("missing_artifacts") or package.get("failures") or not (
+        str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready"))
+    ):
         remediation = package.get("remediation_plan") if isinstance(package.get("remediation_plan"), dict) else {}
         package_blocker_summary = with_windows_acceptance_handoff(
             final_gate_blocker_summary(final_gate, "windows_final_artifacts"),
@@ -909,6 +932,8 @@ def build_report() -> dict[str, Any]:
                 "scope": "windows_final_artifacts",
                 "status": package.get("status"),
                 "missing_artifacts": package.get("missing_artifacts") or [],
+                "failures": package.get("failures") or [],
+                "environment_blocker": package.get("environment_blocker") if isinstance(package.get("environment_blocker"), dict) else {},
                 "remediation_plan": remediation,
                 "blocker_summary": package_blocker_summary,
                 "action": "在 Windows 实机运行 build 和 acceptance，生成 exe、installer、manifest、acceptance_summary。",
@@ -1073,6 +1098,33 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
     ):
         item = index.get(key) if isinstance(index.get(key), dict) else {}
         lines.append(f"| `{key}` | `{_markdown_bool(item.get('ready'))}` | `{item.get('blocking_scope') or ''}` |")
+    windows_index = index.get("windows_final_package") if isinstance(index.get("windows_final_package"), dict) else {}
+    windows_blocker_summary = (
+        windows_index.get("blocker_summary")
+        if isinstance(windows_index.get("blocker_summary"), dict)
+        else {}
+    )
+    windows_environment_blocker = (
+        windows_index.get("environment_blocker")
+        if isinstance(windows_index.get("environment_blocker"), dict)
+        else windows_blocker_summary.get("environment_blocker")
+        if isinstance(windows_blocker_summary.get("environment_blocker"), dict)
+        else {}
+    )
+    if windows_index and not windows_index.get("ready"):
+        lines.extend(["", "## Windows 最终包支持交接", ""])
+        lines.append(f"- 状态：`{windows_index.get('status') or '-'}`")
+        if windows_index.get("failures"):
+            lines.append(f"- 失败码：`{', '.join(str(item) for item in windows_index.get('failures') or [])}`")
+        if windows_index.get("missing_artifacts"):
+            lines.append(f"- 缺失产物：`{', '.join(str(item) for item in windows_index.get('missing_artifacts') or [])}`")
+        if windows_environment_blocker:
+            lines.append(f"- 环境阻断：`{windows_environment_blocker.get('code') or windows_environment_blocker.get('failure_code') or '-'}`")
+            lines.append(f"- 当前平台：`{windows_environment_blocker.get('platform_system') or '-'}`")
+            lines.append(f"- 所需环境：{windows_environment_blocker.get('required_environment') or '-'}")
+        next_required_command = windows_blocker_summary.get("next_required_command")
+        if next_required_command:
+            lines.append(f"- 下一步复验命令：`{next_required_command}`")
     local_index = index.get("local_mvp_acceptance") if isinstance(index.get("local_mvp_acceptance"), dict) else {}
     local_blocker_summary = (
         local_index.get("blocker_summary")

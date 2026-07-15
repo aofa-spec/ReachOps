@@ -2941,7 +2941,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     {
                         "status": "failed",
                         "final_delivery_ready": False,
+                        "failures": ["missing_windows_acceptance_environment", "acceptance_summary_missing"],
                         "missing_artifacts": ["exe", "installer", "manifest", "acceptance_summary"],
+                        "execution_environment": {
+                            "schema_version": "reachops.delivery_package_execution_environment.v1",
+                            "platform_system": "Darwin",
+                            "is_windows": False,
+                            "strict_current_environment_required": True,
+                            "requires_windows_real_acceptance": True,
+                            "windows_acceptance_environment_ready": False,
+                        },
+                        "environment_blocker": {
+                            "schema_version": "reachops.delivery_package_environment_blocker.v1",
+                            "code": "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+                            "failure_code": "missing_windows_acceptance_environment",
+                            "platform_system": "Darwin",
+                            "required_environment": "Windows VM or Windows machine running packaged-client acceptance",
+                            "does_not_claim_final_delivery_ready": True,
+                        },
                         "remediation_plan": remediation_plan,
                         "windows_acceptance_handoff_path": "reports/support/windows_acceptance_handoff.json",
                         "windows_acceptance_handoff": {
@@ -2952,6 +2969,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
                             "does_not_claim_final_delivery_ready": True,
                             "acceptance_summary_path": "reports/reachops_acceptance/acceptance_summary.json",
                             "manifest_path": "dist/installer/reachops-update-manifest.json",
+                            "execution_environment": {
+                                "schema_version": "reachops.delivery_package_execution_environment.v1",
+                                "platform_system": "Darwin",
+                                "is_windows": False,
+                                "strict_current_environment_required": True,
+                                "requires_windows_real_acceptance": True,
+                                "windows_acceptance_environment_ready": False,
+                            },
+                            "environment_blocker": {
+                                "schema_version": "reachops.delivery_package_environment_blocker.v1",
+                                "code": "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+                                "failure_code": "missing_windows_acceptance_environment",
+                                "platform_system": "Darwin",
+                                "required_environment": "Windows VM or Windows machine running packaged-client acceptance",
+                                "does_not_claim_final_delivery_ready": True,
+                            },
                             "missing_artifacts": ["acceptance_summary"],
                             "failure_codes": ["acceptance_summary_missing"],
                             "pending_external_validation": ["windows_real_acceptance"],
@@ -3057,6 +3090,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
         )
         self.assertIn("acceptance_summary_missing", windows_blocker["blocker_summary"]["failures"])
         self.assertEqual(
+            windows_blocker["environment_blocker"]["code"],
+            "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+        )
+        self.assertEqual(
+            windows_blocker["blocker_summary"]["environment_blocker"]["code"],
+            "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+        )
+        self.assertEqual(
             windows_blocker["blocker_summary"]["windows_acceptance_handoff"]["schema_version"],
             "reachops.windows_acceptance_handoff.v1",
         )
@@ -3068,6 +3109,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             windows_blocker["blocker_summary"]["windows_acceptance_handoff"][
                 "requires_windows_real_acceptance"
             ]
+        )
+        self.assertEqual(
+            windows_blocker["blocker_summary"]["windows_acceptance_handoff"]["environment_blocker"]["code"],
+            "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
         )
         self.assertIn("mvp_acceptance", report["sections"])
         self.assertIn("mac_loop_acceptance", report["sections"])
@@ -3149,6 +3194,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(index["commercial_issue_closure"]["acceptance_criteria_total"], 53)
         self.assertEqual(index["commercial_issue_closure"]["acceptance_criteria_external_pending"], 17)
         self.assertEqual(index["windows_final_package"]["blocking_scope"], "windows_final_artifacts")
+        self.assertIn("missing_windows_acceptance_environment", index["windows_final_package"]["failures"])
+        self.assertEqual(
+            index["windows_final_package"]["environment_blocker"]["code"],
+            "FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT",
+        )
         self.assertIn("exe", index["windows_final_package"]["missing_artifacts"])
         self.assertIn("acceptance_summary", index["windows_final_package"]["missing_artifacts"])
         self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(index["windows_final_package"]["remediation_plan"]["commands"]))
@@ -3163,6 +3213,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("## 最终交付标准", markdown)
         self.assertIn("authorization_handoff", markdown)
         self.assertIn("`windows_final_package` | `false`", markdown)
+        self.assertIn("## Windows 最终包支持交接", markdown)
+        self.assertIn("FINAL_DELIVERY_BLOCKED_BY_MISSING_WINDOWS_ACCEPTANCE_ENVIRONMENT", markdown)
         self.assertIn("`authorized_live_submit` | `false`", markdown)
         self.assertIn("`commercial_issue_closure` | `false`", markdown)
         self.assertIn("本地 MVP 可验收不等于最终客户交付完成", markdown)
