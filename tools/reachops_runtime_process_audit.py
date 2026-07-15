@@ -4,8 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ from tools.reachops_run_session_takeover import DEFAULT_BASE_DIR, DEFAULT_LATEST
 
 
 RUNTIME_PROCESS_AUDIT_SCHEMA_VERSION = "reachops.runtime_process_audit.v1"
+RUNTIME_PROCESS_CLEANUP_CONFIRMATION = "CLEANUP_RUNTIME_PROCESSES"
 
 
 def utc_now_iso() -> str:
@@ -103,12 +106,116 @@ def _safe_process_row(row: dict[str, Any], classification: str) -> dict[str, Any
     }
 
 
+def _cleanup_item(item: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "pid": int(item.get("pid") or 0),
+        "ppid": int(item.get("ppid") or 0),
+        "classification": str(item.get("classification") or ""),
+        "reason": reason,
+        "signal": "SIGTERM",
+        "command": str(item.get("command") or "")[:500],
+    }
+
+
+def build_cleanup_plan(
+    *,
+    orphan_chromedrivers: list[dict[str, Any]],
+    detached_reachops_clients: list[dict[str, Any]],
+    stale_launchers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    plan: list[dict[str, Any]] = []
+    for item in orphan_chromedrivers:
+        plan.append(_cleanup_item(item, "orphan_chromedriver_candidate"))
+    for item in detached_reachops_clients:
+        plan.append(_cleanup_item(item, "detached_reachops_client_process"))
+    for item in stale_launchers:
+        plan.append(_cleanup_item(item, "stale_native_client_launcher"))
+    seen: set[int] = set()
+    deduped: list[dict[str, Any]] = []
+    for item in plan:
+        pid = int(item.get("pid") or 0)
+        if pid <= 0 or pid in seen:
+            continue
+        seen.add(pid)
+        deduped.append(item)
+    return deduped
+
+
+def apply_cleanup_plan(
+    cleanup_plan: list[dict[str, Any]],
+    *,
+    apply: bool = False,
+    confirm: str = "",
+    process_terminator: Any = None,
+    sleep_seconds: float = 0.05,
+) -> dict[str, Any]:
+    if not apply:
+        return {
+            "schema_version": "reachops.runtime_process_cleanup.v1",
+            "status": "dry_run",
+            "applied": False,
+            "confirmation_required": RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+            "candidate_count": len(cleanup_plan),
+            "attempted": [],
+            "no_process_killed": True,
+        }
+    if str(confirm or "") != RUNTIME_PROCESS_CLEANUP_CONFIRMATION:
+        return {
+            "schema_version": "reachops.runtime_process_cleanup.v1",
+            "status": "confirmation_required",
+            "applied": False,
+            "confirmation_required": RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+            "candidate_count": len(cleanup_plan),
+            "attempted": [],
+            "no_process_killed": True,
+        }
+    terminator = process_terminator or os.kill
+    attempted: list[dict[str, Any]] = []
+    for item in cleanup_plan:
+        pid = int(item.get("pid") or 0)
+        if pid <= 0:
+            continue
+        row = dict(item)
+        row["attempted"] = True
+        try:
+            terminator(pid, signal.SIGTERM)
+            if sleep_seconds > 0:
+                time.sleep(float(sleep_seconds))
+            row["ok"] = not _pid_running(pid) if process_terminator is None else True
+            row["error"] = "" if row["ok"] else "process_still_running_after_sigterm"
+        except ProcessLookupError:
+            row["ok"] = True
+            row["error"] = "process_already_exited"
+        except PermissionError as exc:
+            row["ok"] = False
+            row["error"] = f"permission_denied:{exc}"
+        except OSError as exc:
+            row["ok"] = False
+            row["error"] = str(exc)
+        attempted.append(row)
+    failed = [row for row in attempted if not row.get("ok")]
+    return {
+        "schema_version": "reachops.runtime_process_cleanup.v1",
+        "status": "completed" if not failed else "partial_failed",
+        "applied": True,
+        "confirmation_required": RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+        "candidate_count": len(cleanup_plan),
+        "attempted_count": len(attempted),
+        "failed_count": len(failed),
+        "attempted": attempted,
+        "no_process_killed": False,
+    }
+
+
 def build_runtime_process_audit(
     *,
     process_rows: list[dict[str, Any]] | None = None,
     latest_session_path: Path = DEFAULT_LATEST_SESSION_PATH,
     base_dir: Path = DEFAULT_BASE_DIR,
     command_runner: Any = None,
+    apply_cleanup: bool = False,
+    confirm_cleanup: str = "",
+    process_terminator: Any = None,
 ) -> dict[str, Any]:
     rows = list(process_rows) if process_rows is not None else _read_process_rows(command_runner=command_runner)
     takeover, _rc = build_takeover_report(latest_session_path=Path(latest_session_path), recover=False)
@@ -154,6 +261,17 @@ def build_runtime_process_audit(
     if session_pid and not session_pid_running and str(takeover.get("status") or "") == "needs_recovery":
         blockers.append("latest_run_session_needs_recovery")
 
+    cleanup_plan = build_cleanup_plan(
+        orphan_chromedrivers=orphan_chromedrivers,
+        detached_reachops_clients=detached_reachops_clients,
+        stale_launchers=stale_launchers,
+    )
+    cleanup_result = apply_cleanup_plan(
+        cleanup_plan,
+        apply=apply_cleanup,
+        confirm=confirm_cleanup,
+        process_terminator=process_terminator,
+    )
     status = "attention_required" if blockers else "ok"
     return {
         "schema_version": RUNTIME_PROCESS_AUDIT_SCHEMA_VERSION,
@@ -175,8 +293,12 @@ def build_runtime_process_audit(
         "stale_native_client_launchers": stale_launchers,
         "stale_native_client_launcher_count": len(stale_launchers),
         "blocker_codes": blockers,
-        "read_only": True,
-        "no_process_killed": True,
+        "cleanup_plan": cleanup_plan,
+        "cleanup_candidate_count": len(cleanup_plan),
+        "cleanup_confirmation_required": RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+        "cleanup_result": cleanup_result,
+        "read_only": not apply_cleanup,
+        "no_process_killed": bool(cleanup_result.get("no_process_killed")),
         "no_browser_started": True,
         "no_submit": True,
         "no_ai_token_used": True,
@@ -187,11 +309,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit ReachOps runtime processes without mutating local state.")
     parser.add_argument("--latest-session-path", default=str(DEFAULT_LATEST_SESSION_PATH))
     parser.add_argument("--base-dir", default=str(DEFAULT_BASE_DIR))
+    parser.add_argument("--apply", action="store_true", help="Apply cleanup to candidate stale/orphan local ReachOps processes.")
+    parser.add_argument("--confirm", default="", help=f"Required confirmation token for --apply: {RUNTIME_PROCESS_CLEANUP_CONFIRMATION}")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     report = build_runtime_process_audit(
         latest_session_path=Path(args.latest_session_path),
         base_dir=Path(args.base_dir),
+        apply_cleanup=bool(args.apply),
+        confirm_cleanup=str(args.confirm or ""),
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False))

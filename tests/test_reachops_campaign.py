@@ -4429,10 +4429,85 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(report["no_submit"])
             self.assertEqual(report["orphan_chromedriver_candidate_count"], 1)
             self.assertEqual(report["stale_native_client_launcher_count"], 2)
+            self.assertEqual(report["cleanup_candidate_count"], 3)
+            self.assertEqual(report["cleanup_result"]["status"], "dry_run")
+            self.assertFalse(report["cleanup_result"]["applied"])
+            self.assertEqual(report["cleanup_confirmation_required"], "CLEANUP_RUNTIME_PROCESSES")
             self.assertIn("orphan_chromedriver_candidates_present", report["blocker_codes"])
             self.assertIn("multiple_native_client_launchers_present", report["blocker_codes"])
             self.assertEqual(report["process_counts"]["chromedriver"], 1)
             self.assertEqual(report["process_counts"]["reachops_native_client_launcher"], 2)
+
+    def test_runtime_process_audit_cleanup_requires_explicit_confirmation(self):
+        rows = [
+            {
+                "pid": 101,
+                "ppid": 1,
+                "stat": "S",
+                "etime": "02:00:00",
+                "command": "/Users/aofa/Library/Application Support/ixBrowser-Resources/chrome/142/chromedriver --port=62000",
+            },
+            {
+                "pid": 201,
+                "ppid": 1,
+                "stat": "S+",
+                "etime": "01:00:00",
+                "command": "/bin/zsh /Users/aofa/Documents/New project/启动ReachOps原生MacUI.command",
+            },
+            {
+                "pid": 301,
+                "ppid": 201,
+                "stat": "S+",
+                "etime": "01:00:00",
+                "command": ".venv/bin/python ReachOpsApp.py",
+            },
+        ]
+        killed = []
+
+        def fake_terminator(pid, sig):
+            killed.append((pid, sig))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp) / "latest_run_session.json"
+            latest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.run_session.v1",
+                        "session_id": "run-cleanup-test",
+                        "plan_id": "plan-cleanup-test",
+                        "state": "RUNNING",
+                        "pid": 999,
+                        "checkpoint": {},
+                        "evidence": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            missing_confirm = build_reachops_runtime_process_audit(
+                process_rows=rows,
+                latest_session_path=latest,
+                base_dir=Path(tmp),
+                apply_cleanup=True,
+                confirm_cleanup="",
+                process_terminator=fake_terminator,
+            )
+            applied = build_reachops_runtime_process_audit(
+                process_rows=rows,
+                latest_session_path=latest,
+                base_dir=Path(tmp),
+                apply_cleanup=True,
+                confirm_cleanup="CLEANUP_RUNTIME_PROCESSES",
+                process_terminator=fake_terminator,
+            )
+
+        self.assertEqual(missing_confirm["cleanup_result"]["status"], "confirmation_required")
+        self.assertFalse(missing_confirm["cleanup_result"]["applied"])
+        self.assertTrue(missing_confirm["no_process_killed"])
+        self.assertEqual(killed, [(101, 15), (301, 15), (201, 15)])
+        self.assertEqual(applied["cleanup_result"]["status"], "completed")
+        self.assertTrue(applied["cleanup_result"]["applied"])
+        self.assertFalse(applied["no_process_killed"])
+        self.assertEqual(applied["cleanup_result"]["attempted_count"], 3)
 
     def test_support_diagnostics_materialization_writes_required_support_files(self):
         with tempfile.TemporaryDirectory() as tmp:
