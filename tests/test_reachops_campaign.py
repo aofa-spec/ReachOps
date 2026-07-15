@@ -2579,6 +2579,125 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(payload["repair_checklist"]["status"], "ready_profiles_available")
         self.assertIn("--profile-ids", payload["repair_checklist"]["retest_command"])
 
+    def test_profile_readiness_probe_auto_selection_excludes_recent_failed_profiles(self):
+        def fake_metadata_builder(**_kwargs):
+            return {
+                "status": "ok",
+                "safe_read_only": True,
+                "open_profile_called": False,
+                "group_name_filter": "United States",
+                "group_count": 1,
+                "known_group_count": 1,
+                "selected_group_id": "257999",
+                "selected_profile_count": 4,
+                "selected_profiles": [
+                    {"profile": {"profile_id": "bad-login", "group_id": "257999", "group_name": "United States"}},
+                    {"profile": {"profile_id": "bad-page", "group_id": "257999", "group_name": "United States"}},
+                    {"profile": {"profile_id": "fresh-1", "group_id": "257999", "group_name": "United States"}},
+                    {"profile": {"profile_id": "fresh-2", "group_id": "257999", "group_name": "United States"}},
+                ],
+            }
+
+        seen_profiles = []
+
+        def fake_preflight(profiles):
+            seen_profiles.extend([str(row.get("profile_id")) for row in profiles])
+            return {
+                "requested": len(profiles),
+                "checked": len(profiles),
+                "available": len(profiles),
+                "unavailable": 0,
+                "errors": {},
+                "results": [
+                    {
+                        "profile_id": row["profile_id"],
+                        "group_name": row["group_name"],
+                        "ok": True,
+                        "duration_seconds": 0.1,
+                    }
+                    for row in profiles
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repair_dir = Path(tmpdir) / "20260715T000000Z" / "reports"
+            repair_dir.mkdir(parents=True)
+            (repair_dir / "profile_repair_checklist.json").write_text(
+                json.dumps(
+                    {
+                        "failed_profile_ids": ["bad-login"],
+                        "error_groups": [{"error_code": "PAGE_OPEN_FAILED", "profile_ids": ["bad-page"]}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("tools.reachops_profile_readiness_probe.ProfilePreflightChecker.run", side_effect=fake_preflight):
+                payload = run_reachops_profile_readiness_probe(
+                    base_dir=tmpdir,
+                    profile_group="United States",
+                    profile_limit=2,
+                    max_workers=1,
+                    page_timeout_seconds=1,
+                    wait_after_open_seconds=0,
+                    total_timeout_seconds=10,
+                    metadata_builder=fake_metadata_builder,
+                )
+
+        self.assertEqual(seen_profiles, ["fresh-1", "fresh-2"])
+        self.assertEqual(payload["attempted_profile_ids"], ["fresh-1", "fresh-2"])
+        self.assertEqual(payload["recent_failed_profile_ids_count"], 2)
+        self.assertEqual(payload["recent_failed_profile_ids_sample"], ["bad-login", "bad-page"])
+        self.assertEqual(payload["metadata"]["excluded_recent_failed_profile_count"], 2)
+        self.assertEqual(payload["metadata"]["excluded_recent_failed_profile_ids_sample"], ["bad-login", "bad-page"])
+
+    def test_profile_readiness_probe_explicit_ids_bypass_recent_failed_exclusion(self):
+        seen_profiles = []
+
+        def fake_preflight(profiles):
+            seen_profiles.extend([str(row.get("profile_id")) for row in profiles])
+            return {
+                "requested": len(profiles),
+                "checked": len(profiles),
+                "available": 0,
+                "unavailable": len(profiles),
+                "errors": {"LOGIN_REQUIRED": len(profiles)},
+                "results": [
+                    {
+                        "profile_id": row["profile_id"],
+                        "group_name": row["group_name"],
+                        "ok": False,
+                        "error_code": "LOGIN_REQUIRED",
+                        "error_message": "LOGIN_REQUIRED",
+                        "duration_seconds": 0.1,
+                    }
+                    for row in profiles
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repair_dir = Path(tmpdir) / "20260715T000000Z" / "reports"
+            repair_dir.mkdir(parents=True)
+            (repair_dir / "profile_repair_checklist.json").write_text(
+                json.dumps({"failed_profile_ids": ["bad-login"]}),
+                encoding="utf-8",
+            )
+            with patch("tools.reachops_profile_readiness_probe.ProfilePreflightChecker.run", side_effect=fake_preflight):
+                payload = run_reachops_profile_readiness_probe(
+                    base_dir=tmpdir,
+                    profile_group="United States",
+                    profile_ids=["bad-login"],
+                    profile_limit=1,
+                    max_workers=1,
+                    page_timeout_seconds=1,
+                    wait_after_open_seconds=0,
+                    total_timeout_seconds=10,
+                )
+
+        self.assertEqual(seen_profiles, ["bad-login"])
+        self.assertEqual(payload["attempted_profile_ids"], ["bad-login"])
+        self.assertEqual(payload["recent_failed_profile_ids_count"], 0)
+        self.assertEqual(payload["metadata"]["status"], "explicit")
+
     def test_profile_readiness_probe_enriches_existing_report_without_reopening_profiles(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             report_dir = Path(tmpdir) / "20260715T000000Z" / "reports"

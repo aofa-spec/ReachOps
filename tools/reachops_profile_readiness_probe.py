@@ -38,12 +38,47 @@ def safe_int(value: Any, default: int, minimum: int = 1, maximum: int = 1000000)
     return max(minimum, min(maximum, parsed))
 
 
+def ordered_unique(values: list[Any]) -> list[str]:
+    rows: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        profile_id = str(value or "").strip()
+        if not profile_id or profile_id in seen:
+            continue
+        seen.add(profile_id)
+        rows.append(profile_id)
+    return rows
+
+
+def load_recent_failed_profile_ids(base_dir: str | Path, max_reports: int = 10) -> list[str]:
+    root = Path(base_dir)
+    candidates = sorted(
+        root.glob("*/reports/profile_repair_checklist.json"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True,
+    )[: max(1, int(max_reports or 1))]
+    failed: list[str] = []
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        failed.extend(payload.get("failed_profile_ids") or [])
+        for group in payload.get("error_groups") or []:
+            if isinstance(group, dict):
+                failed.extend(group.get("profile_ids") or [])
+    return ordered_unique(failed)
+
+
 def select_profiles(
     *,
     profile_ids: list[str] | None = None,
     profile_group: str = "United States",
     profile_limit: int = 3,
     max_pages: int = 2,
+    exclude_profile_ids: list[str] | None = None,
     metadata_builder: Callable[..., dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     limit = safe_int(profile_limit, 3, minimum=1, maximum=100)
@@ -68,20 +103,26 @@ def select_profiles(
             profile_group=profile_group,
             profile_limit=limit,
             max_pages=max_pages,
+            exclude_profile_ids=exclude_profile_ids,
         )
 
     builder = metadata_builder
+    exclude_set = {str(profile_id).strip() for profile_id in (exclude_profile_ids or []) if str(profile_id).strip()}
     metadata = builder(
         group_name=str(profile_group or ""),
         max_pages=max(1, int(max_pages or 1)),
-        profile_limit=limit,
+        profile_limit=min(100, limit + len(exclude_set)),
     )
     selected = metadata.get("selected_profiles") if isinstance(metadata, dict) else []
     profiles: list[dict[str, str]] = []
+    excluded: list[str] = []
     for row in selected or []:
         profile = row.get("profile") if isinstance(row, dict) else {}
         profile_id = str((profile or {}).get("profile_id") or "").strip()
         if not profile_id:
+            continue
+        if profile_id in exclude_set:
+            excluded.append(profile_id)
             continue
         profiles.append(
             {
@@ -103,6 +144,8 @@ def select_profiles(
         "selected_profile_count": int((metadata or {}).get("selected_profile_count") or 0) if isinstance(metadata, dict) else 0,
         "selected_profile_sample_count": len(profiles),
         "profile_limit_honored": len(profiles) <= limit,
+        "excluded_recent_failed_profile_count": len(excluded),
+        "excluded_recent_failed_profile_ids_sample": excluded[:12],
         "error_code": str((metadata or {}).get("error_code") or "") if isinstance(metadata, dict) else "METADATA_UNAVAILABLE",
         "error_message": str((metadata or {}).get("error_message") or "") if isinstance(metadata, dict) else "",
     }
@@ -125,6 +168,7 @@ def select_profiles_from_ixbrowser(
     profile_group: str,
     profile_limit: int,
     max_pages: int,
+    exclude_profile_ids: list[str] | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     try:
         from ixbrowser_local_api import IXBrowserClient
@@ -144,6 +188,7 @@ def select_profiles_from_ixbrowser(
 
     limit = safe_int(profile_limit, 3, minimum=1, maximum=100)
     pages = safe_int(max_pages, 2, minimum=1, maximum=10)
+    exclude_set = {str(profile_id).strip() for profile_id in (exclude_profile_ids or []) if str(profile_id).strip()}
     wanted = str(profile_group or "").strip().lower()
     groups_seen = 0
     selected_group_id = ""
@@ -185,9 +230,23 @@ def select_profiles_from_ixbrowser(
                 "error_code": "BLOCKED_US_GROUP_NOT_FOUND",
                 "error_message": f"profile group not found: {profile_group}",
             }
-        rows = normalize_ix_rows(client.get_profile_list(group_id=int(selected_group_id), page=1, limit=limit) or [])
-        api_code = getattr(client, "code", None)
-        api_message = str(getattr(client, "message", "") or "")
+        rows = []
+        excluded: list[str] = []
+        page_limit = min(100, max(limit, limit + len(exclude_set)))
+        for page in range(1, pages + 1):
+            page_rows = normalize_ix_rows(client.get_profile_list(group_id=int(selected_group_id), page=page, limit=page_limit) or [])
+            api_code = getattr(client, "code", None)
+            api_message = str(getattr(client, "message", "") or "")
+            for row in page_rows:
+                profile_id = str(row.get("profile_id") or row.get("id") or "").strip()
+                if profile_id and profile_id in exclude_set:
+                    excluded.append(profile_id)
+                    continue
+                rows.append(row)
+                if len(rows) >= limit:
+                    break
+            if len(rows) >= limit or len(page_rows) < page_limit:
+                break
         try:
             response_total = int(getattr(client, "total", 0) or selected_group_count or len(rows))
         except Exception:
@@ -232,6 +291,8 @@ def select_profiles_from_ixbrowser(
         "selected_profile_count": int(response_total or len(profiles)),
         "selected_profile_sample_count": len(profiles),
         "profile_limit_honored": len(profiles) <= limit,
+        "excluded_recent_failed_profile_count": len(excluded),
+        "excluded_recent_failed_profile_ids_sample": ordered_unique(excluded)[:12],
         "api_code": api_code,
         "api_message": api_message,
         "error_code": "",
@@ -431,6 +492,8 @@ def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
         f"- unavailable: {(payload.get('summary') or {}).get('unavailable', 0)}",
         f"- no_submit: {str(bool(payload.get('no_submit'))).lower()}",
         f"- quarantine_failed_profiles: {str(bool(payload.get('quarantine_failed_profiles'))).lower()}",
+        f"- exclude_recent_failed: {str(bool(payload.get('exclude_recent_failed'))).lower()}",
+        f"- recent_failed_profile_ids_count: {int(payload.get('recent_failed_profile_ids_count') or 0)}",
         "",
         "## Error Counts",
     ]
@@ -484,6 +547,7 @@ def run_probe(
     total_timeout_seconds: int = 60,
     check_url: str = "https://www.tiktok.com/messages",
     quarantine_failed_profiles: bool = False,
+    exclude_recent_failed: bool = True,
     driver_factory: Callable[[dict], tuple[Any, Any, str]] | None = None,
     metadata_builder: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -492,11 +556,18 @@ def run_probe(
     base = Path(base_dir).resolve()
     run_dir = base / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    explicit_ids = [profile_id for profile_id in (profile_ids or []) if str(profile_id).strip()]
+    recent_failed_profile_ids = (
+        load_recent_failed_profile_ids(base)
+        if bool(exclude_recent_failed) and not explicit_ids
+        else []
+    )
     profiles, metadata = select_profiles(
-        profile_ids=profile_ids,
+        profile_ids=explicit_ids,
         profile_group=profile_group,
         profile_limit=profile_limit,
         max_pages=max_pages,
+        exclude_profile_ids=recent_failed_profile_ids,
         metadata_builder=metadata_builder,
     )
     storage = GrowthStorage(str(run_dir / "data" / "growth_intelligence.db"))
@@ -540,6 +611,9 @@ def run_probe(
         "no_browser_collection": True,
         "no_action_execution": True,
         "quarantine_failed_profiles": bool(quarantine_failed_profiles),
+        "exclude_recent_failed": bool(exclude_recent_failed),
+        "recent_failed_profile_ids_count": len(recent_failed_profile_ids),
+        "recent_failed_profile_ids_sample": recent_failed_profile_ids[:12],
         "metadata": metadata,
         "selected_profiles_count": len(profiles),
         "summary": {
@@ -585,6 +659,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--total-timeout-seconds", type=int, default=60)
     parser.add_argument("--check-url", default="https://www.tiktok.com/messages")
     parser.add_argument("--quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--no-exclude-recent-failed", action="store_true")
     parser.add_argument("--from-report", default="", help="Enrich an existing probe JSON with repair checklist outputs without opening profiles.")
     parser.add_argument("--allow-fail", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -612,6 +687,7 @@ def main(argv: list[str] | None = None) -> int:
         total_timeout_seconds=args.total_timeout_seconds,
         check_url=args.check_url,
         quarantine_failed_profiles=bool(args.quarantine_failed_profiles),
+        exclude_recent_failed=not bool(args.no_exclude_recent_failed),
     )
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
