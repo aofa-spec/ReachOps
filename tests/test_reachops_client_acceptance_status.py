@@ -986,6 +986,80 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertFalse(default_groups_exists)
         self.assertTrue(redirected_groups_exists)
 
+    def test_watchdog_ignores_superseded_heartbeat_from_previous_run(self):
+        class FakeProcess:
+            pid = 12345
+
+            def poll(self):
+                return None
+
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_default_data_dir = reachops_web_ui.DEFAULT_DATA_DIR
+            old_heartbeat_path = reachops_web_ui.HEARTBEAT_PATH
+            old_default_heartbeat_path = reachops_web_ui.DEFAULT_HEARTBEAT_PATH
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_default_latest_run_session_path = reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_run_process = reachops_web_ui.RUN_PROCESS
+            old_run_started_at = reachops_web_ui.RUN_STARTED_AT
+            try:
+                root = Path(tmpdir)
+                data_dir = root / "runtime"
+                heartbeat_path = data_dir / "reachops_web_ui_heartbeat.json"
+                session_path = data_dir / "runs" / "run_new.json"
+                latest_session_path = data_dir / "runs" / "latest_run_session.json"
+                session = {
+                    "schema_version": "reachops.run_session.v1",
+                    "session_id": "run_new",
+                    "state": "PRECHECK",
+                    "status": "running",
+                }
+                session_path.parent.mkdir(parents=True)
+                session_path.write_text(json.dumps(session), encoding="utf-8")
+                latest_session_path.write_text(json.dumps(session), encoding="utf-8")
+                heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+                heartbeat_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "reachops.runtime_heartbeat.v1",
+                            "heartbeat_at": "2000-01-01T00:00:00Z",
+                            "run_session_id": "run_old",
+                            "run_session_path": str(data_dir / "runs" / "run_old.json"),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                reachops_web_ui.DEFAULT_DATA_DIR = data_dir
+                reachops_web_ui.DATA_DIR = data_dir
+                reachops_web_ui.DEFAULT_HEARTBEAT_PATH = heartbeat_path
+                reachops_web_ui.HEARTBEAT_PATH = heartbeat_path
+                reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH = latest_session_path
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = latest_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = str(session_path)
+                reachops_web_ui.RUN_PROCESS = FakeProcess()
+                reachops_web_ui.RUN_STARTED_AT = time.time() - 10
+
+                heartbeat = reachops_web_ui.build_runtime_heartbeat_payload()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.DEFAULT_DATA_DIR = old_default_data_dir
+                reachops_web_ui.HEARTBEAT_PATH = old_heartbeat_path
+                reachops_web_ui.DEFAULT_HEARTBEAT_PATH = old_default_heartbeat_path
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH = old_default_latest_run_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RUN_PROCESS = old_run_process
+                reachops_web_ui.RUN_STARTED_AT = old_run_started_at
+
+        self.assertEqual(heartbeat["status"], "superseded")
+        self.assertFalse(heartbeat["stale"])
+        self.assertTrue(heartbeat["heartbeat_superseded"])
+        self.assertFalse(heartbeat["heartbeat_matches_session"])
+        self.assertEqual(heartbeat["run_session_id"], "run_new")
+        self.assertEqual(heartbeat["heartbeat_run_session_id"], "run_old")
+
     def test_acceptance_remediation_paths_follow_redirected_data_dir(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
@@ -1271,6 +1345,44 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(normalize_profile_limit("-9"), 1)
         self.assertEqual(normalize_profile_limit("7"), 7)
         self.assertEqual(normalize_profile_limit("9999"), MAX_START_PROFILE_LIMIT)
+
+    def test_start_preview_uses_server_group_refresh_cache(self):
+        old_cache = reachops_web_ui.GROUP_CACHE
+        try:
+            reachops_web_ui.GROUP_CACHE = {
+                "loaded_at": time.time(),
+                "groups": [
+                    {
+                        "name": "United States",
+                        "group_id": "257999",
+                        "count": 694,
+                        "count_known": True,
+                    }
+                ],
+                "live_all_group_counts_known": True,
+                "all_group_counts_known": True,
+                "error": "",
+                "stale_cache": False,
+                "background_refresh": False,
+            }
+
+            preview = reachops_web_ui.build_start_preview(
+                {
+                    "target": "anti aging serum",
+                    "group": "United States",
+                    "mode": "preflight",
+                    "volume": "quick",
+                    "profiles": 3,
+                }
+            )
+
+            self.assertTrue(preview["start_allowed"])
+            self.assertEqual(preview["gate_state"], "可启动")
+            self.assertNotIn("profile_group_list_not_ready", preview["blockers"])
+            self.assertTrue(preview["no_submit"])
+            self.assertTrue(preview["no_browser_started"])
+        finally:
+            reachops_web_ui.GROUP_CACHE = old_cache
 
     def test_web_ui_only_trusts_local_api_hosts(self):
         self.assertTrue(is_local_api_host("127.0.0.1:8766"))

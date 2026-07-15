@@ -8,7 +8,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from ReachOps.execution_plan import build_execution_plan
-from tools.run_reachops_headless_macos import apply_execution_plan_to_args, main
+from tools.run_reachops_headless_macos import apply_execution_plan_to_args, classify_headless_terminal_status, main
 
 
 class HeadlessExecutionPlanContractTests(unittest.TestCase):
@@ -130,6 +130,32 @@ class HeadlessExecutionPlanContractTests(unittest.TestCase):
             self.assertTrue(run_session["ai_usage_ledger"]["no_ai_token_used"])
             result_files = sorted((Path(td) / "run_results").glob("*.json"))
             self.assertTrue(result_files)
+
+    def test_headless_blocked_campaign_terminal_is_not_completed(self):
+        lines = [
+            "2026-07-15 15:32:03  CHECK  profile_preflight checked=9 available=0 unavailable=9 errors=PAGE_OPEN_FAILED=3, PROFILE_PREFLIGHT_TIMEOUT=6",
+            "2026-07-15 15:32:03  BLOCK  campaign failed reason=无可用账号 required=1 available=0 checked=9 auto_limit=24 error=INSUFFICIENT_LOGGED_IN_PROFILES next=补充已登录可用账号",
+        ]
+
+        status = classify_headless_terminal_status(lines, timed_out=False)
+
+        self.assertEqual(status["status"], "blocked_by_accounts")
+        self.assertEqual(status["run_session_state"], "BLOCKED")
+        self.assertEqual(status["exit_code"], 2)
+        self.assertEqual(status["error_code"], "BLOCKED_BY_ACCOUNTS")
+
+    def test_headless_done_terminal_remains_completed(self):
+        status = classify_headless_terminal_status(
+            [
+                "2026-07-15 15:20:01  DONE   collection batch=gb_ok",
+                "2026-07-15 15:20:02  DONE   action_preflight queued=0 no_submit=true",
+            ],
+            timed_out=False,
+        )
+
+        self.assertEqual(status["status"], "completed")
+        self.assertEqual(status["run_session_state"], "COMPLETED")
+        self.assertEqual(status["exit_code"], 0)
 
 
 if __name__ == "__main__":

@@ -175,6 +175,41 @@ def terminal_seen(lines: list[str], mode: str) -> bool:
     return collection_terminal_seen(lines) and action_terminal_seen(lines)
 
 
+def blocked_campaign_terminal_line(lines: list[str]) -> str:
+    for line in reversed(lines):
+        if "BLOCK  campaign failed" in line or "BLOCK  campaign not_started" in line:
+            return line
+    return ""
+
+
+def classify_headless_terminal_status(lines: list[str], *, timed_out: bool) -> dict:
+    if timed_out:
+        return {
+            "status": "timeout_finalized",
+            "run_session_state": "BLOCKED",
+            "exit_code": 2,
+            "error_code": "HEADLESS_TIMEOUT",
+        }
+    blocked_line = blocked_campaign_terminal_line(lines)
+    if blocked_line:
+        error_code = "CAMPAIGN_BLOCKED"
+        if "INSUFFICIENT_LOGGED_IN_PROFILES" in blocked_line or "无可用账号" in blocked_line or "没有可用账号" in blocked_line:
+            error_code = "BLOCKED_BY_ACCOUNTS"
+        return {
+            "status": "blocked_by_accounts" if error_code == "BLOCKED_BY_ACCOUNTS" else "blocked",
+            "run_session_state": "BLOCKED",
+            "exit_code": 2,
+            "error_code": error_code,
+            "terminal_line": blocked_line,
+        }
+    return {
+        "status": "completed",
+        "run_session_state": "COMPLETED",
+        "exit_code": 0,
+        "error_code": "",
+    }
+
+
 def write_json_atomic(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -703,12 +738,15 @@ def main() -> int:
         lines = lines_after_marker(latest_log_lines(log_path), marker)
         update_runtime_checkpoint(lines, running=False, last_stage="headless_timeout_finalized")
 
+    terminal_status = classify_headless_terminal_status(lines, timed_out=timed_out)
     result = {
-        "status": "completed" if not timed_out else "timeout_finalized",
+        "status": terminal_status["status"],
         "generated_at": utc_now(),
         "log_path": str(log_path),
         "target": args.target,
         "profile_group": args.profile_group,
+        "error_code": terminal_status.get("error_code") or "",
+        "terminal_line": terminal_status.get("terminal_line") or (lines[-1] if lines else ""),
         "execution_plan": {
             "plan_id": execution_plan.get("plan_id", ""),
             "schema_version": execution_plan.get("schema_version", ""),
@@ -722,14 +760,14 @@ def main() -> int:
     }
     result = finalize_with_evidence_bundle(
         result,
-        "COMPLETED" if result["status"] == "completed" else "BLOCKED",
-        lines[-1] if lines else result["status"],
+        str(terminal_status["run_session_state"]),
+        str(terminal_status.get("terminal_line") or (lines[-1] if lines else result["status"])),
     )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(result)
-    exit_code = 0 if result["status"] == "completed" else 2
+    exit_code = int(terminal_status["exit_code"])
     restore_headless_env()
     return exit_code
 

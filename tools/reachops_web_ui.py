@@ -204,26 +204,50 @@ def build_runtime_heartbeat_payload() -> dict:
     run_age = int(time.time() - RUN_STARTED_AT) if RUN_STARTED_AT and running else 0
     session = read_current_run_session()
     terminal = str((session or {}).get("state") or "") in TERMINAL_RUN_SESSION_STATES
-    missing_stale = bool(running and not heartbeat and run_age > HEARTBEAT_STALE_SECONDS and not terminal)
+    current_session_id = str((session or {}).get("session_id") or "")
+    current_session_path = str(run_session_path_for(session)) if session else ""
+    heartbeat_session_id = str(heartbeat.get("run_session_id") or "")
+    heartbeat_session_path = str(heartbeat.get("run_session_path") or "")
+    heartbeat_matches_session = bool(
+        heartbeat
+        and (
+            (current_session_id and heartbeat_session_id == current_session_id)
+            or (current_session_path and heartbeat_session_path == current_session_path)
+        )
+    )
+    heartbeat_superseded = bool(heartbeat and current_session_id and not heartbeat_matches_session)
+    effective_heartbeat = heartbeat if (not heartbeat or heartbeat_matches_session) else {}
+    effective_age = age if effective_heartbeat else None
+    missing_stale = bool(
+        running
+        and not terminal
+        and not effective_heartbeat
+        and run_age > HEARTBEAT_STALE_SECONDS
+    )
     stale = bool(
         running
         and not terminal
         and (
             missing_stale
-            or (age is not None and age > HEARTBEAT_STALE_SECONDS)
+            or (effective_age is not None and effective_age > HEARTBEAT_STALE_SECONDS)
         )
     )
     return {
         "schema_version": "reachops.web_runtime_heartbeat.v1",
-        "status": "missing_stale" if missing_stale else ("missing" if not heartbeat else ("stale" if stale else "healthy")),
+        "status": "missing_stale" if missing_stale else ("superseded" if heartbeat_superseded else ("missing" if not heartbeat else ("stale" if stale else "healthy"))),
         "running": running,
         "stale": stale,
         "stale_after_seconds": HEARTBEAT_STALE_SECONDS,
-        "age_seconds": age,
+        "age_seconds": effective_age,
+        "raw_age_seconds": age,
         "run_age_seconds": run_age,
         "heartbeat": heartbeat,
+        "heartbeat_matches_session": heartbeat_matches_session,
+        "heartbeat_superseded": heartbeat_superseded,
+        "heartbeat_run_session_id": heartbeat_session_id,
+        "heartbeat_run_session_path": heartbeat_session_path,
         "run_session_state": str((session or {}).get("state") or ""),
-        "run_session_id": str((session or {}).get("session_id") or ""),
+        "run_session_id": current_session_id,
         "path": str(current_heartbeat_path()),
         "no_ai_token_used": True,
     }
@@ -1293,6 +1317,28 @@ def group_cache_quality(payload: dict) -> tuple[int, int]:
     return known_group_count(payload), safe_int((payload or {}).get("profile_count"), 0)
 
 
+def start_preview_group_list_ready(payload: dict, profile_group: str) -> bool:
+    if payload.get("group_list_ready") or payload.get("groupListReady"):
+        return True
+    cached = GROUP_CACHE if GROUP_CACHE.get("groups") else {}
+    if not cached:
+        return False
+    if time.time() - float(cached.get("loaded_at") or 0) >= 60:
+        return False
+    if cached.get("error") or cached.get("stale_cache") or cached.get("background_refresh"):
+        return False
+    groups = [row for row in cached.get("groups") or [] if isinstance(row, dict)]
+    if not groups:
+        return False
+    names = {str(row.get("name") or "").strip().lower(): row for row in groups}
+    selected = names.get(str(profile_group or "").strip().lower())
+    if not selected:
+        return False
+    if cached.get("live_all_group_counts_known") is not True and cached.get("all_group_counts_known") is not True:
+        return False
+    return bool(selected.get("count_known"))
+
+
 def read_cached_groups_payload() -> dict:
     global GROUP_CACHE
     cached = GROUP_CACHE if GROUP_CACHE.get("groups") else {}
@@ -1720,27 +1766,28 @@ def build_start_preview(payload: dict | None) -> dict:
     live_confirmed = truthy(payload.get("live_confirm", payload.get("liveConfirm")))
     account_repair_confirmed = truthy(payload.get("account_repair_confirmed", payload.get("accountRepairConfirmed")))
     account_gate_blocked = truthy(payload.get("account_gate_blocked", payload.get("accountGateBlocked")))
+    group_list_ready = start_preview_group_list_ready(payload, profile_group)
     force_account_recheck = account_gate_blocked
     submit_policy = "真实评论提交" if mode == "live_comment" and live_confirmed else "预检，不提交"
     gate_state = "分组未刷新"
-    if payload.get("group_list_ready") or payload.get("groupListReady"):
+    if group_list_ready:
         gate_state = "可启动"
     if mode == "live_comment" and not live_confirmed:
         gate_state = "需确认真实评论"
-    if account_gate_blocked and (payload.get("group_list_ready") or payload.get("groupListReady")):
+    if account_gate_blocked and group_list_ready:
         gate_state = "自动重检账号"
     blockers: list[str] = []
     next_actions: list[str] = []
     if not target.strip():
         blockers.append("target_required")
         next_actions.append("输入产品链接、关键词、达人主页、视频链接、话题或直播间。")
-    if not (payload.get("group_list_ready") or payload.get("groupListReady")):
+    if not group_list_ready:
         blockers.append("profile_group_list_not_ready")
         next_actions.append("先刷新 ixBrowser 配置分组，确认所选分组账号数量。")
     if mode == "live_comment" and not live_confirmed:
         blockers.append("live_comment_confirmation_required")
         next_actions.append("真实评论前必须勾选授权确认。")
-    if account_gate_blocked and (payload.get("group_list_ready") or payload.get("groupListReady")):
+    if account_gate_blocked and group_list_ready:
         next_actions.append("启动后会重新读取配置列表，自动跳过或移组未登录账号，并继续尝试后续账号。")
     start_allowed = not blockers
     preflight_decision = {
