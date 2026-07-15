@@ -102,6 +102,7 @@ ACCOUNT_REPAIR_AUTO_APPLY_ERRORS = {
     "COMMENT_ACCESS_GATED",
     "ACCOUNT_RESTRICTED",
 }
+ACCOUNT_POOL_CIRCUIT_BREAKER_PROFILE_FAILURES = 10
 
 
 def is_executable(path: Path) -> bool:
@@ -209,6 +210,42 @@ def account_repair_progress_summary(
     }
 
 
+def account_pool_circuit_breaker_status(
+    profile_readiness_handoff: dict | None = None,
+    repair_progress: dict | None = None,
+) -> dict:
+    profile_readiness = profile_readiness_handoff if isinstance(profile_readiness_handoff, dict) else {}
+    progress = repair_progress if isinstance(repair_progress, dict) else {}
+    recent_failed = int(profile_readiness.get("recent_failed_profile_ids_count") or 0)
+    latest_checked = int(profile_readiness.get("checked") or 0)
+    latest_available = int(profile_readiness.get("available") or 0)
+    latest_failed = int(profile_readiness.get("failed_profile_count") or 0)
+    pending_moved = int(progress.get("pending_recheck_moved_count") or 0)
+    hard_failure_count = max(recent_failed, pending_moved, latest_failed)
+    source_exists = bool(profile_readiness.get("source_exists"))
+    triggered = bool(
+        source_exists
+        and latest_available <= 0
+        and latest_checked > 0
+        and hard_failure_count >= ACCOUNT_POOL_CIRCUIT_BREAKER_PROFILE_FAILURES
+    )
+    return {
+        "schema_version": "reachops.account_pool_circuit_breaker.v1",
+        "triggered": triggered,
+        "threshold": ACCOUNT_POOL_CIRCUIT_BREAKER_PROFILE_FAILURES,
+        "hard_failure_count": hard_failure_count,
+        "recent_failed_profile_ids_count": recent_failed,
+        "recent_failed_profile_ids_sample": [
+            str(item) for item in (profile_readiness.get("recent_failed_profile_ids_sample") or [])[:12]
+        ],
+        "latest_checked": latest_checked,
+        "latest_available": latest_available,
+        "latest_failed": latest_failed,
+        "pending_recheck_moved_count": pending_moved,
+        "does_not_claim_real_account_pool_ready": True,
+    }
+
+
 def build_real_pilot_evidence_boundary(
     acceptance: dict,
     operations: dict,
@@ -226,6 +263,7 @@ def build_real_pilot_evidence_boundary(
     repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
     repair_apply_effective_status = account_repair_apply_effective_status(repair_apply)
     repair_progress = account_repair_progress_summary(repair_apply, profile_readiness_handoff)
+    circuit_breaker = account_pool_circuit_breaker_status(profile_readiness_handoff, repair_progress)
     profile_available = int((acceptance.get("checks") or {}).get("profile_available_count") or 0)
     candidates = int(counts.get("candidates") or 0)
     actions = int(counts.get("actions") or 0)
@@ -277,6 +315,7 @@ def build_real_pilot_evidence_boundary(
             "latest_apply_stale_reason": str(repair_apply.get("stale_reason") or ""),
             "latest_apply_pending_recheck": bool(repair_apply.get("pending_recheck")),
             "repair_progress": repair_progress,
+            "account_pool_circuit_breaker": circuit_breaker,
         },
         "external_acceptance_pending": blockers,
     }
@@ -298,6 +337,7 @@ def build_account_blocker_resolution(
     profile_available = int(checks.get("profile_available_count") or 0)
     effective_status = account_repair_apply_effective_status(repair_apply)
     repair_progress = account_repair_progress_summary(repair_apply, profile_readiness_handoff)
+    circuit_breaker = account_pool_circuit_breaker_status(profile_readiness_handoff, repair_progress)
     repair_plan_available = repair_summary.get("status") == "ok"
     repair_plan_profiles = int(repair_summary.get("total_unique_profiles_by_error") or 0)
     error_groups = [row for row in (repair_summary.get("error_groups") or []) if isinstance(row, dict)]
@@ -322,7 +362,14 @@ def build_account_blocker_resolution(
     requires_latest_repair_apply = False
     requires_manual_account_work = False
     if readiness == "blocked_by_accounts":
-        if effective_status == "pending_recheck":
+        if circuit_breaker.get("triggered"):
+            status = "manual_account_work_required"
+            priority_action = "manually_repair_or_replace_accounts"
+            requires_manual_account_work = True
+            blocker_codes.append("account_pool_circuit_breaker_no_ready_profiles")
+            if effective_status == "pending_recheck":
+                blocker_codes.append("account_repair_applied_pending_recheck")
+        elif effective_status == "pending_recheck":
             status = "pending_recheck"
             priority_action = "rerun_client_preflight"
             ready_for_retest = True
@@ -387,6 +434,7 @@ def build_account_blocker_resolution(
         "latest_apply_effective_status": effective_status,
         "latest_apply_effective_message": account_repair_apply_effective_message(repair_apply),
         "repair_progress": repair_progress,
+        "account_pool_circuit_breaker": circuit_breaker,
         "ready_for_retest": ready_for_retest,
         "requires_latest_repair_apply": requires_latest_repair_apply,
         "requires_manual_account_work": requires_manual_account_work,
@@ -522,21 +570,24 @@ def build_account_support_handoff(
     retest_checklist = build_account_retest_checklist(resolution, repair_summary)
     profile_retest_command = str(profile_readiness.get("retest_command") or "").strip()
     if support_required and profile_retest_command:
-        retest_checklist.insert(
-            0,
-            {
-                "id": "profile_readiness_probe_retest",
-                "kind": "profile_readiness_probe",
-                "required": True,
-                "title": "复跑 P0-5 Profile readiness probe",
-                "profile_group": str(profile_readiness.get("profile_group") or ""),
-                "command": profile_retest_command,
-                "expected": "至少 1 个 READY profile；如仍 blocked_by_accounts，继续使用 profile_repair_checklist 修复或替换账号。",
-                "blocks_retest_until_done": True,
-                "no_browser_started_by_reachops": False,
-                "no_submit": True,
-            },
-        )
+        circuit = resolution.get("account_pool_circuit_breaker") if isinstance(resolution, dict) else {}
+        circuit_triggered = bool((circuit if isinstance(circuit, dict) else {}).get("triggered"))
+        profile_retest_item = {
+            "id": "profile_readiness_probe_retest",
+            "kind": "profile_readiness_probe",
+            "required": True,
+            "title": "复跑 P0-5 Profile readiness probe",
+            "profile_group": str(profile_readiness.get("profile_group") or ""),
+            "command": profile_retest_command,
+            "expected": "至少 1 个 READY profile；如仍 blocked_by_accounts，继续使用 profile_repair_checklist 修复或替换账号。",
+            "blocks_retest_until_done": not circuit_triggered,
+            "no_browser_started_by_reachops": False,
+            "no_submit": True,
+        }
+        if circuit_triggered:
+            retest_checklist.append(profile_retest_item)
+        else:
+            retest_checklist.insert(0, profile_retest_item)
     operator_steps = account_operator_steps(error_groups) if support_required and error_groups else [
         str(item) for item in (repair_summary.get("operator_steps") or [])
     ][:8]
@@ -635,6 +686,7 @@ def build_account_support_handoff(
             "moved_count": int(repair_apply.get("moved_count") or 0),
             "failed_count": int(repair_apply.get("failed_count") or 0),
             "repair_progress": account_repair_progress_summary(repair_apply, profile_readiness),
+            "account_pool_circuit_breaker": dict(resolution.get("account_pool_circuit_breaker") or {}),
         },
         "impacted_accounts": {
             "error_group_count": len(error_groups),
@@ -1116,6 +1168,13 @@ def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
         "unavailable": int(summary.get("unavailable") or 0),
         "ready_profile_count": len(ready_ids),
         "failed_profile_count": len(failed_ids),
+        "recent_failed_profile_ids_count": int(payload.get("recent_failed_profile_ids_count") or 0),
+        "recent_failed_profile_ids_sample": [
+            str(item) for item in (payload.get("recent_failed_profile_ids_sample") or [])[:12]
+        ],
+        "bounded_exit": bool(payload.get("bounded_exit", False)),
+        "bounded_exit_status": str(payload.get("bounded_exit_status") or ""),
+        "timeout_triggered": bool(payload.get("timeout_triggered", False)),
         "error_groups": error_groups,
         "profile_repair_apply": repair_apply,
         "retest_command": str(repair.get("retest_command") or ""),
@@ -1183,7 +1242,24 @@ def build_delivery_check(
         str(batch.get("profile_group") or ""),
         str(batch.get("id") or ""),
     )
-    if (
+    account_repair_circuit_breaker = account_pool_circuit_breaker_status(
+        profile_readiness_handoff,
+        account_repair_progress_summary(account_repair_apply, profile_readiness_handoff),
+    )
+    if account_repair_circuit_breaker.get("triggered") and acceptance.get("readiness") == "blocked_by_accounts":
+        group = str(batch.get("profile_group") or account_repair_apply.get("profile_group") or "当前分组")
+        hard_failures = int(account_repair_circuit_breaker.get("hard_failure_count") or 0)
+        threshold = int(
+            account_repair_circuit_breaker.get("threshold") or ACCOUNT_POOL_CIRCUIT_BREAKER_PROFILE_FAILURES
+        )
+        acceptance["blockers"] = [
+            f"账号池熔断：最近真实预检已有 {hard_failures} 个硬失败账号且 0 个 READY，已达到 {threshold} 个连续硬失败阈值；不能继续要求运营反复复测。"
+        ] + list(acceptance.get("blockers") or [])
+        acceptance["next_actions"] = [
+            f"先人工修复或补充 {group} 分组：至少保留 1 个已登录、内核匹配、代理可用、可手动打开 TikTok 的账号。",
+            "账号池修复完成后再复跑有界 readiness probe；在此之前系统必须保持 blocked_by_accounts。",
+        ] + list(acceptance.get("next_actions") or [])
+    elif (
         str(account_repair_apply.get("status") or "") == "no_applicable_profiles"
         and acceptance.get("readiness") == "blocked_by_accounts"
     ):

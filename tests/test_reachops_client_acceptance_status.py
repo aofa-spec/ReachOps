@@ -4675,8 +4675,12 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                     with patch("tools.reachops_client_delivery_check.read_lines", return_value=["WARN profile preflight failed"]):
                         with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
                             with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
-                                payload = build_delivery_check(Path(tmpdir))
-                                repair_plan_exists = Path(payload["remediation_report"]["latest_account_plan_json_path"]).is_file()
+                                with patch(
+                                    "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
+                                    return_value={"source_exists": False},
+                                ):
+                                    payload = build_delivery_check(Path(tmpdir))
+                                    repair_plan_exists = Path(payload["remediation_report"]["latest_account_plan_json_path"]).is_file()
 
         summary = payload["account_repair_summary"]
         self.assertEqual(summary["status"], "ok")
@@ -4768,7 +4772,11 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                     with patch("tools.reachops_client_delivery_check.read_lines", return_value=log_lines):
                         with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
                             with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
-                                payload = build_delivery_check(Path(tmpdir))
+                                with patch(
+                                    "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
+                                    return_value={"source_exists": False},
+                                ):
+                                    payload = build_delivery_check(Path(tmpdir))
 
         self.assertEqual(payload["status"], "blocked_by_accounts")
         self.assertFalse(payload["acceptance_ready"])
@@ -4858,6 +4866,86 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
             payload["account_support_handoff"]["profile_readiness_probe"]["profile_repair_apply"]["moved_count"],
             4,
         )
+
+    def test_delivery_check_circuit_breaks_repeated_no_ready_profile_rechecks(self):
+        batch = {"id": "gb_accounts", "status": "failed", "profile_group": "United States", "config_json": "{}"}
+        acceptance = {
+            "readiness": "blocked_by_accounts",
+            "checks": {"profile_available_count": 0},
+            "blockers": ["账号预检没有可用账号，无法进入真实采集/触达。"],
+            "next_actions": ["先修复 United States 分组账号。"],
+            "profile_preflight_details": [
+                {
+                    "profile_id": "4521",
+                    "status": "不可用",
+                    "error": "LOGIN_REQUIRED",
+                    "message": "LOGIN_REQUIRED",
+                }
+            ],
+        }
+        profile_handoff = {
+            "schema_version": "reachops.profile_readiness_handoff.v1",
+            "source_exists": True,
+            "status": "blocked_by_accounts",
+            "terminal_state": "BLOCKED",
+            "profile_group": "United States",
+            "run_id": "20260715T100204Z",
+            "checked": 5,
+            "available": 0,
+            "failed_profile_count": 5,
+            "recent_failed_profile_ids_count": 26,
+            "recent_failed_profile_ids_sample": ["18767", "18772"],
+            "bounded_exit": True,
+            "bounded_exit_status": "within_budget",
+            "profile_repair_apply": {
+                "status": "applied",
+                "source": "profile_readiness_probe/latest_account_repair_apply.json",
+                "path": "/tmp/profile_probe/latest_account_repair_apply.json",
+                "profile_group": "United States",
+                "selected_count": 5,
+                "moved_count": 5,
+                "failed_count": 0,
+                "pending_recheck": True,
+            },
+            "does_not_claim_real_account_pool_ready": True,
+        }
+        with TemporaryDirectory() as tmpdir:
+            log_lines = [
+                "CONFIG account_repair_apply status=applied group=United States selected=1 moved=1 failed=0"
+            ]
+            with patch("tools.reachops_client_delivery_check.latest_batch", return_value=batch):
+                with patch("tools.reachops_client_delivery_check.latest_profile_preflight", return_value={"checked": 1, "available": 0}):
+                    with patch("tools.reachops_client_delivery_check.read_lines", return_value=log_lines):
+                        with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
+                            with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
+                                with patch(
+                                    "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
+                                    return_value=profile_handoff,
+                                ):
+                                    payload = build_delivery_check(Path(tmpdir))
+
+        self.assertEqual(payload["status"], "blocked_by_accounts")
+        self.assertIn("账号池熔断", payload["blockers"][0])
+        self.assertIn("不能继续要求运营反复复测", payload["blockers"][0])
+        self.assertIn("先人工修复或补充 United States 分组", payload["next_actions"][0])
+        resolution = payload["account_blocker_resolution"]
+        self.assertEqual(resolution["status"], "manual_account_work_required")
+        self.assertEqual(resolution["priority_action"], "manually_repair_or_replace_accounts")
+        self.assertTrue(resolution["requires_manual_account_work"])
+        self.assertFalse(resolution["ready_for_retest"])
+        self.assertIn("account_pool_circuit_breaker_no_ready_profiles", resolution["blocker_codes"])
+        circuit = resolution["account_pool_circuit_breaker"]
+        self.assertTrue(circuit["triggered"])
+        self.assertEqual(circuit["threshold"], 10)
+        self.assertEqual(circuit["hard_failure_count"], 26)
+        self.assertTrue(circuit["does_not_claim_real_account_pool_ready"])
+        handoff = payload["account_support_handoff"]
+        self.assertTrue(handoff["requires_manual_account_work"])
+        self.assertEqual(handoff["retest_checklist"][0]["id"], "manual_repair_or_replace_accounts")
+        self.assertTrue(
+            handoff["latest_apply"]["account_pool_circuit_breaker"]["does_not_claim_real_account_pool_ready"]
+        )
+        self.assertFalse(payload["final_delivery_ready"])
 
     def test_account_repair_progress_summary_dedupes_same_apply_source(self):
         apply_payload = {
@@ -5458,7 +5546,11 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                     with patch("tools.reachops_client_delivery_check.read_lines", return_value=[]):
                         with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
                             with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
-                                payload = build_delivery_check(base_dir)
+                                with patch(
+                                    "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
+                                    return_value={"source_exists": False},
+                                ):
+                                    payload = build_delivery_check(base_dir)
 
         self.assertTrue(payload["account_repair_apply"]["stale"])
         self.assertFalse(payload["account_repair_apply"]["pending_recheck"])
@@ -5506,7 +5598,11 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                     with patch("tools.reachops_client_delivery_check.read_lines", return_value=[]):
                         with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
                             with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
-                                payload = build_delivery_check(base_dir)
+                                with patch(
+                                    "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
+                                    return_value={"source_exists": False},
+                                ):
+                                    payload = build_delivery_check(base_dir)
 
         self.assertEqual(payload["account_repair_apply"]["effective_status"], "group_mismatch")
         self.assertIn("不能用于当前 United States 分组验收", payload["blockers"][0])
@@ -5556,7 +5652,11 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                     with patch("tools.reachops_client_delivery_check.read_lines", return_value=[]):
                         with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
                             with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {}}):
-                                payload = build_delivery_check(base_dir)
+                                with patch(
+                                    "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
+                                    return_value={"source_exists": False},
+                                ):
+                                    payload = build_delivery_check(base_dir)
 
         self.assertEqual(payload["account_repair_apply"]["status"], "no_applicable_profiles")
         self.assertFalse(payload["account_repair_apply"]["pending_recheck"])
