@@ -11476,6 +11476,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             )
             self.assertNotIn(("creator_url", target), [(row["source_type"], row["source_value"]) for row in plan["sources"]])
 
+    def test_direct_tiktok_photo_link_stays_content_url_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            target = "https://www.tiktok.com/@ayieinaussie/photo/7646939533241601301"
+            plan = service.create_campaign_plan(target, max_sources=3)
+
+            self.assertEqual(plan["campaign"]["input_type"], "content_url")
+            self.assertEqual(
+                [(row["source_type"], row["source_value"]) for row in plan["sources"][:1]],
+                [("content_url", target)],
+            )
+            self.assertNotIn(("creator_url", target), [(row["source_type"], row["source_value"]) for row in plan["sources"]])
+
     def test_beauty_social_terms_use_beauty_strategy(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = make_reachops_service(tmp)

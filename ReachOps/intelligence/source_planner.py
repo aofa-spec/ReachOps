@@ -105,10 +105,10 @@ class CampaignAnalyzer:
         if self._is_url(text):
             if "live" in lower and "tiktok.com" in lower:
                 return "live_room_url"
-            if "tiktok.com" in lower and "/@" in lower and "/video/" not in lower:
-                return "creator_url"
-            if "tiktok.com" in lower and "/video/" in lower:
+            if "tiktok.com" in lower and self._is_tiktok_content_url(lower):
                 return "content_url"
+            if "tiktok.com" in lower and "/@" in lower:
+                return "creator_url"
             if self._is_marketplace_url(text) or self._has_product_path_hint(text):
                 return "product_url"
             return "product_url"
@@ -117,6 +117,10 @@ class CampaignAnalyzer:
         if text.startswith("#"):
             return "hashtag"
         return "keyword"
+
+    def _is_tiktok_content_url(self, value: str) -> bool:
+        lower = str(value or "").lower()
+        return any(marker in lower for marker in ("/video/", "/photo/"))
 
     def build_campaign(self, value: str, target_market: str = "auto", target_language: str = "auto") -> AcquisitionCampaign:
         input_type = self.detect_input_type(value)
