@@ -787,6 +787,8 @@ def run_web_local_api_architecture_fixture() -> dict:
         and "下一步复验命令" in goal_delivery_runner
         and "本地MVP账号交接" in web_ui
         and "本地MVP账号复验命令" in web_ui
+        and "retest_checklist" in web_ui
+        and "账号复验清单" in web_ui
         and "does_not_claim_local_mvp_ready" in goal_delivery_runner
         and "does_not_claim_real_account_pool_ready" in goal_delivery_runner,
         "delivery_package_writes_windows_acceptance_handoff": "build_windows_acceptance_handoff" in delivery_package_check

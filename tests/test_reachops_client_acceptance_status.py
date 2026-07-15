@@ -877,6 +877,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertIn("async function refreshFinalStatus()", html)
         self.assertIn("fetch('/api/activation')", html)
         self.assertIn("fetch('/api/final-status')", html)
+        self.assertIn("retest_checklist", html)
+        self.assertIn("账号复验清单", html)
         self.assertIn("next_required_actions", html)
         self.assertIn("verification_commands", html)
         self.assertIn("report_path", html)

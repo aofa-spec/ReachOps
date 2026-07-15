@@ -4675,6 +4675,7 @@ def html_page() -> bytes:
 	            const repairPlan = handoff.repair_plan || {{}};
 	            if (repairPlan.available) finalBlockerRows.push(`    修复计划：账号=${{repairPlan.profile_count || 0}} 事件=${{repairPlan.event_count || 0}} 自动可处理=${{repairPlan.auto_apply_profile_count || 0}} 非自动错误=${{(repairPlan.non_auto_error_codes || []).join(', ') || '-'}}`);
 	            ((handoff.impacted_accounts || {{}}).error_groups || []).slice(0, 3).forEach(group => finalBlockerRows.push(`    账号错误：${{group.error || '-'}} count=${{group.count || 0}} sample=${{(group.profile_ids_sample || []).slice(0, 4).join(',') || '-'}}`));
+	            (handoff.retest_checklist || []).slice(0, 5).forEach(item => finalBlockerRows.push(`    账号复验清单：${{item.id || '-'}} / ${{item.title || '-'}} / ${{item.expected || '-'}}`));
 	            (handoff.retest_commands || []).slice(0, 3).forEach(cmd => finalBlockerRows.push('    账号复测命令：' + cmd));
 	          }}
 	          (blocker.required_evidence || []).forEach(item => finalBlockerRows.push('  必需证据：' + item));
