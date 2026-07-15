@@ -52,6 +52,8 @@ HEARTBEAT_PATH = DATA_DIR / "reachops_web_ui_heartbeat.json"
 LATEST_EXECUTION_PLAN_PATH = DATA_DIR / "plans/latest_execution_plan.json"
 LATEST_RUN_SESSION_PATH = DATA_DIR / "runs/latest_run_session.json"
 DEFAULT_DATA_DIR = DATA_DIR
+DEFAULT_PROGRESS_PATH = PROGRESS_PATH
+DEFAULT_HEARTBEAT_PATH = HEARTBEAT_PATH
 DEFAULT_RESULT_PATH = RESULT_PATH
 DEFAULT_LATEST_EXECUTION_PLAN_PATH = LATEST_EXECUTION_PLAN_PATH
 DEFAULT_LATEST_RUN_SESSION_PATH = LATEST_RUN_SESSION_PATH
@@ -60,6 +62,7 @@ LATEST_EVIDENCE_BUNDLE_MD_PATH = DATA_DIR / "evidence_bundles/latest_evidence_bu
 DEFAULT_LATEST_EVIDENCE_BUNDLE_PATH = LATEST_EVIDENCE_BUNDLE_PATH
 DEFAULT_LATEST_EVIDENCE_BUNDLE_MD_PATH = LATEST_EVIDENCE_BUNDLE_MD_PATH
 CONTROL_DIR = DATA_DIR / "control"
+DEFAULT_CONTROL_DIR = CONTROL_DIR
 DEFAULT_TARGET = ""
 WEB_UI_VERSION = "reachops-unified-ui-2026-07-05-v20-ai-machine-actions"
 CLIENT_DISPLAY_VERSION = "客户端 v20"
@@ -93,6 +96,8 @@ GROUP_REFRESH_LOG_SIGNATURE = ""
 IXBROWSER_API_PORT_OVERRIDE = ""
 WEB_SETTINGS_PATH = DATA_DIR / "config/reachops_web_settings.json"
 LATEST_GROUPS_PATH = DATA_DIR / "config/latest_ixbrowser_groups.json"
+DEFAULT_WEB_SETTINGS_PATH = WEB_SETTINGS_PATH
+DEFAULT_LATEST_GROUPS_PATH = LATEST_GROUPS_PATH
 GROUP_REFRESH_TIMEOUT_SECONDS = 10.0
 GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS = 20.0
 GROUP_COUNT_RESOLVE_WORKERS = 1
@@ -151,10 +156,11 @@ def read_text_tail(path: Path, limit: int = 4000) -> str:
 
 
 def read_runtime_progress_payload() -> dict:
-    if not PROGRESS_PATH.is_file():
+    progress_path = current_progress_path()
+    if not progress_path.is_file():
         return {}
     try:
-        payload = json.loads(PROGRESS_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(progress_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     if not isinstance(payload, dict):
@@ -163,12 +169,13 @@ def read_runtime_progress_payload() -> dict:
 
 
 def read_runtime_heartbeat_payload() -> dict:
-    if not HEARTBEAT_PATH.is_file():
+    heartbeat_path = current_heartbeat_path()
+    if not heartbeat_path.is_file():
         return {}
     try:
-        payload = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(heartbeat_path.read_text(encoding="utf-8"))
     except Exception:
-        return {"status": "read_failed", "path": str(HEARTBEAT_PATH)}
+        return {"status": "read_failed", "path": str(heartbeat_path)}
     if not isinstance(payload, dict):
         return {}
     return payload
@@ -211,7 +218,7 @@ def build_runtime_heartbeat_payload() -> dict:
         "heartbeat": heartbeat,
         "run_session_state": str((session or {}).get("state") or ""),
         "run_session_id": str((session or {}).get("session_id") or ""),
-        "path": str(HEARTBEAT_PATH),
+        "path": str(current_heartbeat_path()),
         "no_ai_token_used": True,
     }
 
@@ -547,6 +554,41 @@ def current_result_path() -> Path:
     return result_path
 
 
+def current_progress_path() -> Path:
+    progress_path = Path(PROGRESS_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and progress_path == Path(DEFAULT_PROGRESS_PATH):
+        return Path(DATA_DIR) / "reachops_web_ui_progress.json"
+    return progress_path
+
+
+def current_heartbeat_path() -> Path:
+    heartbeat_path = Path(HEARTBEAT_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and heartbeat_path == Path(DEFAULT_HEARTBEAT_PATH):
+        return Path(DATA_DIR) / "reachops_web_ui_heartbeat.json"
+    return heartbeat_path
+
+
+def current_control_dir() -> Path:
+    control_dir = Path(CONTROL_DIR)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and control_dir == Path(DEFAULT_CONTROL_DIR):
+        return Path(DATA_DIR) / "control"
+    return control_dir
+
+
+def current_web_settings_path() -> Path:
+    settings_path = Path(WEB_SETTINGS_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and settings_path == Path(DEFAULT_WEB_SETTINGS_PATH):
+        return Path(DATA_DIR) / "config" / "reachops_web_settings.json"
+    return settings_path
+
+
+def current_latest_groups_path() -> Path:
+    groups_path = Path(LATEST_GROUPS_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and groups_path == Path(DEFAULT_LATEST_GROUPS_PATH):
+        return Path(DATA_DIR) / "config" / "latest_ixbrowser_groups.json"
+    return groups_path
+
+
 def current_latest_execution_plan_path() -> Path:
     latest_path = Path(LATEST_EXECUTION_PLAN_PATH)
     if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_EXECUTION_PLAN_PATH):
@@ -600,17 +642,17 @@ def update_current_run_session(state: str, **kwargs) -> dict:
 
 
 def cooperative_control_path(name: str) -> Path:
-    return CONTROL_DIR / name
+    return current_control_dir() / name
 
 
 def write_cooperative_control(name: str, payload: dict) -> None:
-    CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    current_control_dir().mkdir(parents=True, exist_ok=True)
     cooperative_control_path(name).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def clear_cooperative_control() -> None:
     try:
-        CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        current_control_dir().mkdir(parents=True, exist_ok=True)
         for name in ["pause.request", "resume.request"]:
             path = cooperative_control_path(name)
             if path.exists():
@@ -1096,14 +1138,15 @@ def active_ixbrowser_api_port() -> str:
 
 def load_web_settings() -> dict:
     try:
-        return json.loads(WEB_SETTINGS_PATH.read_text(encoding="utf-8"))
+        return json.loads(current_web_settings_path().read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
 def write_web_settings(settings: dict):
-    WEB_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    WEB_SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    settings_path = current_web_settings_path()
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def write_latest_groups_payload(payload: dict):
@@ -1112,9 +1155,10 @@ def write_latest_groups_payload(payload: dict):
         groups = [dict(row) for row in (payload.get("groups") or []) if isinstance(row, dict)]
         if not groups:
             return
-        if groups and LATEST_GROUPS_PATH.exists():
+        latest_groups_path = current_latest_groups_path()
+        if groups and latest_groups_path.exists():
             try:
-                previous = json.loads(LATEST_GROUPS_PATH.read_text(encoding="utf-8"))
+                previous = json.loads(latest_groups_path.read_text(encoding="utf-8"))
             except Exception:
                 previous = {}
             previous_groups = {
@@ -1138,8 +1182,8 @@ def write_latest_groups_payload(payload: dict):
             if known_total and int(payload.get("profile_count") or 0) < known_total:
                 payload["profile_count"] = known_total
             payload["known_group_count"] = len([row for row in merged_groups if row.get("count_known")])
-        LATEST_GROUPS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        LATEST_GROUPS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        latest_groups_path.parent.mkdir(parents=True, exist_ok=True)
+        latest_groups_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 
@@ -1149,7 +1193,7 @@ def cached_groups_payload_with_error(error: str, detail: str) -> dict:
     cached = GROUP_CACHE if GROUP_CACHE.get("groups") else {}
     if not cached:
         try:
-            previous = json.loads(LATEST_GROUPS_PATH.read_text(encoding="utf-8"))
+            previous = json.loads(current_latest_groups_path().read_text(encoding="utf-8"))
             if previous.get("groups"):
                 cached = previous
         except Exception:
@@ -1200,7 +1244,7 @@ def read_cached_groups_payload() -> dict:
     global GROUP_CACHE
     cached = GROUP_CACHE if GROUP_CACHE.get("groups") else {}
     try:
-        previous = json.loads(LATEST_GROUPS_PATH.read_text(encoding="utf-8"))
+        previous = json.loads(current_latest_groups_path().read_text(encoding="utf-8"))
         if previous.get("groups") and group_cache_quality(previous) > group_cache_quality(cached):
             cached = previous
             GROUP_CACHE = dict(previous)
@@ -6495,7 +6539,7 @@ def mark_run_session_blocked_by_watchdog(reason: str, heartbeat_payload: dict | 
             "watchdog_reason": reason,
             "heartbeat_stale": bool((heartbeat or {}).get("stale")),
             "heartbeat_age_seconds": (heartbeat or {}).get("age_seconds"),
-            "heartbeat_path": str(HEARTBEAT_PATH),
+            "heartbeat_path": str(current_heartbeat_path()),
             "running": run_is_active(),
             "no_ai_token_used": True,
         },
@@ -7348,7 +7392,7 @@ class Handler(BaseHTTPRequestHandler):
                 "--base-dir",
                 str(DATA_DIR),
                 "--control-dir",
-                str(CONTROL_DIR),
+                str(current_control_dir()),
                 "--execution-plan",
                 str(plan_path),
                 "--run-session",

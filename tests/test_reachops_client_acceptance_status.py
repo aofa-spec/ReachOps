@@ -863,6 +863,107 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(bundle["latest_markdown_path"], str(redirected_latest_evidence_md))
         self.assertEqual(result["execution_plan"]["plan_id"], bundle["plan_id"])
 
+    def test_runtime_singleton_paths_follow_redirected_data_dir(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_default_data_dir = reachops_web_ui.DEFAULT_DATA_DIR
+            old_progress_path = reachops_web_ui.PROGRESS_PATH
+            old_default_progress_path = reachops_web_ui.DEFAULT_PROGRESS_PATH
+            old_heartbeat_path = reachops_web_ui.HEARTBEAT_PATH
+            old_default_heartbeat_path = reachops_web_ui.DEFAULT_HEARTBEAT_PATH
+            old_control_dir = reachops_web_ui.CONTROL_DIR
+            old_default_control_dir = reachops_web_ui.DEFAULT_CONTROL_DIR
+            old_web_settings_path = reachops_web_ui.WEB_SETTINGS_PATH
+            old_default_web_settings_path = reachops_web_ui.DEFAULT_WEB_SETTINGS_PATH
+            old_latest_groups_path = reachops_web_ui.LATEST_GROUPS_PATH
+            old_default_latest_groups_path = reachops_web_ui.DEFAULT_LATEST_GROUPS_PATH
+            try:
+                root = Path(tmpdir)
+                default_data_dir = root / "default-runtime"
+                redirected_data_dir = root / "isolated-runtime"
+                default_progress = default_data_dir / "reachops_web_ui_progress.json"
+                redirected_progress = redirected_data_dir / "reachops_web_ui_progress.json"
+                default_heartbeat = default_data_dir / "reachops_web_ui_heartbeat.json"
+                redirected_heartbeat = redirected_data_dir / "reachops_web_ui_heartbeat.json"
+                default_control = default_data_dir / "control"
+                redirected_control = redirected_data_dir / "control"
+                default_settings = default_data_dir / "config" / "reachops_web_settings.json"
+                redirected_settings = redirected_data_dir / "config" / "reachops_web_settings.json"
+                default_groups = default_data_dir / "config" / "latest_ixbrowser_groups.json"
+                redirected_groups = redirected_data_dir / "config" / "latest_ixbrowser_groups.json"
+
+                reachops_web_ui.DEFAULT_DATA_DIR = default_data_dir
+                reachops_web_ui.DEFAULT_PROGRESS_PATH = default_progress
+                reachops_web_ui.DEFAULT_HEARTBEAT_PATH = default_heartbeat
+                reachops_web_ui.DEFAULT_CONTROL_DIR = default_control
+                reachops_web_ui.DEFAULT_WEB_SETTINGS_PATH = default_settings
+                reachops_web_ui.DEFAULT_LATEST_GROUPS_PATH = default_groups
+                reachops_web_ui.DATA_DIR = redirected_data_dir
+                reachops_web_ui.PROGRESS_PATH = default_progress
+                reachops_web_ui.HEARTBEAT_PATH = default_heartbeat
+                reachops_web_ui.CONTROL_DIR = default_control
+                reachops_web_ui.WEB_SETTINGS_PATH = default_settings
+                reachops_web_ui.LATEST_GROUPS_PATH = default_groups
+
+                default_progress.parent.mkdir(parents=True)
+                default_progress.write_text(json.dumps({"status": "default"}), encoding="utf-8")
+                redirected_progress.parent.mkdir(parents=True)
+                redirected_progress.write_text(json.dumps({"status": "redirected"}), encoding="utf-8")
+                default_heartbeat.write_text(json.dumps({"status": "default"}), encoding="utf-8")
+                redirected_heartbeat.write_text(json.dumps({"status": "redirected"}), encoding="utf-8")
+
+                progress = reachops_web_ui.read_runtime_progress_payload()
+                heartbeat = reachops_web_ui.read_runtime_heartbeat_payload()
+                heartbeat_payload = reachops_web_ui.build_runtime_heartbeat_payload()
+                reachops_web_ui.write_cooperative_control(
+                    "pause.request",
+                    {"schema_version": "reachops.cooperative_control.v1", "action": "pause"},
+                )
+                reachops_web_ui.persist_ixbrowser_api_port_setting(53201)
+                reachops_web_ui.write_latest_groups_payload(
+                    {
+                        "groups": [
+                            {
+                                "group_id": "us",
+                                "name": "United States",
+                                "count": 3,
+                                "count_known": True,
+                            }
+                        ],
+                        "profile_count": 3,
+                    }
+                )
+
+                default_control_exists = (default_control / "pause.request").exists()
+                redirected_control_exists = (redirected_control / "pause.request").exists()
+                default_settings_exists = default_settings.exists()
+                redirected_settings_exists = redirected_settings.exists()
+                default_groups_exists = default_groups.exists()
+                redirected_groups_exists = redirected_groups.exists()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.DEFAULT_DATA_DIR = old_default_data_dir
+                reachops_web_ui.PROGRESS_PATH = old_progress_path
+                reachops_web_ui.DEFAULT_PROGRESS_PATH = old_default_progress_path
+                reachops_web_ui.HEARTBEAT_PATH = old_heartbeat_path
+                reachops_web_ui.DEFAULT_HEARTBEAT_PATH = old_default_heartbeat_path
+                reachops_web_ui.CONTROL_DIR = old_control_dir
+                reachops_web_ui.DEFAULT_CONTROL_DIR = old_default_control_dir
+                reachops_web_ui.WEB_SETTINGS_PATH = old_web_settings_path
+                reachops_web_ui.DEFAULT_WEB_SETTINGS_PATH = old_default_web_settings_path
+                reachops_web_ui.LATEST_GROUPS_PATH = old_latest_groups_path
+                reachops_web_ui.DEFAULT_LATEST_GROUPS_PATH = old_default_latest_groups_path
+
+        self.assertEqual(progress["status"], "redirected")
+        self.assertEqual(heartbeat["status"], "redirected")
+        self.assertEqual(heartbeat_payload["path"], str(redirected_heartbeat))
+        self.assertFalse(default_control_exists)
+        self.assertTrue(redirected_control_exists)
+        self.assertFalse(default_settings_exists)
+        self.assertTrue(redirected_settings_exists)
+        self.assertFalse(default_groups_exists)
+        self.assertTrue(redirected_groups_exists)
+
     def test_run_session_latest_path_follows_redirected_data_dir(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
