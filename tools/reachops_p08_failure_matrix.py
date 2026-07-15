@@ -140,7 +140,7 @@ def matrix_row(
         "id": case_id,
         "title": title,
         "status": status,
-        "passed": status in {"passed_real", "passed_contract"},
+        "passed": status in {"passed_real", "passed_contract", "passed_fault_injection"},
         "source": source,
         "evidence": evidence,
         "next_action": next_action,
@@ -168,6 +168,11 @@ def build_matrix(
     profile_missing = readiness_summary(profile_missing_payload or {})
     kernel_mismatch = readiness_summary(kernel_mismatch_payload or {})
     proxy_failed = readiness_summary(proxy_failed_payload or {})
+    proxy_failed_is_injected = bool(
+        isinstance(proxy_failed_payload, dict)
+        and isinstance(proxy_failed_payload.get("fault_injection"), dict)
+        and proxy_failed_payload.get("fault_injection", {}).get("enabled")
+    )
     diagnoses = set(pressure.get("diagnosis_counts") or {})
     readiness_errors = set(readiness.get("error_counts") or {})
     profile_missing_errors = set(profile_missing.get("error_counts") or {})
@@ -260,10 +265,28 @@ def build_matrix(
         matrix_row(
             "proxy_failed",
             "代理失败",
-            "passed_real" if "PROXY_FAILED" in proxy_failed_errors else "missing",
+            (
+                "passed_fault_injection"
+                if "PROXY_FAILED" in proxy_failed_errors and proxy_failed_is_injected
+                else "passed_real"
+                if "PROXY_FAILED" in proxy_failed_errors
+                else "missing"
+            ),
             [proxy_failed_report_path] if proxy_failed_report_path else [],
-            "保持代理失败账号在修复清单中，不重复消耗坏账号。" if proxy_failed_errors else "使用代理故障账号或安全 fault injection 证明 PROXY_FAILED 分类和修复清单。",
-            source="real_profile_readiness" if proxy_failed_errors else "local_audit",
+            (
+                "补充真实代理故障 Profile 证据后再升级为 passed_real。"
+                if proxy_failed_is_injected and proxy_failed_errors
+                else "保持代理失败账号在修复清单中，不重复消耗坏账号。"
+                if proxy_failed_errors
+                else "使用代理故障账号或安全 fault injection 证明 PROXY_FAILED 分类和修复清单。"
+            ),
+            source=(
+                "safe_fault_injection"
+                if proxy_failed_is_injected and proxy_failed_errors
+                else "real_profile_readiness"
+                if proxy_failed_errors
+                else "local_audit"
+            ),
         ),
         matrix_row(
             "page_timeout",

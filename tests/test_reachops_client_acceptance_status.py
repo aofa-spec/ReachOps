@@ -161,6 +161,31 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertEqual(by_id["database_busy"]["status"], "missing")
         self.assertIn("database_busy", matrix["summary"]["missing_ids"])
 
+    def test_p08_failure_matrix_marks_proxy_fault_injection_separately_from_real(self):
+        matrix = build_p08_failure_matrix(
+            pressure_rows=[],
+            readiness_payload={},
+            runtime_audit={},
+            proxy_failed_payload={
+                "status": "blocked_by_accounts",
+                "fault_injection": {
+                    "enabled": True,
+                    "failure_code": "PROXY_FAILED",
+                    "counts_as_real_acceptance": False,
+                },
+                "results": [{"profile_id": "proxy-injection-1", "error_code": "PROXY_FAILED"}],
+                "summary": {"errors": {"PROXY_FAILED": 1}},
+            },
+            proxy_failed_report_path="/tmp/reachops_proxy_failed_probe.json",
+        )
+
+        by_id = {row["id"]: row for row in matrix["rows"]}
+        self.assertEqual(by_id["proxy_failed"]["status"], "passed_fault_injection")
+        self.assertTrue(by_id["proxy_failed"]["passed"])
+        self.assertEqual(by_id["proxy_failed"]["source"], "safe_fault_injection")
+        self.assertIn("proxy_failed_summary", matrix)
+        self.assertIn("补充真实代理故障", by_id["proxy_failed"]["next_action"])
+
     def test_headless_dummy_root_executes_delayed_callbacks(self):
         calls = []
 

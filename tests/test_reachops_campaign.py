@@ -2678,6 +2678,38 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(automation["account_repair_queue_profile_ids"], ["logged-out"])
         self.assertFalse(payload["repair_checklist"]["does_not_modify_ixbrowser_groups"])
 
+    def test_profile_readiness_probe_can_safely_inject_proxy_failure_without_opening_profiles(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("tools.reachops_profile_readiness_probe.ProfilePreflightChecker.run") as run_mock:
+                payload = run_reachops_profile_readiness_probe(
+                    base_dir=tmpdir,
+                    profile_group="获客分组测试",
+                    profile_limit=1,
+                    max_workers=1,
+                    page_timeout_seconds=1,
+                    wait_after_open_seconds=0,
+                    total_timeout_seconds=10,
+                    inject_failure_code="PROXY_FAILED",
+                    inject_profile_ids=["proxy-injection-1"],
+                )
+                written_payload = json.loads(Path(payload["outputs"]["json"]).read_text(encoding="utf-8"))
+
+        run_mock.assert_not_called()
+        self.assertEqual(payload["status"], "blocked_by_accounts")
+        self.assertEqual(payload["terminal_state"], "BLOCKED")
+        self.assertEqual(payload["summary"]["errors"], {"PROXY_FAILED": 1})
+        self.assertEqual(payload["attempted_profile_ids"], ["proxy-injection-1"])
+        self.assertEqual(payload["hard_failed_profile_ids"], ["proxy-injection-1"])
+        self.assertTrue(payload["fault_injection"]["enabled"])
+        self.assertFalse(payload["fault_injection"]["counts_as_real_acceptance"])
+        self.assertFalse(payload["fault_injection"]["real_ixbrowser_opened"])
+        self.assertFalse(payload["metadata"]["open_profile_called"])
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(payload["no_browser_collection"])
+        self.assertTrue(payload["no_action_execution"])
+        self.assertEqual(payload["repair_checklist"]["error_groups"][0]["error_code"], "PROXY_FAILED")
+        self.assertEqual(written_payload["fault_injection"]["failure_code"], "PROXY_FAILED")
+
     def test_profile_readiness_probe_reports_us_group_not_found_terminal_reason(self):
         def fake_metadata_builder(**_kwargs):
             return {

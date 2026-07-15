@@ -707,42 +707,96 @@ def run_probe(
     exclude_recent_failed: bool = True,
     driver_factory: Callable[[dict], tuple[Any, Any, str]] | None = None,
     metadata_builder: Callable[..., dict[str, Any]] | None = None,
+    inject_failure_code: str = "",
+    inject_profile_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     started_monotonic = time.monotonic()
     base = Path(base_dir).resolve()
     run_id, run_dir = unique_run_dir(base)
+    failure_injection_code = str(inject_failure_code or "").strip().upper()
+    injection_allowed = {
+        "PROXY_FAILED",
+        "PAGE_TIMEOUT",
+        "GROUP_REFRESH_FAILURE",
+        "DATABASE_BUSY",
+        "REPORT_WRITE_FAILURE",
+        "DISK_SPACE_ABNORMAL",
+    }
+    if failure_injection_code and failure_injection_code not in injection_allowed:
+        raise ValueError(f"unsupported injected failure code: {failure_injection_code}")
     explicit_ids = [profile_id for profile_id in (profile_ids or []) if str(profile_id).strip()]
+    injected_ids = ordered_unique(inject_profile_ids or explicit_ids)
+    if failure_injection_code and not injected_ids:
+        injected_ids = [f"fault-injection-{failure_injection_code.lower().replace('_', '-')}"]
     recent_failed_profile_ids = (
         load_recent_failed_profile_ids(base)
-        if bool(exclude_recent_failed) and not explicit_ids
+        if bool(exclude_recent_failed) and not explicit_ids and not failure_injection_code
         else []
     )
-    profiles, metadata = select_profiles(
-        profile_ids=explicit_ids,
-        profile_group=profile_group,
-        profile_limit=profile_limit,
-        max_pages=max_pages,
-        exclude_profile_ids=recent_failed_profile_ids,
-        metadata_builder=metadata_builder,
-    )
-    storage = GrowthStorage(str(run_dir / "data" / "growth_intelligence.db"))
-    checker = ProfilePreflightChecker(
-        storage,
-        ProfilePreflightConfig(
-            max_workers=max(1, min(int(max_workers or 1), max(1, len(profiles)))),
-            page_load_timeout_seconds=max(1, int(page_timeout_seconds or 20)),
-            wait_after_open_seconds=max(0.0, float(wait_after_open_seconds or 0)),
-            check_url=str(check_url or "https://www.tiktok.com/messages"),
-            evidence_dir=str(run_dir / "evidence" / "profile_preflight"),
-            close_browser_after_check=True,
-            retain_successful_browser_after_check=False,
-            total_timeout_seconds=max(5, int(total_timeout_seconds or 60)),
-            quarantine_on_failure=bool(quarantine_failed_profiles),
-            launch_stagger_seconds=0.0,
-        ),
-        driver_factory=driver_factory,
-    )
-    summary = checker.run(profiles) if profiles else {"requested": 0, "checked": 0, "available": 0, "unavailable": 0, "errors": {}, "results": []}
+    if failure_injection_code:
+        profiles = [
+            {"profile_id": profile_id, "group_name": str(profile_group or "")}
+            for profile_id in injected_ids[: safe_int(profile_limit, 1, minimum=1, maximum=100)]
+        ]
+        metadata = {
+            "status": "safe_fault_injection",
+            "safe_read_only": True,
+            "open_profile_called": False,
+            "group_name_filter": str(profile_group or ""),
+            "selected_profile_count": len(profiles),
+            "selected_profile_sample_count": len(profiles),
+            "selected_group_id_present": False,
+            "profile_limit_honored": True,
+            "error_code": failure_injection_code,
+            "error_message": f"safe no-submit failure injection for {failure_injection_code}",
+        }
+        summary = {
+            "requested": len(profiles),
+            "checked": len(profiles),
+            "available": 0,
+            "unavailable": len(profiles),
+            "errors": {failure_injection_code: len(profiles)} if profiles else {},
+            "results": [
+                {
+                    "profile_id": profile["profile_id"],
+                    "group_name": profile.get("group_name", ""),
+                    "ok": False,
+                    "error_code": failure_injection_code,
+                    "error_message": f"safe no-submit failure injection for {failure_injection_code}",
+                    "duration_seconds": 0.0,
+                    "evidence_path": "",
+                    "quarantine_move": {"attempted": False},
+                }
+                for profile in profiles
+            ],
+        }
+    else:
+        profiles, metadata = select_profiles(
+            profile_ids=explicit_ids,
+            profile_group=profile_group,
+            profile_limit=profile_limit,
+            max_pages=max_pages,
+            exclude_profile_ids=recent_failed_profile_ids,
+            metadata_builder=metadata_builder,
+        )
+        storage = GrowthStorage(str(run_dir / "data" / "growth_intelligence.db"))
+        checker = ProfilePreflightChecker(
+            storage,
+            ProfilePreflightConfig(
+                max_workers=max(1, min(int(max_workers or 1), max(1, len(profiles)))),
+                page_load_timeout_seconds=max(1, int(page_timeout_seconds or 20)),
+                wait_after_open_seconds=max(0.0, float(wait_after_open_seconds or 0)),
+                check_url=str(check_url or "https://www.tiktok.com/messages"),
+                evidence_dir=str(run_dir / "evidence" / "profile_preflight"),
+                close_browser_after_check=True,
+                retain_successful_browser_after_check=False,
+                total_timeout_seconds=max(5, int(total_timeout_seconds or 60)),
+                quarantine_on_failure=bool(quarantine_failed_profiles),
+                launch_stagger_seconds=0.0,
+            ),
+            driver_factory=driver_factory,
+        )
+        summary = checker.run(profiles) if profiles else {"requested": 0, "checked": 0, "available": 0, "unavailable": 0, "errors": {}, "results": []}
     status, terminal_state = readiness_status(summary, profiles)
     profile_counts = build_profile_scan_counts(
         summary=summary,
@@ -787,6 +841,14 @@ def run_probe(
         "exclude_recent_failed": bool(exclude_recent_failed),
         "recent_failed_profile_ids_count": len(recent_failed_profile_ids),
         "recent_failed_profile_ids_sample": recent_failed_profile_ids[:12],
+        "fault_injection": {
+            "enabled": bool(failure_injection_code),
+            "failure_code": failure_injection_code,
+            "safe_no_submit": True,
+            "real_ixbrowser_opened": False,
+            "real_tiktok_opened": False,
+            "counts_as_real_acceptance": False,
+        },
         "metadata": metadata,
         "selected_profiles_count": len(profiles),
         "profile_counts": profile_counts,
@@ -843,6 +905,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--quarantine-failed-profiles", action="store_true")
     parser.add_argument("--no-exclude-recent-failed", action="store_true")
     parser.add_argument("--from-report", default="", help="Enrich an existing probe JSON with repair checklist outputs without opening profiles.")
+    parser.add_argument("--inject-failure-code", default="", help="Safely inject a bounded no-submit failure code without opening profiles.")
+    parser.add_argument("--inject-profile-ids", default="", help="Comma-separated synthetic or explicit profile IDs for --inject-failure-code.")
     parser.add_argument("--allow-fail", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -870,6 +934,8 @@ def main(argv: list[str] | None = None) -> int:
         check_url=args.check_url,
         quarantine_failed_profiles=bool(args.quarantine_failed_profiles),
         exclude_recent_failed=not bool(args.no_exclude_recent_failed),
+        inject_failure_code=args.inject_failure_code,
+        inject_profile_ids=split_csv(args.inject_profile_ids),
     )
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
