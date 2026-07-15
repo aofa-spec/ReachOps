@@ -2321,7 +2321,15 @@ def run_audit(args) -> dict:
                 and data_governance_fixture.get("recovery_objectives", {}).get("schema_version") == "reachops.recovery_objectives.v1"
                 and data_governance_fixture.get("support_bundle", {}).get("manifest_schema_version") == "reachops.support_bundle_manifest.v1"
                 and data_governance_fixture.get("support_bundle", {}).get("diagnostic_manifest_complete") is True
+                and isinstance(data_governance_fixture.get("support_bundle", {}).get("required_diagnostic_files"), list)
+                and isinstance(data_governance_fixture.get("support_bundle", {}).get("missing_required_diagnostics"), list)
+                and "required_diagnostics_present" in data_governance_fixture.get("support_bundle", {})
+                and "does_not_claim_required_diagnostics_present" in data_governance_fixture.get("support_bundle", {})
                 and "reports/support/account_support_handoff.json" in (data_governance_fixture.get("support_bundle", {}).get("required_diagnostics") or [])
+                and "reports/support/account_support_handoff.json" in {
+                    str(item.get("relative_path") or "")
+                    for item in data_governance_fixture.get("support_bundle", {}).get("required_diagnostic_files") or []
+                }
                 and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest_passed") is True
                 and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest", {}).get("activation_status_included") is False
                 and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest", {}).get("raw_database_included") is False

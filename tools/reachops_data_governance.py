@@ -210,6 +210,29 @@ def build_support_bundle_manifest(base_dir: Path, candidate_paths: list[Path] | 
         for item in included
         if _support_exclude_match(str(item.get("relative_path") or ""))
     ]
+    included_paths = {str(item.get("relative_path") or "") for item in included}
+    excluded_by_path = {str(item.get("relative_path") or ""): item for item in excluded}
+    required_diagnostic_files: list[dict[str, Any]] = []
+    for relative_path in SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS:
+        path = base_dir / relative_path
+        excluded_detail = excluded_by_path.get(relative_path) or {}
+        required_diagnostic_files.append(
+            {
+                "relative_path": relative_path,
+                "path": str(path),
+                "exists": path.exists(),
+                "size_bytes": path.stat().st_size if path.exists() and path.is_file() else 0,
+                "sha256": sha256_file(path) if path.exists() and path.is_file() else "",
+                "included_in_manifest": relative_path in included_paths,
+                "excluded_reason": str(excluded_detail.get("reason") or ""),
+                "matched_pattern": str(excluded_detail.get("matched_pattern") or ""),
+            }
+        )
+    missing_required_diagnostics = [
+        item["relative_path"]
+        for item in required_diagnostic_files
+        if not item["exists"]
+    ]
     return {
         "schema_version": SUPPORT_BUNDLE_MANIFEST_SCHEMA_VERSION,
         "base_dir": str(base_dir),
@@ -229,6 +252,9 @@ def build_support_bundle_manifest(base_dir: Path, candidate_paths: list[Path] | 
         "excluded_files": excluded,
         "outside_base_candidates": outside_base,
         "forbidden_included": forbidden_included,
+        "required_diagnostic_files": required_diagnostic_files,
+        "required_diagnostics_present": not missing_required_diagnostics,
+        "missing_required_diagnostics": missing_required_diagnostics,
         "passed": not forbidden_included and not outside_base,
     }
 
@@ -524,6 +550,10 @@ def verify_privacy_operation_audit(db_path: Path, *, workspace_id: str = "worksp
 def build_support_bundle_policy(base_dir: Path) -> dict[str, Any]:
     dry_run_manifest = build_support_bundle_manifest(base_dir)
     included_paths = {str(item.get("relative_path") or "") for item in dry_run_manifest.get("included_files") or []}
+    missing_required_diagnostics = [
+        str(item)
+        for item in dry_run_manifest.get("missing_required_diagnostics") or []
+    ]
     return {
         "default_redacted": True,
         "manifest_schema_version": SUPPORT_BUNDLE_MANIFEST_SCHEMA_VERSION,
@@ -549,6 +579,10 @@ def build_support_bundle_policy(base_dir: Path) -> dict[str, Any]:
         ],
         "required_diagnostics": list(SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS),
         "diagnostic_manifest_complete": all(path in included_paths for path in SUPPORT_BUNDLE_REQUIRED_DIAGNOSTICS),
+        "required_diagnostic_files": dry_run_manifest.get("required_diagnostic_files") or [],
+        "required_diagnostics_present": not missing_required_diagnostics,
+        "missing_required_diagnostics": missing_required_diagnostics,
+        "does_not_claim_required_diagnostics_present": bool(missing_required_diagnostics),
         "dry_run_manifest": dry_run_manifest,
         "dry_run_manifest_passed": bool(dry_run_manifest.get("passed")),
     }

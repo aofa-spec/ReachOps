@@ -78,7 +78,10 @@ from tools.reachops_ci_release_baseline_audit import build_report as build_reach
 from tools.reachops_account_readiness_audit import build_report as build_reachops_account_readiness_report
 from tools.reachops_control_plane_audit import build_report as build_reachops_control_plane_report
 from tools.reachops_issue_closure_audit import build_report as build_reachops_issue_closure_report
-from tools.reachops_data_governance import build_report as build_reachops_data_governance_report
+from tools.reachops_data_governance import (
+    build_report as build_reachops_data_governance_report,
+    build_support_bundle_policy as build_reachops_support_bundle_policy,
+)
 from tools.reachops_security_supply_chain_audit import build_report as build_reachops_security_supply_chain_report
 from tools.reachops_start_contract_audit import build_report as build_reachops_start_contract_report
 from tools.reachops_outcome_metrics import (
@@ -3883,6 +3886,44 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("live_submit", missing_report_evidence["missing_package_report_files"])
             missing_report_note = Path(missing_report_evidence["rollback_note_path"]).read_text(encoding="utf-8")
             self.assertIn("Missing package reports: live_submit", missing_report_note)
+
+    def test_support_bundle_policy_surfaces_missing_required_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            support = build_reachops_support_bundle_policy(root)
+
+            self.assertTrue(support["diagnostic_manifest_complete"])
+            self.assertFalse(support["required_diagnostics_present"])
+            self.assertTrue(support["does_not_claim_required_diagnostics_present"])
+            self.assertIn("reports/support/account_support_handoff.json", support["missing_required_diagnostics"])
+            diagnostic_status = {
+                item["relative_path"]: item
+                for item in support["required_diagnostic_files"]
+            }
+            self.assertIn("reports/support/account_support_handoff.json", diagnostic_status)
+            self.assertFalse(diagnostic_status["reports/support/account_support_handoff.json"]["exists"])
+            self.assertTrue(diagnostic_status["reports/support/account_support_handoff.json"]["included_in_manifest"])
+            self.assertEqual(diagnostic_status["reports/support/account_support_handoff.json"]["excluded_reason"], "")
+            self.assertEqual(
+                support["dry_run_manifest"]["missing_required_diagnostics"],
+                support["missing_required_diagnostics"],
+            )
+            self.assertFalse(support["dry_run_manifest"]["required_diagnostics_present"])
+
+            for relative_path in support["required_diagnostics"]:
+                path = root / relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({"relative_path": relative_path}, sort_keys=True), encoding="utf-8")
+
+            ready = build_reachops_support_bundle_policy(root)
+            self.assertTrue(ready["diagnostic_manifest_complete"])
+            self.assertTrue(ready["required_diagnostics_present"])
+            self.assertFalse(ready["does_not_claim_required_diagnostics_present"])
+            self.assertEqual(ready["missing_required_diagnostics"], [])
+            self.assertTrue(all(item["exists"] for item in ready["required_diagnostic_files"]))
+            self.assertTrue(all(item["included_in_manifest"] for item in ready["required_diagnostic_files"]))
+            self.assertTrue(ready["dry_run_manifest"]["required_diagnostics_present"])
+            self.assertEqual(ready["dry_run_manifest"]["missing_required_diagnostics"], [])
 
     def test_reachops_data_governance_verifies_backup_restore_and_redaction_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
