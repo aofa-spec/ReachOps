@@ -3886,21 +3886,30 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertTrue(payload["running"])
         self.assertIs(process_after_stop, fake_process)
 
-    def test_safe_report_download_path_only_allows_runtime_reports(self):
+    def test_safe_report_download_path_allows_runtime_reports_and_evidence(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
             try:
                 reachops_web_ui.DATA_DIR = Path(tmpdir)
-                allowed = Path(tmpdir) / "reports" / "acceptance_remediation" / "fix.csv"
-                allowed.parent.mkdir(parents=True)
-                allowed.write_text("ok", encoding="utf-8")
+                allowed_paths = [
+                    Path(tmpdir) / "reports" / "acceptance_remediation" / "fix.csv",
+                    Path(tmpdir) / "data" / "growth_intelligence" / "reports" / "operator.csv",
+                    Path(tmpdir) / "evidence_bundles" / "latest_evidence_bundle.json",
+                    Path(tmpdir) / "page_state" / "precheck_unknown.json",
+                    Path(tmpdir) / "run_results" / "result.json",
+                ]
+                for allowed in allowed_paths:
+                    allowed.parent.mkdir(parents=True, exist_ok=True)
+                    allowed.write_text("ok", encoding="utf-8")
                 denied = Path(tmpdir) / "outside.csv"
                 denied.write_text("no", encoding="utf-8")
 
-                self.assertEqual(safe_report_download_path(str(allowed)), allowed.resolve())
+                resolved_allowed = [safe_report_download_path(str(path)) for path in allowed_paths]
                 self.assertIsNone(safe_report_download_path(str(denied)))
             finally:
                 reachops_web_ui.DATA_DIR = old_data_dir
+
+        self.assertEqual(resolved_allowed, [path.resolve() for path in allowed_paths])
 
     def test_download_http_endpoint_reports_file_send_failure_as_json(self):
         with TemporaryDirectory() as tmpdir:

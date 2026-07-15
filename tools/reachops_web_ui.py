@@ -1010,6 +1010,9 @@ def safe_report_download_path(raw_path: str) -> Path | None:
         allowed_roots = [
             (DATA_DIR / "reports").resolve(),
             (DATA_DIR / "data/growth_intelligence/reports").resolve(),
+            (DATA_DIR / "evidence_bundles").resolve(),
+            (DATA_DIR / "page_state").resolve(),
+            (DATA_DIR / "run_results").resolve(),
         ]
         if not any(_is_relative_to(path, root) for root in allowed_roots):
             return None
