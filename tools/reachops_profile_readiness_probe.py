@@ -70,7 +70,7 @@ def select_profiles(
             max_pages=max_pages,
         )
 
-    builder = metadata_builder or build_ixbrowser_metadata_report
+    builder = metadata_builder
     metadata = builder(
         group_name=str(profile_group or ""),
         max_pages=max(1, int(max_pages or 1)),
@@ -284,13 +284,91 @@ def readiness_status(summary: dict[str, Any], selected_profiles: list[dict[str, 
     return "passed", TERMINAL_COMPLETED
 
 
+def build_repair_checklist(payload: dict[str, Any]) -> dict[str, Any]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in payload.get("results") or []:
+        if not isinstance(row, dict) or row.get("ok"):
+            continue
+        error_code = str(row.get("error_code") or row.get("status") or "UNKNOWN_PAGE_STATE")
+        group = grouped.setdefault(
+            error_code,
+            {
+                "error_code": error_code,
+                "count": 0,
+                "profile_ids": [],
+                "recommended_action": recommended_action(error_code, False),
+                "evidence_paths": [],
+            },
+        )
+        group["count"] = int(group.get("count") or 0) + 1
+        profile_id = str(row.get("profile_id") or "")
+        if profile_id:
+            group["profile_ids"].append(profile_id)
+        evidence_path = str(row.get("evidence_path") or "")
+        if evidence_path:
+            group["evidence_paths"].append(evidence_path)
+    groups = sorted(grouped.values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("error_code") or "")))
+    profile_group = str(payload.get("profile_group") or "United States")
+    failed_ids = [
+        str(row.get("profile_id") or "")
+        for row in payload.get("results") or []
+        if isinstance(row, dict) and not row.get("ok") and str(row.get("profile_id") or "")
+    ]
+    ready_ids = [
+        str(row.get("profile_id") or "")
+        for row in payload.get("results") or []
+        if isinstance(row, dict) and row.get("ok") and str(row.get("profile_id") or "")
+    ]
+    profile_limit = max(1, len(failed_ids) or int((payload.get("budgets") or {}).get("max_profile_scan_count") or 1))
+    retest_command = (
+        "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_profile_readiness_probe.py "
+        f"--profile-group {json.dumps(profile_group)} "
+        f"--profile-limit {profile_limit} --max-workers 1 --allow-fail --json"
+    )
+    if failed_ids:
+        retest_command = (
+            "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_profile_readiness_probe.py "
+            f"--profile-group {json.dumps(profile_group)} "
+            f"--profile-ids {json.dumps(','.join(failed_ids))} "
+            f"--profile-limit {len(failed_ids)} --max-workers 1 --allow-fail --json"
+        )
+    return {
+        "schema_version": "reachops.profile_repair_checklist.v1",
+        "status": "ready_profiles_available" if ready_ids else "manual_repair_required",
+        "profile_group": profile_group,
+        "ready_profile_ids": ready_ids,
+        "failed_profile_ids": failed_ids,
+        "error_groups": groups,
+        "manual_only": True,
+        "no_submit": bool(payload.get("no_submit", True)),
+        "does_not_modify_ixbrowser_groups": not bool(payload.get("quarantine_failed_profiles")),
+        "retest_command": retest_command,
+        "next_action": (
+            "Use READY profile IDs for the next single-account real no-submit run."
+            if ready_ids
+            else "Repair listed profiles or provide a different candidate list, then rerun the retest command."
+        ),
+    }
+
+
 def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
     reports_dir = base_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     json_path = reports_dir / "profile_readiness_probe.json"
     csv_path = reports_dir / "profile_readiness_probe.csv"
     md_path = reports_dir / "profile_readiness_probe.md"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    repair_json_path = reports_dir / "profile_repair_checklist.json"
+    repair_csv_path = reports_dir / "profile_repair_checklist.csv"
+    repair_md_path = reports_dir / "profile_repair_checklist.md"
+    outputs = {
+        "json": str(json_path),
+        "csv": str(csv_path),
+        "markdown": str(md_path),
+        "repair_json": str(repair_json_path),
+        "repair_csv": str(repair_csv_path),
+        "repair_markdown": str(repair_md_path),
+    }
+    payload["outputs"] = outputs
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         fieldnames = [
             "profile_id",
@@ -307,6 +385,41 @@ def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
         writer.writeheader()
         for row in payload.get("results") or []:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
+    repair_checklist = payload.get("repair_checklist") if isinstance(payload.get("repair_checklist"), dict) else build_repair_checklist(payload)
+    payload["repair_checklist"] = repair_checklist
+    repair_json_path.write_text(json.dumps(repair_checklist, ensure_ascii=False, indent=2), encoding="utf-8")
+    with repair_csv_path.open("w", encoding="utf-8", newline="") as handle:
+        fieldnames = ["error_code", "count", "profile_ids", "recommended_action", "evidence_paths"]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in repair_checklist.get("error_groups") or []:
+            writer.writerow(
+                {
+                    "error_code": row.get("error_code", ""),
+                    "count": row.get("count", 0),
+                    "profile_ids": ",".join(str(item) for item in row.get("profile_ids") or []),
+                    "recommended_action": row.get("recommended_action", ""),
+                    "evidence_paths": ",".join(str(item) for item in row.get("evidence_paths") or []),
+                }
+            )
+    repair_lines = [
+        "# ReachOps Profile Repair Checklist",
+        "",
+        f"- status: {repair_checklist.get('status')}",
+        f"- profile_group: {repair_checklist.get('profile_group')}",
+        f"- no_submit: {str(bool(repair_checklist.get('no_submit'))).lower()}",
+        f"- does_not_modify_ixbrowser_groups: {str(bool(repair_checklist.get('does_not_modify_ixbrowser_groups'))).lower()}",
+        "",
+        "## Error Groups",
+    ]
+    for row in repair_checklist.get("error_groups") or []:
+        repair_lines.append(
+            f"- {row.get('error_code')}: {row.get('count')} profiles; action={row.get('recommended_action')}"
+        )
+    if not repair_checklist.get("error_groups"):
+        repair_lines.append("- none")
+    repair_lines.extend(["", "## Retest Command", f"`{repair_checklist.get('retest_command')}`"])
+    repair_md_path.write_text("\n".join(repair_lines) + "\n", encoding="utf-8")
     lines = [
         "# ReachOps Profile Readiness Probe",
         "",
@@ -326,9 +439,36 @@ def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
         lines.extend([f"- {key}: {value}" for key, value in sorted(errors.items())])
     else:
         lines.append("- none")
-    lines.extend(["", "## Next Action", str(payload.get("next_action") or "")])
+    lines.extend(
+        [
+            "",
+            "## Repair Checklist",
+            f"- JSON: {repair_json_path}",
+            f"- CSV: {repair_csv_path}",
+            f"- Markdown: {repair_md_path}",
+            "",
+            "## Retest Command",
+            f"`{repair_checklist.get('retest_command')}`",
+            "",
+            "## Next Action",
+            str(payload.get("next_action") or repair_checklist.get("next_action") or ""),
+        ]
+    )
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return {"json": str(json_path), "csv": str(csv_path), "markdown": str(md_path)}
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return outputs
+
+
+def enrich_existing_report(path: str | Path) -> dict[str, Any]:
+    report_path = Path(path).expanduser().resolve()
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    report_dir = report_path.parent.parent
+    payload.setdefault("schema_version", SCHEMA_VERSION)
+    payload.setdefault("mode", "profile_readiness_probe")
+    payload["repair_checklist"] = build_repair_checklist(payload)
+    payload["report_dir"] = str(report_dir)
+    write_outputs(report_dir, payload)
+    return payload
 
 
 def run_probe(
@@ -426,8 +566,9 @@ def run_probe(
         },
         "next_action": next_action,
     }
-    payload["outputs"] = write_outputs(run_dir, payload)
     payload["report_dir"] = str(run_dir)
+    payload["repair_checklist"] = build_repair_checklist(payload)
+    write_outputs(run_dir, payload)
     return payload
 
 
@@ -444,6 +585,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--total-timeout-seconds", type=int, default=60)
     parser.add_argument("--check-url", default="https://www.tiktok.com/messages")
     parser.add_argument("--quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--from-report", default="", help="Enrich an existing probe JSON with repair checklist outputs without opening profiles.")
     parser.add_argument("--allow-fail", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -451,6 +593,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if str(args.from_report or "").strip():
+        payload = enrich_existing_report(args.from_report)
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        else:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
     payload = run_probe(
         base_dir=args.base_dir,
         profile_group=args.profile_group,

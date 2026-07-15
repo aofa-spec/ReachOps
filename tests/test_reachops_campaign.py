@@ -71,6 +71,7 @@ from tools.reachops_live_submit_acceptance import run_acceptance as run_reachops
 from tools.reachops_live_environment_blocker_report import build_report as build_reachops_live_environment_blocker_report
 from tools.reachops_live_environment_blocker_report import main as reachops_live_environment_blocker_main
 from tools.reachops_ixbrowser_profile_metadata_report import build_report as build_ixbrowser_profile_metadata_report
+from tools.reachops_profile_readiness_probe import enrich_existing_report as enrich_reachops_profile_readiness_report
 from tools.reachops_profile_readiness_probe import run_probe as run_reachops_profile_readiness_probe
 from tools.verify_reachops_acceptance_summary import verify_summary as verify_reachops_acceptance_summary
 from tools.reachops_delivery_package_check import check_delivery_package as check_reachops_delivery_package
@@ -2551,6 +2552,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(Path(payload["outputs"]["json"]).is_file())
             self.assertTrue(Path(payload["outputs"]["csv"]).is_file())
             self.assertTrue(Path(payload["outputs"]["markdown"]).is_file())
+            self.assertTrue(Path(payload["outputs"]["repair_json"]).is_file())
+            written_payload = json.loads(Path(payload["outputs"]["json"]).read_text(encoding="utf-8"))
+            self.assertIn("outputs", written_payload)
+            self.assertIn("repair_checklist", written_payload)
 
         self.assertEqual(payload["status"], "partial")
         self.assertEqual(payload["terminal_state"], "COMPLETED")
@@ -2569,6 +2574,49 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("kernel", failed["recommended_action"].lower())
         self.assertEqual(payload["attempted_profile_ids"], ["10001", "10002"])
         self.assertEqual(payload["hard_failed_profile_ids"], ["10002"])
+        self.assertEqual(payload["repair_checklist"]["status"], "ready_profiles_available")
+        self.assertIn("--profile-ids", payload["repair_checklist"]["retest_command"])
+
+    def test_profile_readiness_probe_enriches_existing_report_without_reopening_profiles(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_dir = Path(tmpdir) / "20260715T000000Z" / "reports"
+            report_dir.mkdir(parents=True)
+            report_path = report_dir / "profile_readiness_probe.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "status": "blocked_by_accounts",
+                        "terminal_state": "BLOCKED",
+                        "profile_group": "United States",
+                        "no_submit": True,
+                        "quarantine_failed_profiles": False,
+                        "summary": {"checked": 1, "available": 0, "unavailable": 1, "errors": {"LOGIN_REQUIRED": 1}},
+                        "results": [
+                            {
+                                "profile_id": "10001",
+                                "group_name": "United States",
+                                "ok": False,
+                                "status": "LOGIN_REQUIRED",
+                                "error_code": "LOGIN_REQUIRED",
+                                "evidence_path": "/tmp/evidence.png",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            payload = enrich_reachops_profile_readiness_report(report_path)
+
+            self.assertEqual(payload["repair_checklist"]["status"], "manual_repair_required")
+            self.assertEqual(payload["repair_checklist"]["failed_profile_ids"], ["10001"])
+            self.assertTrue(payload["repair_checklist"]["does_not_modify_ixbrowser_groups"])
+            self.assertTrue(Path(payload["outputs"]["repair_json"]).is_file())
+            self.assertTrue(Path(payload["outputs"]["repair_csv"]).is_file())
+            self.assertTrue(Path(payload["outputs"]["repair_markdown"]).is_file())
+            written_payload = json.loads(Path(payload["outputs"]["json"]).read_text(encoding="utf-8"))
+            self.assertIn("outputs", written_payload)
+            self.assertIn("repair_checklist", written_payload)
 
     def test_reachops_windows_package_preflight_validates_build_inputs_without_claiming_final_delivery(self):
         report = build_reachops_windows_package_preflight()
