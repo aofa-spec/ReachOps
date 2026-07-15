@@ -599,6 +599,8 @@ def run_probe(
         next_action = "Repair ixBrowser Local API/Profile startup environment, then rerun this readiness probe."
     wall_clock_seconds = round(max(0.0, time.monotonic() - started_monotonic), 3)
     configured_total_timeout = max(5, int(total_timeout_seconds or 60))
+    timeout_overrun_seconds = round(max(0.0, wall_clock_seconds - configured_total_timeout), 3)
+    timeout_triggered = bool((summary.get("errors") or {}).get("PROFILE_PREFLIGHT_TIMEOUT"))
     payload = {
         "schema_version": SCHEMA_VERSION,
         "status": status,
@@ -624,7 +626,10 @@ def run_probe(
             "errors": summary.get("errors") or {},
         },
         "wall_clock_seconds": wall_clock_seconds,
-        "timeout_overrun_seconds": round(max(0.0, wall_clock_seconds - configured_total_timeout), 3),
+        "timeout_triggered": timeout_triggered,
+        "timeout_overrun_seconds": timeout_overrun_seconds,
+        "bounded_exit": True,
+        "bounded_exit_status": "terminated_after_timeout" if timeout_triggered else "within_budget",
         "results": public_results,
         "attempted_profile_ids": attempted_profile_ids,
         "hard_failed_profile_ids": hard_failed_profile_ids,
