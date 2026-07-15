@@ -613,6 +613,20 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertEqual(plan["total_error_events_by_error"], 20)
         self.assertEqual(plan["summary_only_error_count"], 19)
 
+    def test_account_repair_plan_operator_steps_follow_current_error_groups(self):
+        plan = build_account_repair_plan(
+            {"id": "gb_timeout", "status": "failed", "profile_group": "United States"},
+            [{"profile_id": "5897", "error": "PROFILE_PREFLIGHT_TIMEOUT", "message": "timeout"}],
+            preflight_errors={"PROFILE_PREFLIGHT_TIMEOUT": 20, "PAGE_OPEN_FAILED": 5},
+        )
+
+        steps = "\n".join(plan["operator_steps"])
+        self.assertIn("PROFILE_PREFLIGHT_TIMEOUT/PAGE_OPEN_FAILED", steps)
+        self.assertIn("代理", steps)
+        self.assertIn("至少保留 1 个已登录", steps)
+        self.assertNotIn("IXBROWSER_KERNEL_MISMATCH", steps)
+        self.assertNotIn("LOGIN_REQUIRED", steps)
+
     def test_profile_remediation_csv_quality_rejects_duplicate_profile_ids(self):
         with TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "remediation.csv"
@@ -4193,7 +4207,11 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                 "total_unique_profiles_by_error": 20,
                 "total_error_events_by_error": 25,
                 "summary_only_error_count": 5,
-                "operator_steps": ["手动打开超时账号确认代理和 TikTok 页面加载。"],
+                "operator_steps": [
+                    "先处理 IXBROWSER_KERNEL_MISMATCH：把对应配置内核改为 ixBrowser 当前支持版本 138，或移出执行分组。",
+                    "再处理 LOGIN_REQUIRED：手动打开配置完成 TikTok 登录；无法登录则移入封禁/不可用分组。",
+                    "最后处理 PROFILE_PREFLIGHT_TIMEOUT/PAGE_OPEN_FAILED：确认代理和 TikTok 页面加载稳定，必要时降低并发或移出本轮执行。",
+                ],
                 "error_groups": [
                     {
                         "error": "PROFILE_PREFLIGHT_TIMEOUT",
@@ -4273,6 +4291,10 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(handoff["latest_apply"]["moved_count"], 2)
         self.assertEqual(handoff["impacted_accounts"]["error_groups"][0]["profile_ids_sample"], ["5897", "18430"])
         self.assertEqual(handoff["impacted_accounts"]["error_groups"][1]["summary_only_count"], 5)
+        operator_steps = "\n".join(handoff["operator_steps"])
+        self.assertIn("PROFILE_PREFLIGHT_TIMEOUT/PAGE_OPEN_FAILED", operator_steps)
+        self.assertNotIn("IXBROWSER_KERNEL_MISMATCH", operator_steps)
+        self.assertNotIn("LOGIN_REQUIRED", operator_steps)
         self.assertIn("client_delivery.profile_available>=1", handoff["acceptance_required"])
         self.assertEqual(handoff["retest_checklist"][0]["id"], "manual_repair_or_replace_accounts")
         self.assertEqual(handoff["retest_checklist"][1]["id"], "client_delivery_retest")

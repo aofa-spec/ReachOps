@@ -17,6 +17,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from tools.reachops_client_acceptance_status import (
     DEFAULT_BASE_DIR,
+    account_operator_steps,
     derive_acceptance,
     latest_batch,
     latest_profile_preflight,
@@ -445,6 +446,9 @@ def build_account_support_handoff(
     if support_required and not priority_action:
         priority_action = "create_or_repair_real_account_pool"
     retest_checklist = build_account_retest_checklist(resolution, repair_summary)
+    operator_steps = account_operator_steps(error_groups) if support_required and error_groups else [
+        str(item) for item in (repair_summary.get("operator_steps") or [])
+    ][:8]
     return {
         "schema_version": "reachops.account_support_handoff.v1",
         "status": support_status,
@@ -494,7 +498,7 @@ def build_account_support_handoff(
             "error_group_count": len(error_groups),
             "error_groups": error_groups,
         },
-        "operator_steps": [str(item) for item in (repair_summary.get("operator_steps") or [])][:8],
+        "operator_steps": operator_steps[:8],
         "retest_commands": [
             "python tools/reachops_client_delivery_check.py --json",
             "python tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json",

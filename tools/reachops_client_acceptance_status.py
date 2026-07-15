@@ -564,6 +564,25 @@ def dedupe_profile_remediation_details(details: list[dict]) -> list[dict]:
     return [{key: value for key, value in by_profile[profile_id].items() if key != "_order"} for profile_id in order]
 
 
+def account_operator_steps(error_groups: list[dict]) -> list[str]:
+    errors = {str(row.get("error") or "").strip() for row in error_groups or [] if int(row.get("count") or 0) > 0}
+    steps: list[str] = []
+    if "IXBROWSER_KERNEL_MISMATCH" in errors:
+        steps.append("处理 IXBROWSER_KERNEL_MISMATCH：把对应配置内核改为 ixBrowser 当前支持版本 138，或移出执行分组。")
+    if "LOGIN_REQUIRED" in errors:
+        steps.append("处理 LOGIN_REQUIRED：手动打开配置完成 TikTok 登录；无法登录则移入封禁/不可用分组。")
+    if "PROFILE_PREFLIGHT_TIMEOUT" in errors or "PAGE_OPEN_FAILED" in errors:
+        present = "/".join(error for error in ("PROFILE_PREFLIGHT_TIMEOUT", "PAGE_OPEN_FAILED") if error in errors)
+        steps.append(f"处理 {present}：确认代理、TikTok 页面加载速度和账号稳定性，必要时降低并发或移出本轮执行。")
+    for row in error_groups or []:
+        error = str(row.get("error") or "").strip()
+        if not error or error in {"IXBROWSER_KERNEL_MISMATCH", "LOGIN_REQUIRED", "PROFILE_PREFLIGHT_TIMEOUT", "PAGE_OPEN_FAILED"}:
+            continue
+        steps.append(f"处理 {error}：{recommended_profile_action(error)}")
+    steps.append("至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑开始获客。")
+    return steps
+
+
 def build_account_repair_plan(batch: dict, details: list[dict], preflight_errors: dict | None = None) -> dict:
     groups: dict[str, dict] = {}
     for item in details or []:
@@ -633,12 +652,7 @@ def build_account_repair_plan(batch: dict, details: list[dict], preflight_errors
         "total_error_events_by_error": total_error_events,
         "summary_only_error_count": summary_only_error_count,
         "groups": ordered,
-        "operator_steps": [
-            "先处理 IXBROWSER_KERNEL_MISMATCH：把对应配置内核改为 ixBrowser 当前支持版本 138，或移出执行分组。",
-            "再处理 LOGIN_REQUIRED：手动打开配置完成 TikTok 登录；无法登录则移入封禁/不可用分组。",
-            "最后处理 PROFILE_PREFLIGHT_TIMEOUT/PAGE_OPEN_FAILED：确认代理和 TikTok 页面加载稳定，必要时降低并发或移出本轮执行。",
-            "至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑开始获客。",
-        ],
+        "operator_steps": account_operator_steps(ordered),
         "acceptance_after_repair": [
             "reachops_client_delivery_check.py --json 返回 status=passed。",
             "profile_available>=1。",
