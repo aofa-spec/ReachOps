@@ -155,20 +155,24 @@ def build_matrix(
     runtime_audit: dict[str, Any],
     profile_missing_payload: dict[str, Any] | None = None,
     kernel_mismatch_payload: dict[str, Any] | None = None,
+    proxy_failed_payload: dict[str, Any] | None = None,
     pressure_summary_path: str = "",
     readiness_report_path: str = "",
     runtime_audit_path: str = "",
     profile_missing_report_path: str = "",
     kernel_mismatch_report_path: str = "",
+    proxy_failed_report_path: str = "",
 ) -> dict[str, Any]:
     pressure = summarize_pressure(pressure_rows)
     readiness = readiness_summary(readiness_payload)
     profile_missing = readiness_summary(profile_missing_payload or {})
     kernel_mismatch = readiness_summary(kernel_mismatch_payload or {})
+    proxy_failed = readiness_summary(proxy_failed_payload or {})
     diagnoses = set(pressure.get("diagnosis_counts") or {})
     readiness_errors = set(readiness.get("error_counts") or {})
     profile_missing_errors = set(profile_missing.get("error_counts") or {})
     kernel_mismatch_errors = set(kernel_mismatch.get("error_counts") or {})
+    proxy_failed_errors = set(proxy_failed.get("error_counts") or {})
     terminal_ok = bool(
         pressure.get("row_count", 0) >= 100
         and pressure.get("terminal_ratio", 0) >= 0.98
@@ -256,9 +260,10 @@ def build_matrix(
         matrix_row(
             "proxy_failed",
             "代理失败",
-            "missing",
-            [],
-            "使用代理故障账号或安全 fault injection 证明 PROXY_FAILED 分类和修复清单。",
+            "passed_real" if "PROXY_FAILED" in proxy_failed_errors else "missing",
+            [proxy_failed_report_path] if proxy_failed_report_path else [],
+            "保持代理失败账号在修复清单中，不重复消耗坏账号。" if proxy_failed_errors else "使用代理故障账号或安全 fault injection 证明 PROXY_FAILED 分类和修复清单。",
+            source="real_profile_readiness" if proxy_failed_errors else "local_audit",
         ),
         matrix_row(
             "page_timeout",
@@ -315,6 +320,7 @@ def build_matrix(
         "readiness_summary": readiness,
         "profile_missing_summary": profile_missing,
         "kernel_mismatch_summary": kernel_mismatch,
+        "proxy_failed_summary": proxy_failed,
         "runtime_audit_summary": {
             "status": runtime_audit.get("status", ""),
             "cleanup_candidate_count": int(runtime_audit.get("cleanup_candidate_count") or 0),
@@ -344,6 +350,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--readiness-report", default="/tmp/reachops_profile_readiness_p08_group.json")
     parser.add_argument("--profile-missing-report", default="/tmp/reachops_profile_missing_probe.json")
     parser.add_argument("--kernel-mismatch-report", default="/tmp/reachops_kernel_mismatch_probe.json")
+    parser.add_argument("--proxy-failed-report", default="/tmp/reachops_proxy_failed_probe.json")
     parser.add_argument("--runtime-audit", default="/tmp/reachops_runtime_audit_after_p08_pressure.json")
     parser.add_argument("--output", default="reports/reachops/p08_failure_matrix/latest_p08_failure_matrix.json")
     parser.add_argument("--json", action="store_true")
@@ -358,11 +365,13 @@ def main(argv: list[str] | None = None) -> int:
         runtime_audit=read_json(args.runtime_audit),
         profile_missing_payload=read_json(args.profile_missing_report),
         kernel_mismatch_payload=read_json(args.kernel_mismatch_report),
+        proxy_failed_payload=read_json(args.proxy_failed_report),
         pressure_summary_path=str(Path(args.pressure_summary).expanduser()),
         readiness_report_path=str(Path(args.readiness_report).expanduser()),
         runtime_audit_path=str(Path(args.runtime_audit).expanduser()),
         profile_missing_report_path=str(Path(args.profile_missing_report).expanduser()),
         kernel_mismatch_report_path=str(Path(args.kernel_mismatch_report).expanduser()),
+        proxy_failed_report_path=str(Path(args.proxy_failed_report).expanduser()),
     )
     write_report(args.output, payload)
     if args.json:
