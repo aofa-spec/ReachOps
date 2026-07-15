@@ -16,6 +16,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.workbench.profile_preflight import ProfilePreflightChecker, ProfilePreflightConfig
+from tools.reachops_run_id import unique_run_dir
 
 SCHEMA_VERSION = "reachops.profile_readiness_probe.v1"
 TERMINAL_COMPLETED = "COMPLETED"
@@ -707,10 +708,8 @@ def run_probe(
     metadata_builder: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     started_monotonic = time.monotonic()
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     base = Path(base_dir).resolve()
-    run_dir = base / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_id, run_dir = unique_run_dir(base)
     explicit_ids = [profile_id for profile_id in (profile_ids or []) if str(profile_id).strip()]
     recent_failed_profile_ids = (
         load_recent_failed_profile_ids(base)

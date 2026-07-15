@@ -60,6 +60,7 @@ from tools.run_reachops_real_flow_macos import append_related_source_expansions
 from tools.run_reachops_real_flow_macos import creator_url_from_tiktok_url
 from tools.run_reachops_real_flow_macos import summarize_scenario as summarize_real_flow_scenario
 from tools.reachops_run_id import unique_run_dir
+from tools.reachops_p08_failure_matrix import build_matrix as build_p08_failure_matrix
 from tools.reachops_web_ui import (
     DEFAULT_TARGET,
     MAX_JSON_PAYLOAD_BYTES,
@@ -84,6 +85,63 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
 
             self.assertEqual(run_id, "20260715T220235Z_001")
             self.assertTrue(run_dir.is_dir())
+
+    def test_p08_failure_matrix_marks_real_pressure_and_missing_faults(self):
+        pressure_rows = []
+        for index in range(1, 101):
+            pressure_rows.append(
+                {
+                    "index": index,
+                    "rc": 0 if index <= 62 else 2,
+                    "acceptance_status": "passed" if index <= 62 else "blocked",
+                    "structured_terminal": True,
+                    "usable_profile_ids": ["13685"],
+                    "daily_counts": {str(13000 + offset): 30 for offset in range(10)},
+                    "scenario_summaries": [
+                        {
+                            "diagnosis_status": "leads_found" if index <= 62 else "no_usable_profile_remaining",
+                            "no_action_reason": (
+                                {}
+                                if index <= 62
+                                else {
+                                    "code": "low_intent_candidates" if index % 2 else "no_candidates",
+                                    "no_submit": True,
+                                }
+                            ),
+                            "funnel": {
+                                "comment_users": 1,
+                                "customer_leads": 1 if index <= 62 else 0,
+                                "outreach_actions": 1 if index <= 62 else 0,
+                            },
+                            "attempted_profiles": [["13685"]],
+                        }
+                    ],
+                }
+            )
+        matrix = build_p08_failure_matrix(
+            pressure_rows=pressure_rows,
+            readiness_payload={
+                "status": "partial",
+                "selected_profiles_count": 2,
+                "available_profile_count": 1,
+                "unavailable_profile_count": 1,
+                "results": [{"profile_id": "13708", "error_code": "LOGIN_REQUIRED"}],
+            },
+            runtime_audit={
+                "status": "ok",
+                "cleanup_candidate_count": 0,
+                "orphan_chromedriver_candidate_count": 0,
+                "detached_reachops_client_process_count": 0,
+            },
+        )
+
+        self.assertEqual(matrix["status"], "partial")
+        by_id = {row["id"]: row for row in matrix["rows"]}
+        self.assertEqual(by_id["pressure_mode_100_real_no_submit"]["status"], "passed_real")
+        self.assertEqual(by_id["account_login_invalid"]["status"], "passed_real")
+        self.assertEqual(by_id["runtime_process_cleanup"]["status"], "passed_real")
+        self.assertEqual(by_id["database_busy"]["status"], "missing")
+        self.assertIn("database_busy", matrix["summary"]["missing_ids"])
 
     def test_headless_dummy_root_executes_delayed_callbacks(self):
         calls = []
