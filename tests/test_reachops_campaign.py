@@ -2661,6 +2661,91 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(automation["account_repair_queue_profile_ids"], ["logged-out"])
         self.assertFalse(payload["repair_checklist"]["does_not_modify_ixbrowser_groups"])
 
+    def test_profile_readiness_probe_reports_us_group_not_found_terminal_reason(self):
+        def fake_metadata_builder(**_kwargs):
+            return {
+                "status": "group_not_found",
+                "safe_read_only": True,
+                "open_profile_called": False,
+                "group_name_filter": "United States",
+                "group_count": 2,
+                "known_group_count": 0,
+                "selected_group_id": "",
+                "selected_profile_count": 0,
+                "selected_profiles": [],
+                "error_code": "BLOCKED_US_GROUP_NOT_FOUND",
+                "error_message": "profile group not found: United States",
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("tools.reachops_profile_readiness_probe.ProfilePreflightChecker.run") as run_mock:
+                payload = run_reachops_profile_readiness_probe(
+                    base_dir=tmpdir,
+                    profile_group="United States",
+                    profile_limit=3,
+                    max_workers=1,
+                    page_timeout_seconds=1,
+                    wait_after_open_seconds=0,
+                    total_timeout_seconds=10,
+                    metadata_builder=fake_metadata_builder,
+                )
+                written_payload = json.loads(Path(payload["outputs"]["json"]).read_text(encoding="utf-8"))
+
+        run_mock.assert_not_called()
+        self.assertEqual(payload["status"], "blocked_by_accounts")
+        self.assertEqual(payload["terminal_state"], "BLOCKED")
+        self.assertEqual(payload["terminal_reason_code"], "BLOCKED_US_GROUP_NOT_FOUND")
+        self.assertEqual(payload["metadata"]["error_code"], "BLOCKED_US_GROUP_NOT_FOUND")
+        self.assertEqual(payload["selected_profiles_count"], 0)
+        self.assertEqual(payload["attempted_profile_ids"], [])
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(payload["no_browser_collection"])
+        self.assertTrue(payload["account_pool_automation"]["runtime_auto_grouping"])
+        self.assertEqual(
+            payload["account_pool_automation"]["terminal_reason_code"],
+            "BLOCKED_US_GROUP_NOT_FOUND",
+        )
+        self.assertEqual(written_payload["terminal_reason_code"], "BLOCKED_US_GROUP_NOT_FOUND")
+
+    def test_profile_readiness_probe_reports_empty_us_group_terminal_reason(self):
+        def fake_metadata_builder(**_kwargs):
+            return {
+                "status": "ok",
+                "safe_read_only": True,
+                "open_profile_called": False,
+                "group_name_filter": "United States",
+                "group_count": 1,
+                "known_group_count": 1,
+                "selected_group_id": "257999",
+                "selected_profile_count": 0,
+                "selected_profiles": [],
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("tools.reachops_profile_readiness_probe.ProfilePreflightChecker.run") as run_mock:
+                payload = run_reachops_profile_readiness_probe(
+                    base_dir=tmpdir,
+                    profile_group="United States",
+                    profile_limit=3,
+                    max_workers=1,
+                    page_timeout_seconds=1,
+                    wait_after_open_seconds=0,
+                    total_timeout_seconds=10,
+                    metadata_builder=fake_metadata_builder,
+                )
+
+        run_mock.assert_not_called()
+        self.assertEqual(payload["status"], "blocked_by_accounts")
+        self.assertEqual(payload["terminal_state"], "BLOCKED")
+        self.assertEqual(payload["terminal_reason_code"], "BLOCKED_US_GROUP_EMPTY")
+        self.assertEqual(payload["metadata"]["status"], "group_empty")
+        self.assertEqual(payload["metadata"]["error_code"], "BLOCKED_US_GROUP_EMPTY")
+        self.assertEqual(payload["selected_profiles_count"], 0)
+        self.assertEqual(payload["attempted_profile_ids"], [])
+        self.assertIn("at least one candidate profile", payload["next_action"])
+        self.assertTrue(payload["bounded_exit"])
+        self.assertEqual(payload["bounded_exit_status"], "within_budget")
+
     def test_profile_readiness_probe_auto_selection_excludes_recent_failed_profiles(self):
         def fake_metadata_builder(**_kwargs):
             return {

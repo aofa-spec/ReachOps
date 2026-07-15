@@ -149,6 +149,14 @@ def select_profiles(
         "error_code": str((metadata or {}).get("error_code") or "") if isinstance(metadata, dict) else "METADATA_UNAVAILABLE",
         "error_message": str((metadata or {}).get("error_message") or "") if isinstance(metadata, dict) else "",
     }
+    if (
+        metadata_summary["selected_group_id_present"]
+        and metadata_summary["selected_profile_count"] <= 0
+        and not profiles
+    ):
+        metadata_summary["status"] = "group_empty"
+        metadata_summary["error_code"] = metadata_summary["error_code"] or "BLOCKED_US_GROUP_EMPTY"
+        metadata_summary["error_message"] = metadata_summary["error_message"] or f"profile group is empty: {profile_group}"
     return profiles, metadata_summary
 
 
@@ -280,6 +288,25 @@ def select_profiles_from_ixbrowser(
         )
         if len(profiles) >= limit:
             break
+    if response_total <= 0 and not profiles:
+        return profiles, {
+            "status": "group_empty",
+            "safe_read_only": True,
+            "open_profile_called": False,
+            "group_name_filter": str(profile_group or ""),
+            "group_count": groups_seen,
+            "known_group_count": 1,
+            "selected_group_id_present": bool(selected_group_id),
+            "selected_profile_count": 0,
+            "selected_profile_sample_count": 0,
+            "profile_limit_honored": True,
+            "excluded_recent_failed_profile_count": len(excluded),
+            "excluded_recent_failed_profile_ids_sample": ordered_unique(excluded)[:12],
+            "api_code": api_code,
+            "api_message": api_message,
+            "error_code": "BLOCKED_US_GROUP_EMPTY",
+            "error_message": f"profile group is empty: {profile_group}",
+        }
     return profiles, {
         "status": "ok",
         "safe_read_only": True,
@@ -345,6 +372,35 @@ def readiness_status(summary: dict[str, Any], selected_profiles: list[dict[str, 
     return "passed", TERMINAL_COMPLETED
 
 
+def terminal_reason_code(
+    *,
+    status: str,
+    summary: dict[str, Any],
+    selected_profiles: list[dict[str, str]],
+    metadata: dict[str, Any],
+) -> str:
+    metadata_error = str(metadata.get("error_code") or "")
+    metadata_status = str(metadata.get("status") or "")
+    if metadata_error in {"BLOCKED_US_GROUP_NOT_FOUND", "BLOCKED_US_GROUP_EMPTY"}:
+        return metadata_error
+    if metadata_status == "group_not_found":
+        return "BLOCKED_US_GROUP_NOT_FOUND"
+    if metadata_status == "group_empty":
+        return "BLOCKED_US_GROUP_EMPTY"
+    if status == "blocked_by_environment":
+        return str(metadata_error or "BLOCKED_BY_ENVIRONMENT")
+    if status == "blocked_by_accounts":
+        if not selected_profiles:
+            return "BLOCKED_BY_ACCOUNTS"
+        if int(summary.get("available") or 0) <= 0:
+            return "BLOCKED_BY_ACCOUNTS"
+    if status == "partial":
+        return "PARTIAL_READY_PROFILE_POOL"
+    if status == "passed":
+        return "READY"
+    return str(status or "UNKNOWN_PAGE_STATE").upper()
+
+
 def build_account_pool_automation(payload: dict[str, Any]) -> dict[str, Any]:
     results = [row for row in payload.get("results") or [] if isinstance(row, dict)]
     ready_profile_ids = [
@@ -362,6 +418,7 @@ def build_account_pool_automation(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": "reachops.account_pool_automation.v1",
         "runtime_auto_grouping": True,
+        "terminal_reason_code": str(payload.get("terminal_reason_code") or ""),
         "automatic_local_grouping_enabled": True,
         "local_grouping_action": "classify_failed_profiles_and_continue_with_ready_pool",
         "normal_logged_in_profiles_continue": bool(ready_profile_ids),
@@ -482,6 +539,13 @@ def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
     repair_checklist = payload.get("repair_checklist") if isinstance(payload.get("repair_checklist"), dict) else build_repair_checklist(payload)
     payload["repair_checklist"] = repair_checklist
+    if not str(payload.get("terminal_reason_code") or ""):
+        payload["terminal_reason_code"] = terminal_reason_code(
+            status=str(payload.get("status") or ""),
+            summary=payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
+            selected_profiles=[],
+            metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        )
     account_pool_automation = (
         payload.get("account_pool_automation")
         if isinstance(payload.get("account_pool_automation"), dict)
@@ -526,6 +590,7 @@ def write_outputs(base_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
         "",
         f"- status: {payload.get('status')}",
         f"- terminal_state: {payload.get('terminal_state')}",
+        f"- terminal_reason_code: {payload.get('terminal_reason_code')}",
         f"- profile_group: {payload.get('profile_group')}",
         f"- checked: {(payload.get('summary') or {}).get('checked', 0)}",
         f"- available: {(payload.get('summary') or {}).get('available', 0)}",
@@ -632,11 +697,21 @@ def run_probe(
     )
     summary = checker.run(profiles) if profiles else {"requested": 0, "checked": 0, "available": 0, "unavailable": 0, "errors": {}, "results": []}
     status, terminal_state = readiness_status(summary, profiles)
+    reason_code = terminal_reason_code(
+        status=status,
+        summary=summary,
+        selected_profiles=profiles,
+        metadata=metadata,
+    )
     public_results = [public_result(row) for row in summary.get("results") or []]
     attempted_profile_ids = [str(row.get("profile_id") or "") for row in public_results if str(row.get("profile_id") or "")]
     hard_failed_profile_ids = [str(row.get("profile_id") or "") for row in public_results if row.get("error_code")]
     next_action = "Proceed to a one-account real no-submit run only after at least one READY profile is confirmed."
-    if status == "blocked_by_accounts":
+    if reason_code == "BLOCKED_US_GROUP_NOT_FOUND":
+        next_action = "Refresh ixBrowser groups and configure a United States profile group before any collection run."
+    elif reason_code == "BLOCKED_US_GROUP_EMPTY":
+        next_action = "Add or move at least one candidate profile into the United States group, then rerun this readiness probe."
+    elif status == "blocked_by_accounts":
         next_action = "Repair or replace unavailable profiles, then rerun this readiness probe before any collection run."
     elif status == "blocked_by_environment":
         next_action = "Repair ixBrowser Local API/Profile startup environment, then rerun this readiness probe."
@@ -648,6 +723,7 @@ def run_probe(
         "schema_version": SCHEMA_VERSION,
         "status": status,
         "terminal_state": terminal_state,
+        "terminal_reason_code": reason_code,
         "generated_at": utc_stamp(),
         "run_id": run_id,
         "mode": "profile_readiness_probe",
