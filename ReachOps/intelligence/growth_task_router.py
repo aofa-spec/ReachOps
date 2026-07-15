@@ -1095,6 +1095,20 @@ class GrowthTaskRouter:
                 error_message=message or f"page state detected: {error_code}",
             )
             if allow_remote_quarantine and error_code not in {"IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
+                self.storage.log_event(
+                    "profile_remote_group_update_requested",
+                    profile_id,
+                    {
+                        "profile_id": str(profile_id or ""),
+                        "group_name": str(group_name or ""),
+                        "reason": error_code,
+                        "automatic_local_grouping_enabled": True,
+                        "local_grouping_action": "cooldown_profile_and_continue_queue",
+                        "remote_group_update_enabled": True,
+                        "remote_group_update_mode": "account_repair_mode",
+                        "normal_logged_in_profiles_continue": True,
+                    },
+                )
                 self._move_profile_to_quarantine(profile_id, error_code, message or f"page state detected: {error_code}")
             elif error_code not in {"IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
                 self.storage.log_event(
@@ -1104,7 +1118,12 @@ class GrowthTaskRouter:
                         "profile_id": str(profile_id or ""),
                         "group_name": str(group_name or ""),
                         "reason": error_code,
+                        "automatic_local_grouping_enabled": True,
+                        "local_grouping_action": "cooldown_profile_and_continue_queue",
                         "remote_group_update_enabled": False,
+                        "remote_group_update_mode": "requires_explicit_account_repair_mode",
+                        "account_repair_mode_required": True,
+                        "normal_logged_in_profiles_continue": True,
                         "next_action": "continue_with_next_available_profile_or_apply_account_repair_plan",
                     },
                 )
@@ -2235,6 +2254,13 @@ class GrowthTaskRouter:
                 "sources_done": int(usage or 0),
                 "max_sources_per_profile": max(1, int(getattr(config, "max_sources_per_profile", 1) or 1)),
                 "requested_concurrency": max(1, int(getattr(config, "requested_concurrency", 1) or 1)),
+                "runtime_auto_grouping": True,
+                "automatic_local_grouping_enabled": True,
+                "normal_logged_in_profiles_continue": True,
+                "remote_group_update_enabled": bool(getattr(config, "quarantine_failed_profiles", False)),
+                "remote_group_update_mode": "account_repair_mode"
+                if bool(getattr(config, "quarantine_failed_profiles", False))
+                else "requires_explicit_account_repair_mode",
                 "source_id": str(getattr(datasource, "id", "") or ""),
                 "source_type": str(getattr(datasource, "type", "") or ""),
                 "source_value": str(getattr(datasource, "value", "") or ""),
