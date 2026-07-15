@@ -51,6 +51,8 @@ PROGRESS_PATH = DATA_DIR / "reachops_web_ui_progress.json"
 HEARTBEAT_PATH = DATA_DIR / "reachops_web_ui_heartbeat.json"
 LATEST_EXECUTION_PLAN_PATH = DATA_DIR / "plans/latest_execution_plan.json"
 LATEST_RUN_SESSION_PATH = DATA_DIR / "runs/latest_run_session.json"
+DEFAULT_DATA_DIR = DATA_DIR
+DEFAULT_LATEST_RUN_SESSION_PATH = LATEST_RUN_SESSION_PATH
 LATEST_EVIDENCE_BUNDLE_PATH = DATA_DIR / "evidence_bundles/latest_evidence_bundle.json"
 LATEST_EVIDENCE_BUNDLE_MD_PATH = DATA_DIR / "evidence_bundles/latest_evidence_bundle.md"
 CONTROL_DIR = DATA_DIR / "control"
@@ -534,18 +536,25 @@ def run_session_path_for(session: dict) -> Path:
     return DATA_DIR / "runs" / f"{session_id}.json"
 
 
+def current_latest_run_session_path() -> Path:
+    latest_path = Path(LATEST_RUN_SESSION_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_RUN_SESSION_PATH):
+        return Path(DATA_DIR) / "runs" / "latest_run_session.json"
+    return latest_path
+
+
 def read_current_run_session() -> dict:
     if CURRENT_RUN_SESSION_PATH:
         payload = read_run_session(CURRENT_RUN_SESSION_PATH)
         if payload:
             return payload
-    return read_run_session(LATEST_RUN_SESSION_PATH)
+    return read_run_session(current_latest_run_session_path())
 
 
 def persist_run_session(session: dict) -> dict:
     global CURRENT_RUN_SESSION_PATH
     path = run_session_path_for(session)
-    write_run_session(session, path, LATEST_RUN_SESSION_PATH)
+    write_run_session(session, path, current_latest_run_session_path())
     CURRENT_RUN_SESSION_PATH = str(path)
     return session
 
@@ -1981,9 +1990,10 @@ def payload_from_execution_plan(plan: dict) -> dict:
 
 def build_current_run_session_payload() -> dict:
     recovery = recover_current_run_session_if_interrupted("RUN_SESSION_STATUS_RECOVERY")
-    path = Path(CURRENT_RUN_SESSION_PATH) if CURRENT_RUN_SESSION_PATH else LATEST_RUN_SESSION_PATH
-    if not path.is_file() and LATEST_RUN_SESSION_PATH.is_file():
-        path = LATEST_RUN_SESSION_PATH
+    latest_run_session_path = current_latest_run_session_path()
+    path = Path(CURRENT_RUN_SESSION_PATH) if CURRENT_RUN_SESSION_PATH else latest_run_session_path
+    if not path.is_file() and latest_run_session_path.is_file():
+        path = latest_run_session_path
     if not path.is_file():
         return {
             "status": "missing",
@@ -2044,7 +2054,10 @@ def build_current_evidence_bundle() -> dict:
         from ReachOps.evidence_bundle import build_evidence_bundle, write_evidence_bundle, write_evidence_markdown
 
         run_session = read_current_run_session()
-        run_session_path = CURRENT_RUN_SESSION_PATH or str(LATEST_RUN_SESSION_PATH if LATEST_RUN_SESSION_PATH.is_file() else "")
+        latest_run_session_path = current_latest_run_session_path()
+        run_session_path = CURRENT_RUN_SESSION_PATH or str(
+            latest_run_session_path if latest_run_session_path.is_file() else ""
+        )
         candidate_execution_plan_path = Path(
             str(
                 run_session.get("execution_plan_path")

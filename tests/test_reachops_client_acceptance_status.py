@@ -703,6 +703,51 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             with patch("tools.reachops_web_ui.validate_account_repair_for_start", return_value=(True, account_payload)):
                 yield
 
+    def test_run_session_latest_path_follows_redirected_data_dir(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_default_data_dir = reachops_web_ui.DEFAULT_DATA_DIR
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_default_latest_run_session_path = reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            try:
+                root = Path(tmpdir)
+                default_data_dir = root / "default-runtime"
+                redirected_data_dir = root / "isolated-runtime"
+                default_latest = default_data_dir / "runs" / "latest_run_session.json"
+                redirected_latest = redirected_data_dir / "runs" / "latest_run_session.json"
+
+                reachops_web_ui.DEFAULT_DATA_DIR = default_data_dir
+                reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH = default_latest
+                reachops_web_ui.DATA_DIR = redirected_data_dir
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = default_latest
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = ""
+
+                plan = reachops_web_ui.build_execution_plan(
+                    target="anti aging serum",
+                    source_type="keyword",
+                    mode="preflight",
+                    profile_group="United States",
+                    base_dir=str(redirected_data_dir),
+                    origin="test_run_session_path_isolation",
+                )
+                session = reachops_web_ui.create_run_session(plan)
+
+                reachops_web_ui.persist_run_session(session)
+                current = reachops_web_ui.read_current_run_session()
+                default_latest_exists = default_latest.exists()
+                redirected_latest_exists = redirected_latest.exists()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.DEFAULT_DATA_DIR = old_default_data_dir
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH = old_default_latest_run_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+
+        self.assertFalse(default_latest_exists)
+        self.assertTrue(redirected_latest_exists)
+        self.assertEqual(current["session_id"], session["session_id"])
+
     def test_run_session_payload_recovers_dead_running_session(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
