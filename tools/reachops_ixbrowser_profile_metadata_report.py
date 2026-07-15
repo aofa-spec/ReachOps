@@ -13,7 +13,17 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-SECRET_KEYS = {"proxy_user", "proxy_password", "username", "password", "tfa_secret", "name"}
+SECRET_KEYS = {
+    "proxy_user",
+    "proxy_password",
+    "username",
+    "password",
+    "tfa_secret",
+    "name",
+    "proxy_ip",
+    "proxy_port",
+    "real_ip",
+}
 PROFILE_FIELDS = (
     "profile_id",
     "name",
@@ -128,6 +138,7 @@ def list_profile_rows(
     max_pages: int,
     group_id: str = "",
 ) -> list[dict[str, Any]]:
+    capped_limit = max(1, int(profile_limit or 200))
     if not profile_ids:
         kwargs: dict[str, Any] = {}
         if str(group_id or "").strip():
@@ -135,10 +146,10 @@ def list_profile_rows(
         return list_pages(
             client,
             "get_profile_list",
-            limit=min(max(1, int(profile_limit or 200)), 100),
+            limit=min(capped_limit, 100),
             max_pages=max_pages,
             **kwargs,
-        )
+        )[:capped_limit]
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for profile_id in sorted(profile_ids):

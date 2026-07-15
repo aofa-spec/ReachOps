@@ -2412,8 +2412,53 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(report["selected_profiles"][0]["profile"]["profile_id"], 27273)
         self.assertEqual(report["selected_profiles"][0]["proxy"]["proxy_user"], "***redacted***")
         self.assertEqual(report["selected_profiles"][0]["proxy"]["proxy_password"], "***redacted***")
+        self.assertEqual(report["selected_profiles"][0]["profile"]["real_ip"], "***redacted***")
+        self.assertEqual(report["selected_profiles"][0]["profile"]["proxy_ip"], "***redacted***")
+        self.assertEqual(report["selected_profiles"][0]["profile"]["proxy_port"], "***redacted***")
+        self.assertEqual(report["selected_profiles"][0]["proxy"]["proxy_ip"], "***redacted***")
+        self.assertEqual(report["selected_profiles"][0]["proxy"]["proxy_port"], "***redacted***")
         self.assertNotIn("secret-user", json.dumps(report))
+        self.assertNotIn("107.151.249.39", json.dumps(report))
+        self.assertNotIn("179.157.219.17", json.dumps(report))
         self.assertEqual(report["proxy_type_counts"]["socks5"], 1)
+
+    def test_ixbrowser_profile_metadata_report_honors_profile_limit_across_pages(self):
+        test_case = self
+
+        class FakeIXClient:
+            def get_group_list(self, page=1, limit=100):
+                if page > 1:
+                    return []
+                return [{"id": 257999, "title": "United States", "count": 0}]
+
+            def get_profile_list(self, page=1, limit=100, group_id=0, profile_id=0):
+                test_case.assertEqual(int(group_id or 0), 257999)
+                start = (int(page) - 1) * int(limit)
+                return [
+                    {
+                        "profile_id": start + index + 1,
+                        "group_id": 257999,
+                        "group_name": "United States",
+                        "proxy_id": "",
+                    }
+                    for index in range(int(limit))
+                ]
+
+            def get_proxy_list(self, page=1, limit=100, id=0):
+                return []
+
+        with patch("ReachOps.workbench.standalone_app.load_ixbrowser_group_profile_count", return_value=12):
+            report = build_ixbrowser_profile_metadata_report(
+                client=FakeIXClient(),
+                group_name="United States",
+                max_pages=3,
+                profile_limit=5,
+            )
+
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["selected_profile_sample_count"], 5)
+        self.assertEqual(len(report["selected_profiles"]), 5)
+        self.assertEqual(report["available_profile_ids_sample"], ["1", "2", "3", "4", "5"])
 
     def test_ixbrowser_profile_metadata_report_syncs_selected_group_count_into_group_list(self):
         class FakeIXClient:
