@@ -703,6 +703,71 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             with patch("tools.reachops_web_ui.validate_account_repair_for_start", return_value=(True, account_payload)):
                 yield
 
+    def test_execution_plan_latest_path_follows_redirected_data_dir(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_default_data_dir = reachops_web_ui.DEFAULT_DATA_DIR
+            old_latest_execution_plan_path = reachops_web_ui.LATEST_EXECUTION_PLAN_PATH
+            old_default_latest_execution_plan_path = reachops_web_ui.DEFAULT_LATEST_EXECUTION_PLAN_PATH
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_default_latest_run_session_path = reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_log_path = reachops_web_ui.LOG_PATH
+            try:
+                root = Path(tmpdir)
+                default_data_dir = root / "default-runtime"
+                redirected_data_dir = root / "isolated-runtime"
+                default_latest_plan = default_data_dir / "plans" / "latest_execution_plan.json"
+                redirected_latest_plan = redirected_data_dir / "plans" / "latest_execution_plan.json"
+
+                reachops_web_ui.DEFAULT_DATA_DIR = default_data_dir
+                reachops_web_ui.DEFAULT_LATEST_EXECUTION_PLAN_PATH = default_latest_plan
+                reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH = default_data_dir / "runs" / "latest_run_session.json"
+                reachops_web_ui.DATA_DIR = redirected_data_dir
+                reachops_web_ui.LATEST_EXECUTION_PLAN_PATH = default_latest_plan
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = ""
+                reachops_web_ui.RESULT_PATH = redirected_data_dir / "reachops_web_ui_last_run.json"
+                reachops_web_ui.LOG_PATH = redirected_data_dir / "logs" / "growth_ops_runtime.log"
+
+                result = reachops_web_ui.persist_precheck_blocked_start(
+                    target="anti aging serum",
+                    source_type="keyword",
+                    mode="preflight",
+                    profile_group="United States",
+                    volume="quick",
+                    profile_limit=3,
+                    max_videos=5,
+                    max_comments=25,
+                    timeout_seconds=60,
+                    comment_text="",
+                    live_confirmed=False,
+                    account_repair_confirmed=False,
+                    block={
+                        "error": "profile_group_list_unavailable",
+                        "message": "Fixture group list unavailable.",
+                    },
+                )
+                current_plan = reachops_web_ui.build_current_execution_plan_payload()
+                default_latest_exists = default_latest_plan.exists()
+                redirected_latest_exists = redirected_latest_plan.exists()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.DEFAULT_DATA_DIR = old_default_data_dir
+                reachops_web_ui.LATEST_EXECUTION_PLAN_PATH = old_latest_execution_plan_path
+                reachops_web_ui.DEFAULT_LATEST_EXECUTION_PLAN_PATH = old_default_latest_execution_plan_path
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH = old_default_latest_run_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.LOG_PATH = old_log_path
+
+        self.assertFalse(default_latest_exists)
+        self.assertTrue(redirected_latest_exists)
+        self.assertEqual(current_plan["path"], str(redirected_latest_plan))
+        self.assertEqual(current_plan["plan_id"], result["execution_plan"]["plan_id"])
+
     def test_run_session_latest_path_follows_redirected_data_dir(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR

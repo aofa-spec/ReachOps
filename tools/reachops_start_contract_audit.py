@@ -211,7 +211,11 @@ def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
         "status_started": _contains_all(web_ui, ['"status": "started"', '"pid": RUN_PROCESS.pid']),
         "execution_plan_persisted": _contains_all(
             web_ui,
-            ["build_execution_plan", "write_execution_plan(execution_plan, plan_path)", "LATEST_EXECUTION_PLAN_PATH"],
+            [
+                "build_execution_plan",
+                "write_execution_plan(execution_plan, plan_path)",
+                "current_latest_execution_plan_path",
+            ],
         ),
         "run_session_persisted": _contains_all(
             web_ui,

@@ -52,6 +52,7 @@ HEARTBEAT_PATH = DATA_DIR / "reachops_web_ui_heartbeat.json"
 LATEST_EXECUTION_PLAN_PATH = DATA_DIR / "plans/latest_execution_plan.json"
 LATEST_RUN_SESSION_PATH = DATA_DIR / "runs/latest_run_session.json"
 DEFAULT_DATA_DIR = DATA_DIR
+DEFAULT_LATEST_EXECUTION_PLAN_PATH = LATEST_EXECUTION_PLAN_PATH
 DEFAULT_LATEST_RUN_SESSION_PATH = LATEST_RUN_SESSION_PATH
 LATEST_EVIDENCE_BUNDLE_PATH = DATA_DIR / "evidence_bundles/latest_evidence_bundle.json"
 LATEST_EVIDENCE_BUNDLE_MD_PATH = DATA_DIR / "evidence_bundles/latest_evidence_bundle.md"
@@ -536,6 +537,13 @@ def run_session_path_for(session: dict) -> Path:
     return DATA_DIR / "runs" / f"{session_id}.json"
 
 
+def current_latest_execution_plan_path() -> Path:
+    latest_path = Path(LATEST_EXECUTION_PLAN_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_EXECUTION_PLAN_PATH):
+        return Path(DATA_DIR) / "plans" / "latest_execution_plan.json"
+    return latest_path
+
+
 def current_latest_run_session_path() -> Path:
     latest_path = Path(LATEST_RUN_SESSION_PATH)
     if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_RUN_SESSION_PATH):
@@ -682,7 +690,7 @@ def persist_precheck_blocked_start(
     plan_id = str(execution_plan.get("plan_id") or "")
     plan_path = DATA_DIR / "plans" / f"{plan_id or 'execution_plan'}.json"
     write_execution_plan(execution_plan, plan_path)
-    write_execution_plan(execution_plan, LATEST_EXECUTION_PLAN_PATH)
+    write_execution_plan(execution_plan, current_latest_execution_plan_path())
     run_session = create_run_session(
         execution_plan,
         execution_plan_path=str(plan_path),
@@ -1716,7 +1724,7 @@ def build_start_preflight_decision_for_plan(
 
 
 def build_start_from_plan_preview(path: str | Path | None = None) -> dict:
-    plan_path = Path(path or LATEST_EXECUTION_PLAN_PATH)
+    plan_path = Path(path) if path is not None else current_latest_execution_plan_path()
     if not plan_path.is_file():
         return {
             "status": "missing",
@@ -1781,7 +1789,7 @@ def build_start_from_plan_preview(path: str | Path | None = None) -> dict:
 
 
 def build_execution_plan_contract_preview(path: str | Path | None = None) -> dict:
-    plan_path = Path(path or LATEST_EXECUTION_PLAN_PATH)
+    plan_path = Path(path) if path is not None else current_latest_execution_plan_path()
     if not plan_path.is_absolute():
         plan_path = (ROOT_DIR / plan_path).resolve()
     if not plan_path.is_file():
@@ -1926,7 +1934,7 @@ def build_ai_console_payload(payload: dict | None) -> dict:
 
 
 def build_current_execution_plan_payload() -> dict:
-    path = LATEST_EXECUTION_PLAN_PATH
+    path = current_latest_execution_plan_path()
     if not path.is_file():
         return {
             "status": "missing",
@@ -2065,8 +2073,9 @@ def build_current_evidence_bundle() -> dict:
                 or ""
             )
         )
-        if not candidate_execution_plan_path.is_file() and LATEST_EXECUTION_PLAN_PATH.is_file():
-            candidate_execution_plan_path = LATEST_EXECUTION_PLAN_PATH
+        latest_execution_plan_path = current_latest_execution_plan_path()
+        if not candidate_execution_plan_path.is_file() and latest_execution_plan_path.is_file():
+            candidate_execution_plan_path = latest_execution_plan_path
         execution_plan_path = str(candidate_execution_plan_path if candidate_execution_plan_path.is_file() else "")
         result_payload = read_run_result_payload()
         log_path = str(result_payload.get("log_path") or (run_session.get("evidence") or {}).get("log_path") or LOG_PATH)
@@ -7089,7 +7098,9 @@ class Handler(BaseHTTPRequestHandler):
         replay_execution_plan: dict = {}
         replay_source_path = ""
         if start_from_plan:
-            replay_source_path = str((payload or {}).get("execution_plan_path") or LATEST_EXECUTION_PLAN_PATH)
+            replay_source_path = str(
+                (payload or {}).get("execution_plan_path") or current_latest_execution_plan_path()
+            )
             try:
                 replay_execution_plan = read_execution_plan(replay_source_path)
                 payload = payload_from_execution_plan(replay_execution_plan)
@@ -7255,7 +7266,7 @@ class Handler(BaseHTTPRequestHandler):
             plan_path = DATA_DIR / "plans" / f"{plan_id or 'execution_plan'}.json"
             try:
                 write_execution_plan(execution_plan, plan_path)
-                write_execution_plan(execution_plan, LATEST_EXECUTION_PLAN_PATH)
+                write_execution_plan(execution_plan, current_latest_execution_plan_path())
             except Exception as exc:
                 RUN_PROCESS = None
                 RUN_PAUSED = False
