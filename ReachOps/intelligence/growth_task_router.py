@@ -281,6 +281,7 @@ class GrowthTaskRouter:
                     str(profile.get("group_name") or getattr(config, "profile_group", "") or ""),
                     error_code,
                     error_message,
+                    allow_remote_quarantine=bool(getattr(config, "quarantine_failed_profiles", False)),
                 )
                 self.storage.update_collection_task(task.id, "failed", error_code, error_message)
                 last_error = {"error_code": error_code, "message": error_message}
@@ -378,6 +379,7 @@ class GrowthTaskRouter:
                         str(profile.get("group_name") or getattr(config, "profile_group", "") or ""),
                         error_code,
                         str(last_error.get("message") or error_code),
+                        allow_remote_quarantine=bool(getattr(config, "quarantine_failed_profiles", False)),
                     )
                     self.storage.log_event("profile_runtime_failed_retry", datasource.id, {"profile_id": profile_id, "error_code": error_code})
                     self._log_profile_queue_event(
@@ -1077,7 +1079,14 @@ class GrowthTaskRouter:
             ]
         )
 
-    def _record_blocking_profile_state(self, profile_id: str, group_name: str, error_code: str, message: str = ""):
+    def _record_blocking_profile_state(
+        self,
+        profile_id: str,
+        group_name: str,
+        error_code: str,
+        message: str = "",
+        allow_remote_quarantine: bool = False,
+    ):
         if error_code in {"LOGIN_REQUIRED", "CAPTCHA_DETECTED", "PROXY_FAILED", "COMMENT_ACCESS_GATED", "IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
             self.storage.force_profile_cooldown(
                 profile_id,
@@ -1085,8 +1094,20 @@ class GrowthTaskRouter:
                 error_code=error_code,
                 error_message=message or f"page state detected: {error_code}",
             )
-            if error_code not in {"IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
+            if allow_remote_quarantine and error_code not in {"IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
                 self._move_profile_to_quarantine(profile_id, error_code, message or f"page state detected: {error_code}")
+            elif error_code not in {"IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
+                self.storage.log_event(
+                    "profile_quarantine_move_skipped",
+                    profile_id,
+                    {
+                        "profile_id": str(profile_id or ""),
+                        "group_name": str(group_name or ""),
+                        "reason": error_code,
+                        "remote_group_update_enabled": False,
+                        "next_action": "continue_with_next_available_profile_or_apply_account_repair_plan",
+                    },
+                )
             return
         self.storage.record_profile_health(
             profile_id,
@@ -2245,6 +2266,7 @@ class GrowthTaskRouter:
                 str(profile.get("group_name") or getattr(config, "profile_group", "") or ""),
                 "PROFILE_START_FAILED",
                 "profile start failed",
+                allow_remote_quarantine=bool(getattr(config, "quarantine_failed_profiles", False)),
             )
             self.storage.log_event("profile_start_failed_retry", source_id, {"profile_id": profile_id, "reason": "start_failed"})
         return None, last_profile

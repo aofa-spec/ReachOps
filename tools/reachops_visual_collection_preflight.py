@@ -374,7 +374,7 @@ def run_visual_preflight(args) -> dict:
                 total_timeout_seconds=max(5, int(args.profile_preflight_timeout or 0)),
                 evidence_dir=str(evidence_dir / "profile_preflight"),
                 close_browser_after_check=True,
-                quarantine_on_failure=not bool(args.no_quarantine_failed_profiles),
+                quarantine_on_failure=bool(args.quarantine_failed_profiles),
             ),
         )
         executable_profiles, profile_preflight = checker.available_profiles(profiles)
@@ -488,7 +488,8 @@ def parse_args():
     parser.add_argument("--profile-page-timeout", type=int, default=20)
     parser.add_argument("--profile-wait", type=float, default=2.0)
     parser.add_argument("--profile-preflight-timeout", type=int, default=25)
-    parser.add_argument("--no-quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--no-quarantine-failed-profiles", action="store_true", help="Deprecated no-op; failed profiles are not moved unless --quarantine-failed-profiles is set.")
     parser.add_argument("--max-videos", type=int, default=1)
     parser.add_argument("--max-comments", type=int, default=5)
     parser.add_argument("--min-views", type=int, default=0)

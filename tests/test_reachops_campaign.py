@@ -1006,7 +1006,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(report["passed"])
         self.assertEqual(report["status"], "passed_with_external_account_pilot_pending")
         self.assertTrue(report["local_checks"]["lifecycle_signal_coverage_complete"])
-        self.assertTrue(report["local_checks"]["profile_preflight_records_evidence_and_quarantine"])
+        self.assertTrue(report["local_checks"]["profile_preflight_records_evidence_cooldown_and_explicit_quarantine"])
         self.assertTrue(report["local_checks"]["client_gate_rejects_stale_or_missing_profile_preflight"])
         self.assertTrue(report["local_checks"]["client_delivery_exposes_real_pilot_evidence_boundary"])
         self.assertTrue(report["local_checks"]["live_no_submit_preflight_covers_comment_follow_dm"])
@@ -8601,7 +8601,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(len(tasks), 1)
             self.assertEqual(tasks[0]["status"], "failed")
             self.assertEqual(tasks[0]["error_code"], "LOGIN_REQUIRED")
-            self.assertEqual(service.router.profile_group_manager.moves, [("logged-out-profile", "LOGIN_REQUIRED")])
+            self.assertEqual(service.router.profile_group_manager.moves, [])
+            skipped = [
+                row for row in service.storage.list_recent_events("profile_quarantine_move_skipped", limit=10)
+                if row["entity_id"] == "logged-out-profile"
+            ]
+            self.assertEqual(len(skipped), 1)
             self.assertEqual(service.storage.list_candidates(), [])
 
     def test_real_mode_retries_next_profile_when_page_has_empty_result(self):
@@ -9669,7 +9674,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(health["logged-in"]["status"], "healthy")
             self.assertEqual(health["logged-out"]["status"], "cooldown")
             self.assertEqual(health["proxy-bad"]["status"], "cooldown")
-            self.assertCountEqual(group_manager.moves, [("logged-out", "LOGIN_REQUIRED"), ("proxy-bad", "PROXY_FAILED")])
+            self.assertEqual(group_manager.moves, [])
             self.assertEqual(len(released), 3)
 
     def test_profile_preflight_detects_visible_login_popup(self):
@@ -9693,7 +9698,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             ]
             checker = ProfilePreflightChecker(
                 service.storage,
-                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0),
+                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0, quarantine_on_failure=True),
                 driver_factory=lambda _profile: (driver, (FakeReleaseManager(), "popup-login"), ""),
                 group_manager=group_manager,
             )
@@ -9711,7 +9716,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             group_manager = FakeProfileGroupManager()
             checker = ProfilePreflightChecker(
                 service.storage,
-                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0),
+                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0, quarantine_on_failure=True),
                 driver_factory=lambda _profile: (None, None, "ixBrowser open_profile failed: code=2014 message=当前版本仅支持 138 内核打开"),
                 group_manager=group_manager,
             )
@@ -9748,7 +9753,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             ]
             checker = ProfilePreflightChecker(
                 service.storage,
-                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0),
+                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0, quarantine_on_failure=True),
                 driver_factory=lambda _profile: (driver, (FakeReleaseManager(), "setup-modal"), ""),
                 group_manager=group_manager,
             )

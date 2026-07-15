@@ -419,6 +419,8 @@ def scenario_command(args: argparse.Namespace, scenario: dict[str, str], scenari
         command.extend(["--profile-ids", str(args.profile_ids or "")])
     if args.skip_profile_preflight:
         command.append("--skip-profile-preflight")
+    if args.quarantine_failed_profiles:
+        command.append("--quarantine-failed-profiles")
     if args.no_quarantine_failed_profiles:
         command.append("--no-quarantine-failed-profiles")
     if args.accept_low_intent_actions:
@@ -628,7 +630,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-profile-uses-per-run", type=int, default=3)
     parser.add_argument("--max-profile-launches-per-day", type=int, default=6)
     parser.add_argument("--skip-profile-preflight", action="store_true")
-    parser.add_argument("--no-quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--no-quarantine-failed-profiles", action="store_true", help="Deprecated no-op; failed profiles are not moved unless --quarantine-failed-profiles is set.")
     parser.add_argument(
         "--accept-low-intent-actions",
         action="store_true",
@@ -750,11 +753,27 @@ def main() -> int:
                         blocked_reasons.setdefault(str(profile_id), "scenario_timeout")
                 blocked_profile_ids.update(blocked_ids)
                 usable_profile_ids = [profile_id for profile_id in usable_profile_ids if profile_id not in blocked_profile_ids]
-                quarantine = quarantine_profiles(
-                    sorted(blocked_ids),
-                    env,
-                    row.get("diagnosis_status") or "runtime_blocked",
-                    reasons_by_profile=blocked_reasons,
+                quarantine = (
+                    quarantine_profiles(
+                        sorted(blocked_ids),
+                        env,
+                        row.get("diagnosis_status") or "runtime_blocked",
+                        reasons_by_profile=blocked_reasons,
+                    )
+                    if bool(args.quarantine_failed_profiles)
+                    else [
+                        {
+                            "profile_id": profile_id,
+                            "attempted": False,
+                            "ok": False,
+                            "group_id": "",
+                            "group_name": "",
+                            "reason": str(blocked_reasons.get(profile_id) or row.get("diagnosis_status") or "runtime_blocked"),
+                            "error_code": "REMOTE_GROUP_UPDATE_DISABLED",
+                            "error_message": "remote ixBrowser group update requires --quarantine-failed-profiles",
+                        }
+                        for profile_id in sorted(blocked_ids)
+                    ]
                 )
                 preflight = payload.get("profile_preflight") if isinstance(payload.get("profile_preflight"), dict) else {}
                 ok_ids = [

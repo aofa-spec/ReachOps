@@ -1894,7 +1894,7 @@ def run_audit(args) -> dict:
                 and account_readiness_fixture.get("schema_version") == "reachops.account_readiness_audit.v1"
                 and account_readiness_fixture.get("status") == "passed_with_external_account_pilot_pending"
                 and (account_readiness_fixture.get("local_checks") or {}).get("lifecycle_signal_coverage_complete")
-                and (account_readiness_fixture.get("local_checks") or {}).get("profile_preflight_records_evidence_and_quarantine")
+                and (account_readiness_fixture.get("local_checks") or {}).get("profile_preflight_records_evidence_cooldown_and_explicit_quarantine")
                 and (account_readiness_fixture.get("local_checks") or {}).get("live_no_submit_preflight_covers_comment_follow_dm")
                 and (account_readiness_fixture.get("no_submit_contract") or {}).get("preflight_actions_do_not_submit")
                 and (account_readiness_fixture.get("real_vs_fixture_boundary") or {}).get("external_pilot_required")
@@ -2002,7 +2002,7 @@ def run_audit(args) -> dict:
                     (profile_preflight_anomalies.get("health", {}).get(profile_id) or {}).get("status") == "cooldown"
                     for profile_id in ["10002", "10003", "10004", "10005", "10006"]
                 )
-                and ("10006", "IXBROWSER_KERNEL_MISMATCH") in profile_preflight_anomalies.get("quarantine_moves", [])
+                and not profile_preflight_anomalies.get("quarantine_moves", [])
             ),
             profile_preflight_anomalies,
         ),

@@ -2511,7 +2511,7 @@ class GrowthIntelligenceStandaloneApp:
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
                             retain_successful_browser_after_check=True,
-                            quarantine_on_failure=True,
+                            quarantine_on_failure=False,
                         ),
                     )
                     preflight_checkers.append(checker)
@@ -2539,7 +2539,7 @@ class GrowthIntelligenceStandaloneApp:
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
                             retain_successful_browser_after_check=True,
-                            quarantine_on_failure=True,
+                            quarantine_on_failure=False,
                         ),
                     )
                     preflight_checkers.append(checker)
@@ -3096,7 +3096,7 @@ class GrowthIntelligenceStandaloneApp:
                         evidence_dir=str(Path(self.service.paths.reports_dir) / "action_profile_preflight_evidence"),
                         close_browser_after_check=True,
                         retain_successful_browser_after_check=True,
-                        quarantine_on_failure=True,
+                        quarantine_on_failure=False,
                     ),
                 )
                 preflight_checkers.append(checker)

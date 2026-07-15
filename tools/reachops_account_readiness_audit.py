@@ -113,7 +113,7 @@ def build_report(root_dir: str | Path | None = None) -> dict[str, Any]:
                 "IXBROWSER_KERNEL_MISMATCH",
             ],
         ),
-        "profile_preflight_records_evidence_and_quarantine": has_all(
+        "profile_preflight_records_evidence_cooldown_and_explicit_quarantine": has_all(
             profile_preflight,
             [
                 "ProfilePreflightChecker",
@@ -122,6 +122,7 @@ def build_report(root_dir: str | Path | None = None) -> dict[str, Any]:
                 "profile_preflight_checked",
                 "profile_preflight_completed",
                 "quarantine_on_failure",
+                "quarantine_on_failure: bool = False",
                 "profile_quarantine_move_completed",
                 "LOGIN_REQUIRED",
                 "IXBROWSER_KERNEL_MISMATCH",

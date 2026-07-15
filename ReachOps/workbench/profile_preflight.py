@@ -25,7 +25,7 @@ class ProfilePreflightConfig:
     close_browser_after_check: bool = True
     retain_successful_browser_after_check: bool = False
     total_timeout_seconds: float = 0
-    quarantine_on_failure: bool = True
+    quarantine_on_failure: bool = False
     launch_stagger_seconds: float = 0.0
 
 

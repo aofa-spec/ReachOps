@@ -551,6 +551,7 @@ class GrowthTaskConfig:
     retain_profile_sessions_after_collection: bool = False
     requested_concurrency: int = 1
     profile_group: str = ""
+    quarantine_failed_profiles: bool = False
     campaign_id: str = ""
     active_batch_id: str = ""
     intent_keywords: List[str] = field(default_factory=list)
