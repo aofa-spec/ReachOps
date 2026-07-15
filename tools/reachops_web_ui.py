@@ -242,12 +242,22 @@ def summarize_goal_delivery(path: Path | None = None) -> dict:
     windows_payload = windows_section.get("payload") if isinstance(windows_section.get("payload"), dict) else {}
     build_contract = windows_payload.get("build_contract") if isinstance(windows_payload.get("build_contract"), dict) else {}
     delivery_boundary = payload.get("delivery_boundary") if isinstance(payload.get("delivery_boundary"), dict) else {}
+    blocking_scopes = payload.get("blocking_scopes")
+    if not isinstance(blocking_scopes, list):
+        blocking_scopes = delivery_boundary.get("blocking_scopes") if isinstance(delivery_boundary.get("blocking_scopes"), list) else []
+    blocking_scopes = [str(item) for item in blocking_scopes if str(item or "").strip()]
+    try:
+        blocking_scope_count = int(payload.get("blocking_scope_count"))
+    except Exception:
+        blocking_scope_count = len(blocking_scopes)
     return {
         "status": payload.get("status", ""),
         "local_mvp_ready": bool(payload.get("local_mvp_ready")),
         "windows_build_ready": bool(payload.get("windows_build_ready")),
         "final_delivery_ready": bool(payload.get("final_delivery_ready")),
         "delivery_boundary": delivery_boundary,
+        "blocking_scopes": blocking_scopes,
+        "blocking_scope_count": blocking_scope_count,
         "deliverable_index": payload.get("deliverable_index") if isinstance(payload.get("deliverable_index"), dict) else {},
         "failed_checks": payload.get("failed_checks") or [],
         "final_delivery_blockers": payload.get("final_delivery_blockers") if isinstance(payload.get("final_delivery_blockers"), list) else [],
@@ -1393,6 +1403,11 @@ def build_final_status_payload() -> dict:
         payload["external_validation_pending"] = bool(delivery_boundary.get("external_validation_pending"))
         payload["windows_final_artifacts_pending"] = bool(delivery_boundary.get("windows_final_artifacts_pending"))
         payload["pending_scopes"] = delivery_boundary.get("pending_scopes") or []
+        payload["goal_blocking_scopes"] = goal_delivery.get("blocking_scopes") or []
+        try:
+            payload["goal_blocking_scope_count"] = int(goal_delivery.get("blocking_scope_count"))
+        except Exception:
+            payload["goal_blocking_scope_count"] = len(payload["goal_blocking_scopes"])
         payload["product_capability_summary"] = product_capability
         payload["product_development_goals"] = product_development_goals
         return payload

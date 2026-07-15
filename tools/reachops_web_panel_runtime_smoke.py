@@ -289,6 +289,8 @@ def run_runtime_smoke() -> dict:
                     "client_gate_final_delivery_ready_is_not_overall_final_delivery": True,
                     "blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
                 },
+                "blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
+                "blocking_scope_count": 2,
                 "failed_checks": ["delivery_package:passed"],
                 "final_delivery_blockers": [
                     {
@@ -355,6 +357,8 @@ def run_runtime_smoke() -> dict:
                 "external_validation_pending": True,
                 "windows_final_artifacts_pending": True,
                 "pending_scopes": ["external_authorized_execution", "windows_final_artifacts"],
+                "goal_blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
+                "goal_blocking_scope_count": 2,
                 "product_capability_summary": {
                     "schema_version": "reachops.product_capability_summary.v1",
                     "ready": True,
@@ -418,6 +422,8 @@ def run_runtime_smoke() -> dict:
                         "client_gate_final_delivery_ready_is_not_overall_final_delivery": True,
                         "blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
                     },
+                    "blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
+                    "blocking_scope_count": 2,
                     "final_delivery_blockers": [
                         {
                             "scope": "external_authorized_execution",
@@ -1980,6 +1986,10 @@ def run_runtime_smoke() -> dict:
                 and (final_status.get("mvp_acceptance") or {}).get("mvp_local_ready") is True
                 and (final_status.get("goal_delivery") or {}).get("windows_build_ready") is True
                 and (final_status.get("goal_delivery") or {}).get("final_delivery_ready") is False
+                and (final_status.get("goal_delivery") or {}).get("blocking_scope_count") == 2
+                and final_status.get("goal_blocking_scope_count") == 2
+                and set(final_status.get("goal_blocking_scopes") or [])
+                == {"external_authorized_execution", "windows_final_artifacts"}
                 and ((final_status.get("goal_delivery") or {}).get("delivery_boundary") or {}).get("overall_final_delivery_scope_ready") is False
                 and (final_status.get("goal_delivery") or {}).get("summary_path") == str(reachops_web_ui.GOAL_DELIVERY_SUMMARY_PATH)
                 and {row.get("scope") for row in ((final_status.get("goal_delivery") or {}).get("final_delivery_blockers") or [])}

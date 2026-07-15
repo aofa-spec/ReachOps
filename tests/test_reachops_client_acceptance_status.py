@@ -1489,7 +1489,12 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     return_value={"status": "mvp_accepted_external_pending", "mvp_local_ready": True},
                 ), patch(
                     "tools.reachops_web_ui.summarize_goal_delivery",
-                    return_value={"status": "local_mvp_accepted_final_pending", "final_delivery_ready": False},
+                    return_value={
+                        "status": "local_mvp_accepted_final_pending",
+                        "final_delivery_ready": False,
+                        "blocking_scopes": ["windows_final_artifacts", "commercial_issue_closure"],
+                        "blocking_scope_count": 2,
+                    },
                 ):
                     payload = reachops_web_ui.build_final_status_payload()
                     report_path = Path(payload["report_path"])
@@ -1501,6 +1506,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             self.assertTrue(report_path.exists())
             self.assertIn("latest_live_acceptance_readiness.md", str(report_path))
             self.assertIn("ReachOps Live Acceptance Readiness", report_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["goal_blocking_scopes"], ["windows_final_artifacts", "commercial_issue_closure"])
+            self.assertEqual(payload["goal_blocking_scope_count"], 2)
             self.assertEqual(safe_download_path, report_path.resolve())
 
     def test_start_http_endpoint_rejects_empty_target_before_launch(self):
