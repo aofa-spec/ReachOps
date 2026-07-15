@@ -52,10 +52,13 @@ HEARTBEAT_PATH = DATA_DIR / "reachops_web_ui_heartbeat.json"
 LATEST_EXECUTION_PLAN_PATH = DATA_DIR / "plans/latest_execution_plan.json"
 LATEST_RUN_SESSION_PATH = DATA_DIR / "runs/latest_run_session.json"
 DEFAULT_DATA_DIR = DATA_DIR
+DEFAULT_RESULT_PATH = RESULT_PATH
 DEFAULT_LATEST_EXECUTION_PLAN_PATH = LATEST_EXECUTION_PLAN_PATH
 DEFAULT_LATEST_RUN_SESSION_PATH = LATEST_RUN_SESSION_PATH
 LATEST_EVIDENCE_BUNDLE_PATH = DATA_DIR / "evidence_bundles/latest_evidence_bundle.json"
 LATEST_EVIDENCE_BUNDLE_MD_PATH = DATA_DIR / "evidence_bundles/latest_evidence_bundle.md"
+DEFAULT_LATEST_EVIDENCE_BUNDLE_PATH = LATEST_EVIDENCE_BUNDLE_PATH
+DEFAULT_LATEST_EVIDENCE_BUNDLE_MD_PATH = LATEST_EVIDENCE_BUNDLE_MD_PATH
 CONTROL_DIR = DATA_DIR / "control"
 DEFAULT_TARGET = ""
 WEB_UI_VERSION = "reachops-unified-ui-2026-07-05-v20-ai-machine-actions"
@@ -510,7 +513,7 @@ def extract_last_json_object(text: str) -> dict:
 
 
 def read_run_result_payload(path: Path | None = None) -> dict:
-    path = path or RESULT_PATH
+    path = path or current_result_path()
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
@@ -523,7 +526,7 @@ def read_run_result_payload(path: Path | None = None) -> dict:
 
 
 def write_run_result_payload(payload: dict, path: Path | None = None) -> bool:
-    path = path or RESULT_PATH
+    path = path or current_result_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -537,6 +540,13 @@ def run_session_path_for(session: dict) -> Path:
     return DATA_DIR / "runs" / f"{session_id}.json"
 
 
+def current_result_path() -> Path:
+    result_path = Path(RESULT_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and result_path == Path(DEFAULT_RESULT_PATH):
+        return Path(DATA_DIR) / "reachops_web_ui_last_run.json"
+    return result_path
+
+
 def current_latest_execution_plan_path() -> Path:
     latest_path = Path(LATEST_EXECUTION_PLAN_PATH)
     if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_EXECUTION_PLAN_PATH):
@@ -548,6 +558,20 @@ def current_latest_run_session_path() -> Path:
     latest_path = Path(LATEST_RUN_SESSION_PATH)
     if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_RUN_SESSION_PATH):
         return Path(DATA_DIR) / "runs" / "latest_run_session.json"
+    return latest_path
+
+
+def current_latest_evidence_bundle_path() -> Path:
+    latest_path = Path(LATEST_EVIDENCE_BUNDLE_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_EVIDENCE_BUNDLE_PATH):
+        return Path(DATA_DIR) / "evidence_bundles" / "latest_evidence_bundle.json"
+    return latest_path
+
+
+def current_latest_evidence_bundle_md_path() -> Path:
+    latest_path = Path(LATEST_EVIDENCE_BUNDLE_MD_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_EVIDENCE_BUNDLE_MD_PATH):
+        return Path(DATA_DIR) / "evidence_bundles" / "latest_evidence_bundle.md"
     return latest_path
 
 
@@ -694,7 +718,7 @@ def persist_precheck_blocked_start(
     run_session = create_run_session(
         execution_plan,
         execution_plan_path=str(plan_path),
-        result_path=str(RESULT_PATH),
+        result_path=str(current_result_path()),
         log_path=str(LOG_PATH),
         log_offset=len(read_lines(LOG_PATH)),
     )
@@ -2083,7 +2107,7 @@ def build_current_evidence_bundle() -> dict:
             base_dir=DATA_DIR,
             execution_plan_path=execution_plan_path,
             run_session_path=run_session_path,
-            result_path=str(RESULT_PATH if RESULT_PATH.is_file() else ""),
+            result_path=str(current_result_path() if current_result_path().is_file() else ""),
             log_path=log_path,
             offline_learning_path=str(DATA_DIR / "offline_learning" / "unknown_states.json"),
             extra_artifacts=[
@@ -2095,20 +2119,24 @@ def build_current_evidence_bundle() -> dict:
         session_id = str(bundle.get("session_id") or "latest_evidence_bundle")
         bundle_path = DATA_DIR / "evidence_bundles" / f"{session_id}.json"
         markdown_path = DATA_DIR / "evidence_bundles" / f"{session_id}.md"
-        write_evidence_bundle(bundle, bundle_path, LATEST_EVIDENCE_BUNDLE_PATH)
-        write_evidence_markdown(bundle, markdown_path, LATEST_EVIDENCE_BUNDLE_MD_PATH)
+        latest_bundle_path = current_latest_evidence_bundle_path()
+        latest_markdown_path = current_latest_evidence_bundle_md_path()
+        write_evidence_bundle(bundle, bundle_path, latest_bundle_path)
+        write_evidence_markdown(bundle, markdown_path, latest_markdown_path)
         bundle["path"] = str(bundle_path)
         bundle["markdown_path"] = str(markdown_path)
-        bundle["latest_path"] = str(LATEST_EVIDENCE_BUNDLE_PATH)
-        bundle["latest_markdown_path"] = str(LATEST_EVIDENCE_BUNDLE_MD_PATH)
+        bundle["latest_path"] = str(latest_bundle_path)
+        bundle["latest_markdown_path"] = str(latest_markdown_path)
         return bundle
     except Exception as exc:
+        latest_bundle_path = current_latest_evidence_bundle_path()
+        latest_markdown_path = current_latest_evidence_bundle_md_path()
         return {
             "schema_version": "reachops.evidence_bundle.v1",
             "status": "failed",
             "error": str(exc),
-            "path": str(LATEST_EVIDENCE_BUNDLE_PATH),
-            "markdown_path": str(LATEST_EVIDENCE_BUNDLE_MD_PATH),
+            "path": str(latest_bundle_path),
+            "markdown_path": str(latest_markdown_path),
         }
 
 
@@ -7285,7 +7313,7 @@ class Handler(BaseHTTPRequestHandler):
             run_session = create_run_session(
                 execution_plan,
                 execution_plan_path=str(plan_path),
-                result_path=str(RESULT_PATH),
+                result_path=str(current_result_path()),
                 log_path=str(LOG_PATH),
                 log_offset=RUN_LOG_OFFSET,
             )
@@ -7348,12 +7376,13 @@ class Handler(BaseHTTPRequestHandler):
                 "--json",
             ]
             try:
-                RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
-                out = RESULT_PATH.open("w", encoding="utf-8")
+                result_path = current_result_path()
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                out = result_path.open("w", encoding="utf-8")
             except Exception as exc:
                 RUN_PROCESS = None
                 RUN_PAUSED = False
-                append_web_log(f"ERROR  web_ui_result_file_open_failed path={RESULT_PATH} error={exc}")
+                append_web_log(f"ERROR  web_ui_result_file_open_failed path={current_result_path()} error={exc}")
                 self._send_json({"status": "failed", "error": "result_file_open_failed", "message": str(exc)}, 500)
                 return
             env = os.environ.copy()
@@ -7413,7 +7442,7 @@ class Handler(BaseHTTPRequestHandler):
                 RUN_PROCESS = None
                 RUN_STARTED_AT = 0.0
                 RUN_PAUSED = False
-                output_tail = read_text_tail(RESULT_PATH)
+                output_tail = read_text_tail(current_result_path())
                 write_run_result_payload(
                     {
                         "status": "headless_exited_immediately",

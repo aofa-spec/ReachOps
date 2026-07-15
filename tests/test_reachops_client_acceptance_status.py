@@ -768,6 +768,101 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(current_plan["path"], str(redirected_latest_plan))
         self.assertEqual(current_plan["plan_id"], result["execution_plan"]["plan_id"])
 
+    def test_result_and_evidence_latest_paths_follow_redirected_data_dir(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_default_data_dir = reachops_web_ui.DEFAULT_DATA_DIR
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_default_result_path = reachops_web_ui.DEFAULT_RESULT_PATH
+            old_latest_execution_plan_path = reachops_web_ui.LATEST_EXECUTION_PLAN_PATH
+            old_default_latest_execution_plan_path = reachops_web_ui.DEFAULT_LATEST_EXECUTION_PLAN_PATH
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_default_latest_run_session_path = reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH
+            old_latest_evidence_bundle_path = reachops_web_ui.LATEST_EVIDENCE_BUNDLE_PATH
+            old_default_latest_evidence_bundle_path = reachops_web_ui.DEFAULT_LATEST_EVIDENCE_BUNDLE_PATH
+            old_latest_evidence_bundle_md_path = reachops_web_ui.LATEST_EVIDENCE_BUNDLE_MD_PATH
+            old_default_latest_evidence_bundle_md_path = reachops_web_ui.DEFAULT_LATEST_EVIDENCE_BUNDLE_MD_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_log_path = reachops_web_ui.LOG_PATH
+            try:
+                root = Path(tmpdir)
+                default_data_dir = root / "default-runtime"
+                redirected_data_dir = root / "isolated-runtime"
+                default_result = default_data_dir / "reachops_web_ui_last_run.json"
+                redirected_result = redirected_data_dir / "reachops_web_ui_last_run.json"
+                default_latest_evidence = default_data_dir / "evidence_bundles" / "latest_evidence_bundle.json"
+                redirected_latest_evidence = redirected_data_dir / "evidence_bundles" / "latest_evidence_bundle.json"
+                default_latest_evidence_md = default_data_dir / "evidence_bundles" / "latest_evidence_bundle.md"
+                redirected_latest_evidence_md = redirected_data_dir / "evidence_bundles" / "latest_evidence_bundle.md"
+
+                reachops_web_ui.DEFAULT_DATA_DIR = default_data_dir
+                reachops_web_ui.DEFAULT_RESULT_PATH = default_result
+                reachops_web_ui.DEFAULT_LATEST_EXECUTION_PLAN_PATH = (
+                    default_data_dir / "plans" / "latest_execution_plan.json"
+                )
+                reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH = default_data_dir / "runs" / "latest_run_session.json"
+                reachops_web_ui.DEFAULT_LATEST_EVIDENCE_BUNDLE_PATH = default_latest_evidence
+                reachops_web_ui.DEFAULT_LATEST_EVIDENCE_BUNDLE_MD_PATH = default_latest_evidence_md
+                reachops_web_ui.DATA_DIR = redirected_data_dir
+                reachops_web_ui.RESULT_PATH = default_result
+                reachops_web_ui.LATEST_EXECUTION_PLAN_PATH = reachops_web_ui.DEFAULT_LATEST_EXECUTION_PLAN_PATH
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH
+                reachops_web_ui.LATEST_EVIDENCE_BUNDLE_PATH = default_latest_evidence
+                reachops_web_ui.LATEST_EVIDENCE_BUNDLE_MD_PATH = default_latest_evidence_md
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = ""
+                reachops_web_ui.LOG_PATH = redirected_data_dir / "logs" / "growth_ops_runtime.log"
+
+                result = reachops_web_ui.persist_precheck_blocked_start(
+                    target="anti aging serum",
+                    source_type="keyword",
+                    mode="preflight",
+                    profile_group="United States",
+                    volume="quick",
+                    profile_limit=3,
+                    max_videos=5,
+                    max_comments=25,
+                    timeout_seconds=60,
+                    comment_text="",
+                    live_confirmed=False,
+                    account_repair_confirmed=False,
+                    block={
+                        "error": "profile_group_list_unavailable",
+                        "message": "Fixture group list unavailable.",
+                    },
+                )
+                bundle = reachops_web_ui.build_current_evidence_bundle()
+                default_result_exists = default_result.exists()
+                redirected_result_exists = redirected_result.exists()
+                default_latest_evidence_exists = default_latest_evidence.exists()
+                redirected_latest_evidence_exists = redirected_latest_evidence.exists()
+                default_latest_evidence_md_exists = default_latest_evidence_md.exists()
+                redirected_latest_evidence_md_exists = redirected_latest_evidence_md.exists()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.DEFAULT_DATA_DIR = old_default_data_dir
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.DEFAULT_RESULT_PATH = old_default_result_path
+                reachops_web_ui.LATEST_EXECUTION_PLAN_PATH = old_latest_execution_plan_path
+                reachops_web_ui.DEFAULT_LATEST_EXECUTION_PLAN_PATH = old_default_latest_execution_plan_path
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.DEFAULT_LATEST_RUN_SESSION_PATH = old_default_latest_run_session_path
+                reachops_web_ui.LATEST_EVIDENCE_BUNDLE_PATH = old_latest_evidence_bundle_path
+                reachops_web_ui.DEFAULT_LATEST_EVIDENCE_BUNDLE_PATH = old_default_latest_evidence_bundle_path
+                reachops_web_ui.LATEST_EVIDENCE_BUNDLE_MD_PATH = old_latest_evidence_bundle_md_path
+                reachops_web_ui.DEFAULT_LATEST_EVIDENCE_BUNDLE_MD_PATH = old_default_latest_evidence_bundle_md_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.LOG_PATH = old_log_path
+
+        self.assertFalse(default_result_exists)
+        self.assertTrue(redirected_result_exists)
+        self.assertFalse(default_latest_evidence_exists)
+        self.assertTrue(redirected_latest_evidence_exists)
+        self.assertFalse(default_latest_evidence_md_exists)
+        self.assertTrue(redirected_latest_evidence_md_exists)
+        self.assertEqual(bundle["latest_path"], str(redirected_latest_evidence))
+        self.assertEqual(bundle["latest_markdown_path"], str(redirected_latest_evidence_md))
+        self.assertEqual(result["execution_plan"]["plan_id"], bundle["plan_id"])
+
     def test_run_session_latest_path_follows_redirected_data_dir(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
