@@ -4019,6 +4019,10 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
             support["impacted_accounts"]["error_groups"][0]["profile_ids_sample"],
             ["21644"],
         )
+        self.assertEqual(support["retest_checklist"][0]["id"], "apply_latest_account_repair_plan")
+        self.assertEqual(support["retest_checklist"][1]["id"], "client_delivery_retest")
+        self.assertTrue(support["retest_checklist"][0]["no_submit"])
+        self.assertIn("pending_recheck=true", support["retest_checklist"][0]["expected"])
         self.assertIn("python tools/reachops_goal_delivery_runner.py --json", support["retest_commands"])
         self.assertTrue(support["safety_contract"]["apply_alone_is_not_acceptance"])
 
@@ -4261,6 +4265,10 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(handoff["impacted_accounts"]["error_groups"][0]["profile_ids_sample"], ["5897", "18430"])
         self.assertEqual(handoff["impacted_accounts"]["error_groups"][1]["summary_only_count"], 5)
         self.assertIn("client_delivery.profile_available>=1", handoff["acceptance_required"])
+        self.assertEqual(handoff["retest_checklist"][0]["id"], "manual_repair_or_replace_accounts")
+        self.assertEqual(handoff["retest_checklist"][1]["id"], "client_delivery_retest")
+        self.assertTrue(handoff["retest_checklist"][0]["blocks_retest_until_done"])
+        self.assertTrue(handoff["retest_checklist"][0]["no_submit"])
         self.assertTrue(handoff["safety_contract"]["no_submit"])
         self.assertTrue(handoff["does_not_claim_real_account_pool_ready"])
 
@@ -4277,6 +4285,7 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         )
         self.assertIn("account_repair_apply_stale", diagnostic["blocker_codes"])
         self.assertIn("account_repair_plan_has_no_auto_applicable_profiles", diagnostic["blocker_codes"])
+        self.assertEqual(diagnostic["retest_checklist"][0]["id"], "manual_repair_or_replace_accounts")
 
     def test_account_repair_apply_status_normalizes_counts_from_results(self):
         with TemporaryDirectory() as tmpdir:

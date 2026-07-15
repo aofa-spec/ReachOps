@@ -476,6 +476,26 @@ class EvidenceBundleTests(unittest.TestCase):
                                 "python tools/reachops_client_delivery_check.py --json",
                                 "python tools/reachops_goal_delivery_runner.py --json",
                             ],
+                            "retest_checklist": [
+                                {
+                                    "id": "manual_repair_or_replace_accounts",
+                                    "kind": "manual_account_work",
+                                    "title": "人工修复或替换执行分组账号",
+                                    "command": "",
+                                    "expected": "至少保留 1 个可用账号。",
+                                    "required": True,
+                                    "no_submit": True,
+                                },
+                                {
+                                    "id": "client_delivery_retest",
+                                    "kind": "local_gate",
+                                    "title": "复跑客户端账号门禁",
+                                    "command": "python tools/reachops_client_delivery_check.py --json",
+                                    "expected": "profile_available>=1",
+                                    "required": True,
+                                    "no_submit": True,
+                                },
+                            ],
                             "acceptance_required": ["profile_available>=1", "status=passed"],
                             "safety_contract": {
                                 "apply_alone_is_not_acceptance": True,
@@ -615,6 +635,14 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertEqual(
                 bundle["account_support_handoff_summary"]["blocker_codes"],
                 ["account_repair_plan_has_no_auto_applicable_profiles"],
+            )
+            self.assertEqual(
+                bundle["account_support_handoff_summary"]["retest_checklist"][0]["id"],
+                "manual_repair_or_replace_accounts",
+            )
+            self.assertEqual(
+                bundle["account_support_handoff_summary"]["retest_checklist"][1]["command"],
+                "python tools/reachops_client_delivery_check.py --json",
             )
             self.assertTrue(bundle["account_support_handoff_summary"]["does_not_claim_real_account_pool_ready"])
             self.assertEqual(bundle["account_support_handoff_summary"]["repair_plan_non_auto_error_codes"], ["LOGIN_REQUIRED"])
@@ -811,6 +839,7 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertIn("Does not claim real account pool ready: true", render_evidence_markdown(bundle))
             self.assertIn("Non-auto errors: LOGIN_REQUIRED", render_evidence_markdown(bundle))
             self.assertIn("Retest command: python tools/reachops_client_delivery_check.py --json", render_evidence_markdown(bundle))
+            self.assertIn("Retest checklist: manual_repair_or_replace_accounts", render_evidence_markdown(bundle))
             self.assertIn("Human review required: 1", render_evidence_markdown(bundle))
             self.assertIn("Risk Gate Machine Actions", render_evidence_markdown(bundle))
             self.assertIn("request_operator_authorization(required=true)", render_evidence_markdown(bundle))

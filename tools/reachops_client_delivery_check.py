@@ -327,6 +327,86 @@ def build_account_blocker_resolution(
     }
 
 
+def build_account_retest_checklist(resolution: dict, repair_summary: dict | None = None) -> list[dict]:
+    resolution = resolution if isinstance(resolution, dict) else {}
+    repair_summary = repair_summary if isinstance(repair_summary, dict) else {}
+    if str(resolution.get("readiness") or "") != "blocked_by_accounts":
+        return []
+    group = str(resolution.get("profile_group") or repair_summary.get("profile_group") or "当前分组")
+    checklist: list[dict] = []
+    if bool(resolution.get("requires_manual_account_work")):
+        checklist.append(
+            {
+                "id": "manual_repair_or_replace_accounts",
+                "kind": "manual_account_work",
+                "required": True,
+                "title": "人工修复或替换执行分组账号",
+                "profile_group": group,
+                "command": "",
+                "expected": "至少保留 1 个已登录、内核匹配、代理可用、可手动打开 TikTok 的账号在执行分组内。",
+                "blocks_retest_until_done": True,
+                "no_browser_started_by_reachops": True,
+                "no_submit": True,
+            }
+        )
+    if bool(resolution.get("requires_latest_repair_apply")):
+        checklist.append(
+            {
+                "id": "apply_latest_account_repair_plan",
+                "kind": "local_repair_apply",
+                "required": True,
+                "title": "应用最新账号修复计划",
+                "profile_group": group,
+                "command": "python tools/reachops_apply_account_repair_plan.py --apply --json",
+                "expected": "latest_account_repair_apply.status=applied 且 pending_recheck=true；apply 本身不等于验收通过。",
+                "blocks_retest_until_done": True,
+                "no_browser_started_by_reachops": True,
+                "no_submit": True,
+            }
+        )
+    checklist.extend(
+        [
+            {
+                "id": "client_delivery_retest",
+                "kind": "local_gate",
+                "required": True,
+                "title": "复跑客户端账号门禁",
+                "profile_group": group,
+                "command": "python tools/reachops_client_delivery_check.py --json",
+                "expected": "status=passed, readiness=pass, profile_available>=1, failed_checks=[]。",
+                "blocks_retest_until_done": False,
+                "no_browser_started_by_reachops": True,
+                "no_submit": True,
+            },
+            {
+                "id": "mac_loop_mvp_retest",
+                "kind": "local_mvp_gate",
+                "required": True,
+                "title": "复跑本地 MVP 循环验收",
+                "profile_group": group,
+                "command": "python tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json",
+                "expected": "status=passed 且 mac_loop_ready=true；如仍阻断，继续使用新的账号支持交接包。",
+                "blocks_retest_until_done": False,
+                "no_browser_started_by_reachops": False,
+                "no_submit": True,
+            },
+            {
+                "id": "goal_delivery_retest",
+                "kind": "goal_gate",
+                "required": True,
+                "title": "复跑目标总门禁",
+                "profile_group": group,
+                "command": "python tools/reachops_goal_delivery_runner.py --json",
+                "expected": "local_mvp_ready=true；final_delivery_ready 仍需 Windows 实机验收和授权真实执行证据。",
+                "blocks_retest_until_done": False,
+                "no_browser_started_by_reachops": True,
+                "no_submit": True,
+            },
+        ]
+    )
+    return checklist
+
+
 def build_account_support_handoff(
     acceptance: dict,
     *,
@@ -364,6 +444,7 @@ def build_account_support_handoff(
     blocker_codes = [str(item) for item in (resolution.get("blocker_codes") or []) if str(item).strip()]
     if support_required and not priority_action:
         priority_action = "create_or_repair_real_account_pool"
+    retest_checklist = build_account_retest_checklist(resolution, repair_summary)
     return {
         "schema_version": "reachops.account_support_handoff.v1",
         "status": support_status,
@@ -419,6 +500,7 @@ def build_account_support_handoff(
             "python tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json",
             "python tools/reachops_goal_delivery_runner.py --json",
         ],
+        "retest_checklist": retest_checklist,
         "acceptance_required": [
             "client_delivery.status=passed",
             "client_delivery.readiness=pass",
@@ -1176,6 +1258,9 @@ def build_account_support_handoff_diagnostic(payload: dict) -> dict:
         "account_blocker_resolution": blocker_resolution,
         "account_support_handoff": handoff,
         "retest_commands": [str(item) for item in (handoff.get("retest_commands") or [])],
+        "retest_checklist": [
+            item for item in (handoff.get("retest_checklist") or []) if isinstance(item, dict)
+        ],
         "acceptance_required": [str(item) for item in (handoff.get("acceptance_required") or [])],
         "safety_contract": safety_contract,
         "no_browser_started": bool(safety_contract.get("no_browser_started", True)),

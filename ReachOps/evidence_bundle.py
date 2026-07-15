@@ -646,6 +646,19 @@ def build_account_support_handoff_summary(base_dir: str | Path) -> dict[str, Any
         ],
         "operator_steps": [str(item) for item in (handoff.get("operator_steps") or [])[:8]],
         "retest_commands": [str(item) for item in (handoff.get("retest_commands") or [])[:8]],
+        "retest_checklist": [
+            {
+                "id": _safe_text(row.get("id")),
+                "kind": _safe_text(row.get("kind")),
+                "title": _safe_text(row.get("title")),
+                "command": _safe_text(row.get("command")),
+                "expected": _safe_text(row.get("expected")),
+                "required": bool(row.get("required", True)),
+                "no_submit": bool(row.get("no_submit", True)),
+            }
+            for row in (handoff.get("retest_checklist") or [])[:8]
+            if isinstance(row, dict)
+        ],
         "acceptance_required": list(handoff.get("acceptance_required") or [])[:8],
         "safety_contract": safety_contract,
         "apply_alone_is_not_acceptance": bool(safety_contract.get("apply_alone_is_not_acceptance", True)),
@@ -2780,6 +2793,12 @@ def render_evidence_markdown(bundle: dict[str, Any]) -> str:
                 lines.append(f"- {row.get('error', '-')} count={row.get('count', 0)} sample={sample or '-'}")
         for command in account_support_handoff.get("retest_commands") or []:
             lines.append(f"- Retest command: {command}")
+        for item in account_support_handoff.get("retest_checklist") or []:
+            if isinstance(item, dict):
+                command = item.get("command") or "manual"
+                lines.append(
+                    f"- Retest checklist: {item.get('id') or '-'} / {item.get('title') or '-'} / command={command} / expected={item.get('expected') or '-'}"
+                )
     page_state_summary = bundle.get("page_state_summary") if isinstance(bundle.get("page_state_summary"), dict) else {}
     if page_state_summary:
         lines.extend(
