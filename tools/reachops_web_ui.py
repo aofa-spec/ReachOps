@@ -2860,6 +2860,13 @@ def html_page() -> bytes:
     .previewItem.wide {{ display:none; }}
     .previewItem ul {{ margin:7px 0 0; padding-left:18px; color:var(--muted); line-height:1.45; font-size:12px; }}
     .previewItem li {{ overflow-wrap:anywhere; word-break:break-word; }}
+    .runtimeAutomationPanel {{ border:1px solid #314151; border-radius:8px; background:#151c22; padding:10px; display:grid; gap:8px; }}
+    .runtimeAutomationGrid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(136px,1fr)); gap:8px; }}
+    .runtimeCleanupActions {{ display:grid; grid-template-columns:repeat(2,minmax(112px,.32fr)) minmax(180px,1fr); gap:8px; align-items:center; }}
+    .runtimeCleanupActions input {{ height:32px; }}
+    .runtimeCleanupActions button {{ height:32px; padding:0 10px; font-size:12px; }}
+    .runtimeCleanupDetails {{ color:var(--muted); font-size:12px; line-height:1.45; overflow-wrap:anywhere; }}
+    .runtimeCleanupDetails ul {{ margin:0; padding-left:18px; }}
     .decision {{ display:grid; grid-template-columns:1.2fr 1fr; gap:10px; }}
     .decision .notice {{ min-height:86px; }}
     .steps {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(92px,1fr)); gap:8px; }}
@@ -3065,14 +3072,28 @@ def html_page() -> bytes:
 	            <button class="okBtn" id="resume">继续</button>
 	            <button id="stop">停止</button>
 	          </div>
-	          <div class="secondaryActions" aria-label="次级操作">
-	            <button id="previewPlanReplay">预检重放计划</button>
-	            <button class="okBtn" id="startFromPlan">重放计划执行</button>
-	            <button id="downloadExecutionPlan">下载执行计划</button>
-	            <button class="warn" id="applyAccountRepair" disabled>隔离坏账号</button>
-	          </div>
-	        </div>
-	      </div>
+          <div class="secondaryActions" aria-label="次级操作">
+            <button id="previewPlanReplay">预检重放计划</button>
+            <button class="okBtn" id="startFromPlan">重放计划执行</button>
+            <button id="downloadExecutionPlan">下载执行计划</button>
+            <button class="warn" id="applyAccountRepair" disabled>隔离坏账号</button>
+          </div>
+          <div class="runtimeAutomationPanel" id="runtimeAutomationPanel">
+            <div class="runtimeAutomationGrid">
+              <div class="previewItem ok"><span>账号自动处理</span><b id="runtimeAccountGrouping">未登录自动冷却，健康账号继续</b></div>
+              <div class="previewItem warn"><span>远端分组更新</span><b id="runtimeRemoteGroupMode">需账号修复确认</b></div>
+              <div class="previewItem" id="runtimeCleanupStatusBox"><span>运行时清理</span><b id="runtimeCleanupStatus">未检查</b></div>
+              <div class="previewItem" id="runtimeCleanupCandidatesBox"><span>遗留进程候选</span><b id="runtimeCleanupCandidates">0</b></div>
+            </div>
+            <div class="runtimeCleanupActions" aria-label="运行时进程清理">
+              <button id="previewRuntimeCleanup">预览清理</button>
+              <button class="warn" id="applyRuntimeCleanup">执行清理</button>
+              <input id="runtimeCleanupConfirm" placeholder="输入 CLEANUP_RUNTIME_PROCESSES 才会执行" />
+            </div>
+            <div class="runtimeCleanupDetails" id="runtimeCleanupDetails">预览只生成诊断，不打开浏览器、不提交动作；执行清理必须输入确认令牌。</div>
+          </div>
+        </div>
+      </div>
       <div class="copyNotice" id="copyModeNotice">
         <strong>评论文案：自动识别生成</strong>
         <span>评论内容留空时，系统会根据线索意图自动生成回复；只有达到触达分数的线索才会进入评论队列，低意向用户会自动跳过。</span>
@@ -5110,6 +5131,52 @@ def html_page() -> bytes:
       }}
       refreshLogs(); refreshSnapshot(); refreshAcceptance();
     }}
+    function renderRuntimeCleanup(result) {{
+      const audit = result.runtime_process_audit || {{}};
+      const cleanup = result.cleanup_result || audit.cleanup_result || {{}};
+      const count = Number(result.cleanup_candidate_count || audit.cleanup_candidate_count || 0);
+      const status = String(cleanup.status || result.status || audit.status || 'unknown');
+      const applied = cleanup.applied === true;
+      const attempted = Array.isArray(cleanup.attempted) ? cleanup.attempted.length : 0;
+      if ($('runtimeCleanupStatus')) $('runtimeCleanupStatus').textContent = applied ? '已执行' : status;
+      if ($('runtimeCleanupCandidates')) $('runtimeCleanupCandidates').textContent = String(count);
+      const statusBox = $('runtimeCleanupStatusBox');
+      const candidatesBox = $('runtimeCleanupCandidatesBox');
+      if (statusBox) statusBox.className = applied ? 'previewItem ok' : (status === 'dry_run' ? 'previewItem warn' : 'previewItem bad');
+      if (candidatesBox) candidatesBox.className = count > 0 ? 'previewItem warn' : 'previewItem ok';
+      if ($('runtimeCleanupDetails')) {{
+        $('runtimeCleanupDetails').innerHTML = listItems([
+          `清理状态：${{status}}`,
+          `候选进程：${{count}}`,
+          `已尝试终止：${{attempted}}`,
+          `安全边界：no_browser_started=${{result.no_browser_started === true}}，no_submit=${{result.no_submit === true}}`,
+          `诊断文件：${{audit.path || result.path || '未写入'}}`
+        ]);
+      }}
+    }}
+    async function previewRuntimeCleanup() {{
+      let result = {{}};
+      try {{
+        result = await postJson('/api/control', {{action:'runtime_cleanup_preview'}});
+      }} catch (err) {{
+        result = {{status:'failed', error:'network_error', message:String(err), no_browser_started:true, no_submit:true}};
+      }}
+      renderRuntimeCleanup(result);
+      showApiNotice(result.status === 'runtime_cleanup_preview' ? '运行时清理预览已生成' : '运行时清理预览失败', result, result.status === 'runtime_cleanup_preview' ? '' : 'blocked', 12000);
+      refreshLogs(); refreshSnapshot(); refreshAcceptance();
+    }}
+    async function applyRuntimeCleanup() {{
+      let result = {{}};
+      try {{
+        result = await postJson('/api/control', {{action:'runtime_cleanup_apply', confirm:$('runtimeCleanupConfirm').value}});
+      }} catch (err) {{
+        result = {{status:'confirmation_required', error:'network_error_or_confirmation_required', message:String(err), no_browser_started:true, no_submit:true}};
+      }}
+      renderRuntimeCleanup(result);
+      const ok = result.status === 'applied' || (result.cleanup_result || {{}}).applied === true;
+      showApiNotice(ok ? '运行时清理已执行' : '运行时清理未执行', result, ok ? '' : 'blocked', 20000);
+      refreshLogs(); refreshSnapshot(); refreshAcceptance();
+    }}
     async function applyAccountRepairPlan() {{
       if (!accountGateAppliesToCurrentGroup()) {{
         showApiNotice(
@@ -5195,7 +5262,7 @@ def html_page() -> bytes:
       document.querySelectorAll('.tab,.page').forEach(el => el.classList.remove('active'));
       btn.classList.add('active'); $(btn.dataset.page).classList.add('active');
     }});
-	    $('start').onclick = start; $('previewPlanReplay').onclick = previewPlanReplay; $('startFromPlan').onclick = startFromPlan; $('downloadExecutionPlan').onclick = downloadExecutionPlan; $('applyAccountRepair').onclick = applyAccountRepairPlan; $('pause').onclick = () => control('pause'); $('resume').onclick = () => control('resume'); $('stop').onclick = () => control('stop');
+	    $('start').onclick = start; $('previewPlanReplay').onclick = previewPlanReplay; $('startFromPlan').onclick = startFromPlan; $('downloadExecutionPlan').onclick = downloadExecutionPlan; $('applyAccountRepair').onclick = applyAccountRepairPlan; $('previewRuntimeCleanup').onclick = previewRuntimeCleanup; $('applyRuntimeCleanup').onclick = applyRuntimeCleanup; $('pause').onclick = () => control('pause'); $('resume').onclick = () => control('resume'); $('stop').onclick = () => control('stop');
 	    $('refresh').onclick = () => {{ refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus(); }};
 	    $('refreshGroups').onclick = refreshGroups;
 	    $('refreshGroupsInline').onclick = () => {{ refreshIxBrowserStatus(); refreshGroups(); }};
