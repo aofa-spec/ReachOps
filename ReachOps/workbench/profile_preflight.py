@@ -318,7 +318,10 @@ class ProfilePreflightChecker:
 
     def _classify_start_failure(self, message: str) -> str:
         text = str(message or "").lower()
-        if "内核" in str(message or "") or "kernel" in text or "code=2011" in text or "code=2014" in text:
+        raw = str(message or "")
+        if "code=2007" in text or "窗口不存在" in raw or "profile not found" in text or "profile missing" in text:
+            return "PROFILE_MISSING"
+        if "内核" in raw or "kernel" in text or "code=2011" in text or "code=2014" in text:
             return "IXBROWSER_KERNEL_MISMATCH"
         if "server busy" in text or "code=1008" in text:
             return "IXBROWSER_SERVER_BUSY"

@@ -113,7 +113,7 @@ def readiness_summary(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(row, dict) and row.get("error_code"):
             errors[str(row.get("error_code"))] += 1
     summary_errors = payload.get("summary", {}).get("errors") if isinstance(payload.get("summary"), dict) else {}
-    if isinstance(summary_errors, dict):
+    if not errors and isinstance(summary_errors, dict):
         for code, count in summary_errors.items():
             errors[str(code)] += int(count or 0)
     return {
@@ -153,14 +153,18 @@ def build_matrix(
     pressure_rows: list[dict[str, Any]],
     readiness_payload: dict[str, Any],
     runtime_audit: dict[str, Any],
+    profile_missing_payload: dict[str, Any] | None = None,
     pressure_summary_path: str = "",
     readiness_report_path: str = "",
     runtime_audit_path: str = "",
+    profile_missing_report_path: str = "",
 ) -> dict[str, Any]:
     pressure = summarize_pressure(pressure_rows)
     readiness = readiness_summary(readiness_payload)
+    profile_missing = readiness_summary(profile_missing_payload or {})
     diagnoses = set(pressure.get("diagnosis_counts") or {})
     readiness_errors = set(readiness.get("error_counts") or {})
+    profile_missing_errors = set(profile_missing.get("error_counts") or {})
     terminal_ok = bool(
         pressure.get("row_count", 0) >= 100
         and pressure.get("terminal_ratio", 0) >= 0.98
@@ -232,9 +236,10 @@ def build_matrix(
         matrix_row(
             "profile_deleted_or_missing",
             "账号被删除或 Profile 不存在",
-            "missing",
-            [],
-            "运行无效 Profile ID 的 no-submit 探针，要求 PROFILE_START_FAILED/PROFILE_MISSING 结构化终态。",
+            "passed_real" if profile_missing_errors.intersection({"PROFILE_MISSING", "PROFILE_START_FAILED"}) else "missing",
+            [profile_missing_report_path] if profile_missing_report_path else [],
+            "保持缺失 Profile 的修复清单，不自动删除或移动远端配置。" if profile_missing_errors else "运行无效 Profile ID 的 no-submit 探针，要求 PROFILE_MISSING 结构化终态。",
+            source="real_profile_readiness" if profile_missing_errors else "local_audit",
         ),
         matrix_row(
             "kernel_mismatch",
@@ -303,6 +308,7 @@ def build_matrix(
         "no_submit": True,
         "pressure_summary": pressure,
         "readiness_summary": readiness,
+        "profile_missing_summary": profile_missing,
         "runtime_audit_summary": {
             "status": runtime_audit.get("status", ""),
             "cleanup_candidate_count": int(runtime_audit.get("cleanup_candidate_count") or 0),
@@ -330,6 +336,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build the P0-8 real no-submit failure-mode matrix.")
     parser.add_argument("--pressure-summary", default="/tmp/reachops_p08_100run_summary.jsonl")
     parser.add_argument("--readiness-report", default="/tmp/reachops_profile_readiness_p08_group.json")
+    parser.add_argument("--profile-missing-report", default="/tmp/reachops_profile_missing_probe.json")
     parser.add_argument("--runtime-audit", default="/tmp/reachops_runtime_audit_after_p08_pressure.json")
     parser.add_argument("--output", default="reports/reachops/p08_failure_matrix/latest_p08_failure_matrix.json")
     parser.add_argument("--json", action="store_true")
@@ -342,9 +349,11 @@ def main(argv: list[str] | None = None) -> int:
         pressure_rows=read_jsonl(args.pressure_summary),
         readiness_payload=read_json(args.readiness_report),
         runtime_audit=read_json(args.runtime_audit),
+        profile_missing_payload=read_json(args.profile_missing_report),
         pressure_summary_path=str(Path(args.pressure_summary).expanduser()),
         readiness_report_path=str(Path(args.readiness_report).expanduser()),
         runtime_audit_path=str(Path(args.runtime_audit).expanduser()),
+        profile_missing_report_path=str(Path(args.profile_missing_report).expanduser()),
     )
     write_report(args.output, payload)
     if args.json:

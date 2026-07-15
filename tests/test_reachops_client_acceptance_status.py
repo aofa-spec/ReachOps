@@ -133,12 +133,18 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
                 "orphan_chromedriver_candidate_count": 0,
                 "detached_reachops_client_process_count": 0,
             },
+            profile_missing_payload={
+                "status": "blocked_by_accounts",
+                "results": [{"profile_id": "999999999", "error_code": "PROFILE_MISSING"}],
+                "summary": {"errors": {"PROFILE_MISSING": 1}},
+            },
         )
 
         self.assertEqual(matrix["status"], "partial")
         by_id = {row["id"]: row for row in matrix["rows"]}
         self.assertEqual(by_id["pressure_mode_100_real_no_submit"]["status"], "passed_real")
         self.assertEqual(by_id["account_login_invalid"]["status"], "passed_real")
+        self.assertEqual(by_id["profile_deleted_or_missing"]["status"], "passed_real")
         self.assertEqual(by_id["runtime_process_cleanup"]["status"], "passed_real")
         self.assertEqual(by_id["database_busy"]["status"], "missing")
         self.assertIn("database_busy", matrix["summary"]["missing_ids"])

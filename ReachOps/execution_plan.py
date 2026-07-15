@@ -217,6 +217,7 @@ def adversarial_cli_args_for_contract_preview(payload: dict[str, Any]) -> dict[s
 
 def default_repair_policy() -> dict[str, Any]:
     return {
+        "PROFILE_MISSING": {"action": "remove_or_repair_profile_reference", "continue": "next_profile"},
         "LOGIN_REQUIRED": {"action": "quarantine_profile", "continue": "next_profile"},
         "PROFILE_START_FAILED": {"action": "retry_then_cooldown", "max_retries": 2},
         "PAGE_TIMEOUT": {"action": "refresh_then_retry", "max_retries": 1},

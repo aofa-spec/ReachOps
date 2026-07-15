@@ -348,6 +348,7 @@ def recommended_action(error_code: str, ok: bool) -> str:
     if ok:
         return "Keep in candidate pool for real no-submit validation."
     return {
+        "PROFILE_MISSING": "Remove the missing profile from the candidate pool or restore it in ixBrowser, then rerun readiness probe.",
         "LOGIN_REQUIRED": "Log in to TikTok for this profile, then rerun readiness probe.",
         "CAPTCHA_DETECTED": "Resolve captcha manually or remove from automated run pool.",
         "PROXY_FAILED": "Repair proxy/network settings before retry.",

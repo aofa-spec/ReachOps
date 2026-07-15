@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 
 ERROR_CODES = {
+    "PROFILE_MISSING",
     "PROFILE_START_FAILED",
     "IXBROWSER_KERNEL_MISMATCH",
     "IXBROWSER_SERVER_BUSY",

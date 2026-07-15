@@ -129,6 +129,18 @@ class FakeDriver:
         self.quit_called = True
 
 
+class ProfilePreflightClassificationTests(unittest.TestCase):
+    def test_ixbrowser_missing_window_is_profile_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = GrowthStorage(str(Path(tmpdir) / "growth.db"))
+            checker = ProfilePreflightChecker(storage, ProfilePreflightConfig(total_timeout_seconds=5))
+
+            self.assertEqual(
+                checker._classify_start_failure("ixBrowser open_profile failed: code=2007 message=窗口不存在"),
+                "PROFILE_MISSING",
+            )
+
+
 class LoginDialogDriver(FakeDriver):
     def execute_script(self, script):
         text = str(script or "")
