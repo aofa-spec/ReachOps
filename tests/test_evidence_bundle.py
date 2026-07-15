@@ -453,6 +453,7 @@ class EvidenceBundleTests(unittest.TestCase):
                             "ready_for_retest": False,
                             "requires_latest_repair_apply": False,
                             "requires_manual_account_work": True,
+                            "blocker_codes": ["account_repair_plan_has_no_auto_applicable_profiles"],
                             "does_not_claim_real_account_pool_ready": True,
                             "repair_plan": {
                                 "available": True,
@@ -611,6 +612,10 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertEqual(bundle["account_support_handoff_summary"]["support_case"], "account_pool_blocked")
             self.assertEqual(bundle["account_support_handoff_summary"]["priority_action"], "manually_repair_or_replace_accounts")
             self.assertTrue(bundle["account_support_handoff_summary"]["requires_manual_account_work"])
+            self.assertEqual(
+                bundle["account_support_handoff_summary"]["blocker_codes"],
+                ["account_repair_plan_has_no_auto_applicable_profiles"],
+            )
             self.assertTrue(bundle["account_support_handoff_summary"]["does_not_claim_real_account_pool_ready"])
             self.assertEqual(bundle["account_support_handoff_summary"]["repair_plan_non_auto_error_codes"], ["LOGIN_REQUIRED"])
             self.assertEqual(bundle["account_support_handoff_summary"]["error_groups"][0]["profile_ids_sample"], ["profile-1"])

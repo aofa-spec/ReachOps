@@ -41,6 +41,7 @@ from tools.reachops_client_delivery_check import (
     account_repair_summary_lines,
     build_account_blocker_resolution,
     build_account_support_handoff,
+    build_account_support_handoff_diagnostic,
     build_delivery_check,
     build_real_pilot_evidence_boundary,
     latest_account_repair_apply_status,
@@ -4250,6 +4251,8 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(handoff["priority_action"], "manually_repair_or_replace_accounts")
         self.assertTrue(handoff["requires_manual_account_work"])
         self.assertFalse(handoff["requires_latest_repair_apply"])
+        self.assertIn("account_repair_apply_stale", handoff["blocker_codes"])
+        self.assertIn("account_repair_plan_has_no_auto_applicable_profiles", handoff["blocker_codes"])
         self.assertEqual(handoff["repair_plan"]["non_auto_error_codes"], ["PROFILE_PREFLIGHT_TIMEOUT"])
         self.assertEqual(handoff["repair_plan"]["summary_only_error_count"], 5)
         self.assertEqual(handoff["latest_apply"]["effective_status"], "stale")
@@ -4260,6 +4263,20 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertIn("client_delivery.profile_available>=1", handoff["acceptance_required"])
         self.assertTrue(handoff["safety_contract"]["no_submit"])
         self.assertTrue(handoff["does_not_claim_real_account_pool_ready"])
+
+        diagnostic = build_account_support_handoff_diagnostic(
+            {
+                "delivery_check_path": "/tmp/latest_delivery_check.json",
+                "status": "blocked_by_accounts",
+                "readiness": "blocked_by_accounts",
+                "final_delivery_ready": False,
+                "failed_checks": ["acceptance:ready"],
+                "account_blocker_resolution": resolution,
+                "account_support_handoff": handoff,
+            }
+        )
+        self.assertIn("account_repair_apply_stale", diagnostic["blocker_codes"])
+        self.assertIn("account_repair_plan_has_no_auto_applicable_profiles", diagnostic["blocker_codes"])
 
     def test_account_repair_apply_status_normalizes_counts_from_results(self):
         with TemporaryDirectory() as tmpdir:

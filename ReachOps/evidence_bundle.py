@@ -628,6 +628,7 @@ def build_account_support_handoff_summary(base_dir: str | Path) -> dict[str, Any
         "ready_for_retest": bool(handoff.get("ready_for_retest")),
         "requires_latest_repair_apply": bool(handoff.get("requires_latest_repair_apply")),
         "requires_manual_account_work": bool(handoff.get("requires_manual_account_work")),
+        "blocker_codes": [str(item) for item in (handoff.get("blocker_codes") or [])[:12]],
         "does_not_claim_real_account_pool_ready": bool(handoff.get("does_not_claim_real_account_pool_ready", True)),
         "repair_plan_available": bool(repair_plan.get("available")),
         "repair_plan_profile_count": int(repair_plan.get("profile_count") or 0),

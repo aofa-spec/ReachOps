@@ -361,6 +361,7 @@ def build_account_support_handoff(
         )
     support_status = str(resolution.get("status") or ("blocked_by_accounts" if support_required else "not_required"))
     priority_action = str(resolution.get("priority_action") or "")
+    blocker_codes = [str(item) for item in (resolution.get("blocker_codes") or []) if str(item).strip()]
     if support_required and not priority_action:
         priority_action = "create_or_repair_real_account_pool"
     return {
@@ -375,6 +376,7 @@ def build_account_support_handoff(
         "ready_for_retest": bool(resolution.get("ready_for_retest")),
         "requires_latest_repair_apply": bool(resolution.get("requires_latest_repair_apply")),
         "requires_manual_account_work": bool(resolution.get("requires_manual_account_work")),
+        "blocker_codes": blocker_codes,
         "does_not_claim_real_account_pool_ready": bool(resolution.get("does_not_claim_real_account_pool_ready") or support_required),
         "repair_plan": {
             "available": repair_summary.get("status") == "ok",
@@ -1169,6 +1171,7 @@ def build_account_support_handoff_diagnostic(payload: dict) -> dict:
         "ready_for_retest": bool(handoff.get("ready_for_retest")),
         "requires_latest_repair_apply": bool(handoff.get("requires_latest_repair_apply")),
         "requires_manual_account_work": bool(handoff.get("requires_manual_account_work")),
+        "blocker_codes": [str(item) for item in (handoff.get("blocker_codes") or blocker_resolution.get("blocker_codes") or []) if str(item).strip()],
         "does_not_claim_real_account_pool_ready": bool(handoff.get("does_not_claim_real_account_pool_ready", True)),
         "account_blocker_resolution": blocker_resolution,
         "account_support_handoff": handoff,
