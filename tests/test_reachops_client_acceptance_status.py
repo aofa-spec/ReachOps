@@ -244,6 +244,41 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertIn("group_refresh_failure_summary", matrix)
         self.assertIn("补充真实 ixBrowser", by_id["group_refresh_failure"]["next_action"])
 
+    def test_p08_failure_matrix_marks_web_ui_restart_fault_injection_separately_from_real(self):
+        matrix = build_p08_failure_matrix(
+            pressure_rows=[],
+            readiness_payload={},
+            runtime_audit={},
+            web_ui_restart_payload={
+                "status": "completed",
+                "terminal_reason_code": "WEB_UI_RESTART_RECOVERED",
+                "error_code": "WEB_UI_RESTART",
+                "no_browser_started": True,
+                "no_submit": True,
+                "fault_injection": {
+                    "enabled": True,
+                    "failure_code": "WEB_UI_RESTART",
+                    "counts_as_real_acceptance": False,
+                },
+                "web_ui_restart": {
+                    "run_session_takeover_checked": True,
+                    "run_session_recovered": True,
+                    "existing_run_duplicate_start_prevented": True,
+                    "duplicate_task_started": False,
+                    "max_recovery_attempts": 1,
+                },
+                "summary": {"errors": {"WEB_UI_RESTART": 1}},
+            },
+            web_ui_restart_report_path="/tmp/reachops_web_ui_restart_probe.json",
+        )
+
+        by_id = {row["id"]: row for row in matrix["rows"]}
+        self.assertEqual(by_id["web_ui_restart"]["status"], "passed_fault_injection")
+        self.assertTrue(by_id["web_ui_restart"]["passed"])
+        self.assertEqual(by_id["web_ui_restart"]["source"], "safe_fault_injection")
+        self.assertIn("web_ui_restart_summary", matrix)
+        self.assertIn("补充真实运行中 Web UI 重启", by_id["web_ui_restart"]["next_action"])
+
     def test_headless_dummy_root_executes_delayed_callbacks(self):
         calls = []
 
