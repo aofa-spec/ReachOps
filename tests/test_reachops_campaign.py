@@ -2936,6 +2936,58 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(payload["bounded_exit"])
         self.assertEqual(payload["bounded_exit_status"], "terminated_after_timeout")
 
+    def test_profile_readiness_probe_marks_completed_after_budget_when_wall_clock_overruns_without_timeout_error(self):
+        def fake_metadata_builder(**_kwargs):
+            return {
+                "status": "ok",
+                "safe_read_only": True,
+                "open_profile_called": False,
+                "group_name_filter": "United States",
+                "group_count": 1,
+                "known_group_count": 1,
+                "selected_group_id": "257999",
+                "selected_profile_count": 1,
+                "selected_profiles": [
+                    {"profile": {"profile_id": "slow-login", "group_id": "257999", "group_name": "United States"}},
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("tools.reachops_profile_readiness_probe.time.monotonic", side_effect=[100.0, 112.5]), patch(
+                "tools.reachops_profile_readiness_probe.ProfilePreflightChecker.run",
+                return_value={
+                    "requested": 1,
+                    "checked": 1,
+                    "available": 0,
+                    "unavailable": 1,
+                    "errors": {"LOGIN_REQUIRED": 1},
+                    "results": [
+                        {
+                            "profile_id": "slow-login",
+                            "group_name": "United States",
+                            "ok": False,
+                            "error_code": "LOGIN_REQUIRED",
+                            "error_message": "LOGIN_REQUIRED",
+                            "duration_seconds": 12.5,
+                        },
+                    ],
+                },
+            ):
+                payload = run_reachops_profile_readiness_probe(
+                    base_dir=tmpdir,
+                    profile_group="United States",
+                    profile_limit=1,
+                    max_workers=1,
+                    page_timeout_seconds=1,
+                    wait_after_open_seconds=0,
+                    total_timeout_seconds=10,
+                    metadata_builder=fake_metadata_builder,
+                )
+
+        self.assertFalse(payload["timeout_triggered"])
+        self.assertEqual(payload["timeout_overrun_seconds"], 2.5)
+        self.assertEqual(payload["bounded_exit_status"], "completed_after_budget")
+
     def test_profile_readiness_probe_enriches_existing_report_without_reopening_profiles(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             report_dir = Path(tmpdir) / "20260715T000000Z" / "reports"

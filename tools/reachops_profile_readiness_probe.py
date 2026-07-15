@@ -401,6 +401,14 @@ def terminal_reason_code(
     return str(status or "UNKNOWN_PAGE_STATE").upper()
 
 
+def bounded_exit_status(timeout_triggered: bool, timeout_overrun_seconds: float) -> str:
+    if timeout_triggered:
+        return "terminated_after_timeout"
+    if float(timeout_overrun_seconds or 0) > 0:
+        return "completed_after_budget"
+    return "within_budget"
+
+
 def build_profile_scan_counts(
     *,
     summary: dict[str, Any],
@@ -797,7 +805,7 @@ def run_probe(
         "timeout_triggered": timeout_triggered,
         "timeout_overrun_seconds": timeout_overrun_seconds,
         "bounded_exit": True,
-        "bounded_exit_status": "terminated_after_timeout" if timeout_triggered else "within_budget",
+        "bounded_exit_status": bounded_exit_status(timeout_triggered, timeout_overrun_seconds),
         "results": public_results,
         "attempted_profile_ids": attempted_profile_ids,
         "hard_failed_profile_ids": hard_failed_profile_ids,
