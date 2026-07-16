@@ -13539,6 +13539,29 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(any("force_account_recheck" in row for row in logs))
         self.assertTrue(any("recent_unusable_excluded count=1" in row for row in logs))
 
+    def test_standalone_profile_shortfall_adds_recoverable_accounts_before_collection(self):
+        app = GrowthIntelligenceStandaloneApp.__new__(GrowthIntelligenceStandaloneApp)
+        logs = []
+        app._thread_log = logs.append
+        app._profile_id = lambda profile: str((profile or {}).get("profile_id") or (profile or {}).get("id") or "").strip()
+
+        profiles = app._append_recoverable_shortfall_profiles(
+            [{"profile_id": "13737"}, {"profile_id": "18430"}],
+            [
+                {"profile_id": "13737"},
+                {"profile_id": "18430"},
+                {"profile_id": "13742", "last_error_code": "LOGIN_REQUIRED"},
+                {"profile_id": "18444", "last_error_code": "PROFILE_PREFLIGHT_TIMEOUT"},
+                {"profile_id": "bad-kernel", "last_error_code": "IXBROWSER_KERNEL_MISMATCH"},
+            ],
+            3,
+            log_prefix="CONFIG quick_preflight_candidates group=获客分组测试",
+        )
+
+        self.assertEqual([row["profile_id"] for row in profiles[:3]], ["13737", "18430", "13742"])
+        self.assertNotIn("bad-kernel", [row["profile_id"] for row in profiles])
+        self.assertTrue(any("recoverable_shortfall candidates=2" in row for row in logs))
+
     def test_profile_group_display_keeps_operator_readable_group_name(self):
         display = group_display_name({"group_id": "281726", "group_name": "加拿大获客组", "count": 12})
 

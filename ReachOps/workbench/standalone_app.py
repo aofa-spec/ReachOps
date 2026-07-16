@@ -1514,6 +1514,35 @@ class GrowthIntelligenceStandaloneApp:
             recoverable.append(profile)
         return recoverable
 
+    def _append_recoverable_shortfall_profiles(
+        self,
+        profiles: list[dict],
+        candidate_profiles: list[dict],
+        requested_limit: int,
+        *,
+        log_prefix: str,
+    ) -> list[dict]:
+        rows = list(profiles or [])
+        requested_limit = max(1, int(requested_limit or 1))
+        if len(rows) >= requested_limit:
+            return rows
+        seen = {self._profile_id(row) for row in rows if self._profile_id(row)}
+        shortfall = [
+            row
+            for row in self._recoverable_profile_candidates(candidate_profiles)
+            if self._profile_id(row) and self._profile_id(row) not in seen
+        ]
+        if not shortfall:
+            return rows
+        needed = requested_limit - len(rows)
+        rows.extend(shortfall)
+        self._thread_log(
+            f"{log_prefix} recoverable_shortfall candidates={len(shortfall)} "
+            f"needed={needed} requested={requested_limit} "
+            "policy=bounded_recheck_before_collection"
+        )
+        return rows
+
     def _transient_recheck_profile_candidates(self, candidate_profiles: list[dict], limit: int) -> list[dict]:
         transient_error_codes = {
             "PAGE_OPEN_FAILED",
@@ -1919,6 +1948,12 @@ class GrowthIntelligenceStandaloneApp:
             except Exception as exc:
                 self._thread_log(f"WARN   profile_preflight backfill_registry_failed stage={stage} error={exc}")
         ranked_candidates = self._rank_profile_candidates(candidate_profiles, candidate_limit)
+        ranked_candidates = self._append_recoverable_shortfall_profiles(
+            ranked_candidates,
+            candidate_profiles,
+            requested_limit,
+            log_prefix=f"CHECK  profile_preflight stage={stage}",
+        )
         remaining = [
             profile
             for profile in ranked_candidates
@@ -2700,7 +2735,7 @@ class GrowthIntelligenceStandaloneApp:
                 else:
                     fast_preflight_limit = max(profile_limit * 3, 9)
                     auto_preflight_limit = max(fast_preflight_limit, profile_limit * 20, 60)
-                min_collection_profiles = 1
+                min_collection_profiles = profile_limit
                 cached_profiles = self._cached_profiles_from_storage(profile_group, limit=auto_preflight_limit)
                 profiles = list(cached_profiles)
                 if len(cached_profiles) >= min_collection_profiles:
@@ -2724,6 +2759,12 @@ class GrowthIntelligenceStandaloneApp:
                             and self._profile_id(row) not in selected_profile_ids
                         ],
                     ]
+                    ranked_profiles = self._append_recoverable_shortfall_profiles(
+                        ranked_profiles,
+                        candidate_profiles,
+                        profile_limit,
+                        log_prefix=f"CONFIG quick_preflight_candidates group={profile_group or '全部'}",
+                    )
                     if ranked_profiles:
                         profiles = ranked_profiles
                         self._thread_log(
@@ -2894,7 +2935,7 @@ class GrowthIntelligenceStandaloneApp:
                     ),
                 )
                 self.root.after(0, lambda: self.console.refresh(self._current_snapshot()))
-                if not executable_profiles:
+                if len(executable_profiles) < min_collection_profiles:
                     self.service.storage.update_collection_batch(
                         self.active_batch_id,
                         "failed",
@@ -2903,21 +2944,22 @@ class GrowthIntelligenceStandaloneApp:
                     self.root.after(
                         0,
                         lambda: self._log(
-                            f"BLOCK  campaign failed reason=无可用账号 required={min_collection_profiles} available={len(executable_profiles)} "
+                            f"BLOCK  campaign failed reason=可用账号不足 required={min_collection_profiles} available={len(executable_profiles)} "
                             f"checked={profile_preflight.get('checked', 0)} auto_limit={auto_preflight_limit} "
-                            "error=INSUFFICIENT_LOGGED_IN_PROFILES next=系统已自动跳过异常账号；请补充至少1个已登录可用账号或稍后再次执行"
+                            "error=INSUFFICIENT_LOGGED_IN_PROFILES next=系统已自动重检同分组账号；请保留至少3个已登录可用账号后再次执行"
                         ),
                     )
                     self._finalize_native_run_session(
                         "BLOCKED",
-                        last_stage="native_profile_preflight_no_available_profiles",
+                        last_stage="native_profile_preflight_insufficient_profiles",
                         result={
                             "status": "blocked",
                             "error_code": "INSUFFICIENT_LOGGED_IN_PROFILES",
                             "target": source_value,
                             "profile_group": profile_group,
                             "checked_profiles": int(profile_preflight.get("checked") or 0),
-                            "available_profiles": 0,
+                            "available_profiles": len(executable_profiles),
+                            "required_profiles": min_collection_profiles,
                             "unavailable_profiles": int(profile_preflight.get("unavailable") or 0),
                             "errors": dict(profile_preflight.get("errors") or {}),
                             "no_submit": True,
@@ -2929,14 +2971,6 @@ class GrowthIntelligenceStandaloneApp:
                     )
                     self.root.after(0, lambda: self.console.refresh(self._current_snapshot()))
                     return
-                if len(executable_profiles) < profile_limit:
-                    self.root.after(
-                        0,
-                        lambda: self._log(
-                            f"WARN   profile_preflight degraded_run requested={profile_limit} available={len(executable_profiles)} "
-                            "action=用可用账号先执行，避免空转等待"
-                        ),
-                    )
                 self._thread_log(
                     f"QUEUE  account_queue_effective batch={self.active_batch_id} "
                     f"requested_concurrency={profile_limit} effective_concurrency={min(profile_limit, len(executable_profiles))} "
