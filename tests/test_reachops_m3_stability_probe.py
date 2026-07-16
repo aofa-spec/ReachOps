@@ -42,6 +42,30 @@ def completed_payload(run_id: str = "run_1", status: str = "passed", scenario_st
     }
 
 
+def payload_with_pool(
+    run_id: str,
+    *,
+    status: str = "passed",
+    usable_profile_ids: list[str] | None = None,
+    blocked_profile_ids: list[str] | None = None,
+) -> dict:
+    usable_profile_ids = usable_profile_ids if usable_profile_ids is not None else ["18444", "18979", "18981"]
+    blocked_profile_ids = blocked_profile_ids if blocked_profile_ids is not None else []
+    payload = completed_payload(run_id, status=status)
+    payload["selected_profile_ids"] = ["18444", "18979", "18981"]
+    payload["usable_profile_ids"] = usable_profile_ids
+    payload["blocked_profile_ids"] = blocked_profile_ids
+    payload["acceptance"] = {"status": status, "no_submit": True}
+    payload["scenarios"][0]["profile_preflight"] = {
+        "skipped": False,
+        "checked": len(usable_profile_ids) + len(blocked_profile_ids),
+        "available": len(usable_profile_ids),
+        "unavailable": len(blocked_profile_ids),
+    }
+    payload["scenarios"][0]["browser_started"] = len(usable_profile_ids)
+    return payload
+
+
 def completed_process(payload: dict, returncode: int = 0) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=["python"], returncode=returncode, stdout=json.dumps(payload), stderr="")
 
@@ -86,6 +110,7 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
         self.assertEqual(summary["failed_count"], 0)
         self.assertEqual(written["schema_version"], "reachops.m3_probe_summary.v1")
         command = run_mock.call_args_list[0].args[0]
+        self.assertEqual(command[4:6], ["--profile-ids", "18444,18979,18981"])
         self.assertIn("--max-attempt-batches", command)
         self.assertIn("1", command)
         self.assertIn("--json", command)
@@ -143,6 +168,61 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
         self.assertEqual(summary["terminal_state"], "COMPLETED")
         self.assertEqual(summary["cooldown_seconds"], 7)
         sleep_mock.assert_called_once_with(7)
+
+    def test_m3_probe_excludes_blocked_profiles_between_iterations(self):
+        with TemporaryDirectory() as tmpdir:
+            args = self.base_args(tmpdir, iterations=20)
+            args.profile_ids = "18444,18979,18981,13708"
+            args.profile_limit = 4
+            args.profile_scan_limit = 4
+            runs = [
+                completed_process(
+                    payload_with_pool(
+                        "run_1",
+                        usable_profile_ids=["18444", "13708"],
+                        blocked_profile_ids=["18979", "18981"],
+                    )
+                ),
+                completed_process(completed_payload("run_2")),
+            ]
+            with patch("tools.reachops_m3_stability_probe.subprocess.run", side_effect=runs) as run_mock:
+                code, summary = m3.run_probe(args)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(summary["terminal_state"], "BLOCKED")
+        self.assertEqual(summary["terminal_reason"], "insufficient_active_profiles_for_m3")
+        self.assertEqual(summary["iterations_completed"], 1)
+        self.assertEqual(summary["active_profile_ids"], ["18444", "13708"])
+        self.assertEqual(summary["excluded_profile_ids"], ["18979", "18981"])
+        self.assertEqual(run_mock.call_count, 1)
+
+    def test_m3_probe_can_delegate_profile_selection_to_group_runtime(self):
+        with TemporaryDirectory() as tmpdir:
+            args = m3.parse_args(
+                [
+                    "--target",
+                    "https://www.tiktok.com/@ayieinaussie/photo/7646939533241601301",
+                    "--profile-group",
+                    "获客分组测试",
+                    "--iterations",
+                    "1",
+                    "--output-dir",
+                    str(Path(tmpdir) / "m3_probe"),
+                    "--quiet",
+                    "--json",
+                ]
+            )
+            with patch(
+                "tools.reachops_m3_stability_probe.subprocess.run",
+                return_value=completed_process(completed_payload("run_1")),
+            ) as run_mock:
+                code, summary = m3.run_probe(args)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(summary["terminal_state"], "COMPLETED")
+        command = run_mock.call_args_list[0].args[0]
+        self.assertNotIn("--profile-ids", command)
+        self.assertEqual(summary["profile_ids"], [])
 
     def test_m3_probe_requires_three_profiles_by_default(self):
         args = m3.parse_args(

@@ -45,13 +45,11 @@ def split_profile_ids(value: str) -> list[str]:
 
 
 def build_real_flow_command(args: argparse.Namespace) -> list[str]:
-    return [
+    command = [
         sys.executable,
         "tools/run_reachops_real_flow_macos.py",
         "--profile-group",
         str(args.profile_group or ""),
-        "--profile-ids",
-        str(args.profile_ids or ""),
         "--profile-limit",
         str(max(1, int(args.profile_limit or 1))),
         "--profile-scan-limit",
@@ -76,6 +74,9 @@ def build_real_flow_command(args: argparse.Namespace) -> list[str]:
         str(args.target or ""),
         "--json",
     ]
+    if str(args.profile_ids or "").strip():
+        command[4:4] = ["--profile-ids", str(args.profile_ids or "")]
+    return command
 
 
 def summarize_iteration(
@@ -142,13 +143,20 @@ def build_summary(
         "target": str(args.target or ""),
         "profile_group": str(args.profile_group or ""),
         "profile_ids": split_profile_ids(str(args.profile_ids or "")),
+        "adaptive_profile_pool": bool(getattr(args, "adaptive_profile_pool", False)),
+        "minimum_profile_count": max(1, int(getattr(args, "minimum_profile_count", 3) or 3)),
+        "active_profile_ids": list(getattr(args, "active_profile_ids", []) or []),
+        "excluded_profile_ids": list(getattr(args, "excluded_profile_ids", []) or []),
         "iterations_requested": int(args.iterations or 0),
         "iterations_completed": len(rows),
         "cooldown_seconds": max(0, int(getattr(args, "cooldown_seconds", 0) or 0)),
         "passed_count": passed_count,
         "failed_count": failed_count,
         "terminal_state": "COMPLETED" if completed else "BLOCKED" if terminal else "RUNNING",
-        "terminal_reason": "twenty_consecutive_real_no_submit_passed" if completed else "m3_probe_stopped_before_completion" if terminal else "",
+        "terminal_reason": (
+            str(getattr(args, "terminal_reason_override", "") or "")
+            or ("twenty_consecutive_real_no_submit_passed" if completed else "m3_probe_stopped_before_completion" if terminal else "")
+        ),
         "clear_terminal_ratio": passed_count / len(rows) if rows else 0,
         "unauthorized_submit_count": sum(1 for row in rows if row.get("no_submit") is False),
         "rows": rows,
@@ -161,6 +169,9 @@ def build_summary(
 def run_probe(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if not hasattr(args, "print_progress"):
         args.print_progress = not bool(getattr(args, "quiet", False))
+    args.adaptive_profile_pool = not bool(getattr(args, "disable_adaptive_profile_pool", False))
+    args.minimum_profile_count = max(1, int(getattr(args, "minimum_profile_count", 3) or 3))
+    args.terminal_reason_override = ""
     profile_ids = split_profile_ids(str(args.profile_ids or ""))
     if not str(args.target or "").strip():
         summary = {
@@ -174,12 +185,13 @@ def run_probe(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "rows": [],
         }
         return 3, summary
-    if len(profile_ids) < 3 and not bool(args.allow_fewer_profiles):
+    if profile_ids and len(profile_ids) < args.minimum_profile_count and not bool(args.allow_fewer_profiles):
         summary = {
             "schema_version": "reachops.m3_probe_summary.v1",
             "terminal_state": "BLOCKED",
             "terminal_reason": "insufficient_profile_ids_for_m3",
             "profile_ids": profile_ids,
+            "minimum_profile_count": args.minimum_profile_count,
             "iterations_requested": int(args.iterations or 0),
             "iterations_completed": 0,
             "passed_count": 0,
@@ -191,8 +203,17 @@ def run_probe(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     summary_path = out_dir / "m3_probe_summary.json"
     started_at = utc_stamp()
     rows: list[dict[str, Any]] = []
-    command = build_real_flow_command(args)
+    active_profile_ids = list(profile_ids)
+    excluded_profile_ids: list[str] = []
+    args.active_profile_ids = list(active_profile_ids)
+    args.excluded_profile_ids = list(excluded_profile_ids)
     for index in range(1, int(args.iterations or 1) + 1):
+        command_args = argparse.Namespace(**vars(args))
+        if active_profile_ids:
+            command_args.profile_ids = ",".join(active_profile_ids)
+            command_args.profile_limit = min(max(1, int(args.profile_limit or 1)), len(active_profile_ids))
+            command_args.profile_scan_limit = min(max(1, int(args.profile_scan_limit or args.profile_limit or 1)), len(active_profile_ids))
+        command = build_real_flow_command(command_args)
         started = time.time()
         try:
             proc = subprocess.run(
@@ -213,6 +234,14 @@ def run_probe(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             )
         row = summarize_iteration(index, proc, time.time() - started)
         rows.append(row)
+        if profile_ids and bool(args.adaptive_profile_pool):
+            blocked_now = {str(item) for item in row.get("blocked_profile_ids") or [] if str(item)}
+            for profile_id in active_profile_ids:
+                if profile_id in blocked_now and profile_id not in excluded_profile_ids:
+                    excluded_profile_ids.append(profile_id)
+            active_profile_ids = [profile_id for profile_id in active_profile_ids if profile_id not in blocked_now]
+            args.active_profile_ids = list(active_profile_ids)
+            args.excluded_profile_ids = list(excluded_profile_ids)
         write_json(summary_path, build_summary(args, started_at=started_at, rows=rows))
         if bool(args.print_progress):
             print(
@@ -224,6 +253,14 @@ def run_probe(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             )
         passed = iteration_passed(row)
         if not passed and not bool(args.continue_on_failure):
+            break
+        if (
+            profile_ids
+            and bool(args.adaptive_profile_pool)
+            and not bool(args.allow_fewer_profiles)
+            and len(active_profile_ids) < args.minimum_profile_count
+        ):
+            args.terminal_reason_override = "insufficient_active_profiles_for_m3"
             break
         if index < int(args.iterations or 1):
             cooldown_seconds = max(0, int(getattr(args, "cooldown_seconds", 0) or 0))
@@ -241,9 +278,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run bounded ReachOps M3 real no-submit stability probe.")
     parser.add_argument("--target", required=True)
     parser.add_argument("--profile-group", default="United States")
-    parser.add_argument("--profile-ids", required=True)
+    parser.add_argument("--profile-ids", default="")
     parser.add_argument("--profile-limit", type=int, default=3)
     parser.add_argument("--profile-scan-limit", type=int, default=3)
+    parser.add_argument("--minimum-profile-count", type=int, default=3)
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--max-sources", type=int, default=1)
     parser.add_argument("--max-videos", type=int, default=1)
@@ -257,6 +295,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--continue-on-failure", action="store_true")
     parser.add_argument("--allow-fewer-profiles", action="store_true")
+    parser.add_argument("--disable-adaptive-profile-pool", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
