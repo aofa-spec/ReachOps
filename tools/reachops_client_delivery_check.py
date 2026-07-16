@@ -337,6 +337,7 @@ def build_account_blocker_resolution(
     account_repair_summary: dict | None = None,
     account_repair_apply: dict | None = None,
     profile_readiness_handoff: dict | None = None,
+    m3_stability_boundary: dict | None = None,
 ) -> dict:
     batch = batch if isinstance(batch, dict) else {}
     repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
@@ -347,6 +348,10 @@ def build_account_blocker_resolution(
     effective_status = account_repair_apply_effective_status(repair_apply)
     repair_progress = account_repair_progress_summary(repair_apply, profile_readiness_handoff)
     circuit_breaker = account_pool_circuit_breaker_status(profile_readiness_handoff, repair_progress)
+    m3_boundary = m3_stability_boundary if isinstance(m3_stability_boundary, dict) else {}
+    m3_blocked_by_accounts = bool(
+        m3_boundary.get("applies_to_current_acceptance") and m3_boundary.get("blocked_by_accounts")
+    )
     repair_plan_available = repair_summary.get("status") == "ok"
     repair_plan_profiles = int(repair_summary.get("total_unique_profiles_by_error") or 0)
     error_groups = [row for row in (repair_summary.get("error_groups") or []) if isinstance(row, dict)]
@@ -428,6 +433,13 @@ def build_account_blocker_resolution(
             priority_action = "create_or_repair_real_account_pool"
             requires_manual_account_work = True
             blocker_codes.append("profile_available_zero")
+        if m3_blocked_by_accounts:
+            if "m3_insufficient_active_profiles" not in blocker_codes:
+                blocker_codes.append("m3_insufficient_active_profiles")
+            status = "m3_insufficient_active_profiles" if status == "not_blocked" else status
+            priority_action = priority_action or "manually_repair_or_replace_accounts"
+            ready_for_retest = False
+            requires_manual_account_work = True
     return {
         "schema_version": "reachops.account_blocker_resolution.v1",
         "status": status,
@@ -444,6 +456,7 @@ def build_account_blocker_resolution(
         "latest_apply_effective_message": account_repair_apply_effective_message(repair_apply),
         "repair_progress": repair_progress,
         "account_pool_circuit_breaker": circuit_breaker,
+        "m3_stability_boundary": m3_boundary,
         "ready_for_retest": ready_for_retest,
         "requires_latest_repair_apply": requires_latest_repair_apply,
         "requires_manual_account_work": requires_manual_account_work,
@@ -533,6 +546,37 @@ def build_account_retest_checklist(resolution: dict, repair_summary: dict | None
     return checklist
 
 
+def build_m3_retest_command(m3_boundary: dict, group: str) -> str:
+    target = str(m3_boundary.get("target") or "").strip()
+    profile_group = str(m3_boundary.get("profile_group") or group or "United States").strip()
+    iterations = max(20, int(m3_boundary.get("iterations_requested") or 20))
+    minimum_profile_count = max(3, int(m3_boundary.get("minimum_profile_count") or 3))
+    command = [
+        "PYTHONDONTWRITEBYTECODE=1",
+        "PYTHONPATH=.",
+        "/Users/aofa/.local/bin/python3.11",
+        "tools/reachops_m3_stability_probe.py",
+    ]
+    if target:
+        command.extend(["--target", json.dumps(target, ensure_ascii=False)])
+    else:
+        command.extend(["--target", "<authorized-or-no-submit-tiktok-target>"])
+    command.extend(
+        [
+            "--profile-group",
+            json.dumps(profile_group, ensure_ascii=False),
+            "--iterations",
+            str(iterations),
+            "--minimum-profile-count",
+            str(minimum_profile_count),
+            "--cooldown-seconds",
+            str(max(30, int(m3_boundary.get("cooldown_seconds") or 30))),
+            "--json",
+        ]
+    )
+    return " ".join(command)
+
+
 def build_account_support_handoff(
     acceptance: dict,
     *,
@@ -542,6 +586,7 @@ def build_account_support_handoff(
     profile_readiness_handoff: dict | None = None,
     account_repair_apply: dict | None = None,
     account_blocker_resolution: dict | None = None,
+    m3_stability_boundary: dict | None = None,
 ) -> dict:
     batch = batch if isinstance(batch, dict) else {}
     remediation = remediation if isinstance(remediation, dict) else {}
@@ -549,6 +594,13 @@ def build_account_support_handoff(
     profile_readiness = profile_readiness_handoff if isinstance(profile_readiness_handoff, dict) else {}
     repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
     resolution = account_blocker_resolution if isinstance(account_blocker_resolution, dict) else {}
+    m3_boundary = (
+        m3_stability_boundary
+        if isinstance(m3_stability_boundary, dict)
+        else resolution.get("m3_stability_boundary")
+        if isinstance(resolution.get("m3_stability_boundary"), dict)
+        else {}
+    )
     acceptance = acceptance if isinstance(acceptance, dict) else {}
     readiness = str(acceptance.get("readiness") or "")
     support_required = readiness == "blocked_by_accounts"
@@ -574,6 +626,13 @@ def build_account_support_handoff(
         blocker_code = "profile_readiness_probe_manual_repair_required"
         if blocker_code not in blocker_codes and int(profile_readiness.get("available") or 0) <= 0:
             blocker_codes.append(blocker_code)
+    m3_blocked_by_accounts = bool(
+        support_required
+        and m3_boundary.get("applies_to_current_acceptance")
+        and m3_boundary.get("blocked_by_accounts")
+    )
+    if m3_blocked_by_accounts and "m3_insufficient_active_profiles" not in blocker_codes:
+        blocker_codes.append("m3_insufficient_active_profiles")
     if support_required and not priority_action:
         priority_action = "create_or_repair_real_account_pool"
     retest_checklist = build_account_retest_checklist(resolution, repair_summary)
@@ -597,6 +656,24 @@ def build_account_support_handoff(
             retest_checklist.append(profile_retest_item)
         else:
             retest_checklist.insert(0, profile_retest_item)
+    m3_retest_command = ""
+    if m3_blocked_by_accounts:
+        group_for_m3 = str(batch.get("profile_group") or repair_summary.get("profile_group") or resolution.get("profile_group") or "")
+        m3_retest_command = build_m3_retest_command(m3_boundary, group_for_m3)
+        retest_checklist.append(
+            {
+                "id": "m3_stability_retest",
+                "kind": "m3_real_no_submit_probe",
+                "required": True,
+                "title": "复跑 M3 多账号 no-submit 稳定性探针",
+                "profile_group": str(m3_boundary.get("profile_group") or group_for_m3),
+                "command": m3_retest_command,
+                "expected": "terminal_state=COMPLETED、iterations_completed>=20、unauthorized_submit_count=0；账号不足必须保持 blocked_by_accounts。",
+                "blocks_retest_until_done": True,
+                "no_browser_started_by_reachops": False,
+                "no_submit": True,
+            }
+        )
     operator_steps = account_operator_steps(error_groups) if support_required and error_groups else [
         str(item) for item in (repair_summary.get("operator_steps") or [])
     ][:8]
@@ -622,6 +699,8 @@ def build_account_support_handoff(
     ]
     if profile_retest_command:
         retest_commands.insert(0, profile_retest_command)
+    if m3_retest_command:
+        retest_commands.append(m3_retest_command)
     return {
         "schema_version": "reachops.account_support_handoff.v1",
         "status": support_status,
@@ -696,6 +775,28 @@ def build_account_support_handoff(
             "failed_count": int(repair_apply.get("failed_count") or 0),
             "repair_progress": account_repair_progress_summary(repair_apply, profile_readiness),
             "account_pool_circuit_breaker": dict(resolution.get("account_pool_circuit_breaker") or {}),
+        },
+        "m3_stability_probe": {
+            "available": bool(m3_boundary.get("source_exists")),
+            "schema_version": str(m3_boundary.get("schema_version") or ""),
+            "path": str(m3_boundary.get("path") or ""),
+            "profile_group": str(m3_boundary.get("profile_group") or ""),
+            "terminal_state": str(m3_boundary.get("terminal_state") or ""),
+            "terminal_reason": str(m3_boundary.get("terminal_reason") or ""),
+            "iterations_requested": int(m3_boundary.get("iterations_requested") or 0),
+            "iterations_completed": int(m3_boundary.get("iterations_completed") or 0),
+            "passed_count": int(m3_boundary.get("passed_count") or 0),
+            "minimum_profile_count": int(m3_boundary.get("minimum_profile_count") or 0),
+            "active_profile_count": int(m3_boundary.get("active_profile_count") or 0),
+            "active_profile_ids": [str(item) for item in (m3_boundary.get("active_profile_ids") or []) if str(item)][:12],
+            "excluded_profile_ids": [str(item) for item in (m3_boundary.get("excluded_profile_ids") or []) if str(item)][:20],
+            "excluded_profile_count": int(m3_boundary.get("excluded_profile_count") or 0),
+            "unauthorized_submit_count": int(m3_boundary.get("unauthorized_submit_count") or 0),
+            "blocked_by_accounts": bool(m3_boundary.get("blocked_by_accounts")),
+            "applies_to_current_acceptance": bool(m3_boundary.get("applies_to_current_acceptance")),
+            "retest_command": m3_retest_command,
+            "no_submit": True,
+            "does_not_claim_m3_passed": bool(m3_boundary.get("does_not_claim_m3_passed", True)),
         },
         "impacted_accounts": {
             "error_group_count": len(error_groups),
@@ -1327,11 +1428,13 @@ def latest_m3_stability_boundary(root: Path = ROOT_DIR, profile_group: str = "")
         "source_exists": bool(latest_summary),
         "path": latest_path,
         "source_mtime": latest_mtime,
+        "target": str(latest_summary.get("target") or ""),
         "profile_group": str(latest_summary.get("profile_group") or ""),
         "terminal_state": terminal_state,
         "terminal_reason": terminal_reason,
         "iterations_requested": iterations_requested,
         "iterations_completed": iterations_completed,
+        "cooldown_seconds": int(latest_summary.get("cooldown_seconds") or 0),
         "passed_count": passed_count,
         "failed_count": int(latest_summary.get("failed_count") or 0),
         "minimum_profile_count": minimum_profile_count,
@@ -1783,6 +1886,7 @@ def build_delivery_check(
         account_repair_summary=account_repair_summary,
         account_repair_apply=account_repair_apply,
         profile_readiness_handoff=profile_readiness_handoff,
+        m3_stability_boundary=m3_stability_boundary,
     )
     account_support_handoff = build_account_support_handoff(
         acceptance,
@@ -1792,6 +1896,7 @@ def build_delivery_check(
         profile_readiness_handoff=profile_readiness_handoff,
         account_repair_apply=account_repair_apply,
         account_blocker_resolution=account_blocker_resolution,
+        m3_stability_boundary=m3_stability_boundary,
     )
 
     return {

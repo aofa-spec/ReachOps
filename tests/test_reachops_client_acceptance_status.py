@@ -6209,11 +6209,14 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         m3_boundary = {
             "schema_version": "reachops.m3_stability_boundary.v1",
             "source_exists": True,
+            "path": "/tmp/m3_probe_summary.json",
+            "target": "https://www.tiktok.com/@ayieinaussie/photo/7646939533241601301",
             "profile_group": "获客分组测试",
             "terminal_state": "BLOCKED",
             "terminal_reason": "insufficient_active_profiles_for_m3",
             "iterations_requested": 20,
             "iterations_completed": 1,
+            "cooldown_seconds": 60,
             "passed_count": 1,
             "failed_count": 0,
             "minimum_profile_count": 3,
@@ -6263,6 +6266,18 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertIn("m3_stability:latest_account_pool", payload["failed_checks"])
         self.assertIn("最新 M3 多账号稳定性证据", payload["blockers"][0])
         self.assertEqual(payload["m3_stability_boundary"]["terminal_reason"], "insufficient_active_profiles_for_m3")
+        self.assertIn("m3_insufficient_active_profiles", payload["account_blocker_resolution"]["blocker_codes"])
+        handoff = payload["account_support_handoff"]
+        self.assertIn("m3_insufficient_active_profiles", handoff["blocker_codes"])
+        self.assertEqual(handoff["m3_stability_probe"]["terminal_reason"], "insufficient_active_profiles_for_m3")
+        self.assertEqual(handoff["m3_stability_probe"]["active_profile_count"], 1)
+        self.assertEqual(handoff["m3_stability_probe"]["minimum_profile_count"], 3)
+        self.assertIn("reachops_m3_stability_probe.py", handoff["m3_stability_probe"]["retest_command"])
+        self.assertIn("--iterations 20", handoff["m3_stability_probe"]["retest_command"])
+        checklist_by_id = {row["id"]: row for row in handoff["retest_checklist"]}
+        self.assertIn("m3_stability_retest", checklist_by_id)
+        self.assertTrue(checklist_by_id["m3_stability_retest"]["blocks_retest_until_done"])
+        self.assertIn("reachops_m3_stability_probe.py", "\n".join(handoff["retest_commands"]))
 
     def test_latest_profile_readiness_probe_handoff_indexes_repair_apply_result(self):
         with TemporaryDirectory() as tmpdir:
