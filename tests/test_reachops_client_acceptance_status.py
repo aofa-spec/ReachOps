@@ -273,6 +273,39 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertIn("group_refresh_failure_summary", matrix)
         self.assertIn("补充真实 ixBrowser", by_id["group_refresh_failure"]["next_action"])
 
+    def test_p08_failure_matrix_marks_group_refresh_failure_real_local_api_disconnect(self):
+        matrix = build_p08_failure_matrix(
+            pressure_rows=[],
+            readiness_payload={},
+            runtime_audit={},
+            group_refresh_failure_payload={
+                "status": "blocked_by_environment",
+                "terminal_reason_code": "GROUP_REFRESH_FAILURE",
+                "error_code": "GROUP_REFRESH_FAILURE",
+                "no_browser_started": True,
+                "no_submit": True,
+                "fault_injection": {
+                    "enabled": False,
+                    "failure_code": "GROUP_REFRESH_FAILURE",
+                    "counts_as_real_acceptance": True,
+                },
+                "group_refresh": {
+                    "refresh_attempt_count": 2,
+                    "max_refresh_retries": 1,
+                    "bounded_retry_policy_enforced": True,
+                    "real_local_api_disconnect": True,
+                },
+                "summary": {"errors": {"GROUP_REFRESH_FAILURE": 1}},
+            },
+            group_refresh_failure_report_path="/tmp/reachops_group_refresh_failure_real.json",
+        )
+
+        by_id = {row["id"]: row for row in matrix["rows"]}
+        self.assertEqual(by_id["group_refresh_failure"]["status"], "passed_real")
+        self.assertTrue(by_id["group_refresh_failure"]["passed"])
+        self.assertEqual(by_id["group_refresh_failure"]["source"], "real_web_ui_group_refresh")
+        self.assertIn("保持分组刷新失败最多重试 1 次", by_id["group_refresh_failure"]["next_action"])
+
     def test_p08_failure_matrix_marks_web_ui_restart_fault_injection_separately_from_real(self):
         matrix = build_p08_failure_matrix(
             pressure_rows=[],

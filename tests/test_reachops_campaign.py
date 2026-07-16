@@ -2831,6 +2831,35 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["errors"], {"GROUP_REFRESH_FAILURE": 1})
         self.assertEqual(written_payload["outputs"]["json"], str(output))
 
+    def test_group_refresh_failure_probe_records_real_local_api_disconnect(self):
+        def failing_refresh(**_kwargs):
+            raise ConnectionRefusedError("connection refused")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "group_refresh_failure.json"
+            payload = build_reachops_group_refresh_failure_probe(
+                output=output,
+                profile_group="United States",
+                real_local_api_disconnect=True,
+                api_port=65530,
+                group_refresh_func=failing_refresh,
+            )
+            written_payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "blocked_by_environment")
+        self.assertEqual(payload["terminal_state"], "BLOCKED")
+        self.assertEqual(payload["terminal_reason_code"], "GROUP_REFRESH_FAILURE")
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(payload["no_browser_started"])
+        self.assertFalse(payload["fault_injection"]["enabled"])
+        self.assertTrue(payload["fault_injection"]["counts_as_real_acceptance"])
+        self.assertTrue(payload["group_refresh"]["real_local_api_disconnect"])
+        self.assertEqual(payload["group_refresh"]["refresh_attempt_count"], 2)
+        self.assertEqual(payload["group_refresh"]["max_refresh_retries"], 1)
+        self.assertTrue(payload["group_refresh"]["bounded_retry_policy_enforced"])
+        self.assertEqual(payload["summary"]["errors"], {"GROUP_REFRESH_FAILURE": 1})
+        self.assertEqual(written_payload["outputs"]["json"], str(output))
+
     def test_web_ui_restart_probe_records_bounded_no_browser_recovery_contract(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "web_ui_restart.json"
