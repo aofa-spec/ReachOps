@@ -154,6 +154,11 @@ def build_summary(
     passed_count = sum(1 for row in rows if iteration_passed(row, minimum_profile_count))
     failed_count = len(rows) - passed_count
     completed = bool(len(rows) >= int(args.iterations or 0) and failed_count == 0)
+    completed_reason = (
+        "twenty_consecutive_real_no_submit_passed"
+        if int(args.iterations or 0) >= 20
+        else "requested_real_no_submit_iterations_passed"
+    )
     summary = {
         "schema_version": "reachops.m3_probe_summary.v1",
         "started_at": started_at,
@@ -178,7 +183,7 @@ def build_summary(
         "terminal_state": "COMPLETED" if completed else "BLOCKED" if terminal else "RUNNING",
         "terminal_reason": (
             str(getattr(args, "terminal_reason_override", "") or "")
-            or ("twenty_consecutive_real_no_submit_passed" if completed else "m3_probe_stopped_before_completion" if terminal else "")
+            or (completed_reason if completed else "m3_probe_stopped_before_completion" if terminal else "")
         ),
         "clear_terminal_ratio": passed_count / len(rows) if rows else 0,
         "unauthorized_submit_count": sum(1 for row in rows if row.get("no_submit") is False),

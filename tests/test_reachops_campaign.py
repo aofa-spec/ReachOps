@@ -11808,6 +11808,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertNotIn("Count", source_values)
         self.assertNotIn("2pcs", source_values)
 
+    def test_product_url_keeps_short_product_slug_with_model_number(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            plan = service.create_campaign_plan(
+                "https://chameleonpeptides.com/product/peptide-31/?attribute_pa_strength=50mg",
+                max_sources=6,
+            )
+
+        self.assertEqual(plan["campaign"]["input_type"], "product_url")
+        self.assertEqual(plan["campaign"]["product_name"], "Peptide 31")
+        source_values = [str(row["source_value"]) for row in plan["sources"]]
+        self.assertIn("Peptide 31", source_values)
+        self.assertIn("Peptide 31 review", source_values)
+        self.assertFalse(any("chameleonpeptides.com" in value.lower() for value in source_values))
+
     def test_router_never_opens_external_product_url_as_topic_source(self):
         router = GrowthTaskRouter.__new__(GrowthTaskRouter)
 
@@ -13758,6 +13773,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 quick_volume_label="快速",
             ),
             100,
+        )
+        self.assertEqual(
+            app._quick_direct_target_plan_source_limit(
+                "https://chameleonpeptides.com/product/peptide-31/?attribute_pa_strength=50mg",
+                source_type="auto",
+                quick_volume_label="快速",
+            ),
+            6,
         )
 
     def test_standalone_profile_preflight_can_check_wide_initial_batch(self):

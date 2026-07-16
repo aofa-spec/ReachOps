@@ -306,6 +306,11 @@ class CampaignAnalyzer:
         compact = re.sub(r"\s+", "", text)
         if not compact:
             return True
+        if len(text.split()) >= 2 and any(
+            re.search(r"[A-Za-z]", word) and len(word) >= 3
+            for word in text.split()
+        ):
+            return False
         if len(text.split()) >= 3:
             return False
         if compact.isdigit():

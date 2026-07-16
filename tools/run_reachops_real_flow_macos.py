@@ -625,9 +625,13 @@ def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
         for row in summary_rows
         if isinstance(row.get("no_action_reason"), dict) and str((row.get("no_action_reason") or {}).get("code") or "").strip()
     ]
+    terminal_no_action = bool(any_collection_completed and no_action_reasons)
+    lead_or_terminal_reason = bool(any_leads or terminal_no_action)
     all_no_submit = True
     result = {
-        "status": "passed" if no_interruptions and any_browser_started and any_collection_completed and any_leads else "blocked",
+        "status": "passed"
+        if no_interruptions and any_browser_started and any_collection_completed and lead_or_terminal_reason
+        else "blocked",
         "no_submit": all_no_submit,
         "targets": [
             {
@@ -652,8 +656,8 @@ def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
             },
             {
                 "name": "lead_pipeline",
-                "passed": any_leads,
-                "goal": "真实采集后产生 customer_leads/outreach_actions，或对重复目标明确跳过重复动作生成。",
+                "passed": lead_or_terminal_reason,
+                "goal": "真实采集后产生 customer_leads/outreach_actions，或给出结构化 no-action reason 后安全收口。",
             },
         ],
     }

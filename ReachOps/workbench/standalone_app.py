@@ -3309,6 +3309,8 @@ class GrowthIntelligenceStandaloneApp:
         text = str(source_value or "").strip().lower()
         if "tiktok.com" in text and ("/video/" in text or "/@" in text or "/live" in text):
             return 1
+        if text.startswith(("http://", "https://")):
+            return 6
         return 100
 
     def _running_collection_batch(self) -> dict:

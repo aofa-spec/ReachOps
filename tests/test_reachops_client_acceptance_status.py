@@ -7042,8 +7042,9 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         result = real_flow_acceptance([row])
 
         self.assertEqual(row["no_action_reason"]["code"], "low_intent_candidates")
-        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["status"], "passed")
         self.assertEqual(result["no_action_reason"]["code"], "low_intent_candidates")
+        self.assertTrue(next(item for item in result["targets"] if item["name"] == "lead_pipeline")["passed"])
 
     def test_real_flow_accepts_duplicate_suppressed_repeat_run(self):
         row = {

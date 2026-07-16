@@ -106,6 +106,7 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(summary["terminal_state"], "COMPLETED")
+        self.assertEqual(summary["terminal_reason"], "requested_real_no_submit_iterations_passed")
         self.assertEqual(summary["passed_count"], 2)
         self.assertEqual(summary["failed_count"], 0)
         self.assertEqual(written["schema_version"], "reachops.m3_probe_summary.v1")
