@@ -2882,6 +2882,46 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["errors"], {"WEB_UI_RESTART": 1})
         self.assertEqual(written_payload["outputs"]["json"], str(output))
 
+    def test_web_ui_restart_probe_records_real_process_restart_contract(self):
+        def real_probe(**_kwargs):
+            return {
+                "run_session_takeover_checked": True,
+                "run_session_recovered": True,
+                "latest_session_reused": True,
+                "existing_run_duplicate_start_prevented": True,
+                "duplicate_task_started": False,
+                "run_process_restarted": True,
+                "bounded_recovery_attempt_count": 1,
+                "max_recovery_attempts": 1,
+                "no_browser_started": True,
+                "no_submit": True,
+                "first_pid": 101,
+                "second_pid": 202,
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "web_ui_restart.json"
+            payload = build_reachops_web_ui_restart_probe(
+                output=output,
+                real_web_ui_restart=True,
+                real_probe_func=real_probe,
+            )
+            written_payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["terminal_state"], "COMPLETED")
+        self.assertEqual(payload["terminal_reason_code"], "WEB_UI_RESTART_RECOVERED")
+        self.assertFalse(payload["fault_injection"]["enabled"])
+        self.assertTrue(payload["fault_injection"]["counts_as_real_acceptance"])
+        self.assertTrue(payload["web_ui_restart"]["real_web_ui_restart"])
+        self.assertTrue(payload["web_ui_restart"]["run_process_restarted"])
+        self.assertTrue(payload["web_ui_restart"]["run_session_takeover_checked"])
+        self.assertTrue(payload["web_ui_restart"]["existing_run_duplicate_start_prevented"])
+        self.assertFalse(payload["web_ui_restart"]["duplicate_task_started"])
+        self.assertTrue(payload["no_submit"])
+        self.assertTrue(payload["no_browser_started"])
+        self.assertEqual(written_payload["outputs"]["json"], str(output))
+
     def test_database_busy_probe_records_real_sqlite_lock_and_bounded_timeout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "database_busy.json"
