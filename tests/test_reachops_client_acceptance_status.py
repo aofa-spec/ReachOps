@@ -46,6 +46,7 @@ from tools.reachops_client_delivery_check import (
     build_delivery_check,
     build_real_pilot_evidence_boundary,
     latest_account_repair_apply_status,
+    latest_real_flow_profile_boundary,
     latest_profile_readiness_probe_handoff,
     main as run_delivery_check,
     profile_remediation_csv_quality,
@@ -5405,6 +5406,50 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(summary["status"], "not_available")
         self.assertNotIn("error", summary)
 
+    def test_delivery_check_blocks_pass_when_profile_readiness_is_stale_for_real_flow(self):
+        batch = {"id": "gb_pass", "status": "completed", "profile_group": "获客分组测试", "config_json": "{}"}
+        acceptance = {
+            "readiness": "pass",
+            "checks": {"profile_available_count": 2},
+            "blockers": [],
+            "next_actions": [],
+            "profile_preflight_details": [],
+        }
+        stale_boundary = {
+            "schema_version": "reachops.real_flow_profile_boundary.v1",
+            "profile_readiness_stale_for_real_flow": True,
+            "newer_real_flow_report_count": 1,
+            "newer_profile_preflight_blocked_count": 1,
+            "does_not_claim_real_account_pool_ready": True,
+        }
+        with TemporaryDirectory() as tmpdir:
+            with patch("tools.reachops_client_delivery_check.latest_batch", return_value=batch):
+                with patch("tools.reachops_client_delivery_check.latest_profile_preflight", return_value={"checked": 2, "available": 2}):
+                    with patch("tools.reachops_client_delivery_check.read_lines", return_value=["DONE   collection batch=gb_pass"]):
+                        with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
+                            with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {"candidates": 2}}):
+                                with patch(
+                                    "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
+                                    return_value={
+                                        "source_exists": True,
+                                        "source_mtime": 100.0,
+                                        "profile_group": "获客分组测试",
+                                    },
+                                ):
+                                    with patch(
+                                        "tools.reachops_client_delivery_check.latest_real_flow_profile_boundary",
+                                        return_value=stale_boundary,
+                                    ):
+                                        payload = build_delivery_check(Path(tmpdir))
+
+        self.assertEqual(payload["readiness"], "blocked_by_accounts")
+        self.assertEqual(payload["status"], "blocked_by_accounts")
+        self.assertTrue(payload["contract_ok"])
+        self.assertFalse(payload["final_delivery_ready"])
+        self.assertFalse(payload["acceptance_ready"])
+        self.assertIn("profile_readiness:current_real_flow_boundary", payload["failed_checks"])
+        self.assertIn("Profile readiness 证据早于后续真实 no-submit 执行报告", payload["blockers"][0])
+
     def test_delivery_check_marks_applied_account_repair_as_pending_recheck(self):
         batch = {"id": "gb_accounts", "status": "failed", "profile_group": "United States", "config_json": "{}"}
         acceptance = {
@@ -5937,6 +5982,89 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(handoff["profile_repair_apply"], {})
         self.assertTrue(handoff["does_not_modify_ixbrowser_groups"])
         self.assertTrue(handoff["does_not_claim_real_account_pool_ready"])
+
+    def test_latest_profile_readiness_probe_handoff_prefers_new_readiness_tree(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            old_dir = root / "reports" / "reachops" / "profile_readiness_probe" / "20260715T000000Z" / "reports"
+            new_dir = root / "reports" / "reachops" / "profile_readiness" / "20260716T000000Z" / "reports"
+            old_dir.mkdir(parents=True)
+            new_dir.mkdir(parents=True)
+            old_path = old_dir / "profile_readiness_probe.json"
+            new_path = new_dir / "profile_readiness_probe.json"
+            old_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.profile_readiness_probe.v1",
+                        "status": "passed",
+                        "terminal_state": "COMPLETED",
+                        "profile_group": "United States",
+                        "run_id": "old",
+                        "summary": {"checked": 2, "available": 2, "unavailable": 0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            new_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.profile_readiness_probe.v1",
+                        "status": "blocked_by_accounts",
+                        "terminal_state": "BLOCKED",
+                        "profile_group": "获客分组测试",
+                        "run_id": "new",
+                        "summary": {"checked": 3, "available": 0, "unavailable": 3},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.utime(old_path, (100, 100))
+            os.utime(new_path, (200, 200))
+
+            handoff = latest_profile_readiness_probe_handoff(root)
+
+        self.assertEqual(handoff["source_kind"], "profile_readiness")
+        self.assertEqual(handoff["run_id"], "new")
+        self.assertEqual(handoff["profile_group"], "获客分组测试")
+        self.assertEqual(handoff["candidate_count"], 2)
+        self.assertEqual(handoff["available"], 0)
+
+    def test_real_flow_profile_boundary_marks_readiness_stale_after_account_blocker(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            readiness = {
+                "path": str(root / "reports" / "reachops" / "profile_readiness" / "20260716T000000Z" / "reports" / "profile_readiness_probe.json"),
+                "source_mtime": 100.0,
+            }
+            real_dir = root / "reports" / "reachops" / "mac_real_flow" / "20260716T010000Z"
+            real_dir.mkdir(parents=True)
+            real_path = real_dir / "reachops_mac_real_flow_report.json"
+            real_path.write_text(
+                json.dumps(
+                    {
+                        "run_id": "20260716T010000Z",
+                        "status": "completed",
+                        "no_submit": True,
+                        "acceptance": {
+                            "status": "blocked",
+                            "no_submit": True,
+                            "targets": [
+                                {"name": "profile_preflight_available", "passed": False},
+                                {"name": "browser_started", "passed": False},
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.utime(real_path, (200, 200))
+
+            boundary = latest_real_flow_profile_boundary(root, readiness)
+
+        self.assertTrue(boundary["profile_readiness_stale_for_real_flow"])
+        self.assertEqual(boundary["newer_real_flow_report_count"], 1)
+        self.assertEqual(boundary["newer_profile_preflight_blocked_count"], 1)
+        self.assertTrue(boundary["does_not_claim_real_account_pool_ready"])
 
     def test_latest_profile_readiness_probe_handoff_indexes_repair_apply_result(self):
         with TemporaryDirectory() as tmpdir:

@@ -105,6 +105,13 @@ ACCOUNT_REPAIR_AUTO_APPLY_ERRORS = {
 ACCOUNT_POOL_CIRCUIT_BREAKER_PROFILE_FAILURES = 10
 
 
+def path_mtime(path: Path) -> float:
+    try:
+        return float(path.stat().st_mtime)
+    except OSError:
+        return 0.0
+
+
 def is_executable(path: Path) -> bool:
     try:
         return bool(path.stat().st_mode & stat.S_IXUSR)
@@ -1074,10 +1081,17 @@ def summarize_optional_account_repair_plan(path_value: str | Path) -> dict:
 
 
 def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
-    probe_root = root / "reports" / "reachops" / "profile_readiness_probe"
+    probe_roots = [
+        root / "reports" / "reachops" / "profile_readiness",
+        root / "reports" / "reachops" / "profile_readiness_probe",
+    ]
     candidates = sorted(
-        probe_root.glob("*/reports/profile_readiness_probe.json"),
-        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        [
+            path
+            for probe_root in probe_roots
+            for path in probe_root.glob("*/reports/profile_readiness_probe.json")
+        ],
+        key=path_mtime,
         reverse=True,
     )
     if not candidates:
@@ -1089,6 +1103,7 @@ def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
             "does_not_claim_real_account_pool_ready": True,
         }
     report_path = candidates[0]
+    source_root = report_path.parents[2].name if len(report_path.parents) > 2 else ""
     try:
         payload = json.loads(report_path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -1159,6 +1174,9 @@ def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
         "status": str(payload.get("status") or repair.get("status") or ""),
         "terminal_state": str(payload.get("terminal_state") or ""),
         "path": str(report_path),
+        "source_kind": source_root,
+        "source_mtime": path_mtime(report_path),
+        "candidate_count": len(candidates),
         "repair_json_path": str(repair_path),
         "repair_markdown_path": str(outputs.get("repair_markdown") or report_path.with_name("profile_repair_checklist.md")),
         "profile_group": str(payload.get("profile_group") or repair.get("profile_group") or ""),
@@ -1184,6 +1202,65 @@ def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
         "no_action_execution": bool(payload.get("no_action_execution", True)),
         "does_not_modify_ixbrowser_groups": does_not_modify_groups,
         "does_not_claim_real_account_pool_ready": int(summary.get("available") or 0) <= 0,
+    }
+
+
+def _real_flow_profile_preflight_passed(payload: dict) -> bool | None:
+    acceptance = payload.get("acceptance") if isinstance(payload.get("acceptance"), dict) else {}
+    for row in acceptance.get("targets") or []:
+        if isinstance(row, dict) and row.get("name") == "profile_preflight_available":
+            return bool(row.get("passed"))
+    return None
+
+
+def latest_real_flow_profile_boundary(
+    root: Path = ROOT_DIR,
+    profile_readiness_handoff: dict | None = None,
+) -> dict:
+    handoff = profile_readiness_handoff if isinstance(profile_readiness_handoff, dict) else {}
+    source_mtime = float(handoff.get("source_mtime") or 0)
+    report_paths = sorted(
+        (root / "reports" / "reachops" / "mac_real_flow").glob("*/reachops_mac_real_flow_report.json"),
+        key=path_mtime,
+        reverse=True,
+    )
+    newer_rows: list[dict] = []
+    for report_path in report_paths:
+        report_mtime = path_mtime(report_path)
+        if source_mtime and report_mtime <= source_mtime:
+            continue
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        acceptance = payload.get("acceptance") if isinstance(payload.get("acceptance"), dict) else {}
+        preflight_passed = _real_flow_profile_preflight_passed(payload)
+        newer_rows.append(
+            {
+                "path": str(report_path),
+                "mtime": report_mtime,
+                "run_id": str(payload.get("run_id") or report_path.parent.name),
+                "status": str(acceptance.get("status") or payload.get("status") or ""),
+                "profile_preflight_available": preflight_passed,
+                "no_submit": bool(acceptance.get("no_submit", payload.get("no_submit", True))),
+            }
+        )
+    blocked_rows = [row for row in newer_rows if row.get("profile_preflight_available") is False]
+    passed_rows = [row for row in newer_rows if row.get("profile_preflight_available") is True]
+    stale = bool(source_mtime and blocked_rows)
+    return {
+        "schema_version": "reachops.real_flow_profile_boundary.v1",
+        "source_profile_readiness_path": str(handoff.get("path") or ""),
+        "source_profile_readiness_mtime": source_mtime,
+        "newer_real_flow_report_count": len(newer_rows),
+        "newer_profile_preflight_blocked_count": len(blocked_rows),
+        "newer_profile_preflight_passed_count": len(passed_rows),
+        "latest_newer_real_flow": newer_rows[0] if newer_rows else {},
+        "blocked_samples": blocked_rows[:5],
+        "profile_readiness_stale_for_real_flow": stale,
+        "does_not_claim_real_account_pool_ready": stale,
     }
 
 
@@ -1236,6 +1313,32 @@ def build_delivery_check(
         remediation.get("latest_account_plan_json_path") or remediation.get("account_plan_json_path") or ""
     )
     profile_readiness_handoff = latest_profile_readiness_probe_handoff(ROOT_DIR)
+    real_flow_profile_boundary = latest_real_flow_profile_boundary(ROOT_DIR, profile_readiness_handoff)
+    current_profile_group = str(batch.get("profile_group") or "").strip()
+    readiness_profile_group = str(profile_readiness_handoff.get("profile_group") or "").strip()
+    real_flow_boundary_applies = bool(
+        acceptance.get("readiness") == "pass"
+        and current_profile_group
+        and readiness_profile_group
+        and current_profile_group == readiness_profile_group
+    )
+    real_flow_profile_boundary["applies_to_current_acceptance"] = real_flow_boundary_applies
+    if real_flow_boundary_applies and real_flow_profile_boundary.get("profile_readiness_stale_for_real_flow"):
+        stale_message = (
+            "Profile readiness 证据早于后续真实 no-submit 执行报告，且后续报告出现账号预检不可用；"
+            "不能复用旧账号池可用性作为当前客户端交付通过依据。"
+        )
+        blockers = [item for item in (acceptance.get("blockers") or []) if stale_message not in str(item)]
+        blockers.insert(0, stale_message)
+        acceptance["blockers"] = blockers
+        next_action = "重新执行当前分组的有界 profile readiness probe，并用最新可用账号完成 real_no_submit 复测。"
+        actions = [item for item in (acceptance.get("next_actions") or []) if next_action not in str(item)]
+        actions.insert(0, next_action)
+        acceptance["next_actions"] = actions
+        acceptance["readiness"] = "blocked_by_accounts"
+        checks_payload = acceptance.get("checks") if isinstance(acceptance.get("checks"), dict) else {}
+        checks_payload["profile_readiness_fresh_for_real_flow"] = False
+        acceptance["checks"] = checks_payload
     account_repair_apply = latest_account_repair_apply_status(
         base_dir,
         log_lines,
@@ -1471,6 +1574,16 @@ def build_delivery_check(
             "readiness": acceptance.get("readiness"),
         }
     )
+    checks.append(
+        {
+            "name": "profile_readiness:current_real_flow_boundary",
+            "ok": not bool(
+                real_flow_profile_boundary.get("applies_to_current_acceptance")
+                and real_flow_profile_boundary.get("profile_readiness_stale_for_real_flow")
+            ),
+            **real_flow_profile_boundary,
+        }
+    )
     if ixbrowser_metadata:
         count_consistency = selected_group_count_consistency(ixbrowser_metadata)
         checks.append(
@@ -1497,7 +1610,11 @@ def build_delivery_check(
         }
     )
 
-    contract_checks = [item for item in checks if item.get("name") != "acceptance:ready"]
+    acceptance_gate_check_names = {
+        "acceptance:ready",
+        "profile_readiness:current_real_flow_boundary",
+    }
+    contract_checks = [item for item in checks if item.get("name") not in acceptance_gate_check_names]
     contract_ok = all(item.get("ok") for item in contract_checks)
     acceptance_ready = acceptance.get("readiness") == "pass"
     failed_checks = [str(item.get("name") or "") for item in checks if not item.get("ok")]
@@ -1550,6 +1667,7 @@ def build_delivery_check(
         "account_blocker_resolution": account_blocker_resolution,
         "account_support_handoff": account_support_handoff,
         "profile_readiness_handoff": profile_readiness_handoff,
+        "real_flow_profile_boundary": real_flow_profile_boundary,
         "remediation_report": remediation,
         "account_repair_summary": account_repair_summary,
         "account_repair_apply": account_repair_apply,
