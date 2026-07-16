@@ -61,7 +61,9 @@ from tools.run_reachops_real_flow_macos import acceptance as real_flow_acceptanc
 from tools.run_reachops_real_flow_macos import append_related_source_expansions
 from tools.run_reachops_real_flow_macos import creator_url_from_tiktok_url
 from tools.run_reachops_real_flow_macos import scenario_needs_profile_backfill
+from tools.run_reachops_real_flow_macos import scenario_should_retry
 from tools.run_reachops_real_flow_macos import summarize_scenario as summarize_real_flow_scenario
+from tools.run_reachops_real_flow_macos import terminal_no_submit_row
 from tools.run_reachops_real_flow_macos import unavailable_profile_reasons
 from tools.reachops_run_id import unique_run_dir
 from tools.reachops_p08_failure_matrix import build_matrix as build_p08_failure_matrix
@@ -7074,6 +7076,39 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertTrue(result["duplicate_suppression"]["passed"])
         self.assertTrue(next(item for item in result["targets"] if item["name"] == "lead_pipeline")["passed"])
+        self.assertTrue(terminal_no_submit_row(row))
+        self.assertFalse(scenario_should_retry(row, set(), ["18444", "18979", "18981"]))
+
+    def test_real_flow_accepts_comment_access_gated_as_terminal_no_submit_evidence(self):
+        row = {
+            "status": "failed",
+            "failures": ["collection_not_completed", "effective_acquisition_not_completed"],
+            "diagnosis_status": "comment_access_gated",
+            "browser_started": 3,
+            "profile_preflight": {"skipped": False, "checked": 3, "available": 3, "unavailable": 0},
+            "funnel": {
+                "target_sources": 1,
+                "content_found": 1,
+                "comment_users": 0,
+                "customer_leads": 0,
+                "outreach_actions": 0,
+            },
+            "no_action_reason": {
+                "code": "no_candidates",
+                "message": "本轮没有采集到有效评论用户，系统保持 no-submit 并停止动作生成。",
+                "candidate_count": 0,
+                "qualified_lead_count": 0,
+                "action_count": 0,
+                "no_submit": True,
+            },
+        }
+
+        result = real_flow_acceptance([row])
+
+        self.assertTrue(terminal_no_submit_row(row))
+        self.assertFalse(scenario_should_retry(row, {"16292"}, ["18430", "16292", "13791"]))
+        self.assertEqual(result["status"], "passed")
+        self.assertTrue(next(item for item in result["targets"] if item["name"] == "collection_completed")["passed"])
 
     def test_real_flow_requests_profile_backfill_when_m3_pool_drops_below_required(self):
         row = {

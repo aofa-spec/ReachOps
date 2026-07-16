@@ -601,11 +601,30 @@ def run_command_with_timeout(command: list[str], env: dict[str, str], timeout_se
         return int(proc.returncode or 124), stdout or "", stderr, True
 
 
+TERMINAL_NO_SUBMIT_CODES = {"duplicate_suppressed", "low_intent_candidates", "no_candidates"}
+
+
+def terminal_no_submit_row(row: dict[str, Any]) -> bool:
+    no_action = row.get("no_action_reason") if isinstance(row.get("no_action_reason"), dict) else {}
+    code = str(no_action.get("code") or "").strip()
+    if code not in TERMINAL_NO_SUBMIT_CODES or no_action.get("no_submit") is False:
+        return False
+    funnel = row.get("funnel") if isinstance(row.get("funnel"), dict) else {}
+    duplicate = row.get("duplicate_suppression") if isinstance(row.get("duplicate_suppression"), dict) else {}
+    return bool(
+        str(row.get("status") or "") == "ok"
+        or bool(duplicate.get("duplicate_suppressed"))
+        or int(funnel.get("content_found") or 0) > 0
+        or int(funnel.get("comment_users") or 0) > 0
+    )
+
+
 def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
     no_interruptions = not any("operator_interrupted" in set(row.get("failures") or []) for row in summary_rows)
     any_profile_available = any((row.get("profile_preflight") or {}).get("available", 0) > 0 for row in summary_rows)
     any_browser_started = any(int(row.get("browser_started") or 0) > 0 for row in summary_rows)
     any_duplicate_suppressed = any(bool((row.get("duplicate_suppression") or {}).get("duplicate_suppressed")) for row in summary_rows)
+    any_terminal_no_submit = any(terminal_no_submit_row(row) for row in summary_rows)
     any_collection_completed = any(
         str(row.get("status") or "") == "ok"
         and (
@@ -613,7 +632,7 @@ def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
             or bool((row.get("duplicate_suppression") or {}).get("duplicate_suppressed"))
         )
         for row in summary_rows
-    )
+    ) or any_terminal_no_submit
     any_leads = any(
         int(((row.get("funnel") or {}).get("customer_leads") or 0)) > 0
         or int(((row.get("funnel") or {}).get("outreach_actions") or 0)) > 0
@@ -711,6 +730,8 @@ def unavailable_profile_reasons(payload: dict[str, Any]) -> dict[str, str]:
 
 def scenario_should_retry(row: dict[str, Any], blocked_ids: set[str], attempted_ids: list[str]) -> bool:
     funnel = row.get("funnel") if isinstance(row.get("funnel"), dict) else {}
+    if terminal_no_submit_row(row):
+        return False
     if str(row.get("status") or "") == "ok":
         return int(funnel.get("customer_leads") or 0) <= 0 and int(funnel.get("outreach_actions") or 0) <= 0
     diagnosis = str(row.get("diagnosis_status") or "")
