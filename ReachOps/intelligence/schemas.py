@@ -551,6 +551,8 @@ class GrowthTaskConfig:
     max_sources_per_profile: int = 100
     retain_profile_sessions_after_collection: bool = False
     requested_concurrency: int = 1
+    max_comment_users_empty_profile_retries_per_source: int = 2
+    max_consecutive_empty_result_sources: int = 0
     profile_group: str = ""
     quarantine_failed_profiles: bool = False
     campaign_id: str = ""

@@ -947,7 +947,7 @@ class MacQuickConsole(tk.Frame):
         self.action_execution_workers_var.set(int(preset["workers"]))
         live_comment_mode = quick_send_mode_key(self.quick_send_mode_var.get()) == "live_comment"
         self.action_execution_mode_var.set("真实提交" if live_comment_mode else "预检，不提交")
-        self.action_execution_live_confirm_var.set(bool(live_comment_mode))
+        self.action_execution_live_confirm_var.set(False)
 
     def set_profile_group_options(self, display_values: list[str], selected: str = ""):
         values = stable_combobox_values(display_values or []) or ["请刷新账号分组"]
@@ -2496,6 +2496,23 @@ class GrowthIntelligenceStandaloneApp:
         task_interval = max(1, int(self.console.scan_interval_var.get() or quick_preset.get("task_interval") or 3))
         if quick_mode == "live_comment":
             task_interval = max(12, task_interval)
+            if not self._quick_send_live_submit_confirmed(quick_mode):
+                self._log(
+                    "BLOCK  campaign not_started reason=LIVE_COMMENT_CONFIRMATION_REQUIRED "
+                    "next=真实评论必须单独勾选确认；M3 验收请使用采集 + 触达预检 no-submit"
+                )
+                release_start_lock()
+                return
+            authorization = self._live_submit_authorization_decision()
+            if not bool(getattr(authorization, "allowed", False)):
+                code = str(getattr(authorization, "error_code", "") or "LIVE_SUBMIT_NOT_AUTHORIZED")
+                message = str(getattr(authorization, "error_message", "") or "live submit not authorized")
+                self._log(
+                    f"BLOCK  campaign not_started reason={code} message={message} "
+                    "next=完成激活/授权后再进入真实评论；M3 验收继续使用 no-submit"
+                )
+                release_start_lock()
+                return
         profile_limit = max(1, int(self.console.scan_profile_limit_var.get() or 3))
         profile_group = self._selected_group_name()
         intent_keywords = parse_keyword_list(self.console.scan_intent_keywords_var.get())
@@ -2547,7 +2564,7 @@ class GrowthIntelligenceStandaloneApp:
             "max_comments": max_comments,
             "profile_limit": profile_limit,
             "queue_profile_target": max(profile_limit, min(max(profile_limit * 2, len(planned_sources)), 12)),
-            "max_sources_per_profile": 100,
+            "max_sources_per_profile": 3 if quick_volume_label == "快速" else 20,
             "task_interval": task_interval,
             "quick_mode": quick_mode_label,
             "quick_volume": quick_volume_label,
@@ -3016,6 +3033,8 @@ class GrowthIntelligenceStandaloneApp:
                         active_batch_id=self.active_batch_id,
                         account_queue_enabled=True,
                         max_sources_per_profile=int(range_config.get("max_sources_per_profile") or 1),
+                        max_comment_users_empty_profile_retries_per_source=1,
+                        max_consecutive_empty_result_sources=2,
                         retain_profile_sessions_after_collection=True,
                         requested_concurrency=profile_limit,
                         quarantine_failed_profiles=remote_account_quarantine,
@@ -3189,6 +3208,37 @@ class GrowthIntelligenceStandaloneApp:
             return bool(live_confirm_var.get()) if live_confirm_var else False
         except Exception:
             return False
+
+    def _live_submit_authorization_decision(self):
+        try:
+            from .authorization_gate import AuthorizationDecision, LiveSubmitAuthorizationGate
+
+            gate = LiveSubmitAuthorizationGate.from_storage(self.service.storage)
+            return gate.authorize_live_submit(
+                {"action_type": "comment_reply", "id": "native_live_submit_preflight"},
+                {"profile_id": "native_live_submit_preflight"},
+                feature="live_submit",
+            )
+        except Exception as exc:
+            try:
+                from .authorization_gate import AuthorizationDecision
+
+                return AuthorizationDecision(
+                    False,
+                    "LIVE_SUBMIT_AUTHORIZATION_CHECK_FAILED",
+                    str(exc),
+                    {"source": "native_tk_client"},
+                )
+            except Exception:
+                return type(
+                    "Decision",
+                    (),
+                    {
+                        "allowed": False,
+                        "error_code": "LIVE_SUBMIT_AUTHORIZATION_CHECK_FAILED",
+                        "error_message": str(exc),
+                    },
+                )()
 
     def _scope_quick_direct_target_sources(
         self,

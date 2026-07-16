@@ -141,16 +141,19 @@ class GrowthTaskRouter:
                     "max_sources_per_profile": int(getattr(config, "max_sources_per_profile", 0) or 0),
                 },
             )
+        consecutive_empty_result_sources = 0
         try:
             for index, source_input in enumerate(source_list):
                 datasource = self.datasource_manager.create(source_input["type"], source_input["value"])
                 ok, error = self._run_source_with_profile_fallback(datasource, batch_id, profiles, index, config, profile_usage)
                 if ok:
                     processed += 1
+                    consecutive_empty_result_sources = 0
                     self.storage.update_collection_batch(batch_id, "running", processed_delta=1)
                 else:
                     if not error:
                         error = {"error_code": "UNKNOWN", "message": ""}
+                    error_code = str(error.get("error_code") or "UNKNOWN")
                     self.storage.update_collection_batch(batch_id, "running", failed_delta=1)
                     self.storage.log_event(
                         "collection_source_failed",
@@ -161,10 +164,30 @@ class GrowthTaskRouter:
                             "source_type": datasource.type,
                             "source_value": datasource.value,
                             "source_index": index + 1,
-                            "error_code": str(error.get("error_code") or "UNKNOWN"),
+                            "error_code": error_code,
                             "message": str(error.get("message") or ""),
                         },
                     )
+                    if error_code in {"COMMENT_USERS_EMPTY_RETRY", "EMPTY_RESULT_RETRY"}:
+                        consecutive_empty_result_sources += 1
+                    else:
+                        consecutive_empty_result_sources = 0
+                    empty_breaker_limit = int(getattr(config, "max_consecutive_empty_result_sources", 0) or 0)
+                    if empty_breaker_limit > 0 and consecutive_empty_result_sources >= empty_breaker_limit:
+                        self.storage.log_event(
+                            "collection_empty_result_circuit_breaker",
+                            batch_id,
+                            {
+                                "batch_id": batch_id,
+                                "error_code": error_code,
+                                "consecutive_empty_result_sources": consecutive_empty_result_sources,
+                                "limit": empty_breaker_limit,
+                                "source_index": index + 1,
+                                "remaining_sources": max(0, len(source_list) - index - 1),
+                                "action": "stop_remaining_sources_to_avoid_repeated_page_opens",
+                            },
+                        )
+                        break
                 if index < len(source_list) - 1:
                     self._sleep_between_tasks(config)
         finally:
@@ -241,6 +264,7 @@ class GrowthTaskRouter:
         last_error = {}
         attempted_profile_ids = set()
         profile_usage = profile_usage if profile_usage is not None else {}
+        comment_users_empty_attempts = 0
         for profile in self._profile_candidates_for_index(profiles, index, config, profile_usage):
             profile_id = str(profile.get("profile_id") or profile.get("id") or "").strip()
             if profile_id in attempted_profile_ids:
@@ -343,6 +367,25 @@ class GrowthTaskRouter:
                             usage=profile_usage.get(profile_id, 0),
                         )
                         last_error = {"error_code": empty_retry["error_code"], "message": empty_retry["message"]}
+                        if empty_retry["error_code"] == "COMMENT_USERS_EMPTY_RETRY":
+                            comment_users_empty_attempts += 1
+                            retry_limit = max(
+                                1,
+                                int(getattr(config, "max_comment_users_empty_profile_retries_per_source", 2) or 2),
+                            )
+                            if comment_users_empty_attempts >= retry_limit:
+                                self.storage.log_event(
+                                    "profile_comment_users_empty_retry_limited",
+                                    datasource.id,
+                                    {
+                                        "profile_id": profile_id,
+                                        "error_code": empty_retry["error_code"],
+                                        "attempts": comment_users_empty_attempts,
+                                        "limit": retry_limit,
+                                        "action": "stop_profile_switch_for_source",
+                                    },
+                                )
+                                return False, last_error
                         continue
                     self.storage.update_collection_task(task.id, "completed")
                     profile_usage[profile_id] = profile_usage.get(profile_id, 0) + 1

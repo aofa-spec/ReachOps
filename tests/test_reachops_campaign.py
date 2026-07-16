@@ -9600,6 +9600,83 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(tasks[0]["error_code"], "COMMENT_USERS_EMPTY_RETRY")
             self.assertIn("content discovered", tasks[0]["error_message"])
 
+    def test_comment_user_empty_retry_limit_stops_profile_switch_for_source(self):
+        opened_profiles = []
+        with tempfile.TemporaryDirectory() as tmp:
+            service = GrowthIntelligenceService(
+                base_dir=tmp,
+                browser_factory=lambda profile_id: (opened_profiles.append(profile_id) or FakeDriver()),
+                collectors={
+                    "profile": StaticProfileCollector(),
+                    "video": StaticVideoCollector(),
+                    "comment": EmptyCommentCollector(),
+                    "search": object(),
+                },
+            )
+            service.router._wait_for_page = lambda *_args, **_kwargs: True
+
+            result = service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@empty_comments"}],
+                [{"profile_id": "p1", "group_name": "US"}, {"profile_id": "p2", "group_name": "US"}],
+                GrowthTaskConfig(
+                    test_mode=False,
+                    task_delay_min_seconds=0,
+                    task_delay_max_seconds=0,
+                    retry_empty_result_with_next_profile=True,
+                    max_comment_users_empty_profile_retries_per_source=1,
+                ),
+            )
+            tasks = service.storage.list_collection_tasks(limit=10)
+            events = service.storage.list_recent_events("profile_comment_users_empty_retry_limited", limit=10)
+
+            self.assertEqual(result.processed_sources, 0)
+            self.assertEqual(opened_profiles, ["p1"])
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0]["error_code"], "COMMENT_USERS_EMPTY_RETRY")
+            self.assertEqual(len(events), 1)
+            self.assertEqual(json.loads(events[0]["payload"])["action"], "stop_profile_switch_for_source")
+
+    def test_empty_result_circuit_breaker_stops_remaining_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = GrowthIntelligenceService(
+                base_dir=tmp,
+                browser_factory=lambda _profile_id: FakeDriver(),
+                collectors={
+                    "profile": StaticProfileCollector(),
+                    "video": StaticVideoCollector(),
+                    "comment": EmptyCommentCollector(),
+                    "search": object(),
+                },
+            )
+            service.router._wait_for_page = lambda *_args, **_kwargs: True
+
+            result = service.run_collection(
+                [
+                    {"type": "creator_url", "value": "https://www.tiktok.com/@empty_one"},
+                    {"type": "creator_url", "value": "https://www.tiktok.com/@empty_two"},
+                    {"type": "creator_url", "value": "https://www.tiktok.com/@empty_three"},
+                ],
+                [{"profile_id": "p1", "group_name": "US"}],
+                GrowthTaskConfig(
+                    test_mode=False,
+                    task_delay_min_seconds=0,
+                    task_delay_max_seconds=0,
+                    retry_empty_result_with_next_profile=True,
+                    max_consecutive_empty_result_sources=2,
+                ),
+            )
+            tasks = service.storage.list_collection_tasks(limit=10)
+            events = service.storage.list_recent_events("collection_empty_result_circuit_breaker", limit=10)
+
+            self.assertEqual(result.processed_sources, 0)
+            self.assertEqual(result.failed_sources, 3)
+            self.assertEqual(len(tasks), 2)
+            self.assertEqual({row["error_code"] for row in tasks}, {"COMMENT_USERS_EMPTY_RETRY"})
+            self.assertEqual(len(events), 1)
+            payload = json.loads(events[0]["payload"])
+            self.assertEqual(payload["limit"], 2)
+            self.assertEqual(payload["action"], "stop_remaining_sources_to_avoid_repeated_page_opens")
+
     def test_empty_result_failures_put_single_profile_into_runtime_cooldown(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = GrowthIntelligenceService(
@@ -15074,6 +15151,33 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(latest_session["state_transition_violations"], [])
             self.assertTrue(latest_session["state_machine_contract"]["valid_transition"])
             self.assertTrue(latest_session["ai_usage_ledger"]["no_ai_token_during_execution"])
+
+    def test_quick_send_live_comment_does_not_auto_confirm_live_submit(self):
+        class Var:
+            def __init__(self, value=None):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        console = GrowthOpsConsole.__new__(GrowthOpsConsole)
+        console.quick_send_volume_var = Var("快速")
+        console.quick_send_mode_var = Var("采集 + 真实评论")
+        console.scan_max_videos_var = Var()
+        console.scan_max_comments_var = Var()
+        console.scan_profile_limit_var = Var()
+        console.scan_interval_var = Var()
+        console.action_execution_workers_var = Var()
+        console.action_execution_mode_var = Var()
+        console.action_execution_live_confirm_var = Var(True)
+
+        console.apply_quick_send_preset()
+
+        self.assertEqual(console.action_execution_mode_var.get(), "真实提交")
+        self.assertFalse(console.action_execution_live_confirm_var.get())
 
 
 if __name__ == "__main__":

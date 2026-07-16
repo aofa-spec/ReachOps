@@ -1155,7 +1155,7 @@ class GrowthOpsConsole(ttk.Frame):
         mode_key = quick_send_mode_key(self.quick_send_mode_var.get())
         if mode_key == "live_comment":
             self.action_execution_mode_var.set("真实提交")
-            self.action_execution_live_confirm_var.set(True)
+            self.action_execution_live_confirm_var.set(False)
         else:
             self.action_execution_mode_var.set("预检，不提交")
             self.action_execution_live_confirm_var.set(False)
@@ -2051,9 +2051,7 @@ class GrowthOpsConsole(ttk.Frame):
         ttk.Spinbox(execution_frame, from_=1, to=200, textvariable=self.action_execution_hour_limit_var, width=6).grid(row=1, column=1, sticky="w", padx=(4, 12), pady=(6, 0))
         ttk.Label(execution_frame, text="同视频/小时").grid(row=1, column=2, sticky="w", pady=(6, 0))
         ttk.Spinbox(execution_frame, from_=1, to=20, textvariable=self.action_execution_video_hour_limit_var, width=6).grid(row=1, column=3, sticky="w", padx=(4, 12), pady=(6, 0))
-        self.action_execution_live_confirm_var.set(
-            quick_send_mode_key(self.quick_send_mode_var.get()) == "live_comment"
-        )
+        self.action_execution_live_confirm_var.set(False)
         ttk.Checkbutton(
             execution_frame,
             text="确认真实提交",
