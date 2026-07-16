@@ -124,6 +124,8 @@ def delivery_status(contract_ok: bool, acceptance_ready: bool, readiness: str) -
         return "passed"
     if not contract_ok:
         return "failed"
+    if readiness == "pending_new_run":
+        return "pending_new_run"
     if readiness in {"partial", "blocked_by_accounts", "blocked_by_environment", "not_started"}:
         return readiness
     return "failed"
@@ -1249,7 +1251,8 @@ def latest_real_flow_profile_boundary(
         )
     blocked_rows = [row for row in newer_rows if row.get("profile_preflight_available") is False]
     passed_rows = [row for row in newer_rows if row.get("profile_preflight_available") is True]
-    stale = bool(source_mtime and blocked_rows)
+    latest_row = newer_rows[0] if newer_rows else {}
+    stale = bool(source_mtime and latest_row.get("profile_preflight_available") is False)
     return {
         "schema_version": "reachops.real_flow_profile_boundary.v1",
         "source_profile_readiness_path": str(handoff.get("path") or ""),
@@ -1257,7 +1260,7 @@ def latest_real_flow_profile_boundary(
         "newer_real_flow_report_count": len(newer_rows),
         "newer_profile_preflight_blocked_count": len(blocked_rows),
         "newer_profile_preflight_passed_count": len(passed_rows),
-        "latest_newer_real_flow": newer_rows[0] if newer_rows else {},
+        "latest_newer_real_flow": latest_row,
         "blocked_samples": blocked_rows[:5],
         "profile_readiness_stale_for_real_flow": stale,
         "does_not_claim_real_account_pool_ready": stale,
@@ -1323,6 +1326,12 @@ def build_delivery_check(
         and current_profile_group == readiness_profile_group
     )
     real_flow_profile_boundary["applies_to_current_acceptance"] = real_flow_boundary_applies
+    real_flow_profile_boundary["runtime_log_mtime"] = path_mtime(log_path)
+    real_flow_profile_boundary["post_readiness_real_flow_required"] = bool(
+        real_flow_boundary_applies
+        and float(profile_readiness_handoff.get("source_mtime") or 0) > path_mtime(log_path)
+        and int(real_flow_profile_boundary.get("newer_real_flow_report_count") or 0) <= 0
+    )
     if real_flow_boundary_applies and real_flow_profile_boundary.get("profile_readiness_stale_for_real_flow"):
         stale_message = (
             "Profile readiness 证据早于后续真实 no-submit 执行报告，且后续报告出现账号预检不可用；"
@@ -1338,6 +1347,22 @@ def build_delivery_check(
         acceptance["readiness"] = "blocked_by_accounts"
         checks_payload = acceptance.get("checks") if isinstance(acceptance.get("checks"), dict) else {}
         checks_payload["profile_readiness_fresh_for_real_flow"] = False
+        acceptance["checks"] = checks_payload
+    elif real_flow_profile_boundary.get("post_readiness_real_flow_required"):
+        pending_message = (
+            "Profile readiness 证据晚于当前客户端采集批次；必须使用最新 READY profile 重新完成 real_no_submit，"
+            "不能把旧采集批次作为账号复测后的交付通过依据。"
+        )
+        blockers = [item for item in (acceptance.get("blockers") or []) if pending_message not in str(item)]
+        blockers.insert(0, pending_message)
+        acceptance["blockers"] = blockers
+        next_action = "使用最新 READY profile 重新执行一次有界 real_no_submit 采集复测。"
+        actions = [item for item in (acceptance.get("next_actions") or []) if next_action not in str(item)]
+        actions.insert(0, next_action)
+        acceptance["next_actions"] = actions
+        acceptance["readiness"] = "pending_new_run"
+        checks_payload = acceptance.get("checks") if isinstance(acceptance.get("checks"), dict) else {}
+        checks_payload["real_no_submit_after_profile_readiness"] = False
         acceptance["checks"] = checks_payload
     account_repair_apply = latest_account_repair_apply_status(
         base_dir,
@@ -1570,7 +1595,7 @@ def build_delivery_check(
     checks.append(
         {
             "name": "acceptance:current_state_known",
-            "ok": acceptance.get("readiness") in {"pass", "partial", "blocked_by_accounts", "blocked_by_environment", "not_started"},
+            "ok": acceptance.get("readiness") in {"pass", "partial", "blocked_by_accounts", "blocked_by_environment", "not_started", "pending_new_run"},
             "readiness": acceptance.get("readiness"),
         }
     )
@@ -1578,8 +1603,11 @@ def build_delivery_check(
         {
             "name": "profile_readiness:current_real_flow_boundary",
             "ok": not bool(
-                real_flow_profile_boundary.get("applies_to_current_acceptance")
-                and real_flow_profile_boundary.get("profile_readiness_stale_for_real_flow")
+                (
+                    real_flow_profile_boundary.get("applies_to_current_acceptance")
+                    and real_flow_profile_boundary.get("profile_readiness_stale_for_real_flow")
+                )
+                or real_flow_profile_boundary.get("post_readiness_real_flow_required")
             ),
             **real_flow_profile_boundary,
         }
