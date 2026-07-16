@@ -14994,6 +14994,87 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(latest["id"], batch.id)
         self.assertEqual(latest["total_sources"], 3)
 
+    def test_native_client_run_contract_writes_replayable_terminal_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            app = GrowthIntelligenceStandaloneApp.__new__(GrowthIntelligenceStandaloneApp)
+            app.base_dir = base
+            app.runtime_log_path = base / "logs" / "growth_ops_runtime.log"
+            app.active_batch_id = "gb_native_contract"
+            app.active_campaign_id = "cmp_native_contract"
+            app.active_run_session_path = ""
+            app.active_run_session_latest_path = ""
+            app.active_run_result_path = ""
+            app._log = lambda _message: None
+            app._thread_log = lambda _message: None
+
+            contract = app._create_native_run_contract(
+                target="https://www.tiktok.com/@creator/photo/123",
+                source_type="tiktok_url",
+                mode="preflight",
+                volume="quick",
+                profile_group="获客分组测试",
+                profile_limit=3,
+                max_videos=3,
+                max_comments=20,
+                comment_text="",
+                live_confirmed=False,
+            )
+            self.assertTrue(Path(contract["plan_path"]).is_file())
+            self.assertTrue((base / "plans" / "latest_execution_plan.json").is_file())
+            self.assertTrue(Path(contract["session_path"]).is_file())
+            self.assertTrue((base / "runs" / "latest_run_session.json").is_file())
+
+            app._update_native_run_session(
+                "PROFILE_PREFLIGHT",
+                last_stage="native_collection_batch_created batch=gb_native_contract",
+                evidence={"collection_batch_id": app.active_batch_id},
+            )
+            app._update_native_run_session(
+                "COLLECTING",
+                last_stage="native_profile_preflight_completed checked=3 available=3",
+                evidence={"profile_preflight": {"checked": 3, "available": 3, "unavailable": 0}},
+            )
+            app._update_native_run_session(
+                "SCORING",
+                last_stage="native_collection_finished processed=3 failed=0",
+            )
+            app._update_native_run_session(
+                "ACTION_PLANNING",
+                last_stage="native_action_plan_ready",
+            )
+            app._update_native_run_session(
+                "EXECUTING",
+                last_stage="native_action_preflight_started",
+            )
+            app._finalize_native_run_session(
+                "DEGRADED",
+                last_stage="native_acceptance_executed",
+                result={
+                    "status": "degraded",
+                    "target": "https://www.tiktok.com/@creator/photo/123",
+                    "profile_group": "获客分组测试",
+                    "used_profiles": 3,
+                    "action_success": 3,
+                    "action_failed": 1,
+                    "error_code": "",
+                    "no_submit": True,
+                },
+                evidence={"action_report_json": str(base / "reports" / "action.json")},
+            )
+
+            latest_session = json.loads((base / "runs" / "latest_run_session.json").read_text(encoding="utf-8"))
+            result = json.loads(Path(contract["result_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(latest_session["state"], "DEGRADED")
+            self.assertEqual(latest_session["status"], "degraded")
+            self.assertEqual(latest_session["checkpoint"]["active_batch_id"], app.active_batch_id)
+            self.assertEqual(latest_session["checkpoint"]["active_campaign_id"], app.active_campaign_id)
+            self.assertEqual(latest_session["result"]["used_profiles"], 3)
+            self.assertEqual(result["action_failed"], 1)
+            self.assertEqual(latest_session["state_transition_violations"], [])
+            self.assertTrue(latest_session["state_machine_contract"]["valid_transition"])
+            self.assertTrue(latest_session["ai_usage_ledger"]["no_ai_token_during_execution"])
+
 
 if __name__ == "__main__":
     unittest.main()

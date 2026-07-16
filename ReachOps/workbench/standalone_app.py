@@ -13,9 +13,11 @@ from pathlib import Path
 from tkinter import simpledialog, ttk
 from urllib.parse import urlparse
 
+from ReachOps.execution_plan import build_execution_plan, write_execution_plan
 from ReachOps.intelligence import GrowthIntelligenceService, GrowthTaskConfig
 from ReachOps.intelligence.schemas import ActionQueueItem
 from ReachOps.intelligence.storage import new_id
+from ReachOps.run_session import create_run_session, read_run_session, transition_run_session, write_run_session
 from ReachOps.runtime_paths import RuntimePaths
 
 from .console import GrowthOpsConsole, normalize_source_type, quick_send_mode_key, quick_send_preset
@@ -1046,6 +1048,9 @@ class GrowthIntelligenceStandaloneApp:
         self.active_batch_id = ""
         self._collection_start_lock = threading.Lock()
         self._collection_start_in_progress = False
+        self.active_run_session_path = ""
+        self.active_run_session_latest_path = ""
+        self.active_run_result_path = ""
         self._group_count_refresh_in_progress = False
         self._runtime_event_last_rowid = self._current_growth_event_rowid()
         self._last_runtime_status_line = ""
@@ -1298,6 +1303,123 @@ class GrowthIntelligenceStandaloneApp:
             campaign_id=self.active_campaign_id,
             batch_id=self.active_batch_id,
         )
+
+    def _create_native_run_contract(
+        self,
+        *,
+        target: str,
+        source_type: str,
+        mode: str,
+        volume: str,
+        profile_group: str,
+        profile_limit: int,
+        max_videos: int,
+        max_comments: int,
+        comment_text: str = "",
+        live_confirmed: bool = False,
+    ) -> dict:
+        plan = build_execution_plan(
+            target=target,
+            source_type=source_type,
+            mode=mode,
+            volume=volume,
+            profile_group=profile_group,
+            profile_limit=profile_limit,
+            max_videos=max_videos,
+            max_comments=max_comments,
+            timeout_seconds=1800,
+            comment_text=comment_text,
+            live_confirmed=live_confirmed,
+            base_dir=str(self.base_dir),
+            origin="native_tk_client",
+        )
+        plan_id = str(plan.get("plan_id") or new_id("plan"))
+        plan_path = Path(self.base_dir) / "plans" / f"{plan_id}.json"
+        write_execution_plan(plan, plan_path)
+        latest_plan_path = Path(self.base_dir) / "plans" / "latest_execution_plan.json"
+        write_execution_plan(plan, latest_plan_path)
+
+        result_path = Path(self.base_dir) / "run_results" / f"{plan_id}.json"
+        session = create_run_session(
+            plan,
+            execution_plan_path=str(plan_path),
+            result_path=str(result_path),
+            log_path=str(self.runtime_log_path),
+        )
+        session_path = Path(self.base_dir) / "runs" / f"{session.get('session_id') or new_id('run')}.json"
+        latest_session_path = Path(self.base_dir) / "runs" / "latest_run_session.json"
+        session = transition_run_session(
+            session,
+            "PRECHECK",
+            pid=os.getpid(),
+            last_stage="native_client_start_requested",
+            checkpoint_update={
+                "target": target,
+                "profile_group": profile_group,
+                "mode": mode,
+                "volume": volume,
+                "no_submit": not bool(live_confirmed and mode == "live_comment"),
+            },
+        )
+        write_run_session(session, session_path, latest_session_path)
+        self.active_run_session_path = str(session_path)
+        self.active_run_session_latest_path = str(latest_session_path)
+        self.active_run_result_path = str(result_path)
+        self._log(
+            f"RUNSESSION created id={session.get('session_id', '')} plan={plan_id} "
+            f"path={session_path} no_submit={str(not bool(live_confirmed and mode == 'live_comment')).lower()}"
+        )
+        return {
+            "plan": plan,
+            "plan_path": str(plan_path),
+            "session_id": str(session.get("session_id") or ""),
+            "session_path": str(session_path),
+            "latest_session_path": str(latest_session_path),
+            "result_path": str(result_path),
+        }
+
+    def _update_native_run_session(self, state: str, *, last_stage: str = "", result: dict | None = None, evidence: dict | None = None):
+        path = str(self.active_run_session_path or "")
+        if not path:
+            return {}
+        session = read_run_session(path)
+        if not session:
+            return {}
+        checkpoint_update = {
+            "active_batch_id": self.active_batch_id,
+            "active_campaign_id": self.active_campaign_id,
+            "log_path": str(self.runtime_log_path),
+            "result_path": str(self.active_run_result_path or ""),
+        }
+        updated = transition_run_session(
+            session,
+            state,
+            pid=os.getpid(),
+            last_stage=last_stage,
+            checkpoint_update=checkpoint_update,
+            result=result,
+            evidence=evidence,
+        )
+        write_run_session(updated, path, self.active_run_session_latest_path or None)
+        return updated
+
+    def _finalize_native_run_session(
+        self,
+        state: str,
+        *,
+        last_stage: str,
+        result: dict,
+        evidence: dict | None = None,
+    ):
+        result_path = str(self.active_run_result_path or "")
+        if result_path:
+            try:
+                target = Path(result_path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            except Exception as exc:
+                self._thread_log(f"WARN   run_session result_write_failed error={exc}")
+        return self._update_native_run_session(state, last_stage=last_stage, result=result, evidence=evidence)
 
     def _selected_profiles(self) -> list[dict]:
         group = self._selected_group_name()
@@ -2430,9 +2552,33 @@ class GrowthIntelligenceStandaloneApp:
             "quick_mode": quick_mode_label,
             "quick_volume": quick_volume_label,
         }
+        plan_mode = "collect" if quick_mode == "collect_only" else quick_mode
+        native_run = {}
+        try:
+            native_run = self._create_native_run_contract(
+                target=source_value,
+                source_type=source_type,
+                mode=plan_mode,
+                volume="quick" if quick_volume_label == "快速" else "standard" if quick_volume_label == "标准" else "stress",
+                profile_group=profile_group or "United States",
+                profile_limit=profile_limit,
+                max_videos=max_videos,
+                max_comments=max_comments,
+                comment_text=self._quick_comment_text(),
+                live_confirmed=self._quick_send_live_submit_confirmed(quick_mode),
+            )
+        except Exception as exc:
+            self._log(
+                f"BLOCK  campaign not_started campaign={campaign.get('id', '')} "
+                f"reason=RUN_CONTRACT_CREATE_FAILED error={exc}"
+            )
+            release_start_lock()
+            return
         display_plan = {
             **plan,
             "sources": planned_sources,
+            "execution_plan_path": native_run.get("plan_path", ""),
+            "run_session_path": native_run.get("session_path", ""),
         }
         try:
             self.console.show_campaign_plan(display_plan, range_config, profile_group)
@@ -2492,12 +2638,29 @@ class GrowthIntelligenceStandaloneApp:
                 f"status=pending stage=profile_preflight target={source_value} group={profile_group or '未指定'} "
                 f"sources={len(planned_sources)}"
             )
+            self._update_native_run_session(
+                "PROFILE_PREFLIGHT",
+                last_stage=f"native_collection_batch_created batch={precreated_batch.id}",
+                evidence={"collection_batch_id": precreated_batch.id, "campaign_id": str(campaign.get("id") or "")},
+            )
             try:
                 self.console.refresh(self._current_snapshot())
             except Exception:
                 pass
         except Exception as exc:
             self._log(f"BLOCK  campaign not_started campaign={campaign.get('id', '')} reason=BATCH_CREATE_FAILED error={exc}")
+            self._finalize_native_run_session(
+                "BLOCKED",
+                last_stage="native_batch_create_failed",
+                result={
+                    "status": "blocked",
+                    "error_code": "BATCH_CREATE_FAILED",
+                    "error_message": str(exc),
+                    "target": source_value,
+                    "profile_group": profile_group,
+                    "no_submit": True,
+                },
+            )
             release_start_lock()
             return
 
@@ -2560,6 +2723,20 @@ class GrowthIntelligenceStandaloneApp:
                     self._thread_log(
                         "BLOCK  campaign failed reason=没有可用账号 error=NO_PROFILE_SELECTED "
                         "next=点击刷新账号分组，并选择 discovery/comment/action 分组"
+                    )
+                    self._finalize_native_run_session(
+                        "BLOCKED",
+                        last_stage="native_no_profile_selected",
+                        result={
+                            "status": "blocked",
+                            "error_code": "NO_PROFILE_SELECTED",
+                            "target": source_value,
+                            "profile_group": profile_group,
+                            "checked_profiles": 0,
+                            "available_profiles": 0,
+                            "no_submit": True,
+                        },
+                        evidence={"collection_batch_id": self.active_batch_id},
                     )
                     self.root.after(0, lambda: self.console.refresh(self._current_snapshot()))
                     return
@@ -2714,6 +2891,25 @@ class GrowthIntelligenceStandaloneApp:
                             "error=INSUFFICIENT_LOGGED_IN_PROFILES next=系统已自动跳过异常账号；请补充至少1个已登录可用账号或稍后再次执行"
                         ),
                     )
+                    self._finalize_native_run_session(
+                        "BLOCKED",
+                        last_stage="native_profile_preflight_no_available_profiles",
+                        result={
+                            "status": "blocked",
+                            "error_code": "INSUFFICIENT_LOGGED_IN_PROFILES",
+                            "target": source_value,
+                            "profile_group": profile_group,
+                            "checked_profiles": int(profile_preflight.get("checked") or 0),
+                            "available_profiles": 0,
+                            "unavailable_profiles": int(profile_preflight.get("unavailable") or 0),
+                            "errors": dict(profile_preflight.get("errors") or {}),
+                            "no_submit": True,
+                        },
+                        evidence={
+                            "collection_batch_id": self.active_batch_id,
+                            "profile_preflight": profile_preflight,
+                        },
+                    )
                     self.root.after(0, lambda: self.console.refresh(self._current_snapshot()))
                     return
                 if len(executable_profiles) < profile_limit:
@@ -2729,6 +2925,17 @@ class GrowthIntelligenceStandaloneApp:
                     f"requested_concurrency={profile_limit} effective_concurrency={min(profile_limit, len(executable_profiles))} "
                     f"available_profiles={len(executable_profiles)} queue_target={queue_profile_target} "
                     f"profile_ids={','.join([self._profile_id(row) for row in executable_profiles][:8])}"
+                )
+                self._update_native_run_session(
+                    "COLLECTING",
+                    last_stage=(
+                        f"native_profile_preflight_completed checked={profile_preflight.get('checked', 0)} "
+                        f"available={len(executable_profiles)}"
+                    ),
+                    evidence={
+                        "collection_batch_id": self.active_batch_id,
+                        "profile_preflight": profile_preflight,
+                    },
                 )
                 if len(executable_profiles) >= profile_limit and len(executable_profiles) < queue_profile_target:
                     self.root.after(
@@ -2826,6 +3033,23 @@ class GrowthIntelligenceStandaloneApp:
                     f"processed_sources={getattr(result, 'processed_sources', 0)} failed_sources={getattr(result, 'failed_sources', 0)} "
                     f"no_submit={str(not self._quick_send_live_submit_confirmed(quick_mode)).lower()}"
                 )
+                self._update_native_run_session(
+                    "SCORING",
+                    last_stage=(
+                        f"native_collection_finished processed={getattr(result, 'processed_sources', 0)} "
+                        f"failed={getattr(result, 'failed_sources', 0)}"
+                    ),
+                    evidence={
+                        "collection_batch_id": self.active_batch_id,
+                        "collection_report_json": str(getattr(result, "report_json_path", "") or ""),
+                        "collection_report_csv": str(getattr(result, "report_csv_path", "") or ""),
+                    },
+                )
+                self._update_native_run_session(
+                    "ACTION_PLANNING",
+                    last_stage="native_action_plan_ready",
+                    evidence={"collection_batch_id": self.active_batch_id},
+                )
                 if getattr(result, "failed_sources", 0) and not getattr(result, "processed_sources", 0):
                     errors = getattr(result, "errors", {}) or {}
                     top_error = ""
@@ -2845,8 +3069,29 @@ class GrowthIntelligenceStandaloneApp:
                         f"FAST   acceptance status=pending reason=collect_only video_log=true touch_log=skipped "
                         f"next=切换到采集+触达预检或真实评论"
                     )
+                    self._finalize_native_run_session(
+                        "DEGRADED",
+                        last_stage="native_collect_only_completed_without_touch_preflight",
+                        result={
+                            "status": "degraded",
+                            "mode": plan_mode,
+                            "target": source_value,
+                            "profile_group": profile_group,
+                            "processed_sources": int(getattr(result, "processed_sources", 0) or 0),
+                            "failed_sources": int(getattr(result, "failed_sources", 0) or 0),
+                            "used_profiles": len(executable_profiles),
+                            "no_submit": True,
+                            "next_action": "Run no-submit action preflight before M2/M3 acceptance.",
+                        },
+                        evidence={"collection_batch_id": self.active_batch_id},
+                    )
                 else:
                     try:
+                        self._update_native_run_session(
+                            "EXECUTING",
+                            last_stage="native_action_preflight_started",
+                            evidence={"collection_batch_id": self.active_batch_id},
+                        )
                         action_result = self._start_action_queue_processing(str(campaign.get("id") or ""), profile_group, executable_profiles)
                         action_error = str((action_result or {}).get("error_code") or "")
                         acceptance_status = "blocked" if action_error else "executed"
@@ -2857,8 +3102,67 @@ class GrowthIntelligenceStandaloneApp:
                             f"no_submit={str(not self._quick_send_live_submit_confirmed(quick_mode)).lower()} "
                             f"error={action_error or '无'}"
                         )
+                        action_failed = int((action_result or {}).get("failed") or 0)
+                        collection_failed = int(getattr(result, "failed_sources", 0) or 0)
+                        terminal_state = "COMPLETED" if not action_error and not action_failed and not collection_failed else "DEGRADED"
+                        terminal_status = "completed" if terminal_state == "COMPLETED" else "degraded"
+                        self._finalize_native_run_session(
+                            terminal_state,
+                            last_stage=f"native_acceptance_{acceptance_status}",
+                            result={
+                                "status": terminal_status,
+                                "mode": plan_mode,
+                                "target": source_value,
+                                "profile_group": profile_group,
+                                "processed_sources": int(getattr(result, "processed_sources", 0) or 0),
+                                "failed_sources": collection_failed,
+                                "used_profiles": len(executable_profiles),
+                                "actions": int((action_result or {}).get("selected_actions") or 0),
+                                "action_success": int((action_result or {}).get("success") or 0),
+                                "action_failed": action_failed,
+                                "action_skipped": int((action_result or {}).get("skipped") or 0),
+                                "error_code": action_error,
+                                "no_submit": not self._quick_send_live_submit_confirmed(quick_mode),
+                            },
+                            evidence={
+                                "collection_batch_id": self.active_batch_id,
+                                "action_report_json": str((action_result or {}).get("report_path") or ""),
+                            },
+                        )
                     except Exception as e:
                         self._thread_log(f"ERROR  action_preflight failed error={str(e)}")
+                        self._finalize_native_run_session(
+                            "DEGRADED",
+                            last_stage="native_action_preflight_exception",
+                            result={
+                                "status": "degraded",
+                                "error_code": "ACTION_PREFLIGHT_FAILED",
+                                "error_message": str(e),
+                                "target": source_value,
+                                "profile_group": profile_group,
+                                "processed_sources": int(getattr(result, "processed_sources", 0) or 0),
+                                "failed_sources": int(getattr(result, "failed_sources", 0) or 0),
+                                "used_profiles": len(executable_profiles),
+                                "no_submit": True,
+                            },
+                            evidence={"collection_batch_id": self.active_batch_id},
+                        )
+            except Exception as exc:
+                self._thread_log(f"ERROR  native_run failed error={exc}")
+                self._finalize_native_run_session(
+                    "BLOCKED",
+                    last_stage="native_run_unhandled_exception",
+                    result={
+                        "status": "blocked",
+                        "error_code": "NATIVE_RUN_UNHANDLED_EXCEPTION",
+                        "error_message": str(exc),
+                        "target": source_value,
+                        "profile_group": profile_group,
+                        "active_batch_id": self.active_batch_id,
+                        "no_submit": True,
+                    },
+                    evidence={"collection_batch_id": self.active_batch_id},
+                )
             finally:
                 try:
                     self.service.router._close_reusable_profile_sessions(self.active_batch_id)
