@@ -10428,6 +10428,74 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(all("copy_provider=fake_copy_ai" in row.get("reason", "") for row in actions))
             self.assertTrue(all("copy_angle=fake ai angle" in row.get("reason", "") for row in actions))
 
+    def test_shared_collection_state_suppresses_repeated_source_actions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            source = {"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}
+            first_plan = service.create_campaign_plan(source["value"], max_sources=1)
+            first_result = service.run_collection(
+                [source],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(
+                    campaign_id=first_plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    test_mode=True,
+                ),
+            )
+            first_actions = service.storage.list_action_queue(limit=20)
+
+            second_plan = service.create_campaign_plan(source["value"], max_sources=1)
+            second_result = service.run_collection(
+                [source],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(
+                    campaign_id=second_plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    test_mode=True,
+                ),
+            )
+            all_actions = service.storage.list_action_queue(limit=20)
+            history = service.storage.datasource_history_summary("tiktok", source["type"], source["value"])
+
+        self.assertGreater(int(first_result.report.summary["action_queue_count"]), 0)
+        self.assertEqual(int(second_result.report.summary["action_queue_count"]), 0)
+        self.assertEqual(len(all_actions), len(first_actions))
+        self.assertEqual(history["candidate_user_count"], 1)
+        self.assertEqual(history["operation_lead_count"], 1)
+        self.assertEqual(history["action_queue_count"], len(first_actions))
+
+    def test_storage_dedupes_repeated_candidate_across_content_ids_for_same_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "growth.db"))
+            first_candidate, first_created = storage.upsert_candidate(
+                CandidateUser(
+                    id="cu_first",
+                    content_id="content-first",
+                    username="buyer_one",
+                    profile_url="https://www.tiktok.com/@buyer_one",
+                    comment_text="where can I buy this serum link please",
+                    qualify_score=80,
+                    source_path="https://www.tiktok.com/@creator/photo/123",
+                )
+            )
+            second_candidate, second_created = storage.upsert_candidate(
+                CandidateUser(
+                    id="cu_second",
+                    content_id="content-second",
+                    username="BUYER_ONE",
+                    profile_url="https://www.tiktok.com/@buyer_one",
+                    comment_text="need the product link please",
+                    qualify_score=80,
+                    source_path="https://www.tiktok.com/@creator/photo/123",
+                )
+            )
+
+        self.assertTrue(first_created)
+        self.assertFalse(second_created)
+        self.assertEqual(second_candidate.id, first_candidate.id)
+
     def test_standard_outreach_policy_skips_low_intent_and_limits_normal_to_comment(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = make_reachops_service(tmp)

@@ -485,6 +485,8 @@ def scenario_command(args: argparse.Namespace, scenario: dict[str, str], scenari
         "tools/reachops_visual_collection_preflight.py",
         "--base-dir",
         str(scenario_dir),
+        "--state-dir",
+        str(args.state_dir or ""),
         "--target",
         scenario["target"],
         "--source-type",
@@ -522,6 +524,7 @@ def summarize_scenario(name: str, payload: dict[str, Any], returncode: int, stdo
     funnel = payload.get("funnel") if isinstance(payload.get("funnel"), dict) else {}
     profile_preflight = payload.get("profile_preflight") if isinstance(payload.get("profile_preflight"), dict) else {}
     no_action_reason = payload.get("no_action_reason") if isinstance(payload.get("no_action_reason"), dict) else {}
+    duplicate_suppression = payload.get("duplicate_suppression") if isinstance(payload.get("duplicate_suppression"), dict) else {}
     return {
         "name": name,
         "returncode": returncode,
@@ -545,6 +548,7 @@ def summarize_scenario(name: str, payload: dict[str, Any], returncode: int, stdo
             "outreach_actions": int(funnel.get("outreach_actions") or 0),
         },
         "no_action_reason": no_action_reason,
+        "duplicate_suppression": duplicate_suppression,
         "report_path": str(payload.get("report_path") or ""),
         "stdout_lines": len((stdout or "").splitlines()),
         "stderr_lines": len((stderr or "").splitlines()),
@@ -601,14 +605,19 @@ def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
     no_interruptions = not any("operator_interrupted" in set(row.get("failures") or []) for row in summary_rows)
     any_profile_available = any((row.get("profile_preflight") or {}).get("available", 0) > 0 for row in summary_rows)
     any_browser_started = any(int(row.get("browser_started") or 0) > 0 for row in summary_rows)
+    any_duplicate_suppressed = any(bool((row.get("duplicate_suppression") or {}).get("duplicate_suppressed")) for row in summary_rows)
     any_collection_completed = any(
         str(row.get("status") or "") == "ok"
-        and int(((row.get("funnel") or {}).get("comment_users") or 0)) > 0
+        and (
+            int(((row.get("funnel") or {}).get("comment_users") or 0)) > 0
+            or bool((row.get("duplicate_suppression") or {}).get("duplicate_suppressed"))
+        )
         for row in summary_rows
     )
     any_leads = any(
         int(((row.get("funnel") or {}).get("customer_leads") or 0)) > 0
         or int(((row.get("funnel") or {}).get("outreach_actions") or 0)) > 0
+        or bool((row.get("duplicate_suppression") or {}).get("duplicate_suppressed"))
         for row in summary_rows
     )
     no_action_reasons = [
@@ -644,10 +653,15 @@ def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "name": "lead_pipeline",
                 "passed": any_leads,
-                "goal": "真实采集后产生 customer_leads 和 outreach_actions。",
+                "goal": "真实采集后产生 customer_leads/outreach_actions，或对重复目标明确跳过重复动作生成。",
             },
         ],
     }
+    if any_duplicate_suppressed:
+        result["duplicate_suppression"] = {
+            "passed": True,
+            "goal": "同一目标重复运行不会无限重复生成相同线索或动作。",
+        }
     if no_action_reasons and not any_leads:
         result["no_action_reason"] = no_action_reasons[0]
     return result
@@ -712,6 +726,7 @@ def scenario_should_retry(row: dict[str, Any], blocked_ids: set[str], attempted_
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run ReachOps real macOS browser flow across multiple TikTok entry types.")
     parser.add_argument("--base-dir", default="reports/reachops/mac_real_flow")
+    parser.add_argument("--state-dir", default="", help="Persistent Growth Intelligence state dir. Defaults to <base-dir>/runtime_state.")
     parser.add_argument("--profile-group", default="United States")
     parser.add_argument("--profile-ids", default="")
     parser.add_argument("--profile-limit", type=int, default=2)
@@ -743,6 +758,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     base_dir = Path(args.base_dir).resolve()
+    if not str(args.state_dir or "").strip():
+        args.state_dir = str(base_dir / "runtime_state")
+    else:
+        args.state_dir = str(Path(args.state_dir).resolve())
     run_id, run_dir = unique_run_dir(base_dir)
     env = configure_localhost_proxy_bypass()
     scenarios, scenario_plan = build_scenarios(args, run_dir)
@@ -986,6 +1005,7 @@ def main() -> int:
         "mode": "mac_real_browser_flow_no_submit",
         "no_submit": True,
         "profile_group": str(args.profile_group or ""),
+        "state_dir": str(args.state_dir or ""),
         "selected_profile_ids": fixed_profile_ids,
         "profile_selection": profile_selection,
         "scenario_plan": scenario_plan,

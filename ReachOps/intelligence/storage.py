@@ -831,6 +831,96 @@ class GrowthStorage:
             )
             return ds
 
+    def datasource_history_summary(self, platform: str, source_type: str, value: str) -> Dict[str, Any]:
+        platform = str(platform or "").strip()
+        source_type = str(source_type or "").strip()
+        value = str(value or "").strip()
+        empty = {
+            "platform": platform,
+            "source_type": source_type,
+            "source_value": value,
+            "source_id": "",
+            "source_seen": False,
+            "creator_count": 0,
+            "content_count": 0,
+            "candidate_user_count": 0,
+            "high_value_candidate_count": 0,
+            "operation_lead_count": 0,
+            "action_queue_count": 0,
+        }
+        if not platform or not source_type or not value:
+            return dict(empty)
+        with self.connect() as conn:
+            source = conn.execute(
+                "SELECT id FROM data_sources WHERE platform=? AND type=? AND value=?",
+                (platform, source_type, value),
+            ).fetchone()
+            if not source:
+                return dict(empty)
+            source_id = str(source["id"] or "")
+            counts = {
+                "creator_count": conn.execute(
+                    "SELECT COUNT(*) FROM discovered_creators WHERE source_id=?",
+                    (source_id,),
+                ).fetchone()[0],
+                "content_count": conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM discovered_contents dc
+                    JOIN discovered_creators cr ON cr.id=dc.creator_id
+                    WHERE cr.source_id=?
+                    """,
+                    (source_id,),
+                ).fetchone()[0],
+                "candidate_user_count": conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM candidate_users cu
+                    JOIN discovered_contents dc ON dc.id=cu.content_id
+                    JOIN discovered_creators cr ON cr.id=dc.creator_id
+                    WHERE cr.source_id=?
+                    """,
+                    (source_id,),
+                ).fetchone()[0],
+                "high_value_candidate_count": conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM candidate_users cu
+                    JOIN discovered_contents dc ON dc.id=cu.content_id
+                    JOIN discovered_creators cr ON cr.id=dc.creator_id
+                    WHERE cr.source_id=? AND cu.qualify_score >= 70
+                    """,
+                    (source_id,),
+                ).fetchone()[0],
+                "operation_lead_count": conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM operation_leads ol
+                    JOIN candidate_users cu ON cu.id=ol.candidate_user_id
+                    JOIN discovered_contents dc ON dc.id=cu.content_id
+                    JOIN discovered_creators cr ON cr.id=dc.creator_id
+                    WHERE cr.source_id=?
+                    """,
+                    (source_id,),
+                ).fetchone()[0],
+                "action_queue_count": conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM action_queue aq
+                    JOIN operation_leads ol ON ol.id=aq.lead_id
+                    JOIN candidate_users cu ON cu.id=ol.candidate_user_id
+                    JOIN discovered_contents dc ON dc.id=cu.content_id
+                    JOIN discovered_creators cr ON cr.id=dc.creator_id
+                    WHERE cr.source_id=?
+                    """,
+                    (source_id,),
+                ).fetchone()[0],
+            }
+        payload = dict(empty)
+        payload.update({"source_id": source_id, "source_seen": True})
+        payload.update({key: int(value or 0) for key, value in counts.items()})
+        return payload
+
     def upsert_creator(self, creator: DiscoveredCreator) -> DiscoveredCreator:
         now = utc_now_iso()
         with self.connect() as conn:
@@ -934,6 +1024,29 @@ class GrowthStorage:
                 "SELECT * FROM candidate_users WHERE content_id=? AND username=? AND comment_text=?",
                 (candidate.content_id, candidate.username, candidate.comment_text),
             ).fetchone()
+            if not row and str(candidate.source_path or "").strip() and str(candidate.username or "").strip():
+                row = conn.execute(
+                    """
+                    SELECT *
+                    FROM candidate_users
+                    WHERE LOWER(username)=LOWER(?)
+                      AND comment_text=?
+                      AND source_path=?
+                    """,
+                    (candidate.username, candidate.comment_text, candidate.source_path),
+                ).fetchone()
+            if not row and str(candidate.source_path or "").strip() and str(candidate.username or "").strip():
+                row = conn.execute(
+                    """
+                    SELECT *
+                    FROM candidate_users
+                    WHERE LOWER(username)=LOWER(?)
+                      AND source_path=?
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """,
+                    (candidate.username, candidate.source_path),
+                ).fetchone()
             if row:
                 repeat_count = int(row["repeat_seen_count"] or 1) + 1 if "repeat_seen_count" in row.keys() else 2
                 conn.execute(

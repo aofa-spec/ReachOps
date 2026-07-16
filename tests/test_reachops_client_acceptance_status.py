@@ -6703,6 +6703,34 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["no_action_reason"]["code"], "low_intent_candidates")
 
+    def test_real_flow_accepts_duplicate_suppressed_repeat_run(self):
+        row = {
+            "status": "ok",
+            "failures": [],
+            "browser_started": 1,
+            "profile_preflight": {"skipped": False, "checked": 1, "available": 1, "unavailable": 0},
+            "funnel": {
+                "target_sources": 1,
+                "content_found": 0,
+                "comment_users": 0,
+                "customer_leads": 0,
+                "outreach_actions": 0,
+            },
+            "duplicate_suppression": {
+                "duplicate_suppressed": True,
+                "prior_candidate_user_count": 1,
+                "prior_operation_lead_count": 1,
+                "prior_action_queue_count": 2,
+            },
+            "no_action_reason": {"code": "duplicate_suppressed", "no_submit": True},
+        }
+
+        result = real_flow_acceptance([row])
+
+        self.assertEqual(result["status"], "passed")
+        self.assertTrue(result["duplicate_suppression"]["passed"])
+        self.assertTrue(next(item for item in result["targets"] if item["name"] == "lead_pipeline")["passed"])
+
     def test_real_flow_expands_content_url_to_creator_after_low_intent(self):
         scenarios = [
             {
