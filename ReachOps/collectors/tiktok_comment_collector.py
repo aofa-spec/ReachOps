@@ -378,13 +378,38 @@ class TikTokCommentCollector(CollectorAdapter):
                       } catch (e) {}
                       return false;
                     }
-                    function commentPanelVisible() {
-                      const roots = document.querySelectorAll(
+                    function visibleCommentRootCount() {
+                      const roots = Array.from(document.querySelectorAll(
                         '[data-e2e*="comment-level"], [data-e2e*="comment-item"], [data-e2e*="comment-list"], div[class*="CommentItem"], div[class*="DivCommentItem"]'
-                      );
-                      if (roots.length > 0) return true;
+                      ));
+                      return roots.filter((node) => {
+                        if (!visible(node)) return false;
+                        const marker = String([
+                          node.getAttribute && node.getAttribute('data-e2e') || '',
+                          node.getAttribute && node.getAttribute('aria-label') || '',
+                          node.className || ''
+                        ].join(' ')).toLowerCase();
+                        const text = String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                        const hasUserLink = Boolean(node.querySelector && node.querySelector('a[href*="/@"]'));
+                        const itemLike = /comment-level|comment-item|commentitem|divcommentitem/.test(marker);
+                        const emptyHint = /(no comments|be the first to comment|comments are turned off|暂无评论|sem comentários)/.test(text);
+                        const replyLike = /(view replies?|reply|replies|responder|ver respostas)/.test(text);
+                        return itemLike || hasUserLink || emptyHint || replyLike;
+                      }).length;
+                    }
+                    function commentPanelVisible() {
+                      if (visibleCommentRootCount() > 0) return true;
+                      const composer = Array.from(document.querySelectorAll(
+                        '[data-e2e="comment-input"], [contenteditable="true"], textarea, [role="textbox"]'
+                      )).some((node) => visible(node) && /comment|reply|write|add|coment|responder/i.test(String([
+                        node.getAttribute && node.getAttribute('aria-label') || '',
+                        node.getAttribute && node.getAttribute('placeholder') || '',
+                        node.getAttribute && node.getAttribute('data-e2e') || '',
+                        node.parentElement && node.parentElement.innerText || ''
+                      ].join(' '))));
+                      if (composer) return true;
                       const text = (document.body && document.body.innerText || '').toLowerCase();
-                      return /(add comment|write a comment|view replies|reply|replies|responder|ver respostas|no comments|be the first to comment)/.test(text);
+                      return /(no comments|be the first to comment|comments are turned off|暂无评论|sem comentários)/.test(text);
                     }
 	                    function clickableAncestor(node) {
 	                      let item = node;
