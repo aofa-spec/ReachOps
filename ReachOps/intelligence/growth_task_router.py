@@ -1753,7 +1753,13 @@ class GrowthTaskRouter:
                 };
                 const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span, [aria-label], [data-e2e]'))
                   .filter(visible)
-                  .map(el => ({el, label: labelOf(el), rect: el.getBoundingClientRect()}));
+                  .map(el => {
+                    const ownText = norm(Array.from(el.childNodes || [])
+                      .filter(node => node && node.nodeType === Node.TEXT_NODE)
+                      .map(node => node.textContent || '')
+                      .join(' '));
+                    return {el, label: labelOf(el), ownText, rect: el.getBoundingClientRect()};
+                  });
                 const panelSeen = nodes.some(item =>
                   item.label.includes('add comment') ||
                   item.label.includes('view more comments') ||
@@ -1775,20 +1781,35 @@ class GrowthTaskRouter:
                 if (panelSeen) {
                   return {clicked: false, reason: 'comments_already_visible', panelSeen, recommendationActive};
                 }
-                if (recommendationActive) {
-                  const x = Math.round((window.innerWidth || 1200) * 0.76);
-                  const y = Math.round((window.innerHeight || 900) * 0.30);
-                  if (clickPoint(x, y)) {
-                    return {clicked: true, reason: 'comments_tab_coordinate', x, y, recommendationActive};
-                  }
-                }
                 const commentTab = nodes.find(item =>
-                  /^(comments?|commentaires|comentarios|comentários|评论)$/.test(item.label) &&
-                  item.rect.left > (window.innerWidth || 1200) * 0.55
+                  (
+                    /^(comments?|commentaires|comentarios|comentários|评论)$/.test(item.label) ||
+                    /^(comments?|commentaires|comentarios|comentários|评论)$/.test(item.ownText) ||
+                    (/^comments?\b/.test(item.label) && item.rect.top < (window.innerHeight || 900) * 0.25)
+                  ) &&
+                  item.rect.left > (window.innerWidth || 1200) * 0.55 &&
+                  item.rect.top < (window.innerHeight || 900) * 0.35
                 );
                 if (commentTab) {
                   click(commentTab.el);
                   return {clicked: true, reason: 'comments_tab', label: commentTab.label, recommendationActive};
+                }
+                if (recommendationActive) {
+                  const width = window.innerWidth || 1200;
+                  const height = window.innerHeight || 900;
+                  const coordinateAttempts = [
+                    [0.76, 0.115],
+                    [0.74, 0.115],
+                    [0.78, 0.115],
+                    [0.76, 0.14]
+                  ];
+                  for (const [xRatio, yRatio] of coordinateAttempts) {
+                    const x = Math.round(width * xRatio);
+                    const y = Math.round(height * yRatio);
+                    if (clickPoint(x, y)) {
+                      return {clicked: true, reason: 'comments_tab_top_rail_coordinate', x, y, recommendationActive};
+                    }
+                  }
                 }
                 const commentButton = nodes.find(item =>
                   /comment/.test(item.label) &&

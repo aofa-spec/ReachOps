@@ -135,6 +135,44 @@ class FakeDriver:
         self.quit_called = True
 
 
+class CommentPanelActivationTests(unittest.TestCase):
+    def test_photo_recommendation_panel_uses_top_comments_tab_click(self):
+        class Storage:
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event_type, entity_id, payload):
+                self.events.append((event_type, entity_id, payload))
+
+        class RecommendationPanelDriver:
+            def __init__(self):
+                self.script = ""
+
+            def execute_script(self, script):
+                self.script = str(script or "")
+                if "comments_tab_top_rail_coordinate" in self.script and "[0.76, 0.115]" in self.script:
+                    return {
+                        "clicked": True,
+                        "reason": "comments_tab_top_rail_coordinate",
+                        "x": 1368,
+                        "y": 155,
+                        "recommendationActive": True,
+                    }
+                return {"clicked": False, "reason": "wrong_coordinate"}
+
+        router = GrowthTaskRouter.__new__(GrowthTaskRouter)
+        router.storage = Storage()
+        driver = RecommendationPanelDriver()
+
+        with patch("ReachOps.intelligence.growth_task_router.time.sleep"):
+            result = router._ensure_comment_panel_open(driver)
+
+        self.assertTrue(result["clicked"])
+        self.assertEqual(result["reason"], "comments_tab_top_rail_coordinate")
+        self.assertIn("[0.76, 0.115]", driver.script)
+        self.assertEqual(router.storage.events[0][0], "comment_panel_open_attempt")
+
+
 class ProfilePreflightClassificationTests(unittest.TestCase):
     def test_ixbrowser_missing_window_is_profile_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
