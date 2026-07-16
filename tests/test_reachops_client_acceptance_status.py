@@ -61,6 +61,7 @@ from tools.run_reachops_real_flow_macos import acceptance as real_flow_acceptanc
 from tools.run_reachops_real_flow_macos import append_related_source_expansions
 from tools.run_reachops_real_flow_macos import creator_url_from_tiktok_url
 from tools.run_reachops_real_flow_macos import summarize_scenario as summarize_real_flow_scenario
+from tools.run_reachops_real_flow_macos import unavailable_profile_reasons
 from tools.reachops_run_id import unique_run_dir
 from tools.reachops_p08_failure_matrix import build_matrix as build_p08_failure_matrix
 from tools.reachops_web_ui import (
@@ -7071,6 +7072,20 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertTrue(result["duplicate_suppression"]["passed"])
         self.assertTrue(next(item for item in result["targets"] if item["name"] == "lead_pipeline")["passed"])
+
+    def test_real_flow_treats_page_timeout_as_unavailable_profile(self):
+        reasons = unavailable_profile_reasons(
+            {
+                "profile_preflight": {
+                    "results": [
+                        {"profile_id": "18430", "ok": False, "error_code": "PAGE_TIMEOUT"},
+                        {"profile_id": "13685", "ok": True, "error_code": ""},
+                    ]
+                }
+            }
+        )
+
+        self.assertEqual(reasons, {"18430": "PAGE_TIMEOUT"})
 
     def test_real_flow_expands_content_url_to_creator_after_low_intent(self):
         scenarios = [

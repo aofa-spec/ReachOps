@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_PROFILE_PREFLIGHT_TIMEOUT_SECONDS = 60
+DEFAULT_PROFILE_PREFLIGHT_WORKERS = 2
 
 
 def utc_stamp() -> str:
@@ -44,6 +46,18 @@ def split_profile_ids(value: str) -> list[str]:
     return [item.strip() for item in str(value or "").replace("，", ",").split(",") if item.strip()]
 
 
+def effective_profile_preflight_timeout(args: argparse.Namespace) -> int:
+    per_wave_timeout = max(
+        5,
+        int(getattr(args, "profile_preflight_timeout", 0) or DEFAULT_PROFILE_PREFLIGHT_TIMEOUT_SECONDS),
+    )
+    explicit_profile_count = len(split_profile_ids(str(getattr(args, "profile_ids", "") or "")))
+    profile_count = explicit_profile_count or max(1, int(getattr(args, "profile_limit", 1) or 1))
+    workers = max(1, min(DEFAULT_PROFILE_PREFLIGHT_WORKERS, profile_count))
+    waves = max(1, (profile_count + workers - 1) // workers)
+    return per_wave_timeout * waves
+
+
 def build_real_flow_command(args: argparse.Namespace) -> list[str]:
     command = [
         sys.executable,
@@ -65,9 +79,9 @@ def build_real_flow_command(args: argparse.Namespace) -> list[str]:
         "--profile-page-timeout",
         str(max(1, int(args.profile_page_timeout or 20))),
         "--profile-preflight-timeout",
-        str(max(1, int(args.profile_preflight_timeout or 25))),
+        str(effective_profile_preflight_timeout(args)),
         "--scenario-timeout",
-        str(max(1, int(args.scenario_timeout or 150))),
+        str(max(1, int(args.scenario_timeout or 240))),
         "--max-profile-launches-per-day",
         str(max(0, int(args.max_profile_launches_per_day or 0))),
         "--target",
@@ -118,11 +132,14 @@ def summarize_iteration(
     }
 
 
-def iteration_passed(row: dict[str, Any]) -> bool:
+def iteration_passed(row: dict[str, Any], minimum_profile_count: int = 1) -> bool:
+    profile_preflight = row.get("profile_preflight") if isinstance(row.get("profile_preflight"), dict) else {}
+    available_profiles = int(profile_preflight.get("available") or 0)
     return bool(
         int(row.get("returncode") or 0) == 0
         and row.get("acceptance_status") == "passed"
         and row.get("no_submit") is True
+        and available_profiles >= max(1, int(minimum_profile_count or 1))
     )
 
 
@@ -133,7 +150,8 @@ def build_summary(
     rows: list[dict[str, Any]],
     terminal: bool = False,
 ) -> dict[str, Any]:
-    passed_count = sum(1 for row in rows if iteration_passed(row))
+    minimum_profile_count = max(1, int(getattr(args, "minimum_profile_count", 3) or 3))
+    passed_count = sum(1 for row in rows if iteration_passed(row, minimum_profile_count))
     failed_count = len(rows) - passed_count
     completed = bool(len(rows) >= int(args.iterations or 0) and failed_count == 0)
     summary = {
@@ -144,7 +162,12 @@ def build_summary(
         "profile_group": str(args.profile_group or ""),
         "profile_ids": split_profile_ids(str(args.profile_ids or "")),
         "adaptive_profile_pool": bool(getattr(args, "adaptive_profile_pool", False)),
-        "minimum_profile_count": max(1, int(getattr(args, "minimum_profile_count", 3) or 3)),
+        "minimum_profile_count": minimum_profile_count,
+        "profile_preflight_timeout_seconds": max(
+            5,
+            int(getattr(args, "profile_preflight_timeout", 0) or DEFAULT_PROFILE_PREFLIGHT_TIMEOUT_SECONDS),
+        ),
+        "effective_profile_preflight_timeout_seconds": effective_profile_preflight_timeout(args),
         "active_profile_ids": list(getattr(args, "active_profile_ids", []) or []),
         "excluded_profile_ids": list(getattr(args, "excluded_profile_ids", []) or []),
         "iterations_requested": int(args.iterations or 0),
@@ -251,9 +274,6 @@ def run_probe(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 f"diagnosis={row.get('diagnosis_status')} duration={row.get('duration_seconds')}s",
                 flush=True,
             )
-        passed = iteration_passed(row)
-        if not passed and not bool(args.continue_on_failure):
-            break
         if (
             profile_ids
             and bool(args.adaptive_profile_pool)
@@ -261,6 +281,9 @@ def run_probe(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             and len(active_profile_ids) < args.minimum_profile_count
         ):
             args.terminal_reason_override = "insufficient_active_profiles_for_m3"
+            break
+        passed = iteration_passed(row, args.minimum_profile_count)
+        if not passed and not bool(args.continue_on_failure):
             break
         if index < int(args.iterations or 1):
             cooldown_seconds = max(0, int(getattr(args, "cooldown_seconds", 0) or 0))
@@ -287,9 +310,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-videos", type=int, default=1)
     parser.add_argument("--max-comments", type=int, default=5)
     parser.add_argument("--profile-page-timeout", type=int, default=20)
-    parser.add_argument("--profile-preflight-timeout", type=int, default=25)
-    parser.add_argument("--scenario-timeout", type=int, default=150)
-    parser.add_argument("--iteration-timeout", type=int, default=210)
+    parser.add_argument("--profile-preflight-timeout", type=int, default=DEFAULT_PROFILE_PREFLIGHT_TIMEOUT_SECONDS)
+    parser.add_argument("--scenario-timeout", type=int, default=240)
+    parser.add_argument("--iteration-timeout", type=int, default=360)
     parser.add_argument("--cooldown-seconds", type=int, default=30)
     parser.add_argument("--max-profile-launches-per-day", type=int, default=80)
     parser.add_argument("--output-dir", default="")

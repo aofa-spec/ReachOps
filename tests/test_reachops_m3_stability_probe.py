@@ -113,6 +113,8 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
         self.assertEqual(command[4:6], ["--profile-ids", "18444,18979,18981"])
         self.assertIn("--max-attempt-batches", command)
         self.assertIn("1", command)
+        timeout_index = command.index("--profile-preflight-timeout")
+        self.assertEqual(command[timeout_index + 1], "120")
         self.assertIn("--json", command)
 
     def test_m3_probe_stops_on_first_failed_iteration(self):
@@ -222,7 +224,50 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
         self.assertEqual(summary["terminal_state"], "COMPLETED")
         command = run_mock.call_args_list[0].args[0]
         self.assertNotIn("--profile-ids", command)
+        timeout_index = command.index("--profile-preflight-timeout")
+        self.assertEqual(command[timeout_index + 1], "120")
         self.assertEqual(summary["profile_ids"], [])
+
+    def test_m3_probe_scales_preflight_timeout_for_certified_profile_pool(self):
+        args = m3.parse_args(
+            [
+                "--target",
+                "https://www.tiktok.com/@ayieinaussie/photo/7646939533241601301",
+                "--profile-group",
+                "获客分组测试",
+                "--profile-ids",
+                "13685,13737,13791,18430,18444,18979,18981",
+                "--profile-limit",
+                "7",
+                "--quiet",
+                "--json",
+            ]
+        )
+
+        command = m3.build_real_flow_command(args)
+
+        timeout_index = command.index("--profile-preflight-timeout")
+        self.assertEqual(command[timeout_index + 1], "240")
+
+    def test_m3_probe_requires_minimum_available_profiles_per_iteration(self):
+        with TemporaryDirectory() as tmpdir:
+            args = self.base_args(tmpdir, iterations=20)
+            run = completed_process(
+                payload_with_pool(
+                    "run_1",
+                    status="passed",
+                    usable_profile_ids=["18444", "18979"],
+                    blocked_profile_ids=["18981"],
+                )
+            )
+            with patch("tools.reachops_m3_stability_probe.subprocess.run", return_value=run):
+                code, summary = m3.run_probe(args)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(summary["terminal_state"], "BLOCKED")
+        self.assertEqual(summary["iterations_completed"], 1)
+        self.assertEqual(summary["passed_count"], 0)
+        self.assertEqual(summary["failed_count"], 1)
 
     def test_m3_probe_requires_three_profiles_by_default(self):
         args = m3.parse_args(
