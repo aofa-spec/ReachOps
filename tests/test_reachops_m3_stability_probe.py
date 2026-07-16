@@ -118,6 +118,29 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
         self.assertEqual(command[timeout_index + 1], "120")
         self.assertIn("--json", command)
 
+    def test_m3_probe_allows_bounded_backfill_batches_for_group_pool(self):
+        args = m3.parse_args(
+            [
+                "--target",
+                "https://chameleonpeptides.com/product/peptide-31/?attribute_pa_strength=50mg",
+                "--profile-group",
+                "获客分组测试",
+                "--profile-limit",
+                "3",
+                "--profile-scan-limit",
+                "11",
+                "--iterations",
+                "20",
+                "--quiet",
+                "--json",
+            ]
+        )
+
+        command = m3.build_real_flow_command(args)
+
+        batch_index = command.index("--max-attempt-batches")
+        self.assertEqual(command[batch_index + 1], "4")
+
     def test_m3_probe_stops_on_first_failed_iteration(self):
         with TemporaryDirectory() as tmpdir:
             args = self.base_args(tmpdir, iterations=20)

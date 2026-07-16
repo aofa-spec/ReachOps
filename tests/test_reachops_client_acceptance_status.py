@@ -60,6 +60,7 @@ from tools.run_reachops_headless_macos import DummyRoot
 from tools.run_reachops_real_flow_macos import acceptance as real_flow_acceptance
 from tools.run_reachops_real_flow_macos import append_related_source_expansions
 from tools.run_reachops_real_flow_macos import creator_url_from_tiktok_url
+from tools.run_reachops_real_flow_macos import scenario_needs_profile_backfill
 from tools.run_reachops_real_flow_macos import summarize_scenario as summarize_real_flow_scenario
 from tools.run_reachops_real_flow_macos import unavailable_profile_reasons
 from tools.reachops_run_id import unique_run_dir
@@ -7073,6 +7074,16 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertTrue(result["duplicate_suppression"]["passed"])
         self.assertTrue(next(item for item in result["targets"] if item["name"] == "lead_pipeline")["passed"])
+
+    def test_real_flow_requests_profile_backfill_when_m3_pool_drops_below_required(self):
+        row = {
+            "status": "ok",
+            "profile_preflight": {"checked": 3, "available": 2, "unavailable": 1},
+            "funnel": {"customer_leads": 2, "outreach_actions": 0},
+        }
+
+        self.assertTrue(scenario_needs_profile_backfill(row, {"18979"}, 3))
+        self.assertFalse(scenario_needs_profile_backfill(row, set(), 3))
 
     def test_real_flow_treats_page_timeout_as_unavailable_profile(self):
         reasons = unavailable_profile_reasons(

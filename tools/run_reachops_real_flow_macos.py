@@ -728,6 +728,14 @@ def scenario_should_retry(row: dict[str, Any], blocked_ids: set[str], attempted_
     return False
 
 
+def scenario_needs_profile_backfill(row: dict[str, Any], blocked_ids: set[str], required_profiles: int) -> bool:
+    if not blocked_ids:
+        return False
+    preflight = row.get("profile_preflight") if isinstance(row.get("profile_preflight"), dict) else {}
+    available = int(preflight.get("available") or 0)
+    return available < max(1, int(required_profiles or 1))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run ReachOps real macOS browser flow across multiple TikTok entry types.")
     parser.add_argument("--base-dir", default="reports/reachops/mac_real_flow")
@@ -928,6 +936,8 @@ def main() -> int:
                 row["quarantine"] = quarantine
                 scenario_attempts.append({"command": command, "summary": dict(row)})
                 final_row = dict(row)
+                if scenario_needs_profile_backfill(row, blocked_ids, int(args.profile_limit or 1)):
+                    continue
                 if not scenario_should_retry(row, blocked_ids, batch_ids):
                     break
             if final_row is None:

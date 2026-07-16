@@ -59,17 +59,20 @@ def effective_profile_preflight_timeout(args: argparse.Namespace) -> int:
 
 
 def build_real_flow_command(args: argparse.Namespace) -> list[str]:
+    profile_limit = max(1, int(args.profile_limit or 1))
+    profile_scan_limit = max(1, int(args.profile_scan_limit or args.profile_limit or 1))
+    max_attempt_batches = max(1, min(4, (profile_scan_limit + profile_limit - 1) // profile_limit))
     command = [
         sys.executable,
         "tools/run_reachops_real_flow_macos.py",
         "--profile-group",
         str(args.profile_group or ""),
         "--profile-limit",
-        str(max(1, int(args.profile_limit or 1))),
+        str(profile_limit),
         "--profile-scan-limit",
-        str(max(1, int(args.profile_scan_limit or args.profile_limit or 1))),
+        str(profile_scan_limit),
         "--max-attempt-batches",
-        "1",
+        str(max_attempt_batches),
         "--max-sources",
         str(max(1, int(args.max_sources or 1))),
         "--max-videos",
