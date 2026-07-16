@@ -137,7 +137,10 @@ def summarize_iteration(
 
 def iteration_passed(row: dict[str, Any], minimum_profile_count: int = 1) -> bool:
     profile_preflight = row.get("profile_preflight") if isinstance(row.get("profile_preflight"), dict) else {}
-    available_profiles = int(profile_preflight.get("available") or 0)
+    available_profiles = max(
+        int(profile_preflight.get("available") or 0),
+        len([item for item in row.get("usable_profile_ids") or [] if str(item or "").strip()]),
+    )
     return bool(
         int(row.get("returncode") or 0) == 0
         and row.get("acceptance_status") == "passed"

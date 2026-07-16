@@ -141,6 +141,17 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
         batch_index = command.index("--max-attempt-batches")
         self.assertEqual(command[batch_index + 1], "4")
 
+    def test_m3_iteration_pass_uses_recovered_usable_profile_pool(self):
+        row = {
+            "returncode": 0,
+            "acceptance_status": "passed",
+            "no_submit": True,
+            "profile_preflight": {"available": 2},
+            "usable_profile_ids": ["18444", "18979", "18981", "13791", "18430"],
+        }
+
+        self.assertTrue(m3.iteration_passed(row, 3))
+
     def test_m3_probe_stops_on_first_failed_iteration(self):
         with TemporaryDirectory() as tmpdir:
             args = self.base_args(tmpdir, iterations=20)
