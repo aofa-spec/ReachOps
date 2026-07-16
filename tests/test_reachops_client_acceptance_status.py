@@ -46,6 +46,7 @@ from tools.reachops_client_delivery_check import (
     build_delivery_check,
     build_real_pilot_evidence_boundary,
     latest_account_repair_apply_status,
+    latest_m3_stability_boundary,
     latest_real_flow_profile_boundary,
     latest_profile_readiness_probe_handoff,
     main as run_delivery_check,
@@ -5432,7 +5433,7 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                                     "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
                                     return_value={
                                         "source_exists": True,
-                                        "source_mtime": 100.0,
+                                        "source_mtime": 0.0,
                                         "profile_group": "获客分组测试",
                                     },
                                 ):
@@ -6159,6 +6160,109 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(boundary["newer_profile_preflight_blocked_count"], 1)
         self.assertEqual(boundary["newer_profile_preflight_passed_count"], 1)
         self.assertEqual(boundary["latest_newer_real_flow"]["run_id"], "passed")
+
+    def test_latest_m3_stability_boundary_marks_insufficient_active_profiles(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            summary_dir = root / "reports" / "reachops" / "mac_real_flow" / "m3_probe_20260716T010000Z"
+            summary_dir.mkdir(parents=True)
+            summary_path = summary_dir / "m3_probe_summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.m3_probe_summary.v1",
+                        "profile_group": "获客分组测试",
+                        "terminal_state": "BLOCKED",
+                        "terminal_reason": "insufficient_active_profiles_for_m3",
+                        "iterations_requested": 20,
+                        "iterations_completed": 1,
+                        "passed_count": 1,
+                        "failed_count": 0,
+                        "minimum_profile_count": 3,
+                        "active_profile_ids": ["18444"],
+                        "excluded_profile_ids": ["13708", "18979", "18981"],
+                        "unauthorized_submit_count": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.utime(summary_path, (200, 200))
+
+            boundary = latest_m3_stability_boundary(root, "获客分组测试")
+
+        self.assertTrue(boundary["source_exists"])
+        self.assertTrue(boundary["blocked_by_accounts"])
+        self.assertEqual(boundary["terminal_reason"], "insufficient_active_profiles_for_m3")
+        self.assertEqual(boundary["active_profile_count"], 1)
+        self.assertEqual(boundary["minimum_profile_count"], 3)
+        self.assertTrue(boundary["does_not_claim_m3_passed"])
+
+    def test_delivery_check_blocks_pass_when_latest_m3_has_insufficient_accounts(self):
+        batch = {"id": "gb_pass", "status": "completed", "profile_group": "获客分组测试", "config_json": "{}"}
+        acceptance = {
+            "readiness": "pass",
+            "checks": {"profile_available_count": 1},
+            "blockers": [],
+            "next_actions": [],
+            "profile_preflight_details": [],
+        }
+        m3_boundary = {
+            "schema_version": "reachops.m3_stability_boundary.v1",
+            "source_exists": True,
+            "profile_group": "获客分组测试",
+            "terminal_state": "BLOCKED",
+            "terminal_reason": "insufficient_active_profiles_for_m3",
+            "iterations_requested": 20,
+            "iterations_completed": 1,
+            "passed_count": 1,
+            "failed_count": 0,
+            "minimum_profile_count": 3,
+            "active_profile_count": 1,
+            "active_profile_ids": ["18444"],
+            "excluded_profile_ids": ["13708", "18979", "18981"],
+            "excluded_profile_count": 3,
+            "unauthorized_submit_count": 0,
+            "blocked_by_accounts": True,
+            "completed_required_iterations": False,
+            "does_not_claim_m3_passed": True,
+        }
+        with TemporaryDirectory() as tmpdir:
+            with patch("tools.reachops_client_delivery_check.latest_batch", return_value=batch):
+                with patch("tools.reachops_client_delivery_check.latest_profile_preflight", return_value={"checked": 1, "available": 1}):
+                    with patch("tools.reachops_client_delivery_check.read_lines", return_value=["DONE   collection batch=gb_pass"]):
+                        with patch("tools.reachops_client_delivery_check.derive_acceptance", return_value=acceptance):
+                            with patch("tools.reachops_client_delivery_check.build_operations_payload", return_value={"counts": {"candidates": 2}}):
+                                with patch(
+                                    "tools.reachops_client_delivery_check.latest_profile_readiness_probe_handoff",
+                                    return_value={
+                                        "source_exists": True,
+                                        "source_mtime": 0.0,
+                                        "profile_group": "获客分组测试",
+                                    },
+                                ):
+                                    with patch(
+                                        "tools.reachops_client_delivery_check.latest_real_flow_profile_boundary",
+                                        return_value={
+                                            "schema_version": "reachops.real_flow_profile_boundary.v1",
+                                            "profile_readiness_stale_for_real_flow": False,
+                                            "post_readiness_real_flow_required": False,
+                                            "does_not_claim_real_account_pool_ready": False,
+                                        },
+                                    ):
+                                        with patch(
+                                            "tools.reachops_client_delivery_check.latest_m3_stability_boundary",
+                                            return_value=m3_boundary,
+                                        ):
+                                            payload = build_delivery_check(Path(tmpdir))
+
+        self.assertEqual(payload["readiness"], "blocked_by_accounts")
+        self.assertEqual(payload["status"], "blocked_by_accounts")
+        self.assertTrue(payload["contract_ok"])
+        self.assertFalse(payload["final_delivery_ready"])
+        self.assertFalse(payload["acceptance_ready"])
+        self.assertIn("m3_stability:latest_account_pool", payload["failed_checks"])
+        self.assertIn("最新 M3 多账号稳定性证据", payload["blockers"][0])
+        self.assertEqual(payload["m3_stability_boundary"]["terminal_reason"], "insufficient_active_profiles_for_m3")
 
     def test_latest_profile_readiness_probe_handoff_indexes_repair_apply_result(self):
         with TemporaryDirectory() as tmpdir:

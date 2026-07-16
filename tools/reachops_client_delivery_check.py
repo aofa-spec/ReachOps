@@ -1267,6 +1267,86 @@ def latest_real_flow_profile_boundary(
     }
 
 
+M3_ACCOUNT_POOL_BLOCKING_REASONS = {
+    "insufficient_active_profiles_for_m3",
+    "insufficient_profile_ids_for_m3",
+}
+
+
+def latest_m3_stability_boundary(root: Path = ROOT_DIR, profile_group: str = "") -> dict:
+    requested_group = str(profile_group or "").strip()
+    summary_paths = sorted(
+        (root / "reports" / "reachops" / "mac_real_flow").glob("m3_probe_*/m3_probe_summary.json"),
+        key=path_mtime,
+        reverse=True,
+    )
+    latest_summary: dict = {}
+    latest_path = ""
+    latest_mtime = 0.0
+    skipped_group_mismatch = 0
+    for summary_path in summary_paths:
+        try:
+            payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        summary_group = str(payload.get("profile_group") or "").strip()
+        if requested_group and summary_group and summary_group != requested_group:
+            skipped_group_mismatch += 1
+            continue
+        latest_summary = payload
+        latest_path = str(summary_path)
+        latest_mtime = path_mtime(summary_path)
+        break
+
+    terminal_state = str(latest_summary.get("terminal_state") or "")
+    terminal_reason = str(latest_summary.get("terminal_reason") or "")
+    active_profile_ids = [str(item) for item in (latest_summary.get("active_profile_ids") or []) if str(item)]
+    excluded_profile_ids = [str(item) for item in (latest_summary.get("excluded_profile_ids") or []) if str(item)]
+    minimum_profile_count = int(latest_summary.get("minimum_profile_count") or 3)
+    iterations_requested = int(latest_summary.get("iterations_requested") or 0)
+    iterations_completed = int(latest_summary.get("iterations_completed") or 0)
+    passed_count = int(latest_summary.get("passed_count") or 0)
+    unauthorized_submit_count = int(latest_summary.get("unauthorized_submit_count") or 0)
+    blocked_by_accounts = bool(
+        latest_summary
+        and terminal_state == "BLOCKED"
+        and terminal_reason in M3_ACCOUNT_POOL_BLOCKING_REASONS
+    )
+    completed_required_iterations = bool(
+        latest_summary
+        and terminal_state == "COMPLETED"
+        and iterations_requested > 0
+        and iterations_completed >= iterations_requested
+        and passed_count >= iterations_requested
+        and unauthorized_submit_count == 0
+    )
+    return {
+        "schema_version": "reachops.m3_stability_boundary.v1",
+        "source_exists": bool(latest_summary),
+        "path": latest_path,
+        "source_mtime": latest_mtime,
+        "profile_group": str(latest_summary.get("profile_group") or ""),
+        "terminal_state": terminal_state,
+        "terminal_reason": terminal_reason,
+        "iterations_requested": iterations_requested,
+        "iterations_completed": iterations_completed,
+        "passed_count": passed_count,
+        "failed_count": int(latest_summary.get("failed_count") or 0),
+        "minimum_profile_count": minimum_profile_count,
+        "active_profile_count": len(active_profile_ids),
+        "active_profile_ids": active_profile_ids,
+        "excluded_profile_ids": excluded_profile_ids,
+        "excluded_profile_count": len(excluded_profile_ids),
+        "unauthorized_submit_count": unauthorized_submit_count,
+        "blocked_by_accounts": blocked_by_accounts,
+        "completed_required_iterations": completed_required_iterations,
+        "skipped_group_mismatch": skipped_group_mismatch,
+        "does_not_claim_m3_passed": not completed_required_iterations,
+    }
+
+
 def build_delivery_check(
     base_dir: Path = DEFAULT_BASE_DIR,
     ixbrowser_metadata: dict | None = None,
@@ -1318,6 +1398,7 @@ def build_delivery_check(
     profile_readiness_handoff = latest_profile_readiness_probe_handoff(ROOT_DIR)
     real_flow_profile_boundary = latest_real_flow_profile_boundary(ROOT_DIR, profile_readiness_handoff)
     current_profile_group = str(batch.get("profile_group") or "").strip()
+    m3_stability_boundary = latest_m3_stability_boundary(ROOT_DIR, current_profile_group)
     readiness_profile_group = str(profile_readiness_handoff.get("profile_group") or "").strip()
     real_flow_boundary_applies = bool(
         acceptance.get("readiness") == "pass"
@@ -1363,6 +1444,33 @@ def build_delivery_check(
         acceptance["readiness"] = "pending_new_run"
         checks_payload = acceptance.get("checks") if isinstance(acceptance.get("checks"), dict) else {}
         checks_payload["real_no_submit_after_profile_readiness"] = False
+        acceptance["checks"] = checks_payload
+    m3_boundary_applies = bool(
+        acceptance.get("readiness") == "pass"
+        and current_profile_group
+        and str(m3_stability_boundary.get("profile_group") or "").strip() == current_profile_group
+    )
+    m3_stability_boundary["applies_to_current_acceptance"] = m3_boundary_applies
+    if m3_boundary_applies and m3_stability_boundary.get("blocked_by_accounts"):
+        active_count = int(m3_stability_boundary.get("active_profile_count") or 0)
+        minimum_count = int(m3_stability_boundary.get("minimum_profile_count") or 3)
+        m3_message = (
+            f"最新 M3 多账号稳定性证据显示当前分组只有 {active_count} 个活跃可用账号，"
+            f"低于 {minimum_count} 个账号门槛；不能把单次 real_no_submit 成功升级为客户端最终交付通过。"
+        )
+        blockers = [item for item in (acceptance.get("blockers") or []) if m3_message not in str(item)]
+        blockers.insert(0, m3_message)
+        acceptance["blockers"] = blockers
+        next_action = (
+            f"补充或修复 {current_profile_group or '当前分组'} 至少 {minimum_count} 个可持续登录账号，"
+            "再复跑 M3 20 次真实 no-submit 稳定性探针。"
+        )
+        actions = [item for item in (acceptance.get("next_actions") or []) if next_action not in str(item)]
+        actions.insert(0, next_action)
+        acceptance["next_actions"] = actions
+        acceptance["readiness"] = "blocked_by_accounts"
+        checks_payload = acceptance.get("checks") if isinstance(acceptance.get("checks"), dict) else {}
+        checks_payload["m3_stability_account_pool_ready"] = False
         acceptance["checks"] = checks_payload
     account_repair_apply = latest_account_repair_apply_status(
         base_dir,
@@ -1612,6 +1720,16 @@ def build_delivery_check(
             **real_flow_profile_boundary,
         }
     )
+    checks.append(
+        {
+            "name": "m3_stability:latest_account_pool",
+            "ok": not bool(
+                m3_stability_boundary.get("applies_to_current_acceptance")
+                and m3_stability_boundary.get("blocked_by_accounts")
+            ),
+            **m3_stability_boundary,
+        }
+    )
     if ixbrowser_metadata:
         count_consistency = selected_group_count_consistency(ixbrowser_metadata)
         checks.append(
@@ -1641,6 +1759,7 @@ def build_delivery_check(
     acceptance_gate_check_names = {
         "acceptance:ready",
         "profile_readiness:current_real_flow_boundary",
+        "m3_stability:latest_account_pool",
     }
     contract_checks = [item for item in checks if item.get("name") not in acceptance_gate_check_names]
     contract_ok = all(item.get("ok") for item in contract_checks)
@@ -1696,6 +1815,7 @@ def build_delivery_check(
         "account_support_handoff": account_support_handoff,
         "profile_readiness_handoff": profile_readiness_handoff,
         "real_flow_profile_boundary": real_flow_profile_boundary,
+        "m3_stability_boundary": m3_stability_boundary,
         "remediation_report": remediation,
         "account_repair_summary": account_repair_summary,
         "account_repair_apply": account_repair_apply,
