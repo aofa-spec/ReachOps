@@ -60,6 +60,8 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
                 str(iterations),
                 "--output-dir",
                 str(Path(tmpdir) / "m3_probe"),
+                "--cooldown-seconds",
+                "0",
                 "--quiet",
                 "--json",
             ]
@@ -123,6 +125,24 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
         self.assertEqual(summary["rows"][0]["returncode"], 2)
         self.assertIn("iteration_timeout", summary["rows"][0]["stderr_tail"])
         self.assertEqual(run_mock.call_count, 1)
+
+    def test_m3_probe_waits_between_successful_iterations_when_configured(self):
+        with TemporaryDirectory() as tmpdir:
+            args = self.base_args(tmpdir, iterations=2)
+            args.cooldown_seconds = 7
+            runs = [
+                completed_process(completed_payload("run_1")),
+                completed_process(completed_payload("run_2")),
+            ]
+            with patch("tools.reachops_m3_stability_probe.subprocess.run", side_effect=runs), patch(
+                "tools.reachops_m3_stability_probe.time.sleep"
+            ) as sleep_mock:
+                code, summary = m3.run_probe(args)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(summary["terminal_state"], "COMPLETED")
+        self.assertEqual(summary["cooldown_seconds"], 7)
+        sleep_mock.assert_called_once_with(7)
 
     def test_m3_probe_requires_three_profiles_by_default(self):
         args = m3.parse_args(

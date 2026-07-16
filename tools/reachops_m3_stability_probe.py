@@ -144,6 +144,7 @@ def build_summary(
         "profile_ids": split_profile_ids(str(args.profile_ids or "")),
         "iterations_requested": int(args.iterations or 0),
         "iterations_completed": len(rows),
+        "cooldown_seconds": max(0, int(getattr(args, "cooldown_seconds", 0) or 0)),
         "passed_count": passed_count,
         "failed_count": failed_count,
         "terminal_state": "COMPLETED" if completed else "BLOCKED" if terminal else "RUNNING",
@@ -221,8 +222,15 @@ def run_probe(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 f"diagnosis={row.get('diagnosis_status')} duration={row.get('duration_seconds')}s",
                 flush=True,
             )
-        if not iteration_passed(row) and not bool(args.continue_on_failure):
+        passed = iteration_passed(row)
+        if not passed and not bool(args.continue_on_failure):
             break
+        if index < int(args.iterations or 1):
+            cooldown_seconds = max(0, int(getattr(args, "cooldown_seconds", 0) or 0))
+            if cooldown_seconds:
+                if bool(args.print_progress):
+                    print(f"M3 cooldown {cooldown_seconds}s before next iteration", flush=True)
+                time.sleep(cooldown_seconds)
     summary = build_summary(args, started_at=started_at, rows=rows, terminal=True)
     summary["summary_path"] = str(summary_path)
     write_json(summary_path, summary)
@@ -244,6 +252,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--profile-preflight-timeout", type=int, default=25)
     parser.add_argument("--scenario-timeout", type=int, default=150)
     parser.add_argument("--iteration-timeout", type=int, default=210)
+    parser.add_argument("--cooldown-seconds", type=int, default=30)
     parser.add_argument("--max-profile-launches-per-day", type=int, default=80)
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--continue-on-failure", action="store_true")
