@@ -2819,7 +2819,7 @@ class GrowthIntelligenceStandaloneApp:
                             launch_stagger_seconds=launch_stagger,
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
-                            retain_successful_browser_after_check=True,
+                            retain_successful_browser_after_check=False,
                             quarantine_on_failure=remote_account_quarantine,
                         ),
                     )
@@ -2847,7 +2847,7 @@ class GrowthIntelligenceStandaloneApp:
                             launch_stagger_seconds=launch_stagger,
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
-                            retain_successful_browser_after_check=True,
+                            retain_successful_browser_after_check=False,
                             quarantine_on_failure=remote_account_quarantine,
                         ),
                     )

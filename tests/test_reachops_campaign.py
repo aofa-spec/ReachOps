@@ -13562,6 +13562,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertNotIn("bad-kernel", [row["profile_id"] for row in profiles])
         self.assertTrue(any("recoverable_shortfall candidates=2" in row for row in logs))
 
+    def test_native_collection_preflight_releases_success_profiles_before_backfill(self):
+        source = Path("ReachOps/workbench/standalone_app.py").read_text(encoding="utf-8")
+        collection_block = source[source.index("def checker_factory(batch_size: int):") : source.index("queue_profile_target =")]
+
+        self.assertIn("close_browser_after_check=True", collection_block)
+        self.assertIn("retain_successful_browser_after_check=False", collection_block)
+        self.assertNotIn("retain_successful_browser_after_check=True", collection_block)
+
     def test_profile_group_display_keeps_operator_readable_group_name(self):
         display = group_display_name({"group_id": "281726", "group_name": "加拿大获客组", "count": 12})
 
