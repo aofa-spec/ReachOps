@@ -1,0 +1,72 @@
+name: Commit Validated Truthful Execution Patch
+
+on:
+  push:
+    branches:
+      - agent/reachops-truthful-execution-p0
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  commit-validated-patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      REACHOPS_REPAIR_BACKOFF_MAX_SECONDS: "0"
+      REACHOPS_BROWSER_FALLBACK_LEGACY: "0"
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/reachops-truthful-execution-p0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Apply validated migrations
+        run: |
+          python tools/apply_truthful_execution_p0.py
+          python tools/apply_truthful_execution_p0_compat.py
+
+      - name: Compile changed modules
+        run: |
+          python -m py_compile \
+            ReachOps/workbench/action_router.py \
+            ReachOps/intelligence/storage.py \
+            ReachOps/workbench/workflow_service.py \
+            tools/reachops_operator_pressure.py \
+            tests/test_reachops_campaign.py \
+            tests/test_truthful_execution_semantics.py
+
+      - name: Re-run truthful execution tests
+        run: python -m unittest -v tests.test_truthful_execution_semantics
+
+      - name: Commit core implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ReachOps/workbench/action_router.py
+          git add ReachOps/intelligence/storage.py
+          git add ReachOps/workbench/workflow_service.py
+          git add tools/reachops_operator_pressure.py
+          git add tests/test_reachops_campaign.py
+          git add tests/test_truthful_execution_semantics.py
+          git diff --cached --check
+          git commit -m "Enforce truthful execution semantics"
+          git push origin HEAD:agent/reachops-truthful-execution-p0
