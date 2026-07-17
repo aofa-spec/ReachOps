@@ -7134,6 +7134,27 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
 
         self.assertEqual(reasons, {"18430": "PAGE_TIMEOUT"})
 
+    def test_real_flow_treats_modal_blocked_as_unavailable_profile_for_backfill(self):
+        reasons = unavailable_profile_reasons(
+            {
+                "profile_preflight": {
+                    "results": [
+                        {"profile_id": "18444", "ok": False, "error_code": "MODAL_BLOCKED"},
+                        {"profile_id": "18979", "ok": True, "error_code": ""},
+                        {"profile_id": "18981", "ok": False, "error_code": "MODAL_BLOCKED"},
+                    ]
+                }
+            }
+        )
+        row = {
+            "status": "ok",
+            "profile_preflight": {"checked": 3, "available": 1, "unavailable": 2},
+            "funnel": {"customer_leads": 0, "outreach_actions": 0},
+        }
+
+        self.assertEqual(reasons, {"18444": "MODAL_BLOCKED", "18981": "MODAL_BLOCKED"})
+        self.assertTrue(scenario_needs_profile_backfill(row, set(reasons), 3))
+
     def test_real_flow_expands_content_url_to_creator_after_low_intent(self):
         scenarios = [
             {
