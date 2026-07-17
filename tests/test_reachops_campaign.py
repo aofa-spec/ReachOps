@@ -12207,6 +12207,65 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertGreaterEqual(result["success"], 1)
             self.assertIn("exec-2", [row.get("profile_id") for row in result["results"] if row.get("status") == "success"])
 
+    def test_live_preflight_login_required_cools_down_without_consuming_next_profile(self):
+        class LoginDropExecutor:
+            def __init__(self):
+                self.profile_calls = []
+
+            def execute(self, action, profile, rendered_text, dry_run=True):
+                profile_id = str(profile.get("profile_id") or "")
+                self.profile_calls.append(profile_id)
+                if profile_id == "exec-1":
+                    return {
+                        "status": "failed",
+                        "error_code": "LOGIN_REQUIRED",
+                        "error_message": "login required",
+                        "evidence_path": "evidence://preflight/login_required",
+                    }
+                return {
+                    "status": "success",
+                    "error_code": "",
+                    "error_message": "",
+                    "evidence_path": "evidence://preflight/should_not_consume",
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            plan = service.create_campaign_plan("https://www.tiktok.com/@beauty_creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+            )
+            executor = LoginDropExecutor()
+
+            result = GrowthWorkflowService(service).run_action_router(
+                [{"profile_id": "exec-1", "group_name": "US"}, {"profile_id": "exec-2", "group_name": "US"}],
+                config=ActionRouterConfig(
+                    max_workers=1,
+                    per_profile_action_limit=10,
+                    max_switch_attempts=2,
+                    action_types=["comment_reply"],
+                    dry_run=False,
+                    live_preflight_only=True,
+                    allow_live_submit=False,
+                ),
+                platform_executor=executor,
+                limit=1,
+                export_report=False,
+            )
+
+            self.assertEqual(executor.profile_calls, ["exec-1"])
+            self.assertEqual(result["selected_actions"], 1)
+            self.assertEqual(result["failed"], 0)
+            self.assertEqual(result["skipped"], 1)
+            self.assertEqual(result["account_switched"], 0)
+            self.assertEqual(result["errors"]["LOGIN_REQUIRED"], 1)
+            skipped = result["results"][0]
+            self.assertTrue(skipped["no_submit_account_degraded"])
+            self.assertFalse(skipped["switch_profile"])
+            self.assertEqual(skipped["degrade_to"], "skip_action_for_this_run")
+
     def test_action_router_allows_unlimited_comment_run_when_limits_are_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = make_reachops_service(tmp)

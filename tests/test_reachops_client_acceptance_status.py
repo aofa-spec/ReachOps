@@ -7119,6 +7119,29 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertIn("账号池不足", summary["title"])
         self.assertTrue(any("至少 3 个" in item for item in summary["next_actions"]))
 
+    def test_client_operator_summary_uses_real_runtime_action_counts(self):
+        summary = build_client_operator_summary(
+            {
+                "status": "completed",
+                "terminal_line": "FAST acceptance status=executed mode=preflight actions=6 success=3 failed=3 skipped=0 no_submit=true error=无",
+                "tail": [
+                    "CHECK  profile_preflight checked=6 available=3 unavailable=3 errors=LOGIN_REQUIRED=2, PROFILE_PREFLIGHT_TIMEOUT=1",
+                    "FAST collection_result mode=preflight used_profiles=3 processed_sources=5 failed_sources=1 no_submit=true",
+                    "DONE   action_preflight selected=6 success=3 failed=3 skipped=0 switched=1 profiles=2",
+                ],
+                "no_submit": True,
+            }
+        )
+
+        self.assertEqual(summary["customer_state"], "completed_with_account_attention")
+        self.assertIn("部分账号需处理", summary["title"])
+        self.assertIn("处理来源 5 个", summary["message"])
+        self.assertIn("触达预检 6 个动作", summary["message"])
+        self.assertIn("成功 3 个、失败 3 个", summary["message"])
+        self.assertEqual(summary["technical_reference"]["runtime_counts"]["used_profiles"], 3)
+        self.assertEqual(summary["technical_reference"]["runtime_counts"]["runtime_errors"]["LOGIN_REQUIRED"], 2)
+        self.assertTrue(summary["no_submit"])
+
     def test_real_flow_summary_carries_no_action_reason_when_no_actions(self):
         payload = {
             "status": "ok",

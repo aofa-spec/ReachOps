@@ -60,6 +60,12 @@ SWITCH_PROFILE_CODES = {
     "VIDEO_HOURLY_LIMIT_EXCEEDED",
 }
 
+NO_SUBMIT_ACCOUNT_DEGRADE_CODES = {
+    "LOGIN_REQUIRED",
+    "CAPTCHA_DETECTED",
+    "ACCOUNT_RESTRICTED",
+}
+
 FALLBACK_CODES = {
     "DM_NOT_AVAILABLE",
     "DM_ENTRY_NOT_FOUND",
@@ -555,25 +561,51 @@ class ActionRouter:
             page_state=page_state if isinstance(page_state, dict) else {},
             max_retries=1,
         )
+        no_submit_account_degraded = (
+            config.live_preflight_only
+            and not config.allow_live_submit
+            and error_code in NO_SUBMIT_ACCOUNT_DEGRADE_CODES
+        )
+        if no_submit_account_degraded:
+            repair_decision = dict(repair_decision)
+            repair_decision["action"] = "cooldown_profile_and_skip_no_submit_action"
+            repair_decision["reason"] = "no_submit_preflight_profile_became_unavailable"
+            repair_decision["switch_profile"] = False
+            repair_decision["retry_same_profile"] = False
+            repair_decision["fallback_allowed"] = False
+            repair_decision["degrade_to"] = "skip_action_for_this_run"
+            repair_decision["terminal_outcome"] = "skipped_no_submit_account_degraded"
+            repair_decision["next_actions"] = [
+                "标记当前账号冷却或隔离。",
+                "本轮 no-submit 预检不再用其他账号重复同一动作。",
+                "修复 TikTok 登录态或账号限制后再进入下一轮低损耗复测。",
+            ]
         account_health = {}
         if repair_decision.get("cooldown_profile") or error_code in SWITCH_PROFILE_CODES:
             account_health = self.health_manager.record_failure(profile, error_code, error_message)
+        public_status = "skipped" if no_submit_account_degraded else "failed"
+        public_message = (
+            f"no-submit preflight skipped because profile became unavailable: {error_code}"
+            if no_submit_account_degraded
+            else error_message
+        )
         result = self._record(
             action,
             profile,
-            "failed",
+            public_status,
             error_code,
-            error_message,
+            public_message,
             str(platform_result.get("evidence_path") or self._evidence_stub(action, profile, error_code)),
             attempt,
         )
         result["repair_decision"] = repair_decision
         if account_health:
             result["account_health"] = account_health
-        result["retry_same_profile"] = bool(repair_decision.get("retry_same_profile"))
-        result["switch_profile"] = bool(repair_decision.get("switch_profile")) or error_code in SWITCH_PROFILE_CODES
+        result["no_submit_account_degraded"] = no_submit_account_degraded
+        result["retry_same_profile"] = False if no_submit_account_degraded else bool(repair_decision.get("retry_same_profile"))
+        result["switch_profile"] = False if no_submit_account_degraded else bool(repair_decision.get("switch_profile")) or error_code in SWITCH_PROFILE_CODES
         result["degrade_to"] = str(repair_decision.get("degrade_to") or "")
-        result["fallback_available"] = bool(repair_decision.get("fallback_allowed")) or bool(
+        result["fallback_available"] = False if no_submit_account_degraded else bool(repair_decision.get("fallback_allowed")) or bool(
             self._fallback_action(action, error_code, create=False, batch_id=config.batch_id)
         )
         platform_repair_step_results = [
