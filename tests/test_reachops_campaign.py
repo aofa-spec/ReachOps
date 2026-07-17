@@ -35,7 +35,7 @@ from ReachOps.workbench.profile_preflight import ProfilePreflightChecker, Profil
 from ReachOps.workbench.console import GrowthOpsConsole, format_campaign_plan_summary, quick_send_mode_key, quick_send_preset
 from ReachOps.workbench.console import group_name_from_display as console_group_name_from_display
 from ReachOps.workbench.console import safe_tk_option as console_safe_tk_option
-from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp, group_display_name, group_name_from_display, stable_combobox_values
+from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp, collection_profile_preflight_timing, group_display_name, group_name_from_display, stable_combobox_values
 from ReachOps.workbench.tiktok_action_executor import TikTokActionExecutorConfig, TikTokSeleniumActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from ReachOps.workbench.risk_gate import RiskGate
@@ -13940,6 +13940,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(summary["available"], 3)
         self.assertGreaterEqual(checker.calls, 2)
         self.assertTrue(any("backfill_start" in row for row in logs))
+
+    def test_collection_quick_profile_preflight_uses_stable_bounded_timing(self):
+        initial = collection_profile_preflight_timing("quick", 2)
+        recovery = collection_profile_preflight_timing("quick", 2, recovery=True)
+        standard = collection_profile_preflight_timing("standard", 2)
+
+        self.assertEqual(initial["page_timeout"], 18)
+        self.assertEqual(initial["total_timeout"], 48)
+        self.assertEqual(initial["launch_stagger"], 1.2)
+        self.assertEqual(recovery["page_timeout"], 24)
+        self.assertEqual(recovery["total_timeout"], 70)
+        self.assertGreater(recovery["total_timeout"], initial["total_timeout"])
+        self.assertEqual(standard["total_timeout"], 36)
 
     def test_standalone_collection_preflight_starts_after_minimum_available_profile(self):
         class Checker:

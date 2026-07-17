@@ -90,6 +90,40 @@ def parse_keyword_list(value: str) -> list[str]:
     return items
 
 
+def collection_profile_preflight_timing(volume_key: str, batch_size: int, *, recovery: bool = False) -> dict:
+    """Bounded profile preflight timings tuned for real ixBrowser startup variance."""
+
+    quick = str(volume_key or "") == "quick"
+    batch_size = max(1, int(batch_size or 1))
+    if recovery:
+        if quick:
+            return {
+                "page_timeout": 24,
+                "wait_after_open": 1.0,
+                "total_timeout": max(60, min(150, batch_size * 35)),
+                "launch_stagger": 1.5,
+            }
+        return {
+            "page_timeout": 18,
+            "wait_after_open": 1.2,
+            "total_timeout": max(35, min(180, batch_size * 28)),
+            "launch_stagger": 2.0,
+        }
+    if quick:
+        return {
+            "page_timeout": 18,
+            "wait_after_open": 1.0,
+            "total_timeout": max(45, min(120, batch_size * 24)),
+            "launch_stagger": 1.2,
+        }
+    return {
+        "page_timeout": 10,
+        "wait_after_open": 0.8,
+        "total_timeout": max(30, min(90, batch_size * 18)),
+        "launch_stagger": 2.0,
+    }
+
+
 def normalize_ixbrowser_profile(row: dict) -> dict:
     return {
         "profile_id": str(row.get("profile_id") or row.get("profileId") or row.get("browser_id") or row.get("id") or ""),
@@ -2801,24 +2835,15 @@ class GrowthIntelligenceStandaloneApp:
                     self.root.after(0, lambda: self.console.refresh(self._current_snapshot()))
                     return
                 def checker_factory(batch_size: int):
-                    if quick_volume_key == "quick":
-                        page_timeout = 12
-                        wait_after_open = 1.0
-                        total_timeout = max(30, min(72, max(1, batch_size) * 12))
-                        launch_stagger = 0.8
-                    else:
-                        page_timeout = 10
-                        wait_after_open = 0.8
-                        total_timeout = max(30, min(90, max(1, batch_size) * 18))
-                        launch_stagger = 2.0
+                    timing = collection_profile_preflight_timing(quick_volume_key, batch_size)
                     checker = ProfilePreflightChecker(
                         self.service.storage,
                         ProfilePreflightConfig(
                             max_workers=1,
-                            page_load_timeout_seconds=page_timeout,
-                            wait_after_open_seconds=wait_after_open,
-                            total_timeout_seconds=total_timeout,
-                            launch_stagger_seconds=launch_stagger,
+                            page_load_timeout_seconds=timing["page_timeout"],
+                            wait_after_open_seconds=timing["wait_after_open"],
+                            total_timeout_seconds=timing["total_timeout"],
+                            launch_stagger_seconds=timing["launch_stagger"],
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
                             retain_successful_browser_after_check=False,
@@ -2829,24 +2854,15 @@ class GrowthIntelligenceStandaloneApp:
                     return checker
 
                 def recovery_checker_factory(batch_size: int):
-                    if quick_volume_key == "quick":
-                        page_timeout = 16
-                        wait_after_open = 1.0
-                        total_timeout = max(36, min(90, max(1, batch_size) * 15))
-                        launch_stagger = 1.0
-                    else:
-                        page_timeout = 18
-                        wait_after_open = 1.2
-                        total_timeout = max(35, min(180, max(1, batch_size) * 28))
-                        launch_stagger = 2.0
+                    timing = collection_profile_preflight_timing(quick_volume_key, batch_size, recovery=True)
                     checker = ProfilePreflightChecker(
                         self.service.storage,
                         ProfilePreflightConfig(
                             max_workers=1,
-                            page_load_timeout_seconds=page_timeout,
-                            wait_after_open_seconds=wait_after_open,
-                            total_timeout_seconds=total_timeout,
-                            launch_stagger_seconds=launch_stagger,
+                            page_load_timeout_seconds=timing["page_timeout"],
+                            wait_after_open_seconds=timing["wait_after_open"],
+                            total_timeout_seconds=timing["total_timeout"],
+                            launch_stagger_seconds=timing["launch_stagger"],
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
                             retain_successful_browser_after_check=False,
