@@ -83,7 +83,9 @@ def patch_legacy_tests() -> None:
 ''',
         '''            self.assertEqual(fallback["batch_id"], batch["id"])
             self.assertEqual(fallback["status"], "pending_review")
-            self.assertEqual(fallback["suggested_text"], "")
+            dm_action = next(row for row in actions if row["action_type"] == "dm_review")
+            self.assertTrue(fallback["suggested_text"])
+            self.assertNotEqual(fallback["suggested_text"], dm_action["suggested_text"])
             truth = service.storage.outreach_execution_truth_counts(batch["id"])
             self.assertGreaterEqual(truth["simulated_success"], 1)
             self.assertEqual(truth["live_verified"], 0)
