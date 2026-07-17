@@ -13,6 +13,7 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROFILE_PREFLIGHT_TIMEOUT_SECONDS = 60
 DEFAULT_PROFILE_PREFLIGHT_WORKERS = 2
+DEFAULT_M3_LOW_LOSS_ITERATIONS = 1
 DEFAULT_REPEATED_TARGET_REAL_ITERATIONS = 3
 RESOURCE_CONSERVATION_CODES = {"duplicate_suppressed", "no_candidates"}
 RESOURCE_CONSERVATION_DIAGNOSES = {"duplicate_suppressed", "content_found_no_comments"}
@@ -191,10 +192,11 @@ def build_summary(
     passed_count = sum(1 for row in rows if iteration_passed(row, minimum_profile_count))
     failed_count = len(rows) - passed_count
     completed = bool(len(rows) >= int(args.iterations or 0) and failed_count == 0)
+    pressure_mode = bool(getattr(args, "allow_repeated_target_pressure", False))
     completed_reason = (
-        "twenty_consecutive_real_no_submit_passed"
-        if int(args.iterations or 0) >= 20
-        else "requested_real_no_submit_iterations_passed"
+        "support_repeated_target_pressure_passed"
+        if pressure_mode and int(args.iterations or 0) > DEFAULT_M3_LOW_LOSS_ITERATIONS
+        else "m3_low_loss_real_no_submit_passed"
     )
     summary = {
         "schema_version": "reachops.m3_probe_summary.v1",
@@ -207,6 +209,9 @@ def build_summary(
         "minimum_profile_count": minimum_profile_count,
         "account_resource_policy": {
             "allow_repeated_target_pressure": bool(getattr(args, "allow_repeated_target_pressure", False)),
+            "professional_acceptance_profile": "m3_low_loss_real_no_submit",
+            "default_iterations": DEFAULT_M3_LOW_LOSS_ITERATIONS,
+            "high_frequency_pressure_is_not_required_for_m3": True,
             "resource_conservation_after": max(
                 1,
                 int(getattr(args, "resource_conservation_after", 0) or DEFAULT_REPEATED_TARGET_REAL_ITERATIONS),
@@ -358,7 +363,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--profile-limit", type=int, default=3)
     parser.add_argument("--profile-scan-limit", type=int, default=3)
     parser.add_argument("--minimum-profile-count", type=int, default=3)
-    parser.add_argument("--iterations", type=int, default=20)
+    parser.add_argument("--iterations", type=int, default=DEFAULT_M3_LOW_LOSS_ITERATIONS)
     parser.add_argument("--max-sources", type=int, default=1)
     parser.add_argument("--max-videos", type=int, default=1)
     parser.add_argument("--max-comments", type=int, default=5)

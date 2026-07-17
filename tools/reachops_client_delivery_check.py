@@ -549,7 +549,7 @@ def build_account_retest_checklist(resolution: dict, repair_summary: dict | None
 def build_m3_retest_command(m3_boundary: dict, group: str) -> str:
     target = str(m3_boundary.get("target") or "").strip()
     profile_group = str(m3_boundary.get("profile_group") or group or "United States").strip()
-    iterations = max(20, int(m3_boundary.get("iterations_requested") or 20))
+    iterations = 1
     minimum_profile_count = max(3, int(m3_boundary.get("minimum_profile_count") or 3))
     command = [
         "PYTHONDONTWRITEBYTECODE=1",
@@ -668,7 +668,7 @@ def build_account_support_handoff(
                 "title": "复跑 M3 多账号 no-submit 稳定性探针",
                 "profile_group": str(m3_boundary.get("profile_group") or group_for_m3),
                 "command": m3_retest_command,
-                "expected": "terminal_state=COMPLETED、iterations_completed>=20、unauthorized_submit_count=0；账号不足必须保持 blocked_by_accounts。",
+                "expected": "terminal_state=COMPLETED、iterations_completed>=1、minimum_profile_count>=3、unauthorized_submit_count=0；重复目标不得高频消耗账号。",
                 "blocks_retest_until_done": True,
                 "no_browser_started_by_reachops": False,
                 "no_submit": True,
@@ -1410,6 +1410,15 @@ def latest_m3_stability_boundary(root: Path = ROOT_DIR, profile_group: str = "")
     iterations_completed = int(latest_summary.get("iterations_completed") or 0)
     passed_count = int(latest_summary.get("passed_count") or 0)
     unauthorized_submit_count = int(latest_summary.get("unauthorized_submit_count") or 0)
+    account_resource_policy = (
+        latest_summary.get("account_resource_policy")
+        if isinstance(latest_summary.get("account_resource_policy"), dict)
+        else {}
+    )
+    professional_m3_profile = bool(
+        account_resource_policy.get("professional_acceptance_profile") == "m3_low_loss_real_no_submit"
+        and account_resource_policy.get("high_frequency_pressure_is_not_required_for_m3") is True
+    )
     blocked_by_accounts = bool(
         latest_summary
         and terminal_state == "BLOCKED"
@@ -1417,6 +1426,7 @@ def latest_m3_stability_boundary(root: Path = ROOT_DIR, profile_group: str = "")
     )
     completed_required_iterations = bool(
         latest_summary
+        and professional_m3_profile
         and terminal_state == "COMPLETED"
         and iterations_requested > 0
         and iterations_completed >= iterations_requested
@@ -1443,6 +1453,11 @@ def latest_m3_stability_boundary(root: Path = ROOT_DIR, profile_group: str = "")
         "excluded_profile_ids": excluded_profile_ids,
         "excluded_profile_count": len(excluded_profile_ids),
         "unauthorized_submit_count": unauthorized_submit_count,
+        "professional_acceptance_profile": str(account_resource_policy.get("professional_acceptance_profile") or ""),
+        "high_frequency_pressure_is_not_required_for_m3": bool(
+            account_resource_policy.get("high_frequency_pressure_is_not_required_for_m3")
+        ),
+        "legacy_m3_summary": bool(latest_summary and not professional_m3_profile),
         "blocked_by_accounts": blocked_by_accounts,
         "completed_required_iterations": completed_required_iterations,
         "skipped_group_mismatch": skipped_group_mismatch,
@@ -1566,7 +1581,7 @@ def build_delivery_check(
         acceptance["blockers"] = blockers
         next_action = (
             f"补充或修复 {current_profile_group or '当前分组'} 至少 {minimum_count} 个可持续登录账号，"
-            "再复跑 M3 20 次真实 no-submit 稳定性探针。"
+            "再复跑一次低损耗 M3 真实 no-submit 验收；不要对同一目标做 20 轮高频压测。"
         )
         actions = [item for item in (acceptance.get("next_actions") or []) if next_action not in str(item)]
         actions.insert(0, next_action)

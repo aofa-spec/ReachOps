@@ -6290,7 +6290,7 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
                         "profile_group": "获客分组测试",
                         "terminal_state": "BLOCKED",
                         "terminal_reason": "insufficient_active_profiles_for_m3",
-                        "iterations_requested": 20,
+                        "iterations_requested": 1,
                         "iterations_completed": 1,
                         "passed_count": 1,
                         "failed_count": 0,
@@ -6313,6 +6313,71 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(boundary["minimum_profile_count"], 3)
         self.assertTrue(boundary["does_not_claim_m3_passed"])
 
+    def test_latest_m3_stability_boundary_rejects_legacy_completed_summary(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            summary_dir = root / "reports" / "reachops" / "mac_real_flow" / "m3_probe_20260716T010000Z"
+            summary_dir.mkdir(parents=True)
+            summary_path = summary_dir / "m3_probe_summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.m3_probe_summary.v1",
+                        "profile_group": "获客分组测试",
+                        "terminal_state": "COMPLETED",
+                        "terminal_reason": "requested_real_no_submit_iterations_passed",
+                        "iterations_requested": 3,
+                        "iterations_completed": 3,
+                        "passed_count": 3,
+                        "failed_count": 0,
+                        "minimum_profile_count": 3,
+                        "unauthorized_submit_count": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            boundary = latest_m3_stability_boundary(root, "获客分组测试")
+
+        self.assertFalse(boundary["completed_required_iterations"])
+        self.assertTrue(boundary["does_not_claim_m3_passed"])
+        self.assertTrue(boundary["legacy_m3_summary"])
+
+    def test_latest_m3_stability_boundary_accepts_professional_low_loss_summary(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            summary_dir = root / "reports" / "reachops" / "mac_real_flow" / "m3_probe_20260716T010000Z"
+            summary_dir.mkdir(parents=True)
+            summary_path = summary_dir / "m3_probe_summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.m3_probe_summary.v1",
+                        "profile_group": "获客分组测试",
+                        "terminal_state": "COMPLETED",
+                        "terminal_reason": "m3_low_loss_real_no_submit_passed",
+                        "iterations_requested": 1,
+                        "iterations_completed": 1,
+                        "passed_count": 1,
+                        "failed_count": 0,
+                        "minimum_profile_count": 3,
+                        "unauthorized_submit_count": 0,
+                        "account_resource_policy": {
+                            "professional_acceptance_profile": "m3_low_loss_real_no_submit",
+                            "high_frequency_pressure_is_not_required_for_m3": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            boundary = latest_m3_stability_boundary(root, "获客分组测试")
+
+        self.assertTrue(boundary["completed_required_iterations"])
+        self.assertFalse(boundary["does_not_claim_m3_passed"])
+        self.assertFalse(boundary["legacy_m3_summary"])
+        self.assertEqual(boundary["professional_acceptance_profile"], "m3_low_loss_real_no_submit")
+
     def test_delivery_check_blocks_pass_when_latest_m3_has_insufficient_accounts(self):
         batch = {"id": "gb_pass", "status": "completed", "profile_group": "获客分组测试", "config_json": "{}"}
         acceptance = {
@@ -6330,7 +6395,7 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
             "profile_group": "获客分组测试",
             "terminal_state": "BLOCKED",
             "terminal_reason": "insufficient_active_profiles_for_m3",
-            "iterations_requested": 20,
+            "iterations_requested": 1,
             "iterations_completed": 1,
             "cooldown_seconds": 60,
             "passed_count": 1,
@@ -6389,10 +6454,12 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(handoff["m3_stability_probe"]["active_profile_count"], 1)
         self.assertEqual(handoff["m3_stability_probe"]["minimum_profile_count"], 3)
         self.assertIn("reachops_m3_stability_probe.py", handoff["m3_stability_probe"]["retest_command"])
-        self.assertIn("--iterations 20", handoff["m3_stability_probe"]["retest_command"])
+        self.assertIn("--iterations 1", handoff["m3_stability_probe"]["retest_command"])
+        self.assertIn("不要对同一目标做 20 轮高频压测", " ".join(payload["next_actions"]))
         checklist_by_id = {row["id"]: row for row in handoff["retest_checklist"]}
         self.assertIn("m3_stability_retest", checklist_by_id)
         self.assertTrue(checklist_by_id["m3_stability_retest"]["blocks_retest_until_done"])
+        self.assertIn("iterations_completed>=1", checklist_by_id["m3_stability_retest"]["expected"])
         self.assertIn("reachops_m3_stability_probe.py", "\n".join(handoff["retest_commands"]))
 
     def test_latest_profile_readiness_probe_handoff_indexes_repair_apply_result(self):

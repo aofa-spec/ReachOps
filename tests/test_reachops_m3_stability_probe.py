@@ -106,9 +106,10 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(summary["terminal_state"], "COMPLETED")
-        self.assertEqual(summary["terminal_reason"], "requested_real_no_submit_iterations_passed")
+        self.assertEqual(summary["terminal_reason"], "m3_low_loss_real_no_submit_passed")
         self.assertEqual(summary["passed_count"], 2)
         self.assertEqual(summary["failed_count"], 0)
+        self.assertTrue(summary["account_resource_policy"]["high_frequency_pressure_is_not_required_for_m3"])
         self.assertEqual(written["schema_version"], "reachops.m3_probe_summary.v1")
         command = run_mock.call_args_list[0].args[0]
         self.assertEqual(command[4:6], ["--profile-ids", "18444,18979,18981"])
@@ -263,6 +264,36 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
         self.assertEqual(command[timeout_index + 1], "120")
         self.assertEqual(summary["profile_ids"], [])
 
+    def test_m3_probe_defaults_to_single_low_loss_acceptance_iteration(self):
+        args = m3.parse_args(
+            [
+                "--target",
+                "https://www.tiktok.com/@ayieinaussie/photo/7646939533241601301",
+                "--profile-group",
+                "获客分组测试",
+                "--quiet",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(args.iterations, 1)
+        with TemporaryDirectory() as tmpdir:
+            args.output_dir = str(Path(tmpdir) / "m3_probe")
+            with patch(
+                "tools.reachops_m3_stability_probe.subprocess.run",
+                return_value=completed_process(completed_payload("run_1")),
+            ) as run_mock:
+                code, summary = m3.run_probe(args)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(summary["terminal_state"], "COMPLETED")
+        self.assertEqual(summary["terminal_reason"], "m3_low_loss_real_no_submit_passed")
+        self.assertEqual(summary["iterations_requested"], 1)
+        self.assertEqual(summary["iterations_completed"], 1)
+        self.assertFalse(summary["account_resource_policy"]["allow_repeated_target_pressure"])
+        self.assertTrue(summary["account_resource_policy"]["high_frequency_pressure_is_not_required_for_m3"])
+        self.assertEqual(run_mock.call_count, 1)
+
     def test_m3_probe_stops_repeated_group_target_for_account_conservation(self):
         with TemporaryDirectory() as tmpdir:
             args = m3.parse_args(
@@ -337,6 +368,7 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(summary["terminal_state"], "COMPLETED")
+        self.assertEqual(summary["terminal_reason"], "support_repeated_target_pressure_passed")
         self.assertEqual(summary["iterations_completed"], 4)
         self.assertEqual(run_mock.call_count, 4)
         self.assertTrue(summary["account_resource_policy"]["allow_repeated_target_pressure"])
