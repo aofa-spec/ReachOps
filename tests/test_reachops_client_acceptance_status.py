@@ -7119,6 +7119,28 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertIn("账号池不足", summary["title"])
         self.assertTrue(any("至少 3 个" in item for item in summary["next_actions"]))
 
+    def test_client_operator_summary_uses_final_profile_preflight_counts(self):
+        summary = build_client_operator_summary(
+            {
+                "status": "blocked_by_accounts",
+                "error_code": "BLOCKED_BY_ACCOUNTS",
+                "terminal_line": "BLOCK campaign failed reason=可用账号不足 required=3 available=1 checked=11 auto_limit=24 error=INSUFFICIENT_LOGGED_IN_PROFILES",
+                "tail": [
+                    "CHECK  profile_preflight stage=collection reason=initial checked=3 available=1 unavailable=2 errors=LOGIN_REQUIRED=1, PROFILE_PREFLIGHT_TIMEOUT=1",
+                    "CHECK  profile_preflight checked=11 available=1 unavailable=10 errors=LOGIN_REQUIRED=5, PAGE_TIMEOUT=1, PROFILE_PREFLIGHT_TIMEOUT=4",
+                    "CHECK  profile_preflight recovery_retry_skipped stage=collection reason=avoid_duplicate_profile_starts",
+                ],
+                "no_submit": True,
+            }
+        )
+
+        counts = summary["technical_reference"]["runtime_counts"]
+        self.assertEqual(summary["customer_state"], "blocked_by_accounts")
+        self.assertEqual(counts["profile_checked"], 11)
+        self.assertEqual(counts["profile_available"], 1)
+        self.assertEqual(counts["profile_unavailable"], 10)
+        self.assertEqual(counts["runtime_errors"]["LOGIN_REQUIRED"], 5)
+
     def test_client_operator_summary_uses_real_runtime_action_counts(self):
         summary = build_client_operator_summary(
             {

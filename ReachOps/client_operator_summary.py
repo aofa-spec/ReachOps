@@ -45,6 +45,11 @@ def _first_int(text: str, patterns: list[str]) -> int:
     return 0
 
 
+def _max_int(text: str, pattern: str) -> int:
+    values = [_int_value(match) for match in re.findall(pattern, text)]
+    return max(values) if values else 0
+
+
 def _runtime_errors(text: str) -> dict[str, int]:
     errors: dict[str, int] = {}
     for segment in re.findall(r"errors=([^\n]+)", text):
@@ -95,11 +100,11 @@ def _runtime_counts(result: dict[str, Any], evidence_text: str) -> dict[str, Any
         "failed_sources": _int_value(result.get("failed_sources"))
         or _first_int(evidence_text, [r"\bcollection_result[^\n]*\bfailed_sources=(\d+)"]),
         "profile_checked": _int_value(result.get("profile_checked"))
-        or _first_int(evidence_text, [r"\bprofile_preflight[^\n]*\bchecked=(\d+)"]),
+        or _max_int(evidence_text, r"\bprofile_preflight[^\n]*\bchecked=(\d+)"),
         "profile_available": _int_value(result.get("profile_available"))
-        or _first_int(evidence_text, [r"\bprofile_preflight[^\n]*\bavailable=(\d+)"]),
+        or _max_int(evidence_text, r"\bprofile_preflight[^\n]*\bavailable=(\d+)"),
         "profile_unavailable": _int_value(result.get("profile_unavailable"))
-        or _first_int(evidence_text, [r"\bprofile_preflight[^\n]*\bunavailable=(\d+)"]),
+        or _max_int(evidence_text, r"\bprofile_preflight[^\n]*\bunavailable=(\d+)"),
         "action_total": action_total,
         "action_success": action_success,
         "action_failed": action_failed,
