@@ -67,7 +67,20 @@ jobs:
           if-no-files-found: error
 
       - name: Run existing ReachOps regression suite
-        run: timeout 20m python -m unittest -v tests.test_reachops_campaign
+        shell: bash
+        run: |
+          set +e
+          timeout 20m python -m unittest -v tests.test_reachops_campaign 2>&1 | tee reachops-regression-tests.log
+          status=${PIPESTATUS[0]}
+          exit "$status"
+
+      - name: Upload existing regression failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reachops-regression-test-failure
+          path: reachops-regression-tests.log
+          if-no-files-found: error
 
       - name: Validate diff
         run: |
