@@ -37,6 +37,7 @@ from tools.reachops_mac_self_check import (
 from tools import reachops_mvp_acceptance_summary
 from tools import reachops_web_ui
 from tools import reachops_mac_loop_acceptance
+from ReachOps.client_operator_summary import build_client_operator_summary
 from tools.reachops_client_delivery_check import (
     account_repair_progress_summary,
     account_repair_summary_lines,
@@ -4065,24 +4066,41 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     except Exception as exc:
                         errors.append(exc)
 
+                def fake_cleanup(**kwargs):
+                    return {
+                        "schema_version": "reachops.runtime_process_audit.v1",
+                        "status": "ok",
+                        "cleanup_candidate_count": 1,
+                        "cleanup_result": {
+                            "schema_version": "reachops.runtime_process_cleanup.v1",
+                            "status": "completed",
+                            "applied": True,
+                            "attempted": [{"pid": 9988, "ok": True}],
+                            "no_process_killed": False,
+                        },
+                        "no_browser_started": True,
+                        "no_submit": True,
+                    }
+
                 with self.start_gates_pass():
                     with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
                         with patch("tools.reachops_web_ui.os.killpg", return_value=None):
-                            start_thread = threading.Thread(
-                                target=post_json,
-                                args=("start", "/api/start", {"target": "anti aging serum"}),
-                            )
-                            stop_thread = threading.Thread(
-                                target=post_json,
-                                args=("stop", "/api/control", {"action": "stop"}),
-                            )
-                            start_thread.start()
-                            self.assertTrue(popen_entered.wait(timeout=3))
-                            stop_thread.start()
-                            time.sleep(0.05)
-                            release_popen.set()
-                            start_thread.join(timeout=5)
-                            stop_thread.join(timeout=5)
+                            with patch("tools.reachops_web_ui.build_runtime_process_audit", side_effect=fake_cleanup):
+                                start_thread = threading.Thread(
+                                    target=post_json,
+                                    args=("start", "/api/start", {"target": "anti aging serum"}),
+                                )
+                                stop_thread = threading.Thread(
+                                    target=post_json,
+                                    args=("stop", "/api/control", {"action": "stop"}),
+                                )
+                                start_thread.start()
+                                self.assertTrue(popen_entered.wait(timeout=3))
+                                stop_thread.start()
+                                time.sleep(0.05)
+                                release_popen.set()
+                                start_thread.join(timeout=5)
+                                stop_thread.join(timeout=5)
                     process_after_stop = reachops_web_ui.RUN_PROCESS
             finally:
                 release_popen.set()
@@ -4101,6 +4119,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(responses["start"]["status"], "started")
         self.assertEqual(responses["stop"]["status"], "stopped")
         self.assertEqual(responses["stop"]["pid"], 43219)
+        self.assertEqual(responses["stop"]["runtime_cleanup"]["status"], "completed")
+        self.assertTrue(responses["stop"]["runtime_cleanup"]["applied"])
+        self.assertTrue(responses["stop"]["no_submit"])
         self.assertTrue(fake_process.exited)
         self.assertIsNone(process_after_stop)
 
@@ -7023,6 +7044,37 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(payload["no_action_reason"]["candidate_count"], 2)
         self.assertEqual(payload["operation_counts"]["actions"], 0)
         self.assertTrue(any("评分未达到触达线" in item for item in payload["next_actions"]))
+
+    def test_client_operator_summary_translates_duplicate_target_to_customer_language(self):
+        summary = build_client_operator_summary(
+            {
+                "status": "completed",
+                "terminal_line": "FAST acceptance status=executed diagnosis=duplicate_suppressed",
+                "tail": ["DONE action_preflight duplicate_suppressed no_submit=true"],
+                "used_profiles": 3,
+                "processed_sources": 1,
+                "no_submit": True,
+            }
+        )
+
+        self.assertEqual(summary["customer_state"], "completed_no_duplicate")
+        self.assertIn("跳过重复触达", summary["title"])
+        self.assertTrue(summary["account_resource_policy"]["repeat_target_protection"])
+        self.assertTrue(summary["no_submit"])
+
+    def test_client_operator_summary_translates_account_shortfall_to_customer_language(self):
+        summary = build_client_operator_summary(
+            {
+                "status": "blocked",
+                "error_code": "INSUFFICIENT_LOGGED_IN_PROFILES",
+                "terminal_line": "BLOCK campaign failed reason=可用账号不足 required=3 available=1",
+                "no_submit": True,
+            }
+        )
+
+        self.assertEqual(summary["customer_state"], "blocked_by_accounts")
+        self.assertIn("账号池不足", summary["title"])
+        self.assertTrue(any("至少 3 个" in item for item in summary["next_actions"]))
 
     def test_real_flow_summary_carries_no_action_reason_when_no_actions(self):
         payload = {

@@ -14,6 +14,7 @@ from tkinter import simpledialog, ttk
 from urllib.parse import urlparse
 
 from ReachOps.execution_plan import build_execution_plan, write_execution_plan
+from ReachOps.client_operator_summary import attach_client_operator_summary
 from ReachOps.intelligence import GrowthIntelligenceService, GrowthTaskConfig
 from ReachOps.intelligence.schemas import ActionQueueItem
 from ReachOps.intelligence.storage import new_id
@@ -1411,6 +1412,7 @@ class GrowthIntelligenceStandaloneApp:
         result: dict,
         evidence: dict | None = None,
     ):
+        result = attach_client_operator_summary(result)
         result_path = str(self.active_run_result_path or "")
         if result_path:
             try:

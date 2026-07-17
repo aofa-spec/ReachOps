@@ -15,6 +15,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from ReachOps.client_operator_summary import attach_client_operator_summary
+
 
 class DummyVar:
     def __init__(self, value=None):
@@ -610,6 +612,7 @@ def main() -> int:
         return result
 
     def finalize_with_evidence_bundle(result: dict, state: str, last_stage: str) -> dict:
+        result = attach_client_operator_summary(result)
         update_run_session(
             state,
             result=result,

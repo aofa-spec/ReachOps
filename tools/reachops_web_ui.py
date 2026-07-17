@@ -7345,6 +7345,15 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     append_web_log(f"WARN   web_ui_stop_requested pid={pid} result={str(ok).lower()}")
                     RUN_PROCESS = None
+                    cleanup_report = build_runtime_process_control_report(
+                        apply_cleanup=True,
+                        confirm_cleanup=RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+                    )
+                    cleanup_result = (
+                        cleanup_report.get("cleanup_result")
+                        if isinstance(cleanup_report.get("cleanup_result"), dict)
+                        else {}
+                    )
                     session = update_current_run_session(
                         "BLOCKED",
                         pid=pid,
@@ -7355,14 +7364,29 @@ class Handler(BaseHTTPRequestHandler):
                             "ok": bool(ok),
                             "reason": "WEB_UI_STOP_REQUESTED",
                         },
-                        result={"status": "stopped", "reason": "WEB_UI_STOP_REQUESTED"},
+                        result={
+                            "status": "stopped",
+                            "reason": "WEB_UI_STOP_REQUESTED",
+                            "runtime_cleanup": cleanup_result,
+                            "runtime_cleanup_path": cleanup_report.get("path", ""),
+                            "no_submit": True,
+                        },
                     )
                     finalize_stale_web_batch_if_needed(
                         DATA_DIR / "data/growth_intelligence/growth_intelligence.db",
                         force=True,
                         reason="WEB_UI_STOP_REQUESTED",
                     )
-                    self._send_json({"status": "stopped" if ok else "failed", "pid": pid, "run_session": session})
+                    self._send_json(
+                        {
+                            "status": "stopped" if ok else "failed",
+                            "pid": pid,
+                            "run_session": session,
+                            "runtime_cleanup": cleanup_result,
+                            "runtime_cleanup_path": cleanup_report.get("path", ""),
+                            "no_submit": True,
+                        }
+                    )
                     return
                 self._send_json({"status": "rejected", "error": "unknown_action"}, 400)
             return
