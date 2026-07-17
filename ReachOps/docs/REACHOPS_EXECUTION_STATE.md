@@ -14,7 +14,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | Priority | Milestone | Status | Verified evidence | Exit condition |
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `COMPLETE` | PR #10 squash-merged to `main` as `887f7068ad313c7d3cddf971362cdce42c555946`; live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison before merge showed `new_failures=0`, `new_errors=0` | Preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
-| P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | Branch `codex/p1-immutable-campaign-run-observations`; storage slice adds `campaign_runs`, run-scoped observations, versioned `lead_decisions`, `run_id` compatibility columns, and run filters for lead/action/execution reads; `tests.test_campaign_run_observations` 2/2 passed on 2026-07-17 | Review and merge first storage-contract slice; continue wiring collectors/scoring to observation ledger in follow-up PRs |
+| P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | Draft PR #12, branch `codex/p1-immutable-campaign-run-observations`; commit `e6c4b28` starts the storage contract with `campaign_runs`, run-scoped observations, versioned `lead_decisions`, `run_id` compatibility columns, and run filters for lead/action/execution reads; `tests.test_campaign_run_observations` 2/2 passed on 2026-07-17 | Review and merge first storage-contract slice; continue wiring collectors/scoring to observation ledger in follow-up PRs |
 | P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
@@ -22,7 +22,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 ## Next autonomous action
 
-1. Review the P1 storage-contract PR from branch `codex/p1-immutable-campaign-run-observations`.
+1. Review Draft PR #12 from branch `codex/p1-immutable-campaign-run-observations`.
 2. Keep PR #9 frozen until it is re-reviewed or split against the P0/P1 contract.
 3. After the first P1 slice merges, continue P1 in a follow-up PR:
    - wire collectors to write `source_observations`, `content_observations`, and `comment_observations`
@@ -68,6 +68,8 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 - Date: `2026-07-17`
 - Branch: `codex/p1-immutable-campaign-run-observations`
+- PR: Draft PR #12
+- Commit: `e6c4b28`
 - Scope: First P1 storage-contract slice only; no PR #9 changes and no real TikTok action.
 - Code evidence:
   - Added `campaign_runs` as the immutable run ledger, one run per collection batch, with idempotent backfill for existing batches.
