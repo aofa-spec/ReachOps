@@ -8033,7 +8033,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             old_actions = service.storage.list_action_queue(limit=20, batch_id=old_batch["id"])
             new_actions = service.storage.list_action_queue(limit=20, batch_id=new_batch["id"])
             self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "pending_review" for row in old_actions))
-            self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "success" for row in new_actions))
+            self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "pending_review" for row in new_actions))
+            truth = service.storage.outreach_execution_truth_counts(new_batch["id"])
+            self.assertEqual(truth["simulated_success"], 1)
+            self.assertEqual(truth["live_verified"], 0)
 
     def test_action_router_can_target_explicit_campaign_batch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -8065,8 +8068,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(result["selected_actions"], 1)
             old_actions = service.storage.list_action_queue(limit=20, batch_id=old_batch["id"])
             new_actions = service.storage.list_action_queue(limit=20, batch_id=new_batch["id"])
-            self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "success" for row in old_actions))
+            self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "pending_review" for row in old_actions))
             self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "pending_review" for row in new_actions))
+            truth = service.storage.outreach_execution_truth_counts(old_batch["id"])
+            self.assertEqual(truth["simulated_success"], 1)
+            self.assertEqual(truth["live_verified"], 0)
 
     def test_action_router_can_switch_account_when_worker_count_is_one(self):
         class ProfileAwareExecutor:
@@ -8173,8 +8179,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 export_report=False,
             )
             old_funnel = workflow.build_campaign_funnel(campaign_id=old_plan["campaign"]["id"], batch_id=old_batch["id"])
-            self.assertEqual(old_funnel["execution_success"], 1)
-            self.assertEqual(old_funnel["preflight_ok"], 1)
+            self.assertEqual(old_funnel["execution_success"], 0)
+            self.assertEqual(old_funnel["preflight_ok"], 0)
+            truth = service.storage.outreach_execution_truth_counts(old_batch["id"])
+            self.assertEqual(truth["simulated_success"], 1)
+            self.assertEqual(truth["live_verified"], 0)
 
             new_plan = service.create_campaign_plan("https://www.tiktok.com/@new_creator", max_sources=1)
             service.run_collection(
@@ -8282,7 +8291,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             actions = service.storage.list_action_queue(limit=20, batch_id=batch["id"])
             fallback = next(row for row in actions if row["action_type"] == "comment_reply")
             self.assertEqual(fallback["batch_id"], batch["id"])
-            self.assertEqual(fallback["status"], "success")
+            self.assertEqual(fallback["status"], "pending_review")
+            dm_action = next(row for row in actions if row["action_type"] == "dm_review")
+            self.assertTrue(fallback["suggested_text"])
+            self.assertNotEqual(fallback["suggested_text"], dm_action["suggested_text"])
+            truth = service.storage.outreach_execution_truth_counts(batch["id"])
+            self.assertGreaterEqual(truth["simulated_success"], 1)
+            self.assertEqual(truth["live_verified"], 0)
 
     def test_live_submit_requires_authorization_status(self):
         with tempfile.TemporaryDirectory() as tmp:

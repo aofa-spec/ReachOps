@@ -225,8 +225,8 @@ def run_pressure(args) -> dict:
         failures.append("account_switch_status_missing")
     if not final_funnel.get("campaign_id"):
         failures.append("final_funnel_missing_campaign")
-    if int(final_funnel.get("execution_success") or 0) < 1:
-        failures.append("final_funnel_execution_missing")
+    if int(final_funnel.get("execution_success") or 0) != 0:
+        failures.append("final_funnel_live_success_must_remain_zero")
     if failures:
         report["status"] = "failed"
         report["failures"] = failures

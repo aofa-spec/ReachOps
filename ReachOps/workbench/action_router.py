@@ -71,6 +71,18 @@ FALLBACK_CODES = {
     "FOLLOW_BLOCKED",
 }
 
+PLATFORM_ENFORCEMENT_CODES = {
+    "CAPTCHA_DETECTED",
+    "ACCOUNT_RESTRICTED",
+    "RATE_LIMITED",
+    "COMMENT_BLOCKED",
+    "FOLLOW_RATE_LIMITED",
+    "DM_RATE_LIMITED",
+    "DAILY_QUOTA_EXCEEDED",
+    "PROFILE_HOURLY_LIMIT_EXCEEDED",
+    "VIDEO_HOURLY_LIMIT_EXCEEDED",
+}
+
 
 @dataclass
 class ActionRouterConfig:
@@ -180,9 +192,14 @@ class ActionRouter:
         self.offline_learning = OfflineLearningLedger(self._offline_learning_path())
         self._lock = threading.Lock()
         self._profile_locks: dict[str, threading.Lock] = {}
+        self._run_stop_event = threading.Event()
+        self._active_execution_mode = "simulated"
 
     def run(self, profiles: list[dict], config: ActionRouterConfig | None = None, limit: int = 100) -> dict:
         config = config or ActionRouterConfig()
+        self._active_execution_mode = self._execution_mode(config)
+        self._run_stop_event = threading.Event()
+        self._assert_executor_contract(config)
         previous_batch_id = self.storage._active_batch_id()
         if config.batch_id:
             self.storage.set_active_collection_batch(config.batch_id)
@@ -203,6 +220,13 @@ class ActionRouter:
             def worker(profile: dict):
                 handled = 0
                 while handled < config.per_profile_action_limit:
+                    if self._run_stop_event.is_set():
+                        self.storage.log_event(
+                            "action_router_worker_stopped",
+                            "",
+                            {"reason": "run_circuit_breaker", "execution_mode": self._active_execution_mode},
+                        )
+                        return
                     profile_id = str(profile.get("profile_id") or profile.get("id") or "")
                     if self._profile_is_cooldown(profile_id):
                         self.storage.log_event("action_router_profile_stopped", profile_id, {"reason": "cooldown"})
@@ -320,6 +344,19 @@ class ActionRouter:
             result = self._execute_once(current_action, current_profile, config, attempt)
             results.append(result)
             if result["status"] == "success":
+                return results
+            if result.get("block_execution"):
+                self._run_stop_event.set()
+                self.storage.log_event(
+                    "action_router_run_circuit_breaker",
+                    str(current_action.get("id") or ""),
+                    {
+                        "error_code": str(result.get("error_code") or ""),
+                        "profile_id": str(current_profile.get("profile_id") or current_profile.get("id") or ""),
+                        "scope": str(result.get("circuit_breaker_scope") or "run"),
+                        "execution_mode": self._active_execution_mode,
+                    },
+                )
                 return results
             if result.get("retry_same_profile") and attempt < config.max_switch_attempts:
                 attempt += 1
@@ -458,8 +495,9 @@ class ActionRouter:
                 block_publish_profiles=config.block_publish_profiles,
             )
             result = self._record(action, profile, "skipped", rate_code, rate_code, "", attempt, risk_gate=rate_gate)
-            if rate_code in SWITCH_PROFILE_CODES:
-                result["switch_profile"] = True
+            result["block_execution"] = True
+            result["circuit_breaker_scope"] = "run"
+            result["switch_profile"] = False
             return result
 
         self.storage.update_action_status(action_id, "running", "action router started")
@@ -536,6 +574,8 @@ class ActionRouter:
                 evidence_path or self._evidence_stub(action, profile, "success"),
                 attempt,
                 risk_gate={**pre_gate, "allowed": True},
+                execution_mode=self._active_execution_mode,
+                evidence_verified=self._active_execution_mode == "live",
             )
             if daily_limit > 0:
                 self.storage.increment_daily_quota(profile_id, action_type, daily_limit)
@@ -567,14 +607,26 @@ class ActionRouter:
             str(platform_result.get("evidence_path") or self._evidence_stub(action, profile, error_code)),
             attempt,
         )
+        if error_code in PLATFORM_ENFORCEMENT_CODES:
+            repair_decision["block_execution"] = True
+            repair_decision["retry_same_profile"] = False
+            repair_decision["switch_profile"] = False
+            repair_decision["fallback_allowed"] = False
+            repair_decision["terminal_outcome"] = "blocked"
+        blocked = bool(repair_decision.get("block_execution"))
         result["repair_decision"] = repair_decision
         if account_health:
             result["account_health"] = account_health
-        result["retry_same_profile"] = bool(repair_decision.get("retry_same_profile"))
-        result["switch_profile"] = bool(repair_decision.get("switch_profile")) or error_code in SWITCH_PROFILE_CODES
+        result["block_execution"] = blocked
+        result["circuit_breaker_scope"] = "run" if blocked else ""
+        result["retry_same_profile"] = (not blocked) and bool(repair_decision.get("retry_same_profile"))
+        result["switch_profile"] = (not blocked) and (
+            bool(repair_decision.get("switch_profile")) or error_code in SWITCH_PROFILE_CODES
+        )
         result["degrade_to"] = str(repair_decision.get("degrade_to") or "")
-        result["fallback_available"] = bool(repair_decision.get("fallback_allowed")) or bool(
-            self._fallback_action(action, error_code, create=False, batch_id=config.batch_id)
+        result["fallback_available"] = (not blocked) and (
+            bool(repair_decision.get("fallback_allowed"))
+            or bool(self._fallback_action(action, error_code, create=False, batch_id=config.batch_id))
         )
         platform_repair_step_results = [
             dict(row)
@@ -625,6 +677,31 @@ class ActionRouter:
             },
         )
         return result
+
+    def _execution_mode(self, config: ActionRouterConfig) -> str:
+        if config.live_preflight_only:
+            return "preflight"
+        if config.dry_run:
+            return "simulated" if isinstance(self.executor, FixtureActionExecutor) else "dry_run"
+        if config.allow_live_submit:
+            return "live"
+        return "blocked"
+
+    def _assert_executor_contract(self, config: ActionRouterConfig) -> None:
+        if self._execution_mode(config) != "live" or not isinstance(self.executor, FixtureActionExecutor):
+            return
+        test_fixture_enabled = str(os.environ.get("REACHOPS_ALLOW_TEST_FIXTURE_LIVE") or "").strip() == "1"
+        if not test_fixture_enabled:
+            raise RuntimeError("LIVE_EXECUTOR_REQUIRED: live execution cannot use FixtureActionExecutor")
+        self.storage.log_event(
+            "live_fixture_test_override_enabled",
+            "",
+            {
+                "test_only": True,
+                "execution_mode": "live",
+                "counts_require_real_evidence": True,
+            },
+        )
 
     def _repair_audit_event(
         self,
@@ -915,10 +992,29 @@ class ActionRouter:
         evidence_path: str,
         attempt: int,
         risk_gate: dict[str, Any] | None = None,
+        execution_mode: str = "",
+        submission_state: str = "",
+        verification_state: str = "",
+        evidence_verified: bool = False,
     ) -> dict:
         action_id = str(action.get("id") or "")
         action_type = str(action.get("action_type") or "")
         profile_id = str(profile.get("profile_id") or profile.get("id") or "")
+        execution_mode = str(execution_mode or self._active_execution_mode or "simulated")
+        if public_status == "success":
+            if execution_mode == "live":
+                submission_state = submission_state or ("verified_success" if evidence_verified else "submitted_unverified")
+                verification_state = verification_state or ("verified" if evidence_verified else "pending")
+            elif execution_mode == "preflight":
+                submission_state = submission_state or "prepared"
+                verification_state = verification_state or "not_required"
+            else:
+                submission_state = submission_state or "not_attempted"
+                verification_state = verification_state or "not_required"
+        else:
+            submission_state = submission_state or ("blocked" if public_status == "skipped" else "failed")
+            verification_state = verification_state or "not_required"
+            evidence_verified = False
         if not evidence_path:
             evidence_path = self._evidence_stub(action, profile, public_status or error_code or "recorded")
         execution_id = self.storage.create_outreach_execution(
@@ -931,30 +1027,51 @@ class ActionRouter:
             error_code=error_code,
             error_message=message,
             risk_gate=risk_gate,
+            execution_mode=execution_mode,
+            submission_state=submission_state,
+            verification_state=verification_state,
+            evidence_verified=evidence_verified,
         )
+        recorded_action_status = public_status
+        if public_status == "success" and execution_mode != "live":
+            recorded_action_status = "approved" if str(action.get("status") or "") in {"approved", "retryable", "account_switched"} else "pending_review"
         self.storage.record_action_execution_result(
             action_id,
             execution_id,
-            "completed" if public_status == "success" else public_status,
+            "completed" if public_status == "success" and execution_mode == "live" else recorded_action_status,
             error_code=error_code,
             error_message=message,
             retryable=public_status == "failed" and error_code in SWITCH_PROFILE_CODES,
         )
         if public_status in {"skipped", "failed"}:
             self.storage.update_action_status(action_id, public_status, message or error_code)
-        if public_status == "success":
-            self.storage.update_action_status(action_id, "success", "action router success")
-        self.storage.log_event(
-            f"action_router_{public_status}",
-            action_id,
-            {
-                "profile_id": profile_id,
-                "execution_id": execution_id,
-                "error_code": error_code,
-                "attempt": attempt,
-                "risk_gate": risk_gate or {},
-            },
-        )
+        elif public_status == "success" and execution_mode == "live":
+            self.storage.update_action_status(action_id, "success", "verified live action success")
+        elif public_status == "success":
+            self.storage.update_action_status(
+                action_id,
+                recorded_action_status,
+                f"{execution_mode} passed without live submission",
+            )
+        event_payload = {
+            "profile_id": profile_id,
+            "execution_id": execution_id,
+            "error_code": error_code,
+            "attempt": attempt,
+            "risk_gate": risk_gate or {},
+            "execution_mode": execution_mode,
+            "submission_state": submission_state,
+            "verification_state": verification_state,
+            "evidence_verified": bool(evidence_verified),
+            "counts_as_live_success": bool(
+                public_status == "success"
+                and execution_mode == "live"
+                and submission_state == "verified_success"
+                and verification_state == "verified"
+                and evidence_verified
+            ),
+        }
+        self.storage.log_event(f"action_router_{public_status}", action_id, event_payload)
         result = {
             "action_id": action_id,
             "execution_id": execution_id,
@@ -966,6 +1083,11 @@ class ActionRouter:
             "error_code": error_code,
             "error_message": message,
             "evidence_path": evidence_path,
+            "execution_mode": execution_mode,
+            "submission_state": submission_state,
+            "verification_state": verification_state,
+            "evidence_verified": bool(evidence_verified),
+            "counts_as_live_success": event_payload["counts_as_live_success"],
         }
         if isinstance(risk_gate, dict) and risk_gate:
             result["risk_gate"] = risk_gate
@@ -995,6 +1117,10 @@ class ActionRouter:
             evidence_path=evidence_path,
             error_code=error_code,
             error_message=message,
+            execution_mode=self._active_execution_mode,
+            submission_state="blocked",
+            verification_state="not_required",
+            evidence_verified=False,
         )
         self.storage.record_action_execution_result(
             action_id,
@@ -1043,7 +1169,8 @@ class ActionRouter:
                     action_type=fallback_type,
                     target_username=str(action.get("target_username") or ""),
                     target_url=str(action.get("source_path") or action.get("target_url") or ""),
-                    suggested_text=str(action.get("suggested_text") or ""),
+                    suggested_text="",
+                    reason=f"fallback_from_action_id={str(action.get('id') or '')}",
                     status="pending",
                     risk_level=str(action.get("risk_level") or "medium"),
                 )
