@@ -253,6 +253,7 @@ class GrowthWorkflowService:
         execution_summary = {
             "total": len(outreach_executions),
             "success": int(execution_status_counts.get("success", 0) or 0),
+            "submitted_unverified": int(execution_status_counts.get("submitted_unverified", 0) or 0),
             "failed": int(execution_status_counts.get("failed", 0) or 0),
             "skipped": int(execution_status_counts.get("skipped", 0) or 0),
             "account_switched": int(execution_status_counts.get("account_switched", 0) or 0),
@@ -485,7 +486,7 @@ class GrowthWorkflowService:
             return "failed"
         if value in {"pending_review", "approved"}:
             return "pending"
-        if value in {"pending", "running", "success", "failed", "skipped", "account_switched"}:
+        if value in {"pending", "running", "success", "submitted_unverified", "failed", "skipped", "account_switched"}:
             return value
         return "pending"
 
@@ -777,7 +778,7 @@ class GrowthWorkflowService:
     ) -> list[dict]:
         keyword = str(keyword or "").strip().lower()
         filtered = []
-        public_statuses = {"pending", "running", "success", "failed", "skipped", "account_switched"}
+        public_statuses = {"pending", "running", "success", "submitted_unverified", "failed", "skipped", "account_switched"}
         for row in rows or []:
             if status != "all":
                 if status in public_statuses:

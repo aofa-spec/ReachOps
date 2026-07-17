@@ -4722,15 +4722,27 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 page_timeout = 1
                 element_timeout = 1
 
+            class DynamicEvidenceExecutor:
+                def execute(self, action, profile, rendered_text: str, dry_run: bool = True):
+                    action_type = str(action.get("action_type") or "")
+                    path = Path(tmp) / f"{action_type}-external-activation-evidence.png"
+                    path.write_bytes(b"png")
+                    sidecar = {
+                        "screenshot_sha256": hashlib.sha256(b"png").hexdigest(),
+                        "action_type": action_type,
+                        "profile_id": str(profile.get("profile_id") or ""),
+                        "action_id": str(action.get("id") or ""),
+                        "current_url": str(action.get("target_url") or ""),
+                    }
+                    if action_type == "comment_reply":
+                        sidecar["submitted_text"] = rendered_text
+                        sidecar["comment_visible_confirmed"] = True
+                    Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
+                    return {"status": "success", "evidence_path": str(path)}
+
             result = run_reachops_live_submit_acceptance(
                 Args(),
-                platform_executor=FixtureActionExecutor(
-                    [
-                        {"action_type": "comment_reply", "status": "success", "evidence_path": "evidence://submit/comment"},
-                        {"action_type": "follow_review", "status": "success", "evidence_path": "evidence://submit/follow"},
-                        {"action_type": "dm_review", "status": "success", "evidence_path": "evidence://submit/dm"},
-                    ]
-                ),
+                platform_executor=DynamicEvidenceExecutor(),
             )
 
             self.assertTrue(result["passed"])

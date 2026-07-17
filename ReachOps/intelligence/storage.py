@@ -2275,6 +2275,7 @@ class GrowthStorage:
                     SUM(CASE WHEN execution_mode='dry_run' AND status='success' THEN 1 ELSE 0 END) AS dry_run_success,
                     SUM(CASE WHEN execution_mode='preflight' AND status='success' THEN 1 ELSE 0 END) AS preflight_passed,
                     SUM(CASE WHEN execution_mode='live' AND submission_state IN ('submitted', 'submitted_unverified', 'verified_success') THEN 1 ELSE 0 END) AS live_submitted,
+                    SUM(CASE WHEN execution_mode='live' AND submission_state='submitted_unverified' THEN 1 ELSE 0 END) AS submitted_unverified,
                     SUM(CASE WHEN execution_mode='live'
                               AND submission_state='verified_success'
                               AND verification_state='verified'
@@ -2287,7 +2288,7 @@ class GrowthStorage:
                 """,
                 args,
             ).fetchone()
-        keys = ["simulated_success", "dry_run_success", "preflight_passed", "live_submitted", "live_verified", "live_failed"]
+        keys = ["simulated_success", "dry_run_success", "preflight_passed", "live_submitted", "submitted_unverified", "live_verified", "live_failed"]
         return {key: int((row[key] if row else 0) or 0) for key in keys}
 
     def list_collection_batches(self, limit: int = 100, campaign_id: str = "") -> List[Dict[str, Any]]:

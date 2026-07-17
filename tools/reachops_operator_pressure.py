@@ -193,6 +193,7 @@ def run_pressure(args) -> dict:
             "outreach_actions": sum(int(row.get("funnel", {}).get("outreach_actions") or 0) for row in campaigns),
             "selected_actions": int(fallback_action_result.get("selected_actions") or 0) + int(action_result.get("selected_actions") or 0),
             "execution_success": int(fallback_action_result.get("success") or 0) + int(action_result.get("success") or 0),
+            "submitted_unverified": int(fallback_action_result.get("submitted_unverified") or 0) + int(action_result.get("submitted_unverified") or 0),
             "execution_failed": int(fallback_action_result.get("failed") or 0) + int(action_result.get("failed") or 0),
             "account_switched": int(fallback_action_result.get("account_switched") or 0) + int(action_result.get("account_switched") or 0),
             "workers": int(action_result.get("worker_count") or 0),

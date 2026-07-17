@@ -248,14 +248,17 @@ class TruthfulExecutionSemanticsTest(unittest.TestCase):
             ),
             limit=1,
         )
-        self.assertEqual(result["success"], 1)
+        self.assertEqual(result["success"], 0)
+        self.assertEqual(result["submitted_unverified"], 1)
         execution = self.storage.list_outreach_executions(limit=1)[0]
         self.assertEqual(execution["execution_mode"], "live")
+        self.assertEqual(execution["status"], "submitted_unverified")
         self.assertEqual(execution["submission_state"], "submitted_unverified")
         self.assertEqual(execution["verification_state"], "pending")
         self.assertEqual(int(execution["evidence_verified"]), 0)
         truth = self.storage.outreach_execution_truth_counts()
         self.assertEqual(truth["live_submitted"], 1)
+        self.assertEqual(truth["submitted_unverified"], 1)
         self.assertEqual(truth["live_verified"], 0)
         saved_action = next(row for row in self.storage.list_action_queue(limit=50) if row["id"] == action["id"])
         self.assertNotIn(saved_action["status"], {"success", "completed"})
@@ -279,14 +282,17 @@ class TruthfulExecutionSemanticsTest(unittest.TestCase):
             ),
             limit=1,
         )
-        self.assertEqual(result["success"], 1)
+        self.assertEqual(result["success"], 0)
+        self.assertEqual(result["submitted_unverified"], 1)
         execution = self.storage.list_outreach_executions(limit=1)[0]
         self.assertTrue(str(execution["evidence_path"]).startswith("evidence://"))
+        self.assertEqual(execution["status"], "submitted_unverified")
         self.assertEqual(execution["submission_state"], "submitted_unverified")
         self.assertEqual(execution["verification_state"], "pending")
         self.assertEqual(int(execution["evidence_verified"]), 0)
         truth = self.storage.outreach_execution_truth_counts()
         self.assertEqual(truth["live_submitted"], 1)
+        self.assertEqual(truth["submitted_unverified"], 1)
         self.assertEqual(truth["live_verified"], 0)
         saved_action = next(row for row in self.storage.list_action_queue(limit=50) if row["id"] == action["id"])
         self.assertNotIn(saved_action["status"], {"success", "completed"})

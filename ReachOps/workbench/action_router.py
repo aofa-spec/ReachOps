@@ -1018,13 +1018,23 @@ class ActionRouter:
             submission_state = submission_state or ("blocked" if public_status == "skipped" else "failed")
             verification_state = verification_state or "not_required"
             evidence_verified = False
+        verified_live_success = bool(
+            public_status == "success"
+            and execution_mode == "live"
+            and submission_state == "verified_success"
+            and verification_state == "verified"
+            and evidence_verified
+        )
+        result_status = public_status
+        if public_status == "success" and execution_mode == "live" and not verified_live_success:
+            result_status = "submitted_unverified"
         if not evidence_path:
-            evidence_path = self._evidence_stub(action, profile, public_status or error_code or "recorded")
+            evidence_path = self._evidence_stub(action, profile, result_status or error_code or "recorded")
         execution_id = self.storage.create_outreach_execution(
             action_id,
             action_type,
             str(action.get("target_username") or ""),
-            status=public_status,
+            status=result_status,
             profile_id=profile_id,
             evidence_path=evidence_path,
             error_code=error_code,
@@ -1034,13 +1044,6 @@ class ActionRouter:
             submission_state=submission_state,
             verification_state=verification_state,
             evidence_verified=evidence_verified,
-        )
-        verified_live_success = bool(
-            public_status == "success"
-            and execution_mode == "live"
-            and submission_state == "verified_success"
-            and verification_state == "verified"
-            and evidence_verified
         )
         recorded_action_status = public_status
         if public_status == "success" and execution_mode == "live" and not verified_live_success:
@@ -1079,13 +1082,13 @@ class ActionRouter:
             "evidence_verified": bool(evidence_verified),
             "counts_as_live_success": verified_live_success,
         }
-        self.storage.log_event(f"action_router_{public_status}", action_id, event_payload)
+        self.storage.log_event(f"action_router_{result_status}", action_id, event_payload)
         result = {
             "action_id": action_id,
             "execution_id": execution_id,
             "action_type": action_type,
             "public_action_type": PUBLIC_ACTION_TYPE.get(action_type, action_type),
-            "status": public_status,
+            "status": result_status,
             "profile_id": profile_id,
             "attempt": attempt,
             "error_code": error_code,
@@ -1273,6 +1276,7 @@ class ActionRouter:
             "pending": counts.get("pending", 0),
             "running": counts.get("running", 0),
             "success": counts.get("success", 0),
+            "submitted_unverified": counts.get("submitted_unverified", 0),
             "failed": counts.get("failed", 0),
             "skipped": counts.get("skipped", 0),
             "account_switched": counts.get("account_switched", 0),
