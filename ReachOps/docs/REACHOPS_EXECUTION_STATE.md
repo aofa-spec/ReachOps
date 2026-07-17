@@ -13,8 +13,8 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 | Priority | Milestone | Status | Verified evidence | Exit condition |
 |---|---|---|---|---|
-| P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
-| P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
+| P0 | Truthful execution semantics | `COMPLETE` | PR #10 squash-merged to `main` as `887f7068ad313c7d3cddf971362cdce42c555946`; live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison before merge showed `new_failures=0`, `new_errors=0` | Preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
+| P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | Branch `codex/p1-immutable-campaign-run-observations`; storage slice adds `campaign_runs`, run-scoped observations, versioned `lead_decisions`, `run_id` compatibility columns, and run filters for lead/action/execution reads; `tests.test_campaign_run_observations` 2/2 passed on 2026-07-17 | Review and merge first storage-contract slice; continue wiring collectors/scoring to observation ledger in follow-up PRs |
 | P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
@@ -22,19 +22,13 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 ## Next autonomous action
 
-1. Review PR #10 evidence-truthfulness correction and merge only after accepting the known non-P0 baseline failures separately.
-2. Do not expand PR #10 with P1.
-3. After P0 merges, start P1 on a separate branch/PR:
-   - add `campaign_runs`
-   - add `source_observations`
-   - add `content_observations`
-   - add `comment_observations`
-   - add `candidate_observations`
-   - add versioned `lead_decisions`
-   - keep existing global entities for compatibility
-   - scope scoring and lead creation to run/batch observations
-   - add idempotent migration and rollback evidence
-   - add cross-campaign isolation tests
+1. Review the P1 storage-contract PR from branch `codex/p1-immutable-campaign-run-observations`.
+2. Keep PR #9 frozen until it is re-reviewed or split against the P0/P1 contract.
+3. After the first P1 slice merges, continue P1 in a follow-up PR:
+   - wire collectors to write `source_observations`, `content_observations`, and `comment_observations`
+   - wire scoring to write `candidate_observations` and versioned `lead_decisions`
+   - ensure reports and exports prefer run-scoped reads
+   - add cross-campaign and cross-batch isolation tests at workflow level
 
 ## Known external blockers
 
@@ -69,6 +63,32 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Safety:
   - No real TikTok action was executed.
   - Fixture live execution remains blocked by default and is only enabled in explicit test fixture paths through `REACHOPS_ALLOW_TEST_FIXTURE_LIVE=1`.
+
+## Latest P1 verification snapshot
+
+- Date: `2026-07-17`
+- Branch: `codex/p1-immutable-campaign-run-observations`
+- Scope: First P1 storage-contract slice only; no PR #9 changes and no real TikTok action.
+- Code evidence:
+  - Added `campaign_runs` as the immutable run ledger, one run per collection batch, with idempotent backfill for existing batches.
+  - Added `source_observations`, `content_observations`, `comment_observations`, `candidate_observations`, and versioned `lead_decisions`.
+  - Added `run_id` compatibility columns to collection tasks, discovered creators/content, shop content, candidates, leads, actions, outreach executions, events, and errors.
+  - Added storage APIs to record run-scoped observations and append lead decisions without mutating prior decisions.
+  - Added optional `run_id` filters for candidates, leads, actions, outreach executions, and execution counts.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/schemas.py tests/test_campaign_run_observations.py`: passed; log `/tmp/reachops-p1-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_campaign_run_observations`: passed, 2 tests; log `/tmp/reachops-p1-run-observations.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p1-truth.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-p1-campaign.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p1-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-p1-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; blockers include Mac local MVP/current ixBrowser evidence and Windows final artifacts; output `/tmp/reachops-p1-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`; output `/tmp/reachops-p1-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p1-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p1-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No customer data, credentials, cookies, real targets, or raw evidence were added.
 
 ## Non-blocking engineering work available
 

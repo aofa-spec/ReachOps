@@ -36,14 +36,23 @@ class GrowthStorage:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.active_collection_batch_id = ""
+        self.active_campaign_run_id = ""
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self.init_schema()
 
     def set_active_collection_batch(self, batch_id: str = ""):
         self.active_collection_batch_id = str(batch_id or "").strip()
+        self.active_campaign_run_id = self.run_id_for_batch(self.active_collection_batch_id) if self.active_collection_batch_id else ""
 
     def _active_batch_id(self) -> str:
         return str(getattr(self, "active_collection_batch_id", "") or "")
+
+    def _active_run_id(self) -> str:
+        run_id = str(getattr(self, "active_campaign_run_id", "") or "")
+        if run_id:
+            return run_id
+        batch_id = self._active_batch_id()
+        return self.run_id_for_batch(batch_id) if batch_id else ""
 
     @contextmanager
     def connect(self):
@@ -87,6 +96,7 @@ class GrowthStorage:
                     source_path TEXT DEFAULT '',
                     raw_meta TEXT DEFAULT '{}',
                     batch_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     status TEXT NOT NULL,
                     last_checked_at TEXT,
                     created_at TEXT NOT NULL,
@@ -109,6 +119,7 @@ class GrowthStorage:
                     source_path TEXT DEFAULT '',
                     raw_meta TEXT DEFAULT '{}',
                     batch_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     published_at TEXT,
                     collected_at TEXT NOT NULL,
                     UNIQUE(creator_id, video_id)
@@ -124,6 +135,7 @@ class GrowthStorage:
                     qualify_score INTEGER DEFAULT 0,
                     intent_tags TEXT DEFAULT '[]',
                     batch_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     UNIQUE(content_id, username, comment_text)
@@ -158,12 +170,14 @@ class GrowthStorage:
                     comments INTEGER DEFAULT 0,
                     shares INTEGER DEFAULT 0,
                     batch_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     collected_at TEXT NOT NULL,
                     UNIQUE(source_id, video_id, video_url)
                 );
                 CREATE TABLE IF NOT EXISTS material_signals (
                     id TEXT PRIMARY KEY,
                     content_id TEXT NOT NULL,
+                    run_id TEXT DEFAULT '',
                     signal_type TEXT NOT NULL,
                     signal_score INTEGER DEFAULT 0,
                     signal_tags TEXT DEFAULT '[]',
@@ -175,6 +189,7 @@ class GrowthStorage:
                     id TEXT PRIMARY KEY,
                     candidate_user_id TEXT NOT NULL,
                     content_id TEXT NOT NULL,
+                    run_id TEXT DEFAULT '',
                     intent_type TEXT NOT NULL,
                     confidence INTEGER DEFAULT 0,
                     evidence TEXT DEFAULT '',
@@ -184,6 +199,7 @@ class GrowthStorage:
                 CREATE TABLE IF NOT EXISTS operation_leads (
                     id TEXT PRIMARY KEY,
                     candidate_user_id TEXT NOT NULL,
+                    run_id TEXT DEFAULT '',
                     lead_type TEXT NOT NULL,
                     priority TEXT DEFAULT 'normal',
                     score INTEGER DEFAULT 0,
@@ -199,6 +215,7 @@ class GrowthStorage:
                 CREATE TABLE IF NOT EXISTS action_queue (
                     id TEXT PRIMARY KEY,
                     lead_id TEXT NOT NULL,
+                    run_id TEXT DEFAULT '',
                     action_type TEXT NOT NULL,
                     target_username TEXT NOT NULL,
                     target_url TEXT DEFAULT '',
@@ -213,6 +230,7 @@ class GrowthStorage:
                 CREATE TABLE IF NOT EXISTS collection_batches (
                     id TEXT PRIMARY KEY,
                     campaign_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     status TEXT DEFAULT 'running',
                     total_sources INTEGER DEFAULT 0,
                     processed_sources INTEGER DEFAULT 0,
@@ -224,9 +242,23 @@ class GrowthStorage:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS campaign_runs (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    batch_id TEXT NOT NULL UNIQUE,
+                    run_key TEXT NOT NULL UNIQUE,
+                    status TEXT DEFAULT 'running',
+                    profile_group TEXT DEFAULT '',
+                    config_json TEXT DEFAULT '{}',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS collection_tasks (
                     id TEXT PRIMARY KEY,
                     batch_id TEXT NOT NULL,
+                    run_id TEXT DEFAULT '',
                     source_id TEXT NOT NULL,
                     source_type TEXT NOT NULL,
                     source_value TEXT NOT NULL,
@@ -389,6 +421,7 @@ class GrowthStorage:
                 CREATE TABLE IF NOT EXISTS outreach_executions (
                     id TEXT PRIMARY KEY,
                     action_id TEXT NOT NULL,
+                    run_id TEXT DEFAULT '',
                     action_type TEXT NOT NULL,
                     target_username TEXT NOT NULL,
                     status TEXT DEFAULT 'pending',
@@ -419,6 +452,7 @@ class GrowthStorage:
                     id TEXT PRIMARY KEY,
                     event TEXT NOT NULL,
                     entity_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     payload TEXT DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
@@ -430,7 +464,81 @@ class GrowthStorage:
                     creator_id TEXT DEFAULT '',
                     profile_id TEXT DEFAULT '',
                     batch_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS source_observations (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    campaign_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    source_id TEXT DEFAULT '',
+                    source_type TEXT DEFAULT '',
+                    source_value TEXT DEFAULT '',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(run_id, source_id, observation_key)
+                );
+                CREATE TABLE IF NOT EXISTS content_observations (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    campaign_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    content_id TEXT DEFAULT '',
+                    source_observation_id TEXT DEFAULT '',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(run_id, content_id, observation_key)
+                );
+                CREATE TABLE IF NOT EXISTS comment_observations (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    campaign_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    content_id TEXT DEFAULT '',
+                    candidate_user_id TEXT DEFAULT '',
+                    username TEXT DEFAULT '',
+                    comment_text TEXT DEFAULT '',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(run_id, content_id, username, observation_key)
+                );
+                CREATE TABLE IF NOT EXISTS candidate_observations (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    campaign_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    candidate_user_id TEXT DEFAULT '',
+                    comment_observation_id TEXT DEFAULT '',
+                    username TEXT DEFAULT '',
+                    score INTEGER DEFAULT 0,
+                    intent_tags_json TEXT DEFAULT '[]',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(run_id, candidate_user_id, observation_key)
+                );
+                CREATE TABLE IF NOT EXISTS lead_decisions (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    campaign_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    candidate_user_id TEXT NOT NULL,
+                    lead_id TEXT DEFAULT '',
+                    decision_version INTEGER DEFAULT 1,
+                    decision_type TEXT NOT NULL,
+                    score INTEGER DEFAULT 0,
+                    reason TEXT DEFAULT '',
+                    payload_json TEXT DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(run_id, candidate_user_id, decision_version, decision_type)
                 );
                 """
             )
@@ -444,6 +552,7 @@ class GrowthStorage:
                     "source_path": "TEXT DEFAULT ''",
                     "raw_meta": "TEXT DEFAULT '{}'",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -457,6 +566,7 @@ class GrowthStorage:
                     "source_path": "TEXT DEFAULT ''",
                     "raw_meta": "TEXT DEFAULT '{}'",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -478,6 +588,7 @@ class GrowthStorage:
                     "last_error_message": "TEXT DEFAULT ''",
                     "last_executed_at": "TEXT",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -491,10 +602,14 @@ class GrowthStorage:
                     "repeat_seen_count": "INTEGER DEFAULT 1",
                     "raw_meta": "TEXT DEFAULT '{}'",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
-            self._ensure_columns(conn, "shop_contents", {"batch_id": "TEXT DEFAULT ''"})
-            self._ensure_columns(conn, "collection_batches", {"campaign_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "shop_contents", {"batch_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "collection_batches", {"campaign_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "collection_tasks", {"run_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "material_signals", {"run_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "audience_intents", {"run_id": "TEXT DEFAULT ''"})
             self._ensure_columns(
                 conn,
                 "operation_leads",
@@ -502,6 +617,7 @@ class GrowthStorage:
                     "lifecycle_stage": "TEXT DEFAULT 'new'",
                     "source_path": "TEXT DEFAULT ''",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                     "updated_at": "TEXT DEFAULT ''",
                 },
             )
@@ -510,6 +626,7 @@ class GrowthStorage:
                 "outreach_executions",
                 {
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                     "risk_gate_json": "TEXT DEFAULT ''",
                     "execution_mode": "TEXT DEFAULT 'simulated'",
                     "submission_state": "TEXT DEFAULT 'not_attempted'",
@@ -517,7 +634,9 @@ class GrowthStorage:
                     "evidence_verified": "INTEGER DEFAULT 0",
                 },
             )
-            self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "growth_events", {"run_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
+            self._ensure_campaign_runs_for_existing_batches(conn)
             self._seed_default_action_templates(conn)
 
     def _ensure_columns(self, conn, table_name: str, columns: Dict[str, str]):
@@ -525,6 +644,51 @@ class GrowthStorage:
         for name, definition in columns.items():
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}")
+
+    def _ensure_campaign_runs_for_existing_batches(self, conn):
+        now = utc_now_iso()
+        rows = conn.execute(
+            """
+            SELECT cb.*
+            FROM collection_batches cb
+            LEFT JOIN campaign_runs cr ON cr.batch_id = cb.id
+            WHERE cr.id IS NULL
+            ORDER BY cb.created_at ASC, cb.rowid ASC
+            """
+        ).fetchall()
+        for row in rows:
+            batch_id = str(row["id"] or "")
+            run_id = str(row["run_id"] or "") if "run_id" in row.keys() else ""
+            run_id = run_id or new_id("run")
+            campaign_id = str(row["campaign_id"] or "")
+            created_at = str(row["created_at"] or now)
+            started_at = row["started_at"] or created_at
+            updated_at = str(row["updated_at"] or created_at)
+            completed_at = row["completed_at"]
+            status = str(row["status"] or "running")
+            run_key = f"{campaign_id or 'uncampaign'}:{batch_id}"
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO campaign_runs
+                (id, campaign_id, batch_id, run_key, status, profile_group, config_json,
+                 started_at, completed_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    campaign_id,
+                    batch_id,
+                    run_key,
+                    status,
+                    str(row["profile_group"] or ""),
+                    str(row["config_json"] or "{}"),
+                    started_at,
+                    completed_at,
+                    created_at,
+                    updated_at,
+                ),
+            )
+            conn.execute("UPDATE collection_batches SET run_id=? WHERE id=? AND COALESCE(run_id, '')=''", (run_id, batch_id))
 
     def _seed_default_action_templates(self, conn):
         now = utc_now_iso()
@@ -545,8 +709,8 @@ class GrowthStorage:
     def log_event(self, event: str, entity_id: str = "", payload: Optional[Dict[str, Any]] = None):
         with self.connect() as conn:
             conn.execute(
-                "INSERT INTO growth_events (id, event, entity_id, payload, created_at) VALUES (?, ?, ?, ?, ?)",
-                (new_id("evt"), event, entity_id, json.dumps(payload or {}, ensure_ascii=False), utc_now_iso()),
+                "INSERT INTO growth_events (id, event, entity_id, run_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (new_id("evt"), event, entity_id, self._active_run_id(), json.dumps(payload or {}, ensure_ascii=False), utc_now_iso()),
             )
 
     def list_recent_events(self, event: str = "", limit: int = 200) -> List[Dict[str, Any]]:
@@ -586,10 +750,10 @@ class GrowthStorage:
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO growth_errors (id, error_code, message, source_id, creator_id, profile_id, batch_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO growth_errors (id, error_code, message, source_id, creator_id, profile_id, batch_id, run_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (new_id("err"), error_code, message, source_id, creator_id, profile_id, self._active_batch_id(), utc_now_iso()),
+                (new_id("err"), error_code, message, source_id, creator_id, profile_id, self._active_batch_id(), self._active_run_id(), utc_now_iso()),
             )
 
     def create_campaign(
@@ -745,6 +909,49 @@ class GrowthStorage:
         rows = self.list_campaigns(limit=1)
         return rows[0] if rows else {}
 
+    def run_id_for_batch(self, batch_id: str) -> str:
+        batch = str(batch_id or "").strip()
+        if not batch:
+            return ""
+        with self.connect() as conn:
+            row = conn.execute("SELECT run_id FROM collection_batches WHERE id=?", (batch,)).fetchone()
+            if row and str(row["run_id"] or "").strip():
+                return str(row["run_id"] or "").strip()
+            row = conn.execute("SELECT id FROM campaign_runs WHERE batch_id=?", (batch,)).fetchone()
+            return str(row["id"] or "").strip() if row else ""
+
+    def list_campaign_runs(self, campaign_id: str = "", limit: int = 100) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM campaign_runs
+                {where}
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 100)]),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_campaign_run(self, run_id: str = "", batch_id: str = "") -> Dict[str, Any]:
+        run = str(run_id or "").strip()
+        batch = str(batch_id or "").strip()
+        if not run and not batch:
+            return {}
+        with self.connect() as conn:
+            if run:
+                row = conn.execute("SELECT * FROM campaign_runs WHERE id=?", (run,)).fetchone()
+            else:
+                row = conn.execute("SELECT * FROM campaign_runs WHERE batch_id=?", (batch,)).fetchone()
+        return dict(row) if row else {}
+
     def list_audience_personas(self, limit: int = 100) -> List[Dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -771,6 +978,253 @@ class GrowthStorage:
                     (int(limit or 200),),
                 ).fetchall()
         return [dict(row) for row in rows]
+
+    def _run_context(self, conn, run_id: str = "", batch_id: str = "") -> Dict[str, Any]:
+        run = str(run_id or "").strip()
+        batch = str(batch_id or "").strip()
+        if run:
+            row = conn.execute("SELECT * FROM campaign_runs WHERE id=?", (run,)).fetchone()
+        elif batch:
+            row = conn.execute("SELECT * FROM campaign_runs WHERE batch_id=?", (batch,)).fetchone()
+        else:
+            active_run = self._active_run_id()
+            row = conn.execute("SELECT * FROM campaign_runs WHERE id=?", (active_run,)).fetchone() if active_run else None
+        if not row:
+            raise ValueError("campaign run is required for immutable observation records")
+        return dict(row)
+
+    def record_source_observation(
+        self,
+        run_id: str,
+        source_id: str,
+        source_type: str,
+        source_value: str,
+        observation_key: str,
+        payload: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+    ) -> str:
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._run_context(conn, run_id=run_id)
+            item_id = new_id("sobs")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO source_observations
+                (id, run_id, campaign_id, batch_id, source_id, source_type, source_value,
+                 observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    run["id"],
+                    run.get("campaign_id") or "",
+                    run.get("batch_id") or "",
+                    str(source_id or ""),
+                    str(source_type or ""),
+                    str(source_value or ""),
+                    str(observation_key or "source_observed"),
+                    json.dumps(payload or {}, ensure_ascii=False),
+                    observed_at or now,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT id FROM source_observations WHERE run_id=? AND source_id=? AND observation_key=?",
+                (run["id"], str(source_id or ""), str(observation_key or "source_observed")),
+            ).fetchone()
+            return row["id"] if row else item_id
+
+    def record_content_observation(
+        self,
+        run_id: str,
+        content_id: str,
+        observation_key: str,
+        payload: Optional[Dict[str, Any]] = None,
+        source_observation_id: str = "",
+        observed_at: str = "",
+    ) -> str:
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._run_context(conn, run_id=run_id)
+            item_id = new_id("cobs")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO content_observations
+                (id, run_id, campaign_id, batch_id, content_id, source_observation_id,
+                 observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    run["id"],
+                    run.get("campaign_id") or "",
+                    run.get("batch_id") or "",
+                    str(content_id or ""),
+                    str(source_observation_id or ""),
+                    str(observation_key or "content_observed"),
+                    json.dumps(payload or {}, ensure_ascii=False),
+                    observed_at or now,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT id FROM content_observations WHERE run_id=? AND content_id=? AND observation_key=?",
+                (run["id"], str(content_id or ""), str(observation_key or "content_observed")),
+            ).fetchone()
+            return row["id"] if row else item_id
+
+    def record_comment_observation(
+        self,
+        run_id: str,
+        content_id: str,
+        candidate_user_id: str,
+        username: str,
+        comment_text: str,
+        observation_key: str,
+        payload: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+    ) -> str:
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._run_context(conn, run_id=run_id)
+            item_id = new_id("mobs")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO comment_observations
+                (id, run_id, campaign_id, batch_id, content_id, candidate_user_id, username,
+                 comment_text, observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    run["id"],
+                    run.get("campaign_id") or "",
+                    run.get("batch_id") or "",
+                    str(content_id or ""),
+                    str(candidate_user_id or ""),
+                    str(username or ""),
+                    str(comment_text or ""),
+                    str(observation_key or "comment_observed"),
+                    json.dumps(payload or {}, ensure_ascii=False),
+                    observed_at or now,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT id FROM comment_observations
+                WHERE run_id=? AND content_id=? AND username=? AND observation_key=?
+                """,
+                (run["id"], str(content_id or ""), str(username or ""), str(observation_key or "comment_observed")),
+            ).fetchone()
+            return row["id"] if row else item_id
+
+    def record_candidate_observation(
+        self,
+        run_id: str,
+        candidate_user_id: str,
+        username: str,
+        score: int,
+        intent_tags: List[str],
+        observation_key: str,
+        payload: Optional[Dict[str, Any]] = None,
+        comment_observation_id: str = "",
+        observed_at: str = "",
+    ) -> str:
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._run_context(conn, run_id=run_id)
+            item_id = new_id("uobs")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO candidate_observations
+                (id, run_id, campaign_id, batch_id, candidate_user_id, comment_observation_id,
+                 username, score, intent_tags_json, observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    run["id"],
+                    run.get("campaign_id") or "",
+                    run.get("batch_id") or "",
+                    str(candidate_user_id or ""),
+                    str(comment_observation_id or ""),
+                    str(username or ""),
+                    int(score or 0),
+                    json.dumps(intent_tags or [], ensure_ascii=False),
+                    str(observation_key or "candidate_observed"),
+                    json.dumps(payload or {}, ensure_ascii=False),
+                    observed_at or now,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT id FROM candidate_observations WHERE run_id=? AND candidate_user_id=? AND observation_key=?",
+                (run["id"], str(candidate_user_id or ""), str(observation_key or "candidate_observed")),
+            ).fetchone()
+            return row["id"] if row else item_id
+
+    def record_lead_decision(
+        self,
+        run_id: str,
+        candidate_user_id: str,
+        decision_type: str,
+        score: int = 0,
+        reason: str = "",
+        lead_id: str = "",
+        payload: Optional[Dict[str, Any]] = None,
+        decision_version: int = 0,
+    ) -> str:
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._run_context(conn, run_id=run_id)
+            if int(decision_version or 0) <= 0:
+                row = conn.execute(
+                    """
+                    SELECT COALESCE(MAX(decision_version), 0) AS latest_version
+                    FROM lead_decisions
+                    WHERE run_id=? AND candidate_user_id=? AND decision_type=?
+                    """,
+                    (run["id"], str(candidate_user_id or ""), str(decision_type or "lead_decision")),
+                ).fetchone()
+                decision_version = int(row["latest_version"] or 0) + 1
+            item_id = new_id("ld")
+            conn.execute(
+                """
+                INSERT INTO lead_decisions
+                (id, run_id, campaign_id, batch_id, candidate_user_id, lead_id, decision_version,
+                 decision_type, score, reason, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    run["id"],
+                    run.get("campaign_id") or "",
+                    run.get("batch_id") or "",
+                    str(candidate_user_id or ""),
+                    str(lead_id or ""),
+                    int(decision_version or 1),
+                    str(decision_type or "lead_decision"),
+                    int(score or 0),
+                    str(reason or ""),
+                    json.dumps(payload or {}, ensure_ascii=False),
+                    now,
+                ),
+            )
+            return item_id
+
+    def list_observations_for_run(self, run_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        run = str(run_id or "").strip()
+        if not run:
+            return {}
+        with self.connect() as conn:
+            return {
+                "source_observations": [dict(row) for row in conn.execute("SELECT * FROM source_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
+                "content_observations": [dict(row) for row in conn.execute("SELECT * FROM content_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
+                "comment_observations": [dict(row) for row in conn.execute("SELECT * FROM comment_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
+                "candidate_observations": [dict(row) for row in conn.execute("SELECT * FROM candidate_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
+                "lead_decisions": [dict(row) for row in conn.execute("SELECT * FROM lead_decisions WHERE run_id=? ORDER BY decision_version ASC, created_at ASC", (run,)).fetchall()],
+            }
 
     def upsert_campaign_strategy_overrides(self, campaign_id: str, overrides: Dict[str, Any], updated_by: str = "") -> Dict[str, Any]:
         campaign_id = str(campaign_id or "").strip()
@@ -846,6 +1300,7 @@ class GrowthStorage:
 
     def upsert_creator(self, creator: DiscoveredCreator) -> DiscoveredCreator:
         now = utc_now_iso()
+        run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT * FROM discovered_creators WHERE source_id=? AND username=?",
@@ -879,8 +1334,8 @@ class GrowthStorage:
                 """
                 INSERT INTO discovered_creators
                 (id, source_id, username, profile_url, followers, likes_total, vertical, country,
-                 language, source_path, raw_meta, batch_id, status, last_checked_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 language, source_path, raw_meta, batch_id, run_id, status, last_checked_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     creator.id,
@@ -895,6 +1350,7 @@ class GrowthStorage:
                     creator.source_path,
                     json.dumps(creator.raw_meta or {}, ensure_ascii=False),
                     self._active_batch_id(),
+                    run_id,
                     creator.status,
                     creator.last_checked_at,
                     creator.created_at,
@@ -903,6 +1359,7 @@ class GrowthStorage:
             return creator
 
     def upsert_content(self, content: DiscoveredContent) -> tuple[DiscoveredContent, bool]:
+        run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT * FROM discovered_contents WHERE creator_id=? AND video_id=?",
@@ -914,9 +1371,9 @@ class GrowthStorage:
                 """
                 INSERT INTO discovered_contents
                 (id, creator_id, video_id, video_url, caption, views, likes, comments, shares,
-                 content_language, country, material_type, collector_level, source_path, raw_meta, batch_id,
+                 content_language, country, material_type, collector_level, source_path, raw_meta, batch_id, run_id,
                  published_at, collected_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     content.id,
@@ -935,6 +1392,7 @@ class GrowthStorage:
                     content.source_path,
                     json.dumps(content.raw_meta or {}, ensure_ascii=False),
                     self._active_batch_id(),
+                    run_id,
                     content.published_at,
                     content.collected_at,
                 ),
@@ -942,6 +1400,7 @@ class GrowthStorage:
             return content, True
 
     def upsert_candidate(self, candidate: CandidateUser) -> tuple[CandidateUser, bool]:
+        run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT * FROM candidate_users WHERE content_id=? AND username=? AND comment_text=?",
@@ -973,8 +1432,8 @@ class GrowthStorage:
                 INSERT INTO candidate_users
                 (id, content_id, username, profile_url, comment_text, comment_likes, reply_count,
                  qualify_score, intent_tags, comment_language, author_profile_completed, collector_level,
-                 source_path, repeat_seen_count, raw_meta, batch_id, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 source_path, repeat_seen_count, raw_meta, batch_id, run_id, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate.id,
@@ -993,6 +1452,7 @@ class GrowthStorage:
                     int(candidate.repeat_seen_count or 1),
                     json.dumps(candidate.raw_meta or {}, ensure_ascii=False),
                     self._active_batch_id(),
+                    run_id,
                     candidate.status,
                     candidate.created_at,
                 ),
@@ -1060,6 +1520,7 @@ class GrowthStorage:
 
     def upsert_shop_content(self, source_id: str, data: Dict[str, Any]) -> tuple[str, bool]:
         now = utc_now_iso()
+        run_id = self._active_run_id()
         video_id = str(data.get("video_id") or "").strip()
         video_url = str(data.get("video_url") or "").strip()
         with self.connect() as conn:
@@ -1074,8 +1535,8 @@ class GrowthStorage:
                 """
                 INSERT INTO shop_contents
                 (id, source_id, product_id, creator_username, video_id, video_url, caption,
-                 material_type, hook_text, views, likes, comments, shares, batch_id, collected_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 material_type, hook_text, views, likes, comments, shares, batch_id, run_id, collected_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -1092,6 +1553,7 @@ class GrowthStorage:
                     int(data.get("comments") or 0),
                     int(data.get("shares") or 0),
                     self._active_batch_id(),
+                    run_id,
                     now,
                 ),
             )
@@ -1102,6 +1564,7 @@ class GrowthStorage:
 
     def upsert_material_signal(self, content_id: str, signal_type: str, score: int, tags: List[str], evidence: str = ""):
         now = utc_now_iso()
+        run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT id FROM material_signals WHERE content_id=? AND signal_type=?",
@@ -1115,13 +1578,14 @@ class GrowthStorage:
                 return row["id"], False
             item_id = new_id("ms")
             conn.execute(
-                "INSERT INTO material_signals VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (item_id, content_id, signal_type, int(score), json.dumps(tags, ensure_ascii=False), evidence, now),
+                "INSERT INTO material_signals (id, content_id, run_id, signal_type, signal_score, signal_tags, evidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (item_id, content_id, run_id, signal_type, int(score), json.dumps(tags, ensure_ascii=False), evidence, now),
             )
             return item_id, True
 
     def upsert_audience_intent(self, candidate_id: str, content_id: str, intent_type: str, confidence: int, evidence: str):
         now = utc_now_iso()
+        run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT id FROM audience_intents WHERE candidate_user_id=? AND content_id=? AND intent_type=?",
@@ -1135,8 +1599,8 @@ class GrowthStorage:
                 return row["id"], False
             item_id = new_id("ai")
             conn.execute(
-                "INSERT INTO audience_intents VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (item_id, candidate_id, content_id, intent_type, int(confidence), evidence, now),
+                "INSERT INTO audience_intents (id, candidate_user_id, content_id, run_id, intent_type, confidence, evidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (item_id, candidate_id, content_id, run_id, intent_type, int(confidence), evidence, now),
             )
             return item_id, True
 
@@ -1150,6 +1614,7 @@ class GrowthStorage:
         source_path: str = "",
     ):
         now = utc_now_iso()
+        run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT id FROM operation_leads WHERE candidate_user_id=? AND lead_type=?",
@@ -1170,13 +1635,14 @@ class GrowthStorage:
             conn.execute(
                 """
                 INSERT INTO operation_leads
-                (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage, source_path,
+                (id, candidate_user_id, run_id, lead_type, priority, score, reason, lifecycle_stage, source_path,
                  status, batch_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
                     candidate_id,
+                    run_id,
                     lead_type,
                     priority,
                     int(score),
@@ -1192,6 +1658,7 @@ class GrowthStorage:
             return item_id, True
 
     def upsert_action_queue_item(self, item: ActionQueueItem) -> tuple[str, bool]:
+        run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT id FROM action_queue WHERE lead_id=? AND action_type=?",
@@ -1202,15 +1669,16 @@ class GrowthStorage:
             conn.execute(
                 """
                 INSERT INTO action_queue
-                (id, lead_id, action_type, target_username, target_url, suggested_text, reason, status, risk_level,
+                (id, lead_id, run_id, action_type, target_username, target_url, suggested_text, reason, status, risk_level,
                  batch_id, created_at, review_status, reviewed_by, reviewed_at, review_note, daily_quota_key,
                  execution_confirmed, confirmed_by, confirmed_at, retry_count, last_execution_id,
                  last_error_code, last_error_message, last_executed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
                     item.lead_id,
+                    run_id,
                     item.action_type,
                     item.target_username,
                     item.target_url,
@@ -1238,12 +1706,15 @@ class GrowthStorage:
             self._refresh_lead_lifecycle(conn, item.lead_id)
             return item.id, True
 
-    def list_operation_leads(self, limit: int = 200, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_operation_leads(self, limit: int = 200, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if batch_id:
             filters.append("ol.batch_id=?")
             args.append(str(batch_id))
+        if run_id:
+            filters.append("ol.run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -1328,20 +1799,22 @@ class GrowthStorage:
     ) -> str:
         now = utc_now_iso()
         item_id = new_id("oe")
+        run_id = self._active_run_id()
         evidence_path = evidence_path or self._execution_evidence_uri(action_id, profile_id, error_code or status or "recorded")
         risk_gate_json = json.dumps(risk_gate or {}, ensure_ascii=False) if isinstance(risk_gate, dict) else ""
         with self.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO outreach_executions
-                (id, action_id, action_type, target_username, status, execution_mode, submission_state,
+                (id, action_id, run_id, action_type, target_username, status, execution_mode, submission_state,
                  verification_state, evidence_verified, profile_id, evidence_path, error_code, error_message,
                  risk_gate_json, batch_id, started_at, completed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
                     action_id,
+                    run_id,
                     action_type,
                     target_username,
                     status,
@@ -1383,8 +1856,11 @@ class GrowthStorage:
             config.setdefault("campaign_id", campaign_id)
         if initial_status not in {"pending", "running"}:
             initial_status = "running"
+        batch_id = new_id("gb")
+        run_id = new_id("run")
+        config.setdefault("run_id", run_id)
         item = CollectionBatch(
-            id=new_id("gb"),
+            id=batch_id,
             campaign_id=campaign_id or "",
             status=initial_status,
             total_sources=int(total_sources or 0),
@@ -1392,6 +1868,7 @@ class GrowthStorage:
             failed_sources=0,
             profile_group=profile_group or "",
             config_json=json.dumps(config or {}, ensure_ascii=False),
+            run_id=run_id,
             started_at=now,
             created_at=now,
             updated_at=now,
@@ -1400,17 +1877,39 @@ class GrowthStorage:
             conn.execute(
                 """
                 INSERT INTO collection_batches
-                (id, campaign_id, status, total_sources, processed_sources, failed_sources, profile_group,
+                (id, campaign_id, run_id, status, total_sources, processed_sources, failed_sources, profile_group,
                  config_json, started_at, completed_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
                     campaign_id or "",
+                    item.run_id,
                     item.status,
                     item.total_sources,
                     item.processed_sources,
                     item.failed_sources,
+                    item.profile_group,
+                    json.dumps(config, ensure_ascii=False),
+                    item.started_at,
+                    item.completed_at,
+                    item.created_at,
+                    item.updated_at,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO campaign_runs
+                (id, campaign_id, batch_id, run_key, status, profile_group, config_json,
+                 started_at, completed_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    campaign_id or "",
+                    batch_id,
+                    f"{campaign_id or 'uncampaign'}:{batch_id}",
+                    item.status,
                     item.profile_group,
                     json.dumps(config, ensure_ascii=False),
                     item.started_at,
@@ -1439,6 +1938,14 @@ class GrowthStorage:
                 """,
                 (status, processed, failed, completed_at, now, batch_id),
             )
+            conn.execute(
+                """
+                UPDATE campaign_runs
+                SET status=?, completed_at=COALESCE(?, completed_at), updated_at=?
+                WHERE batch_id=?
+                """,
+                (status, completed_at, now, batch_id),
+            )
 
     def update_collection_batch_total_sources(self, batch_id: str, total_sources: int):
         now = utc_now_iso()
@@ -1454,9 +1961,11 @@ class GrowthStorage:
 
     def create_collection_task(self, batch_id: str, source_id: str, source_type: str, source_value: str, profile_id: str = "") -> CollectionTask:
         now = utc_now_iso()
+        run_id = self.run_id_for_batch(batch_id)
         item = CollectionTask(
             id=new_id("gt"),
             batch_id=batch_id,
+            run_id=run_id,
             source_id=source_id,
             source_type=source_type,
             source_value=source_value,
@@ -1469,13 +1978,14 @@ class GrowthStorage:
             conn.execute(
                 """
                 INSERT INTO collection_tasks
-                (id, batch_id, source_id, source_type, source_value, profile_id, status,
+                (id, batch_id, run_id, source_id, source_type, source_value, profile_id, status,
                  error_code, error_message, started_at, completed_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
                     item.batch_id,
+                    run_id,
                     item.source_id,
                     item.source_type,
                     item.source_value,
@@ -1735,12 +2245,15 @@ class GrowthStorage:
         with self.connect() as conn:
             return [self._row_to_candidate(row) for row in conn.execute("SELECT * FROM candidate_users").fetchall()]
 
-    def list_candidates_with_content(self, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_candidates_with_content(self, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if batch_id:
             filters.append("cu.batch_id=?")
             args.append(str(batch_id))
+        if run_id:
+            filters.append("cu.run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -1781,12 +2294,15 @@ class GrowthStorage:
             row["commerce_title"] = row.get("product_title") or ""
         return rows
 
-    def list_action_queue(self, limit: int = 100, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_action_queue(self, limit: int = 100, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if batch_id:
             filters.append("aq.batch_id=?")
             args.append(str(batch_id))
+        if run_id:
+            filters.append("aq.run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -2216,18 +2732,21 @@ class GrowthStorage:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def list_outreach_executions(self, limit: int = 100, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_outreach_executions(self, limit: int = 100, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(str(batch_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
-            if batch_id:
-                rows = conn.execute(
-                    "SELECT * FROM outreach_executions WHERE batch_id=? ORDER BY created_at DESC LIMIT ?",
-                    (str(batch_id), limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM outreach_executions ORDER BY created_at DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM outreach_executions {where} ORDER BY created_at DESC LIMIT ?",
+                tuple(args + [limit]),
+            ).fetchall()
             items = [dict(row) for row in rows]
             for item in items:
                 raw_gate = str(item.get("risk_gate_json") or "").strip()
@@ -2240,33 +2759,42 @@ class GrowthStorage:
                         item["risk_gate"] = parsed
             return items
 
-    def outreach_execution_status_counts(self, batch_id: str = "") -> Dict[str, int]:
+    def outreach_execution_status_counts(self, batch_id: str = "", run_id: str = "") -> Dict[str, int]:
         batch_id = str(batch_id or "").strip()
+        run_id = str(run_id or "").strip()
+        filters = []
+        args: list[Any] = []
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(batch_id)
+        if run_id:
+            filters.append("run_id=?")
+            args.append(run_id)
+        where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
-            if batch_id:
-                rows = conn.execute(
-                    """
-                    SELECT status, COUNT(*) AS count
-                    FROM outreach_executions
-                    WHERE batch_id=?
-                    GROUP BY status
-                    """,
-                    (batch_id,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT status, COUNT(*) AS count
-                    FROM outreach_executions
-                    GROUP BY status
-                    """
-                ).fetchall()
+            rows = conn.execute(
+                f"""
+                SELECT status, COUNT(*) AS count
+                FROM outreach_executions
+                {where}
+                GROUP BY status
+                """,
+                tuple(args),
+            ).fetchall()
         return {str(row["status"] or ""): int(row["count"] or 0) for row in rows}
 
-    def outreach_execution_truth_counts(self, batch_id: str = "") -> Dict[str, int]:
+    def outreach_execution_truth_counts(self, batch_id: str = "", run_id: str = "") -> Dict[str, int]:
         batch_id = str(batch_id or "").strip()
-        where = "WHERE batch_id=?" if batch_id else ""
-        args = (batch_id,) if batch_id else ()
+        run_id = str(run_id or "").strip()
+        filters = []
+        args: list[Any] = []
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(batch_id)
+        if run_id:
+            filters.append("run_id=?")
+            args.append(run_id)
+        where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             row = conn.execute(
                 f"""
@@ -2286,7 +2814,7 @@ class GrowthStorage:
                 FROM outreach_executions
                 {where}
                 """,
-                args,
+                tuple(args),
             ).fetchone()
         keys = ["simulated_success", "dry_run_success", "preflight_passed", "live_submitted", "submitted_unverified", "live_verified", "live_failed"]
         return {key: int((row[key] if row else 0) or 0) for key in keys}
@@ -2664,6 +3192,12 @@ class GrowthStorage:
             "acquisition_campaigns",
             "audience_personas",
             "acquisition_sources",
+            "campaign_runs",
+            "source_observations",
+            "content_observations",
+            "comment_observations",
+            "candidate_observations",
+            "lead_decisions",
         }
         if table_name not in allowed:
             raise ValueError(f"unsupported table: {table_name}")
