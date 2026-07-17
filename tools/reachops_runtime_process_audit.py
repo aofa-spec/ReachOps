@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -61,12 +62,15 @@ def _parse_process_line(line: str) -> dict[str, Any]:
 
 def _read_process_rows(command_runner: Any = None) -> list[dict[str, Any]]:
     runner = command_runner or subprocess.run
-    completed = runner(
-        ["ps", "-axo", "pid=,ppid=,stat=,etime=,command="],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        completed = runner(
+            ["ps", "-axo", "pid=,ppid=,stat=,etime=,command="],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        return []
     rows: list[dict[str, Any]] = []
     for line in str(getattr(completed, "stdout", "") or "").splitlines():
         row = _parse_process_line(line)
@@ -78,6 +82,8 @@ def _read_process_rows(command_runner: Any = None) -> list[dict[str, Any]]:
 def _classify_process(row: dict[str, Any]) -> str:
     command = str(row.get("command") or "")
     lower = command.lower()
+    if "--protected-userid=" in lower:
+        return "ixbrowser_profile"
     if "chromedriver" in lower:
         return "chromedriver"
     if "ixbrowser.app" in lower or "/ixbrowser" in lower:
@@ -95,6 +101,11 @@ def _classify_process(row: dict[str, Any]) -> str:
     return ""
 
 
+def _profile_id_from_command(command: str) -> str:
+    match = re.search(r"--protected-userid=(\d+)", str(command or ""))
+    return match.group(1) if match else ""
+
+
 def _safe_process_row(row: dict[str, Any], classification: str) -> dict[str, Any]:
     return {
         "pid": int(row.get("pid") or 0),
@@ -102,6 +113,7 @@ def _safe_process_row(row: dict[str, Any], classification: str) -> dict[str, Any
         "stat": str(row.get("stat") or ""),
         "etime": str(row.get("etime") or ""),
         "classification": classification,
+        "profile_id": _profile_id_from_command(str(row.get("command") or "")),
         "command": str(row.get("command") or "")[:500],
     }
 
@@ -117,26 +129,110 @@ def _cleanup_item(item: dict[str, Any], reason: str) -> dict[str, Any]:
     }
 
 
+def _profile_cleanup_item(profile_id: str, rows: list[dict[str, Any]], reason: str) -> dict[str, Any]:
+    pids = sorted({int(row.get("pid") or 0) for row in rows if int(row.get("pid") or 0) > 0})
+    return {
+        "pid": 0,
+        "ppid": 0,
+        "profile_id": str(profile_id or ""),
+        "profile_process_pids": pids[:20],
+        "profile_process_count": len(pids),
+        "classification": "ixbrowser_profile",
+        "reason": reason,
+        "signal": "IXBROWSER_CLOSE_PROFILE",
+        "command": f"ixBrowser close_profile profile_id={profile_id}",
+    }
+
+
+def _profile_ids_from_value(value: Any, *, profile_context: bool = False) -> set[str]:
+    ids: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_text = str(key or "").lower()
+            if key_text in {"profile_id", "profileid"}:
+                text = str(item or "")
+                if text.isdigit():
+                    ids.add(text)
+            elif key_text in {"profile_ids", "profileids", "attempted_profiles"}:
+                ids.update(_profile_ids_from_value(item, profile_context=True))
+            else:
+                ids.update(_profile_ids_from_value(item, profile_context=False))
+        return ids
+    if isinstance(value, list):
+        for item in value:
+            ids.update(_profile_ids_from_value(item, profile_context=profile_context))
+        return ids
+    text = str(value or "")
+    if not text:
+        return ids
+    for match in re.finditer(r"--protected-userid=(\d+)", text):
+        ids.add(match.group(1))
+    for match in re.finditer(r"\bprofile_ids?=([0-9][0-9, ]*)", text):
+        for token in re.split(r"[,\s]+", match.group(1)):
+            if token.isdigit():
+                ids.add(token)
+    if profile_context and text.isdigit() and 4 <= len(text) <= 12:
+        ids.add(text)
+    return ids
+
+
+def collect_runtime_profile_ids(*, latest_session_path: Path, base_dir: Path) -> list[str]:
+    ids: set[str] = set()
+    candidates = [
+        Path(latest_session_path),
+        Path(base_dir) / "reachops_web_ui_last_run.json",
+        Path(base_dir) / "logs" / "growth_ops_runtime.log",
+    ]
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if path.suffix.lower() == ".json":
+                try:
+                    ids.update(_profile_ids_from_value(json.loads(text)))
+                    continue
+                except Exception:
+                    pass
+            ids.update(_profile_ids_from_value(text[-120000:]))
+        except Exception:
+            continue
+    return sorted(ids, key=lambda item: (len(item), item))
+
+
 def build_cleanup_plan(
     *,
     orphan_chromedrivers: list[dict[str, Any]],
     detached_reachops_clients: list[dict[str, Any]],
     stale_launchers: list[dict[str, Any]],
+    ixbrowser_profile_candidates: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     plan: list[dict[str, Any]] = []
+    for item in ixbrowser_profile_candidates or []:
+        profile_id = str(item.get("profile_id") or "").strip()
+        if profile_id:
+            plan.append(_profile_cleanup_item(profile_id, list(item.get("processes") or []), "runtime_ixbrowser_profile_candidate"))
     for item in orphan_chromedrivers:
         plan.append(_cleanup_item(item, "orphan_chromedriver_candidate"))
     for item in detached_reachops_clients:
         plan.append(_cleanup_item(item, "detached_reachops_client_process"))
     for item in stale_launchers:
         plan.append(_cleanup_item(item, "stale_native_client_launcher"))
-    seen: set[int] = set()
+    seen_pids: set[int] = set()
+    seen_profiles: set[str] = set()
     deduped: list[dict[str, Any]] = []
     for item in plan:
-        pid = int(item.get("pid") or 0)
-        if pid <= 0 or pid in seen:
+        if str(item.get("classification") or "") == "ixbrowser_profile":
+            profile_id = str(item.get("profile_id") or "")
+            if not profile_id or profile_id in seen_profiles:
+                continue
+            seen_profiles.add(profile_id)
+            deduped.append(item)
             continue
-        seen.add(pid)
+        pid = int(item.get("pid") or 0)
+        if pid <= 0 or pid in seen_pids:
+            continue
+        seen_pids.add(pid)
         deduped.append(item)
     return deduped
 
@@ -147,6 +243,7 @@ def apply_cleanup_plan(
     apply: bool = False,
     confirm: str = "",
     process_terminator: Any = None,
+    profile_closer: Any = None,
     sleep_seconds: float = 0.05,
 ) -> dict[str, Any]:
     if not apply:
@@ -172,6 +269,26 @@ def apply_cleanup_plan(
     terminator = process_terminator or os.kill
     attempted: list[dict[str, Any]] = []
     for item in cleanup_plan:
+        if str(item.get("classification") or "") == "ixbrowser_profile":
+            profile_id = str(item.get("profile_id") or "").strip()
+            if not profile_id:
+                continue
+            row = dict(item)
+            row["attempted"] = True
+            try:
+                closer = profile_closer
+                if closer is None:
+                    from ReachOps.adapters.browser_manager import get_workbench_browser_adapter
+
+                    closer = get_workbench_browser_adapter().force_close_profile
+                closer(profile_id, str(item.get("reason") or "runtime_cleanup"))
+                row["ok"] = True
+                row["error"] = ""
+            except Exception as exc:
+                row["ok"] = False
+                row["error"] = str(exc)
+            attempted.append(row)
+            continue
         pid = int(item.get("pid") or 0)
         if pid <= 0:
             continue
@@ -216,6 +333,7 @@ def build_runtime_process_audit(
     apply_cleanup: bool = False,
     confirm_cleanup: str = "",
     process_terminator: Any = None,
+    profile_closer: Any = None,
 ) -> dict[str, Any]:
     rows = list(process_rows) if process_rows is not None else _read_process_rows(command_runner=command_runner)
     takeover, _rc = build_takeover_report(latest_session_path=Path(latest_session_path), recover=False)
@@ -230,6 +348,11 @@ def build_runtime_process_audit(
             continue
         counts[classification] = int(counts.get(classification, 0) or 0) + 1
         relevant.append(_safe_process_row(row, classification))
+    runtime_profile_ids = collect_runtime_profile_ids(
+        latest_session_path=Path(latest_session_path),
+        base_dir=Path(base_dir),
+    )
+    runtime_profile_id_set = set(runtime_profile_ids)
 
     orphan_chromedrivers = [
         item
@@ -251,7 +374,28 @@ def build_runtime_process_audit(
         if item["classification"] == "reachops_native_client_launcher"
         and int(item.get("pid") or 0) != int((by_pid.get(session_pid) or {}).get("ppid") or 0)
     ]
+    ixbrowser_profile_processes = [
+        item
+        for item in relevant
+        if item["classification"] == "ixbrowser_profile"
+        and str(item.get("profile_id") or "") in runtime_profile_id_set
+    ]
+    ixbrowser_profile_candidates: list[dict[str, Any]] = []
+    for profile_id in runtime_profile_ids:
+        processes = [item for item in ixbrowser_profile_processes if str(item.get("profile_id") or "") == profile_id]
+        if not processes:
+            continue
+        ixbrowser_profile_candidates.append(
+            {
+                "profile_id": profile_id,
+                "process_count": len(processes),
+                "pids": sorted(int(item.get("pid") or 0) for item in processes if int(item.get("pid") or 0) > 0)[:20],
+                "processes": processes,
+            }
+        )
     blockers: list[str] = []
+    if ixbrowser_profile_candidates:
+        blockers.append("runtime_ixbrowser_profile_candidates_present")
     if orphan_chromedrivers:
         blockers.append("orphan_chromedriver_candidates_present")
     if detached_reachops_clients:
@@ -265,12 +409,14 @@ def build_runtime_process_audit(
         orphan_chromedrivers=orphan_chromedrivers,
         detached_reachops_clients=detached_reachops_clients,
         stale_launchers=stale_launchers,
+        ixbrowser_profile_candidates=ixbrowser_profile_candidates,
     )
     cleanup_result = apply_cleanup_plan(
         cleanup_plan,
         apply=apply_cleanup,
         confirm=confirm_cleanup,
         process_terminator=process_terminator,
+        profile_closer=profile_closer,
     )
     status = "attention_required" if blockers else "ok"
     return {
@@ -286,6 +432,10 @@ def build_runtime_process_audit(
         "relevant_process_count": len(relevant),
         "process_counts": counts,
         "relevant_processes": relevant,
+        "runtime_profile_ids": runtime_profile_ids,
+        "runtime_profile_id_count": len(runtime_profile_ids),
+        "ixbrowser_profile_candidates": ixbrowser_profile_candidates,
+        "ixbrowser_profile_candidate_count": len(ixbrowser_profile_candidates),
         "orphan_chromedriver_candidates": orphan_chromedrivers,
         "orphan_chromedriver_candidate_count": len(orphan_chromedrivers),
         "detached_reachops_client_processes": detached_reachops_clients,

@@ -5113,6 +5113,88 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(applied["no_process_killed"])
         self.assertEqual(applied["cleanup_result"]["attempted_count"], 3)
 
+    def test_runtime_process_audit_closes_only_run_session_ixbrowser_profiles(self):
+        rows = [
+            {
+                "pid": 101,
+                "ppid": 10,
+                "stat": "S",
+                "etime": "00:02:00",
+                "command": "/Applications/Chromium Helper --protected-userid=18981 --remote-debugging-port=62001",
+            },
+            {
+                "pid": 102,
+                "ppid": 10,
+                "stat": "S",
+                "etime": "00:02:00",
+                "command": "/Applications/Chromium Helper --protected-userid=99999 --remote-debugging-port=62002",
+            },
+        ]
+        closed = []
+
+        def fake_profile_closer(profile_id, reason):
+            closed.append((profile_id, reason))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest_run_session.json"
+            latest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reachops.run_session.v1",
+                        "session_id": "run-profile-cleanup",
+                        "state": "RUNNING",
+                        "pid": 999,
+                        "result": {
+                            "profile_preflight": {
+                                "results": [{"profile_id": "18981"}],
+                                "checked": 1,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            dry = build_reachops_runtime_process_audit(
+                process_rows=rows,
+                latest_session_path=latest,
+                base_dir=base,
+            )
+            applied = build_reachops_runtime_process_audit(
+                process_rows=rows,
+                latest_session_path=latest,
+                base_dir=base,
+                apply_cleanup=True,
+                confirm_cleanup="CLEANUP_RUNTIME_PROCESSES",
+                profile_closer=fake_profile_closer,
+            )
+
+        self.assertEqual(dry["runtime_profile_ids"], ["18981"])
+        self.assertEqual(dry["ixbrowser_profile_candidate_count"], 1)
+        self.assertEqual(dry["ixbrowser_profile_candidates"][0]["profile_id"], "18981")
+        self.assertIn("runtime_ixbrowser_profile_candidates_present", dry["blocker_codes"])
+        self.assertEqual(dry["cleanup_plan"][0]["classification"], "ixbrowser_profile")
+        self.assertEqual(applied["cleanup_result"]["status"], "completed")
+        self.assertEqual(closed, [("18981", "runtime_ixbrowser_profile_candidate")])
+
+    def test_runtime_process_audit_handles_missing_platform_ps(self):
+        def missing_ps(*_args, **_kwargs):
+            raise FileNotFoundError("ps")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = build_reachops_runtime_process_audit(
+                latest_session_path=Path(tmp) / "missing_latest_run_session.json",
+                base_dir=Path(tmp),
+                command_runner=missing_ps,
+            )
+
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["process_count"], 0)
+        self.assertEqual(report["cleanup_candidate_count"], 0)
+        self.assertTrue(report["no_browser_started"])
+        self.assertTrue(report["no_submit"])
+
     def test_support_diagnostics_materialization_writes_required_support_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "runtime"
