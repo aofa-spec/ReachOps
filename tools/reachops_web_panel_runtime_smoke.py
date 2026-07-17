@@ -981,19 +981,29 @@ def run_runtime_smoke() -> dict:
                     "error": "",
                 }
 
+            old_group_cache = reachops_web_ui.GROUP_CACHE
             reachops_web_ui.load_groups = fake_incomplete_group_counts
+            reachops_web_ui.GROUP_CACHE = {
+                **fake_incomplete_group_counts(refresh=True),
+                "loaded_at": time.time(),
+                "stale_cache": False,
+                "background_refresh": False,
+            }
             status, incomplete_group_counts = _json_request(
-                base + "/api/start",
-                {"target": "anti aging serum", "group": "Canada"},
-                expect_error=400,
+                base + "/api/start-preview",
+                {"target": "anti aging serum", "group": "United States"},
             )
-            checks["start_rejects_incomplete_group_counts"] = (
-                status == 400
-                and incomplete_group_counts.get("error") == "profile_group_counts_incomplete"
-                and (incomplete_group_counts.get("run_session") or {}).get("path")
-                and (incomplete_group_counts.get("execution_plan") or {}).get("path")
+            checks["start_preview_allows_unknown_group_count_for_runtime_preflight"] = (
+                status == 200
+                and incomplete_group_counts.get("start_allowed") is True
+                and incomplete_group_counts.get("profile_group_count_known") is False
+                and incomplete_group_counts.get("profile_group_runtime_count_required") is True
+                and "实时读取账号列表" in str(incomplete_group_counts.get("profile_group_count_warning") or "")
+                and incomplete_group_counts.get("no_browser_started") is True
+                and incomplete_group_counts.get("no_submit") is True
                 and not captured.get("cmd")
             )
+            reachops_web_ui.GROUP_CACHE = old_group_cache
             reachops_web_ui.load_groups = original_fake_load_groups
 
             status, unconfirmed_live = _json_request(

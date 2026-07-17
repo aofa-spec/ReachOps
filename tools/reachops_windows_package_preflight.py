@@ -246,7 +246,7 @@ SCRIPT_EXPECTATIONS = {
         "target_required",
         "profile_group_list_unavailable",
         "profile_group_not_found",
-        "profile_group_counts_incomplete",
+        "unknown_group_count_runtime_preflight",
         "account_repair_required",
         "LIVE_SUBMIT_NOT_AUTHORIZED",
         "already_running",

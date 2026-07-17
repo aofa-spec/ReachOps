@@ -5556,7 +5556,6 @@ class ReachOpsCampaignTests(unittest.TestCase):
             "untrusted_origin",
             "group_list_unavailable",
             "group_not_found",
-            "group_counts_incomplete",
             "live_comment_confirmation_required",
             "live_submit_not_authorized",
             "already_running",
@@ -5566,6 +5565,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(cases[name]["no_submit"], name)
             self.assertTrue(cases[name]["next_action"], name)
         continuation_cases = {row["name"]: row for row in report["runtime_continuation_cases"]}
+        self.assertTrue(continuation_cases["unknown_group_count_runtime_preflight"]["passed"])
+        self.assertTrue(continuation_cases["unknown_group_count_runtime_preflight"]["runtime_auto_grouping"])
         self.assertTrue(continuation_cases["account_gate_runtime_auto_recheck"]["passed"])
         self.assertTrue(continuation_cases["account_gate_runtime_auto_recheck"]["force_account_recheck"])
         self.assertTrue(continuation_cases["account_gate_runtime_auto_recheck"]["runtime_auto_grouping"])
@@ -9026,7 +9027,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("reachops.start_contract_audit.v1", start_contract_audit)
         self.assertIn("reachops.api_start_contract.v1", start_contract_audit)
         self.assertIn("profile_group_list_unavailable", start_contract_audit)
-        self.assertIn("profile_group_counts_incomplete", start_contract_audit)
+        self.assertIn("unknown_group_count_runtime_preflight", start_contract_audit)
         self.assertIn("account_repair_required", start_contract_audit)
         self.assertIn("account_gate_runtime_auto_recheck", start_contract_audit)
         self.assertIn("runtime_auto_grouping", start_contract_audit)

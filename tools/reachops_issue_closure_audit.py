@@ -328,6 +328,10 @@ def build_report(root: str | Path = ROOT_DIR, *, run_pip: bool = False) -> dict[
                 "contract_version": start_contract.get("contract_version"),
                 "failed_cases": start_contract.get("failed_cases"),
                 "rejection_case_count": len(start_contract.get("rejection_cases") or []),
+                "runtime_continuation_case_count": len(start_contract.get("runtime_continuation_cases") or []),
+                "runtime_continuation_cases": [
+                    row.get("name") for row in (start_contract.get("runtime_continuation_cases") or []) if row.get("passed")
+                ],
                 "response_invariants": start_contract.get("response_invariants"),
             },
             [
@@ -345,9 +349,15 @@ def build_report(root: str | Path = ROOT_DIR, *, run_pip: bool = False) -> dict[
                 ),
                 _criterion(
                     "issue_2_group_evidence_cached_fallback",
-                    "Fresh live group evidence and permitted cached fallback behavior are unambiguous.",
-                    "local_passed" if len(start_contract.get("rejection_cases") or []) >= 8 else "unclassified",
-                    "rejection_cases.profile_group_*",
+                    "Fresh live group evidence and selected-group runtime preflight fallback are unambiguous.",
+                    "local_passed"
+                    if len(start_contract.get("rejection_cases") or []) >= 7
+                    and any(
+                        row.get("name") == "unknown_group_count_runtime_preflight" and row.get("passed")
+                        for row in (start_contract.get("runtime_continuation_cases") or [])
+                    )
+                    else "unclassified",
+                    "rejection_cases.profile_group_* and runtime_continuation_cases.unknown_group_count_runtime_preflight",
                 ),
                 _criterion(
                     "issue_2_rejections_stable_no_browser_no_submit",
@@ -363,9 +373,16 @@ def build_report(root: str | Path = ROOT_DIR, *, run_pip: bool = False) -> dict[
                 ),
                 _criterion(
                     "issue_2_contract_tests_cover_required_cases",
-                    "Contract tests cover target missing, group unavailable, count incomplete, account recheck, live authorization, already-running, and successful start.",
-                    "local_passed" if len(start_contract.get("rejection_cases") or []) >= 8 and not start_contract.get("failed_cases") else "unclassified",
-                    "rejection_cases and success_contract",
+                    "Contract tests cover target missing, group unavailable, unknown group count runtime preflight, account recheck, live authorization, already-running, and successful start.",
+                    "local_passed"
+                    if len(start_contract.get("rejection_cases") or []) >= 7
+                    and any(
+                        row.get("name") == "unknown_group_count_runtime_preflight" and row.get("passed")
+                        for row in (start_contract.get("runtime_continuation_cases") or [])
+                    )
+                    and not start_contract.get("failed_cases")
+                    else "unclassified",
+                    "rejection_cases, runtime_continuation_cases, and success_contract",
                 ),
             ],
         ),

@@ -1313,6 +1313,52 @@ def build_run_session_health_summary(run_session: dict[str, Any]) -> dict[str, A
     }
 
 
+def infer_observed_runtime_states_from_log(log_lines: list[str]) -> list[str]:
+    states: list[str] = []
+
+    def add(state: str) -> None:
+        if state and state not in states:
+            states.append(state)
+
+    for line in log_lines or []:
+        text = _safe_text(line)
+        if not text:
+            continue
+        lowered = text.lower()
+        if "RUN    web_headless_start" in text or "CLICK  start_acquisition" in text:
+            add("PRECHECK")
+        if (
+            "QUEUE  account_queue_start" in text
+            or "QUEUE  account_queue_effective" in text
+            or "preflight_session_handoff" in text
+            or "profile_started" in text
+            or "open_profile" in lowered
+        ):
+            add("PROFILE_OPENING")
+        if (
+            text.startswith("VIDEO  ")
+            or "FAST   collection_result" in text
+            or "comment_scan_started" in text
+            or "comments_collected" in text
+            or "material_discovered" in text
+            or "profile_source_completed" in text
+        ):
+            add("COLLECTING")
+        if "SCORE " in text or "candidate_user_scored" in text or "operation_lead_created" in text:
+            add("SCORING")
+        if "START  action_preflight" in text or "action_queue_created" in text or "queued_total=" in text:
+            add("ACTION_PLANNING")
+        if text.startswith("TOUCH  ") or "DONE   action_preflight" in text or "FAST   acceptance" in text:
+            add("EXECUTING")
+        if "repair" in lowered or "账号修复" in text:
+            add("REPAIRING")
+        if "BLOCK  " in text:
+            add("BLOCKED")
+        if "FAST   acceptance status=executed" in text or "DONE   action_preflight" in text:
+            add("COMPLETED")
+    return states
+
+
 def build_autonomous_execution_summary(
     run_session: dict[str, Any],
     run_session_health: dict[str, Any],
@@ -1346,6 +1392,10 @@ def build_autonomous_execution_summary(
     inferred_state = _safe_text(checkpoint.get("runtime_state_inferred"))
     if inferred_state and inferred_state not in observed_states:
         observed_states.append(inferred_state)
+    log_observed_states = infer_observed_runtime_states_from_log(log_lines)
+    for state in log_observed_states:
+        if state not in observed_states:
+            observed_states.append(state)
 
     implemented_states = [state for state in RUN_SESSION_STATE_ORDER if state]
     session_result = run_session.get("result") if isinstance(run_session.get("result"), dict) else {}
@@ -1410,6 +1460,7 @@ def build_autonomous_execution_summary(
         "implemented_states": implemented_states,
         "observed_state_count": len(observed_states),
         "observed_states": observed_states,
+        "log_observed_states": log_observed_states,
         "missing_core_states": missing_core_states,
         "missing_implemented_states": missing_implemented_states,
         "required_core_states": core_states,

@@ -67,6 +67,9 @@ def _continuation_case(
     test_ok: bool,
     next_action: str,
     evidence: list[str],
+    previous_error_code: str = "",
+    force_account_recheck: bool = False,
+    runtime_auto_grouping: bool = True,
 ) -> dict[str, Any]:
     passed = bool(source_ok and test_ok)
     return {
@@ -74,9 +77,10 @@ def _continuation_case(
         "status": "passed" if passed else "failed",
         "passed": passed,
         "next_action": next_action,
-        "previous_error_code": "account_repair_required",
-        "force_account_recheck": True,
-        "runtime_auto_grouping": True,
+        "previous_error_code": previous_error_code,
+        "force_account_recheck": force_account_recheck,
+        "runtime_auto_grouping": runtime_auto_grouping,
+        "no_browser_started": True,
         "no_submit": True,
         "source_contract_present": bool(source_ok),
         "test_or_smoke_evidence_present": bool(test_ok),
@@ -161,24 +165,6 @@ def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
             evidence=["tools/reachops_web_ui.py", "tests/test_reachops_client_acceptance_status.py"],
         ),
         _case(
-            "group_counts_incomplete",
-            error_code="profile_group_counts_incomplete",
-            http_status=400,
-            source_ok=_contains_all(
-                web_ui,
-                [
-                    "profile_group_counts_incomplete",
-                    "live_all_group_counts_known",
-                    "count_resolution_error",
-                    "persist_precheck_blocked_start",
-                ],
-            ),
-            test_ok="start_group_precheck_block_writes_auditable_run_session" in runtime_smoke
-            and "blocked_group_page_counts" in runtime_smoke,
-            next_action="Refresh groups until every ixBrowser group count is live and complete.",
-            evidence=["tools/reachops_web_ui.py", "tools/reachops_web_panel_runtime_smoke.py"],
-        ),
-        _case(
             "live_comment_confirmation_required",
             error_code="live_comment_confirmation_required",
             http_status=400,
@@ -215,6 +201,27 @@ def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
 
     runtime_continuation_cases = [
         _continuation_case(
+            "unknown_group_count_runtime_preflight",
+            source_ok=_contains_all(
+                web_ui,
+                [
+                    "selected_group_count_runtime_notice",
+                    "profile_group_count_warning",
+                    "profile_group_runtime_count_required",
+                    "runtime_profile_preflight=true",
+                ],
+            ),
+            test_ok="test_start_validation_allows_selected_group_unknown_count_with_runtime_preflight" in http_tests
+            and "test_start_preview_allows_known_group_with_unknown_count_for_runtime_preflight" in http_tests
+            and "start_preview_allows_unknown_group_count_for_runtime_preflight" in runtime_smoke,
+            next_action="Proceed to bounded runtime profile-list read and login preflight when the selected ixBrowser group exists but count is unknown.",
+            evidence=[
+                "tools/reachops_web_ui.py",
+                "tests/test_reachops_client_acceptance_status.py",
+                "tools/reachops_web_panel_runtime_smoke.py",
+            ],
+        ),
+        _continuation_case(
             "account_gate_runtime_auto_recheck",
             source_ok=_contains_all(
                 web_ui,
@@ -230,6 +237,9 @@ def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
             and "REACHOPS_FORCE_ACCOUNT_RECHECK" in http_tests
             and "runtime_auto_grouping" in http_tests,
             next_action="Start bounded runtime preflight so logged-in accounts continue and blocked accounts are skipped or quarantined.",
+            previous_error_code="account_repair_required",
+            force_account_recheck=True,
+            runtime_auto_grouping=True,
             evidence=["tools/reachops_web_ui.py", "tests/test_reachops_client_acceptance_status.py"],
         )
     ]

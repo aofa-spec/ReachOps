@@ -1876,7 +1876,11 @@ def run_audit(args) -> dict:
                 and (start_contract_fixture.get("response_invariants") or {}).get("prelaunch_rejections_do_not_start_browser")
                 and (start_contract_fixture.get("response_invariants") or {}).get("prelaunch_rejections_do_not_submit")
                 and (start_contract_fixture.get("response_invariants") or {}).get("blocked_start_is_recoverable_and_supportable")
-                and len(start_contract_fixture.get("rejection_cases") or []) >= 8
+                and len(start_contract_fixture.get("rejection_cases") or []) >= 7
+                and any(
+                    row.get("name") == "unknown_group_count_runtime_preflight" and row.get("passed")
+                    for row in (start_contract_fixture.get("runtime_continuation_cases") or [])
+                )
             ),
             start_contract_fixture,
         ),

@@ -1362,9 +1362,26 @@ def start_preview_group_list_ready(payload: dict, profile_group: str) -> bool:
     selected = names.get(str(profile_group or "").strip().lower())
     if not selected:
         return False
-    if cached.get("live_all_group_counts_known") is not True and cached.get("all_group_counts_known") is not True:
-        return False
-    return bool(selected.get("count_known"))
+    return True
+
+
+def selected_group_count_runtime_notice(group_payload: dict, profile_group: str) -> dict:
+    groups = [row for row in (group_payload.get("groups") or []) if isinstance(row, dict)]
+    names = {str(row.get("name") or "").strip().lower(): row for row in groups}
+    selected = names.get(str(profile_group or "").strip().lower()) or {}
+    count_known = bool(selected.get("count_known"))
+    if count_known and group_payload.get("live_all_group_counts_known") is True:
+        return {}
+    return {
+        "profile_group_count_known": count_known,
+        "profile_group_count_status": str(selected.get("count_status") or ("known" if count_known else "unknown")),
+        "profile_group_count_warning": (
+            "ixBrowser 未返回该分组账号数量；启动后会实时读取账号列表、逐个登录预检，并自动跳过不可用账号。"
+            if not count_known
+            else "ixBrowser 未返回全部分组账号数量；本次只使用已选择分组，启动后仍会实时读取账号列表并预检。"
+        ),
+        "profile_group_runtime_count_required": not count_known,
+    }
 
 
 def read_cached_groups_payload() -> dict:
@@ -1795,6 +1812,7 @@ def build_start_preview(payload: dict | None) -> dict:
     account_repair_confirmed = truthy(payload.get("account_repair_confirmed", payload.get("accountRepairConfirmed")))
     account_gate_blocked = truthy(payload.get("account_gate_blocked", payload.get("accountGateBlocked")))
     group_list_ready = start_preview_group_list_ready(payload, profile_group)
+    group_count_notice = selected_group_count_runtime_notice(GROUP_CACHE if GROUP_CACHE.get("groups") else {}, profile_group) if group_list_ready else {}
     force_account_recheck = account_gate_blocked
     submit_policy = "真实评论提交" if mode == "live_comment" and live_confirmed else "预检，不提交"
     gate_state = "分组未刷新"
@@ -1811,13 +1829,17 @@ def build_start_preview(payload: dict | None) -> dict:
         next_actions.append("输入产品链接、关键词、达人主页、视频链接、话题或直播间。")
     if not group_list_ready:
         blockers.append("profile_group_list_not_ready")
-        next_actions.append("先刷新 ixBrowser 配置分组，确认所选分组账号数量。")
+        next_actions.append("先刷新 ixBrowser 配置分组，确认所选分组存在。")
+    elif group_count_notice.get("profile_group_count_warning"):
+        next_actions.append(str(group_count_notice["profile_group_count_warning"]))
     if mode == "live_comment" and not live_confirmed:
         blockers.append("live_comment_confirmation_required")
         next_actions.append("真实评论前必须勾选授权确认。")
     if account_gate_blocked and group_list_ready:
         next_actions.append("启动后会重新读取配置列表，自动跳过或移组未登录账号，并继续尝试后续账号。")
     start_allowed = not blockers
+    if start_allowed:
+        next_actions.append("可以启动本地执行。")
     preflight_decision = {
         "schema_version": "reachops.start_preflight_decision.v1",
         "status": "ready" if start_allowed else "blocked",
@@ -1828,6 +1850,7 @@ def build_start_preview(payload: dict | None) -> dict:
         "submit_policy": submit_policy,
         "mode": mode,
         "profile_group": profile_group,
+        **group_count_notice,
         "no_ai_token_used": True,
         "no_browser_started": True,
         "no_submit": True,
@@ -1881,6 +1904,7 @@ def build_start_preview(payload: dict | None) -> dict:
         "start_allowed": start_allowed,
         "blockers": blockers,
         "next_actions": preflight_decision["next_actions"],
+        **group_count_notice,
         "submit_policy": submit_policy,
         "gate_state": gate_state,
         "no_browser_started": True,
@@ -6594,28 +6618,31 @@ def validate_profile_group_for_start(profile_group: str) -> tuple[bool, dict]:
             "available_groups": [str(row.get("name") or "") for row in groups],
             "next_actions": ["点击“刷新分组”后重新选择账号分组，再启动采集。"],
         }
-    if group_payload.get("live_all_group_counts_known") is not True:
-        return False, {
-            "status": "rejected",
-            "error": "profile_group_counts_incomplete",
-            "message": "启动前必须通过 ixBrowser Local API 完整读取全部配置分组账号数量；当前分组数量不完整，已拒绝启动。",
-            "profile_group": profile_group,
-            "group_count": len(groups),
-            "known_group_count": int(group_payload.get("live_known_group_count") or group_payload.get("known_group_count") or 0),
-            "count_resolution_error": group_payload.get("count_resolution_error") or "",
-            "next_actions": ["重新点击“刷新分组”，等待全部分组账号数量读取完成后再启动采集。"],
-        }
     selected_group = names[profile_group.strip().lower()]
+    count_notice = selected_group_count_runtime_notice(group_payload, profile_group)
     if not selected_group.get("count_known"):
-        return False, {
-            "status": "rejected",
-            "error": "profile_group_count_unknown",
-            "message": "选中的账号分组账号数量未知，不能证明配置列表可用于本次采集，已拒绝启动。",
-            "profile_group": profile_group,
-            "group_id": selected_group.get("group_id") or "",
-            "next_actions": ["重新刷新分组，确认该分组显示账号数量后再启动采集。"],
-        }
-    return True, {"group": selected_group}
+        append_web_log(
+            f"WARN   web_ui_start_group_count_unknown group={profile_group} "
+            f"group_id={selected_group.get('group_id') or ''} runtime_profile_preflight=true"
+        )
+    elif group_payload.get("live_all_group_counts_known") is not True:
+        append_web_log(
+            f"WARN   web_ui_start_group_counts_partial group={profile_group} "
+            f"known_group_count={int(group_payload.get('live_known_group_count') or group_payload.get('known_group_count') or 0)} "
+            f"group_count={len(groups)} runtime_profile_preflight=true"
+        )
+    return True, {
+        "group": selected_group,
+        "group_count": len(groups),
+        "known_group_count": int(group_payload.get("live_known_group_count") or group_payload.get("known_group_count") or 0),
+        "count_resolution_error": group_payload.get("count_resolution_error") or "",
+        **count_notice,
+        "next_actions": (
+            [str(count_notice["profile_group_count_warning"]), "可以启动本地执行。"]
+            if count_notice.get("profile_group_count_warning")
+            else ["可以启动本地执行。"]
+        ),
+    }
 
 
 def validate_account_repair_for_start(profile_group: str, account_repair_confirmed: bool) -> tuple[bool, dict]:
@@ -7578,12 +7605,15 @@ class Handler(BaseHTTPRequestHandler):
                 origin="web_ui_start",
             )
             if not replay_execution_plan:
+                start_next_actions = list(group_check.get("next_actions") or [])
+                if not start_next_actions:
+                    start_next_actions = ["可以启动本地执行。"]
                 preflight_decision = build_start_preflight_decision_for_plan(
                     execution_plan,
                     start_allowed=True,
                     gate_state="可启动",
                     blockers=[],
-                    next_actions=["可以启动本地执行。"],
+                    next_actions=start_next_actions,
                     no_submit=mode != "live_comment",
                 )
                 execution_plan = attach_autonomous_preflight_forecast(

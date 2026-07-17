@@ -8,8 +8,11 @@ from pathlib import Path
 
 from ReachOps.evidence_bundle import (
     build_ai_usage_summary,
+    build_autonomous_execution_summary,
     build_autonomy_readiness_summary,
     build_evidence_bundle,
+    build_run_session_health_summary,
+    infer_observed_runtime_states_from_log,
     build_product_capability_summary,
     build_risk_policy_summary,
     render_evidence_markdown,
@@ -23,6 +26,48 @@ from ReachOps.workbench.offline_learning_ledger import review_policy_candidate
 
 
 class EvidenceBundleTests(unittest.TestCase):
+    def test_autonomous_summary_uses_runtime_log_states_when_sampling_misses_collection(self) -> None:
+        plan = build_execution_plan(target="https://example.test/product", mode="preflight")
+        session = create_run_session(plan)
+        session = transition_run_session(session, "PRECHECK", last_stage="RUN web_headless_start")
+        session = transition_run_session(session, "PROFILE_PREFLIGHT", last_stage="CHECK profile_preflight")
+        session = transition_run_session(
+            session,
+            "EXECUTING",
+            last_stage="FAST acceptance status=executed mode=preflight no_submit=true",
+            result={"status": "completed"},
+        )
+        log_lines = [
+            "RUN    web_headless_start target=https://example.test/product",
+            "QUEUE  account_queue_effective batch=gb_1 requested_concurrency=3 effective_concurrency=3",
+            "VIDEO  material_discovered content=sc_1 url=https://www.tiktok.com/@demo/video/1",
+            "VIDEO  comment_scan_started content=ct_1 profile=18979 source=Peptide",
+            "FAST   collection_result mode=preflight used_profiles=3 processed_sources=5 failed_sources=1 no_submit=true",
+            "START  action_preflight batch=gb_1 actions=6 queued_total=7 no_submit=true",
+            "TOUCH  success mode=action_preflight action=aq_1 type=comment_reply profile=18979",
+            "FAST   acceptance status=executed mode=preflight actions=6 success=3 failed=3 skipped=0 no_submit=true error=无",
+        ]
+
+        observed = infer_observed_runtime_states_from_log(log_lines)
+        summary = build_autonomous_execution_summary(
+            session,
+            build_run_session_health_summary(session),
+            {},
+            {
+                "audit_status": "pass",
+                "execution_phase_ai_call_count": 0,
+                "execution_phase_token_estimate": 0,
+            },
+            log_lines,
+        )
+
+        self.assertIn("PROFILE_OPENING", observed)
+        self.assertIn("COLLECTING", observed)
+        self.assertIn("PROFILE_OPENING", summary["observed_states"])
+        self.assertIn("COLLECTING", summary["observed_states"])
+        self.assertEqual(summary["missing_core_states"], [])
+        self.assertTrue(summary["autonomous_core_ready"])
+
     def test_bundle_summarizes_interrupted_run_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

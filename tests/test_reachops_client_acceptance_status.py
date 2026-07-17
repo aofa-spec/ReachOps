@@ -1859,6 +1859,49 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         finally:
             reachops_web_ui.GROUP_CACHE = old_cache
 
+    def test_start_preview_allows_known_group_with_unknown_count_for_runtime_preflight(self):
+        old_cache = reachops_web_ui.GROUP_CACHE
+        try:
+            reachops_web_ui.GROUP_CACHE = {
+                "loaded_at": time.time(),
+                "groups": [
+                    {
+                        "name": "获客分组测试",
+                        "group_id": "308389",
+                        "count": 0,
+                        "count_known": False,
+                        "count_status": "unknown",
+                        "count_label": "数量未返回",
+                    }
+                ],
+                "live_all_group_counts_known": False,
+                "all_group_counts_known": False,
+                "error": "",
+                "stale_cache": False,
+                "background_refresh": False,
+            }
+
+            preview = reachops_web_ui.build_start_preview(
+                {
+                    "target": "https://chameleonpeptides.com/product/peptide-31/?attribute_pa_strength=50mg",
+                    "group": "获客分组测试",
+                    "mode": "preflight",
+                    "volume": "quick",
+                    "profiles": 3,
+                }
+            )
+
+            self.assertTrue(preview["start_allowed"])
+            self.assertEqual(preview["gate_state"], "可启动")
+            self.assertNotIn("profile_group_list_not_ready", preview["blockers"])
+            self.assertFalse(preview["profile_group_count_known"])
+            self.assertTrue(preview["profile_group_runtime_count_required"])
+            self.assertIn("启动后会实时读取账号列表", preview["profile_group_count_warning"])
+            self.assertTrue(preview["no_submit"])
+            self.assertTrue(preview["no_browser_started"])
+        finally:
+            reachops_web_ui.GROUP_CACHE = old_cache
+
     def test_web_ui_only_trusts_local_api_hosts(self):
         self.assertTrue(is_local_api_host("127.0.0.1:8766"))
         self.assertTrue(is_local_api_host("localhost"))
@@ -7837,7 +7880,7 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertTrue(build.call_args.kwargs["collect_metadata"])
 
-    def test_start_validation_rejects_incomplete_group_counts(self):
+    def test_start_validation_allows_incomplete_group_counts_with_runtime_preflight(self):
         payload = {
             "groups": [
                 {"name": "Canada", "group_id": "281726", "count": 2, "count_known": True},
@@ -7854,10 +7897,32 @@ class ReachOpsMacSelfCheckTest(unittest.TestCase):
         with patch("tools.reachops_web_ui.load_groups", return_value=payload):
             ok, result = reachops_web_ui.validate_profile_group_for_start("Canada")
 
-        self.assertFalse(ok)
-        self.assertEqual(result["error"], "profile_group_counts_incomplete")
+        self.assertTrue(ok)
+        self.assertTrue(result["profile_group_count_known"])
         self.assertEqual(result["group_count"], 2)
         self.assertEqual(result["known_group_count"], 1)
+        self.assertIn("实时读取账号列表", result["profile_group_count_warning"])
+
+    def test_start_validation_allows_selected_group_unknown_count_with_runtime_preflight(self):
+        payload = {
+            "groups": [
+                {"name": "获客分组测试", "group_id": "308389", "count": 0, "count_known": False, "count_status": "unknown"},
+            ],
+            "group_count": 1,
+            "known_group_count": 0,
+            "live_known_group_count": 0,
+            "all_group_counts_known": False,
+            "live_all_group_counts_known": False,
+            "error": "",
+            "stale_cache": False,
+        }
+        with patch("tools.reachops_web_ui.load_groups", return_value=payload):
+            ok, result = reachops_web_ui.validate_profile_group_for_start("获客分组测试")
+
+        self.assertTrue(ok)
+        self.assertFalse(result["profile_group_count_known"])
+        self.assertTrue(result["profile_group_runtime_count_required"])
+        self.assertIn("启动后会实时读取账号列表", result["profile_group_count_warning"])
 
     def test_delivery_check_write_preserves_existing_ixbrowser_metadata(self):
         with TemporaryDirectory() as tmpdir:
