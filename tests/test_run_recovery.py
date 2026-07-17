@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from ReachOps.execution_plan import build_execution_plan
 from ReachOps.run_recovery import recover_interrupted_run_session, should_recover_interrupted_run
@@ -11,7 +14,13 @@ from ReachOps.run_session import (
     infer_run_state,
     is_allowed_state_transition,
     transition_run_session,
+    write_run_session,
 )
+from tools.reachops_run_session_takeover import build_takeover_report
+
+
+def read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 class RunRecoveryTests(unittest.TestCase):
@@ -184,6 +193,51 @@ class RunRecoveryTests(unittest.TestCase):
             infer_run_state(["DONE   action_submit batch=123"], running=True),
             "EXECUTING",
         )
+
+    def test_takeover_reports_dead_running_session_without_mutating_by_default(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            latest = base / "runs" / "latest_run_session.json"
+            result = base / "last_run.json"
+            plan = build_execution_plan(target="anti aging serum", mode="collect")
+            session = create_run_session(plan, result_path=str(result), log_path=str(base / "run.log"))
+            session = transition_run_session(session, "PRECHECK", pid=987654, last_stage="PRECHECK fixture")
+            write_run_session(session, latest, latest)
+
+            report, rc = build_takeover_report(latest_session_path=latest, default_result_path=result, recover=False)
+            persisted = read_json(latest)
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(report["status"], "needs_recovery")
+        self.assertTrue(report["needs_recovery"])
+        self.assertFalse(report["pid_running"])
+        self.assertFalse(report["recovered"])
+        self.assertEqual(persisted["state"], "PRECHECK")
+        self.assertTrue(report["no_browser_started"])
+        self.assertTrue(report["no_submit"])
+
+    def test_takeover_recovers_dead_running_session_to_blocked(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            latest = base / "runs" / "latest_run_session.json"
+            result = base / "last_run.json"
+            plan = build_execution_plan(target="anti aging serum", mode="collect")
+            session = create_run_session(plan, result_path=str(result), log_path=str(base / "run.log"))
+            session = transition_run_session(session, "PRECHECK", pid=987654, last_stage="PRECHECK fixture")
+            write_run_session(session, latest, latest)
+
+            report, rc = build_takeover_report(latest_session_path=latest, default_result_path=result, recover=True)
+            persisted = read_json(latest)
+            result_payload = read_json(result)
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(report["status"], "recovered_interrupted")
+        self.assertTrue(report["recovered"])
+        self.assertEqual(persisted["state"], "BLOCKED")
+        self.assertEqual(persisted["result"]["error"], "process_interrupted")
+        self.assertEqual(result_payload["error"], "process_interrupted")
+        self.assertTrue(report["no_browser_started"])
+        self.assertTrue(report["no_submit"])
 
 
 if __name__ == "__main__":

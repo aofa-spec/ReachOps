@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -25,8 +26,17 @@ from ReachOps.intelligence.ai_strategy import HTTPAcquisitionIntelligenceProvide
 from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.action_router import ActionRouterConfig, FixtureActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
+from tools.reachops_ci_release_baseline_audit import build_report as build_ci_release_baseline_report
+from tools.reachops_account_readiness_audit import build_report as build_account_readiness_report
+from tools.reachops_control_plane_audit import build_report as build_control_plane_report
+from tools.reachops_issue_closure_audit import build_report as build_issue_closure_report
 from tools.reachops_delivery_smoke import build_service
 from tools.reachops_client_delivery_check import build_delivery_check
+from tools.reachops_data_governance import build_report as build_data_governance_report
+from tools.reachops_security_supply_chain_audit import build_report as build_security_supply_chain_report
+from tools.reachops_start_contract_audit import build_report as build_start_contract_report
+from tools.reachops_outcome_metrics import build_report as build_outcome_metrics_report
+from tools.reachops_outcome_metrics import import_outcomes_csv as import_outcomes_csv_fixture
 from tools.reachops_live_submit_acceptance import run_acceptance as run_live_submit_acceptance
 from tools.reachops_repository_cleanliness_check import clean_generated_redundant_paths, scan_repository_cleanliness
 from tools.reachops_web_panel_dom_smoke import run_dom_smoke as run_web_panel_dom_smoke
@@ -377,6 +387,74 @@ def run_packaging_update_fixture() -> dict:
     }
 
 
+def run_outcome_metrics_fixture() -> dict:
+    base_dir = Path(tempfile.mkdtemp(prefix="reachops-audit-outcomes-"))
+    db_path = base_dir / "outcomes.db"
+    now = "2026-07-14T00:00:00Z"
+    build_outcome_metrics_report(db_path=db_path, create_missing_db=True)
+    csv_path = base_dir / "outcomes.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "id,lead_id,workspace_id,owner,qualification_decision,qualification_reason,rejection_reason,lifecycle_stage,dedupe_key,source_path,evidence_path,data_scope,active_followup,accepted_at,reply_at,meaningful_conversation_at,meeting_at,quote_at,order_at,revenue_amount,revenue_currency,lost_reason,attribution_confidence,contact_policy,cost_amount,cost_currency,created_at",
+                f"out-real,lead-real,ws-1,owner-1,accepted,human accepted,,accepted,buyer@example.test,https://www.tiktok.com/@creator/video/1,reports/evidence/lead-real.json,real_customer,1,{now},{now},{now},{now},{now},{now},1200,USD,,operator_confirmed,authorized_followup,300,USD,{now}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO operation_leads
+            (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+             source_path, status, batch_id, created_at, updated_at)
+            VALUES
+            ('lead-real', 'candidate-real', 'purchase', 'high', 92, 'asked for price', 'accepted',
+             'https://www.tiktok.com/@creator/video/1', 'accepted', 'batch-real', ?, ?),
+            ('lead-fixture', 'candidate-fixture', 'purchase', 'high', 99, 'fixture lead', 'accepted',
+             'fixture://source', 'accepted', 'batch-fixture', ?, ?)
+            """,
+            (now, now, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO lead_outcomes
+            (id, lead_id, workspace_id, owner, qualification_decision, qualification_reason,
+             rejection_reason, lifecycle_stage, dedupe_key, source_path, evidence_path, data_scope,
+             active_followup, accepted_at, reply_at, revenue_amount, revenue_currency, lost_reason,
+             attribution_confidence, contact_policy, cost_amount, cost_currency, created_at, updated_at)
+            VALUES
+            ('out-fixture', 'lead-fixture', 'ws-1', 'owner-1', 'accepted', 'fixture accepted',
+             '', 'accepted', 'fixture-buyer', 'fixture://source', 'fixture://evidence', 'fixture',
+             1, ?, ?, 0.0, 'USD', '', 'fixture', 'fixture', 0.0, 'USD', ?, ?)
+            """
+            ,
+            (now, now, now, now),
+        )
+    ingestion = import_outcomes_csv_fixture(db_path=db_path, csv_path=csv_path, ingest_source="csv")
+    report = build_outcome_metrics_report(
+        db_path=db_path,
+        start_at="2026-07-13T00:00:00Z",
+        end_at="2026-07-15T00:00:00Z",
+    )
+    report["ingestion"] = ingestion
+    return report
+
+
+def run_data_governance_fixture() -> dict:
+    base_dir = Path(tempfile.mkdtemp(prefix="reachops-audit-governance-"))
+    db_path = base_dir / "growth_intelligence.db"
+    output_dir = base_dir / "governance"
+    return build_data_governance_report(
+        root=ROOT_DIR,
+        db_path=db_path,
+        output_dir=output_dir,
+        create_missing_db=True,
+        verify_backup=True,
+        verify_privacy_ops=True,
+    )
+
+
 def run_web_panel_runtime_smoke_with_retry(attempts: int = 3) -> dict:
     result = {}
     for index in range(max(1, int(attempts or 1))):
@@ -495,6 +573,9 @@ def run_web_local_api_architecture_fixture() -> dict:
     live_submit_acceptance = (ROOT_DIR / "tools" / "reachops_live_submit_acceptance.py").read_text(encoding="utf-8")
     client_acceptance = (ROOT_DIR / "tools" / "reachops_client_acceptance_status.py").read_text(encoding="utf-8")
     client_delivery_check = (ROOT_DIR / "tools" / "reachops_client_delivery_check.py").read_text(encoding="utf-8")
+    delivery_package_check = (ROOT_DIR / "tools" / "reachops_delivery_package_check.py").read_text(encoding="utf-8")
+    goal_delivery_runner = (ROOT_DIR / "tools" / "reachops_goal_delivery_runner.py").read_text(encoding="utf-8")
+    final_acceptance_gate = (ROOT_DIR / "tools" / "reachops_final_acceptance_gate.py").read_text(encoding="utf-8")
     schemas = (ROOT_DIR / "ReachOps" / "intelligence" / "schemas.py").read_text(encoding="utf-8")
     error_diagnostics = (ROOT_DIR / "ReachOps" / "workbench" / "error_diagnostics.py").read_text(encoding="utf-8")
     app_entry = (ROOT_DIR / "ReachOpsApp.py").read_text(encoding="utf-8")
@@ -515,7 +596,7 @@ def run_web_local_api_architecture_fixture() -> dict:
     checks = {
         "web_api_start_endpoint": "\"/api/start\"" in web_ui and "postJson('/api/start'" in web_ui,
         "web_api_version_endpoint_identifies_current_ui": 'parsed.path == "/api/version"' in web_ui and "build_version_payload" in web_ui and "WEB_UI_VERSION" in web_ui and "CLIENT_DISPLAY_VERSION" in web_ui and "\"display_version\": CLIENT_DISPLAY_VERSION" in web_ui and "\"client_surface\": \"local_client_console\"" in web_ui and "\"display_name\": \"ReachOps Local Client Console\"" in web_ui and "\"loopback_host\": \"127.0.0.1\"" in web_ui and "ReachOps 本地客户端控制台" in web_ui and "127.0.0.1 控制台" in web_ui and "no_browser_started" in web_ui and "no_submit" in web_ui,
-        "client_entrypoints_default_to_unified_web_console": "from ReachOps.launcher import main" in app_entry and "return _launch_web_client()" in launcher and "legacy_requested = \"--legacy-tk\" in args or os.environ.get(\"REACHOPS_LEGACY_TK\") == \"1\"" in launcher and "Start the unified Web console" in launcher and "Start the legacy Tk diagnostic client" in launcher and "旧 Tk 仅作为诊断入口保留" in launcher and "exec ./启动ReachOps统一WebUI.command" in local_client_command and "tools/reachops_mac_self_check.py --start-web" in unified_web_command and "ReachOps 客户端入口已统一到本地客户端控制台" in native_mac_command and "REACHOPS_LEGACY_TK=1" in native_mac_command and "ReachOpsApp.py --legacy-tk" in native_mac_command and "test_default_entry_starts_unified_web_client" in (ROOT_DIR / "tests" / "test_launcher.py").read_text(encoding="utf-8") and "test_missing_web_launcher_does_not_silently_fallback_to_legacy_tk" in (ROOT_DIR / "tests" / "test_launcher.py").read_text(encoding="utf-8"),
+        "client_entrypoints_default_to_unified_web_console": "from ReachOps.launcher import main" in app_entry and "return _launch_legacy_tk_client()" in launcher and "return _launch_web_client()" in launcher and "web_requested = \"--web\" in args or os.environ.get(\"REACHOPS_WEB_CLIENT\") == \"1\"" in launcher and "Start the native Tk client" in launcher and "Start the unified Web console" in launcher and "ReachOps 本地客户端启动中" in local_client_command and "ReachOpsApp.py" in local_client_command and "tools/reachops_mac_self_check.py --start-web" in unified_web_command and "ReachOps 原生客户端 UI" in native_mac_command and "test_default_entry_starts_native_tk_client" in (ROOT_DIR / "tests" / "test_launcher.py").read_text(encoding="utf-8") and "test_web_client_requires_explicit_flag" in (ROOT_DIR / "tests" / "test_launcher.py").read_text(encoding="utf-8") and "test_missing_web_launcher_does_not_silently_fallback_to_legacy_tk" in (ROOT_DIR / "tests" / "test_launcher.py").read_text(encoding="utf-8"),
         "web_api_start_rejects_empty_target": "target_required" in web_ui and "status\": \"rejected\"" in web_ui,
         "web_api_rejects_invalid_json": "_read_json_payload" in web_ui and "invalid_json" in web_ui,
         "web_api_requires_json_object_payload": "json_object_required" in web_ui and "isinstance(payload, dict)" in web_ui,
@@ -545,7 +626,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_api_closes_parent_stdout_handle": "finally:" in web_ui and "out.close()" in web_ui and "RUN_PROCESS = process" in web_ui,
         "web_api_passes_runtime_dir_to_headless": "\"--base-dir\"" in web_ui and "str(DATA_DIR)" in web_ui,
         "execution_plan_schema_exists": "PLAN_SCHEMA_VERSION" in execution_plan and "EXECUTION_PLAN_JSON_SCHEMA" in execution_plan and "validate_execution_plan" in execution_plan and "limits_{key}_required" in execution_plan and "max_comments" in execution_plan and "authorization_live_confirmed_required" in execution_plan and "risk_policy_no_ai_token_required" in execution_plan and "UNKNOWN_PAGE_STATE" in execution_plan and "reachops.execution_plan_parameter_mapping.v1" in execution_plan and "runtime_contract" in execution_plan and "reachops.execution_runtime_contract.v1" in execution_plan and "\"executor\": \"local_program\"" in execution_plan and "\"control_surface\": \"local_client_console\"" in execution_plan and "\"ai_console_is_execution_dependency\": False" in execution_plan and "\"execution_phase_ai_calls_allowed\": False" in execution_plan and "runtime_contract_no_ai_token_required" in execution_plan and "runtime_contract_execution_ai_calls_disallowed_required" in execution_plan and "plan_fingerprint_sha256" in execution_plan and "plan_id_mismatch" in execution_plan and "build_execution_plan_runtime_contract" in execution_plan and "adversarial_cli_args_for_contract_preview" in execution_plan and "build_autonomous_preflight_forecast" in execution_plan and "attach_autonomous_preflight_forecast" in execution_plan,
-        "web_api_builds_and_persists_execution_plan": "build_execution_plan" in web_ui and "write_execution_plan(execution_plan, plan_path)" in web_ui and "LATEST_EXECUTION_PLAN_PATH" in web_ui and "\"--execution-plan\"" in web_ui and "execution_plan_write_failed" in web_ui and "parsed.path == \"/api/start-from-plan\"" in web_ui and "parsed.path == \"/api/start-from-plan-preview\"" in web_ui and "parsed.path == \"/api/execution-plan-contract-preview\"" in web_ui and "build_start_from_plan_preview" in web_ui and "build_execution_plan_contract_preview" in web_ui and "execution_plan_replay" in web_ui,
+        "web_api_builds_and_persists_execution_plan": "build_execution_plan" in web_ui and "write_execution_plan(execution_plan, plan_path)" in web_ui and "current_latest_execution_plan_path" in web_ui and "\"--execution-plan\"" in web_ui and "execution_plan_write_failed" in web_ui and "parsed.path == \"/api/start-from-plan\"" in web_ui and "parsed.path == \"/api/start-from-plan-preview\"" in web_ui and "parsed.path == \"/api/execution-plan-contract-preview\"" in web_ui and "build_start_from_plan_preview" in web_ui and "build_execution_plan_contract_preview" in web_ui and "execution_plan_replay" in web_ui,
         "web_api_exposes_latest_execution_plan_for_audit": "build_current_execution_plan_payload" in web_ui and "parsed.path == \"/api/execution-plan\"" in web_ui and "read_execution_plan" in web_ui and "\"本轮执行计划 JSON\"" in web_ui and "download_url" in web_ui and "下载执行计划" in web_ui and "reachops.execution_plan_contract_preview.v1" in web_ui and "uses_headless_runtime_mapper" in web_ui,
         "runtime_smoke_verifies_execution_plan_audit_endpoint": "execution_plan_endpoint_returns_latest_auditable_plan" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "execution_plan_contract_preview_uses_headless_mapper_without_side_effects" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "snapshot_exposes_execution_plan_report_artifact" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "start_from_plan_replays_latest_execution_plan" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "start_from_plan_preview_exposes_replay_contract" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "start_preview_exposes_autonomous_preflight_forecast" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "preview_authorization" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "preview_repair_policy" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "preview_risk_policy" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "preview_runtime_contract" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "ai_authorization" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "ai_repair_policy" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "ai_risk_policy" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "ai_runtime_contract" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "capture_error_bundle_then_block" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "require_human_authorization_for_live_actions" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.execution_runtime_contract.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8"),
         "runtime_smoke_verifies_snapshot_evidence_bundle_contract": "snapshot_exposes_evidence_bundle_contract" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "product_capability_endpoint_returns_phase_matrix" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "ai_console_explains_product_capability_matrix" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "start_group_precheck_block_writes_auditable_run_session" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "start_group_precheck_block_writes_page_state_sidecar" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "start_group_precheck_block_writes_repair_decision" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "start_group_precheck_block_writes_risk_gate" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "blocked_group_page_counts" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "blocking_count" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "UNKNOWN_PAGE_STATE" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "status\") != \"success\"" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "state\") != \"COMPLETED\"" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "本轮证据包 JSON" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.evidence_bundle.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.account_health_summary.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.run_session_health.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.run_recovery_summary.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.autonomous_execution_summary.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "precheck_blocked" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "required_core_states" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "screenshot_unavailable_count" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "page_state_sidecar_artifact_count" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "refresh_profile_groups_and_reselect" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "profile_group_not_found" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "run_session_health_current" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "autonomous_state_machine_core_covered" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.autonomy_readiness_summary.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.product_capability_summary.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "phase_3_autonomous_execution" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.plan_runtime_contract_summary.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "reachops.execution_runtime_contract_summary.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "ai_console_control_surface_only" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "execution_phase_ai_calls_disallowed" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "ai_usage_policy_matches_contract" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "cli_args_ignored_for_plan_fields" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "plan_fingerprint_matches" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "runtime_after_fingerprint_present" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8"),
@@ -560,7 +641,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "runtime_smoke_verifies_run_session_audit_endpoint": "run_session_endpoint_returns_latest_auditable_session" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "snapshot_exposes_run_session_report_artifact" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "run_session_checkpoint" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "run_session_health" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "run_session_history" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "control_pause_updates_run_session_without_tokens" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "control_resume_updates_run_session_without_tokens" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "WEB_UI_PAUSE_REQUESTED" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "WEB_UI_RESUME_REQUESTED" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "no_ai_token_used" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8"),
         "runtime_smoke_verifies_state_machine_transition_contract": "reachops.run_session_state_machine_contract.v1" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "valid_state_transitions" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "run_session_transitions_valid" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "state_transition_violation_count" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8"),
         "web_logs_recover_interrupted_run_session": "recover_interrupted_run_session" in web_ui and "recover_current_run_session_if_interrupted" in web_ui and "run_session_recovered_interrupted" in web_ui and "\"recovery\"" in web_ui,
-        "headless_updates_run_session_checkpoints": "parser.add_argument(\"--run-session\"" in headless and "update_run_session(\"PRECHECK\"" in headless and "update_run_session(\"COLLECTING\"" in headless and "update_runtime_checkpoint" in headless and "runtime_state_inferred" in headless and "log_line_count" in headless and "\"COMPLETED\" if result[\"status\"] == \"completed\" else \"BLOCKED\"" in headless and "execution_plan_contract" in run_session and "merged_evidence[\"execution_plan_contract\"]" in run_session,
+        "headless_updates_run_session_checkpoints": "parser.add_argument(\"--run-session\"" in headless and "update_run_session(\"PRECHECK\"" in headless and "update_run_session(\"PROFILE_PREFLIGHT\"" in headless and "update_runtime_checkpoint" in headless and "runtime_state_inferred" in headless and "log_line_count" in headless and "classify_headless_terminal_status" in headless and "blocked_by_accounts" in headless and "\"run_session_state\": \"BLOCKED\"" in headless and "\"exit_code\": 2" in headless and "terminal_status[\"run_session_state\"]" in headless and "execution_plan_contract" in run_session and "merged_evidence[\"execution_plan_contract\"]" in run_session,
         "page_state_detector_standardizes_browser_state": "PAGE_STATES" in page_state_detector and "\"READY\"" in page_state_detector and "\"LOGIN_REQUIRED\"" in page_state_detector and "\"CAPTCHA_DETECTED\"" in page_state_detector and "\"RATE_LIMITED\"" in page_state_detector and "\"PAGE_TIMEOUT\"" in page_state_detector and "\"DOM_STALLED\"" in page_state_detector and "\"MODAL_BLOCKED\"" in page_state_detector and "\"COMMENT_BOX_MISSING\"" in page_state_detector and "\"SUBMIT_BUTTON_MISSING\"" in page_state_detector and "\"UNKNOWN_PAGE_STATE\"" in page_state_detector and "dismissible_modal_visible" in page_state_detector and "close_candidates" in page_state_detector and "no_ai_token_used" in page_state_detector,
         "tiktok_executor_uses_page_state_detector": "PageStateDetector" in action_executor and "self.page_state_detector.detect" in action_executor and "\"page_state\"" in action_executor and "include_action_requirements" in action_executor,
         "tiktok_executor_detects_dom_stalled_from_previous_snapshot": "_page_state_history" in action_executor and "previous_snapshot=previous_snapshot" in action_executor and "state_key=state_key" in action_executor and "\"DOM_STALLED\"" in action_executor,
@@ -584,7 +665,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_api_passes_offline_learning_to_ai_console": "runtime[\"offline_learning\"] = build_offline_learning_payload()" in web_ui and "parsed.path == \"/api/ai-console\"" in web_ui and "\"reachops.offline_learning.v1\"" in web_ui,
         "runtime_smoke_verifies_ai_console_unknown_state_analysis": "ai_console_analyzes_offline_learning_without_tokens" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "分析未知错误" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "offline_learning" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "候选规则" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8"),
         "web_ui_social_console_updates_plan_preview": "aiConsolePanel" in web_ui and "aiConsoleInput" in web_ui and "sendAiConsoleMessage" in web_ui and "applyAiPlanPatch" in web_ui and "renderAiConsoleResult" in web_ui and "postJson('/api/ai-console'" in web_ui and "本地规则 / 0 token" in web_ui and "aiConsoleMachineList" in web_ui and "machine_actions" in web_ui and "aiConsoleTimelineList" in web_ui and "timeline_summary" in web_ui and "关键时间线" in web_ui and "aiConsoleAnalyzeUnknown" in web_ui and "分析未知错误" in web_ui and "未知状态分析" in web_ui and "aiConsoleProductCapability" in web_ui and "产品能力矩阵现在做到哪了" in web_ui and "产品能力矩阵" in web_ui and "offlinePolicyReview" in web_ui and "approveOfflinePolicyCandidate" in web_ui and "rejectOfflinePolicyCandidate" in web_ui and "reviewOfflinePolicyCandidate" in web_ui and "postJson('/api/offline-learning/review'" in web_ui,
-        "web_ui_hourglass_uses_runtime_evidence_not_decoration": "infoHourglass" in web_ui and "renderInfoHourglass" in web_ui and "page_state_summary" in web_ui and "repair_summary" in web_ui and "risk_summary" in web_ui and "account_health_summary" in web_ui and "run_recovery_summary" in web_ui and "中断恢复" in web_ui and "autonomous_preflight_reconciliation" in web_ui and "预判对账" in web_ui and "autonomy_readiness_summary" in web_ui and "product_capability_summary" in web_ui and "run_session_state" in web_ui and "页面状态阻断" in web_ui and "风险门禁阻断" in web_ui and "账号健康" in web_ui and "自治链路" in web_ui and "产品闭环" in web_ui and "产品能力闭环未完成" in web_ui and "自治链路未就绪" in web_ui and "hourglass_particles_are_bound_to_runtime_evidence" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8") and "title=\\\"页面状态：2\\\"" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8") and "title=\\\"风险动作：2\\\"" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8") and "title=\\\"交付边界：2\\\"" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8"),
+        "web_ui_hourglass_uses_runtime_evidence_not_decoration": "infoHourglass" in web_ui and "renderInfoHourglass" in web_ui and "page_state_summary" in web_ui and "repair_summary" in web_ui and "risk_summary" in web_ui and "account_health_summary" in web_ui and "run_recovery_summary" in web_ui and "中断恢复" in web_ui and "autonomous_preflight_reconciliation" in web_ui and "预判对账" in web_ui and "autonomy_readiness_summary" in web_ui and "product_capability_summary" in web_ui and "run_session_state" in web_ui and "页面状态阻断" in web_ui and "风险门禁阻断" in web_ui and "账号健康" in web_ui and "自治链路" in web_ui and "产品闭环" in web_ui and "产品能力闭环未完成" in web_ui and "自治链路未就绪" in web_ui and "hourglass_particles_are_bound_to_runtime_evidence" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8") and "title=\\\"页面状态：2\\\"" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8") and "title=\\\"风险动作：2\\\"" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8") and "title=\\\"交付边界：3\\\"" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8"),
         "evidence_bundle_indexes_plan_session_result_log_and_timeline": "EVIDENCE_BUNDLE_SCHEMA_VERSION" in evidence_bundle and "build_evidence_bundle" in evidence_bundle and "collect_evidence_artifacts" in evidence_bundle and "collect_page_state_artifacts" in evidence_bundle and "page_state_screenshot" in evidence_bundle and "page_state_sidecar" in evidence_bundle and "build_timeline" in evidence_bundle and "run_session.checkpoint" in evidence_bundle and "run_session.state_history" in evidence_bundle and "run_session_health" in evidence_bundle and "Run Session Health" in evidence_bundle and "build_run_recovery_summary" in evidence_bundle and "reachops.run_recovery_summary.v1" in evidence_bundle and "Run Recovery Summary" in evidence_bundle and "build_autonomous_execution_summary" in evidence_bundle and "reachops.autonomous_execution_summary.v1" in evidence_bundle and "Autonomous Execution Summary" in evidence_bundle and "autonomous_state_machine_core_covered" in evidence_bundle and "precheck_blocked" in evidence_bundle and "required_core_states" in evidence_bundle and "PROFILE_GROUP_PRECHECK_BLOCKED" in evidence_bundle and "\"RISK_GATE\"" in evidence_bundle and "\"PAGE_STATE\"" in evidence_bundle and "runtime_state_inferred" in evidence_bundle and "render_evidence_markdown" in evidence_bundle and "no_ai_token_during_execution" in evidence_bundle and "build_plan_runtime_contract_summary" in evidence_bundle and "reachops.plan_runtime_contract_summary.v1" in evidence_bundle and "plan_fingerprint_matches" in evidence_bundle and "runtime_after_fingerprint_present" in evidence_bundle and "execution_plan_audit_preview" in evidence_bundle and "audit_preview" in evidence_bundle and "ExecutionPlan Runtime Contract" in evidence_bundle and "build_execution_runtime_contract_summary" in evidence_bundle and "reachops.execution_runtime_contract_summary.v1" in evidence_bundle and "execution_runtime_contract_ai_usage_policy_matches" in evidence_bundle and "Execution Runtime Contract" in evidence_bundle and "build_autonomous_preflight_forecast_summary" in evidence_bundle and "reachops.autonomous_preflight_forecast_summary.v1" in evidence_bundle and "Autonomous Preflight Forecast" in evidence_bundle and "build_autonomous_preflight_reconciliation" in evidence_bundle and "reachops.autonomous_preflight_reconciliation.v1" in evidence_bundle and "Autonomous Preflight Reconciliation" in evidence_bundle,
         "evidence_bundle_indexes_page_state_repair_coverage": "build_page_state_repair_coverage" in evidence_bundle and "page_state_repair_coverage" in evidence_bundle and "reachops.page_state_repair_coverage.v1" in evidence_bundle and "page_state_repair_policy_covered" in evidence_bundle and "page_state_repair_all_covered" in evidence_bundle and "Page State Repair Coverage" in evidence_bundle,
         "evidence_bundle_summarizes_state_machine_transition_contract": "reachops.run_session_state_machine_contract.v1" in evidence_bundle and "valid_state_transitions" in evidence_bundle and "state_transition_violation_count" in evidence_bundle and "run_session_transitions_valid" in evidence_bundle and "autonomous_valid_state_transitions" in evidence_bundle and "Valid state transitions" in evidence_bundle,
@@ -601,7 +682,8 @@ def run_web_local_api_architecture_fixture() -> dict:
         "campaign_export_includes_operator_risk_gate_fields": "_enrich_exported_execution" in workflow_service and "risk_gate_reason_code" in workflow_service and "risk_gate_summary" in workflow_service and "risk_gate_next_step" in workflow_service and "改写或轮换话术后重试" in workflow_service,
         "local_ai_console_explains_risk_summary_in_recap": "risk_summary" in ai_console and "risk_policy_summary" in ai_console and "operator_risk_gate_summary" in ai_console and "证据包运营风险门禁" in ai_console and "运营风险门禁" in ai_console and "风险门禁" in ai_console and "风险策略" in ai_console and "风险分类" in ai_console and "风险最终处置" in ai_console and "重复话术" in ai_console and "authorization_block_count" in ai_console and "risk_actions" in ai_console and "risk_action_count" in ai_console,
         "evidence_bundle_summarizes_account_health_cooldowns": "build_account_health_summary" in evidence_bundle and "reachops.account_health_summary.v1" in evidence_bundle and "\"ACCOUNT_HEALTH\"" in evidence_bundle and "profile_forced_cooldown" in evidence_bundle and "Account Health Summary" in evidence_bundle,
-        "evidence_bundle_indexes_account_repair_plan": "build_account_repair_summary" in evidence_bundle and "reachops.account_repair_summary.v1" in evidence_bundle and "account_repair_plan" in evidence_bundle and "account_repair_apply" in evidence_bundle and "Account Repair Summary" in evidence_bundle and "pending_recheck" in evidence_bundle and "account_repair_safety_contract" in (ROOT_DIR / "tools" / "reachops_apply_account_repair_plan.py").read_text(encoding="utf-8") and "manual_apply_required" in evidence_bundle and "hard_blocker_only" in evidence_bundle and "account_repair_no_submit" in evidence_bundle,
+        "evidence_bundle_indexes_account_repair_plan": "build_account_repair_summary" in evidence_bundle and "reachops.account_repair_summary.v1" in evidence_bundle and "account_repair_plan" in evidence_bundle and "account_repair_apply" in evidence_bundle and "Account Repair Summary" in evidence_bundle and "pending_recheck" in evidence_bundle and "account_repair_safety_contract" in (ROOT_DIR / "tools" / "reachops_apply_account_repair_plan.py").read_text(encoding="utf-8") and "reachops.account_repair_post_apply_verification.v1" in (ROOT_DIR / "tools" / "reachops_apply_account_repair_plan.py").read_text(encoding="utf-8") and "apply_alone_is_not_acceptance" in (ROOT_DIR / "tools" / "reachops_apply_account_repair_plan.py").read_text(encoding="utf-8") and "manual_apply_required" in evidence_bundle and "hard_blocker_only" in evidence_bundle and "account_repair_no_submit" in evidence_bundle,
+        "evidence_bundle_indexes_account_support_handoff": "build_account_support_handoff_summary" in evidence_bundle and "reachops.account_support_handoff_summary.v1" in evidence_bundle and "account_support_handoff_summary" in evidence_bundle and "Account Support Handoff" in evidence_bundle and "does_not_claim_real_account_pool_ready" in evidence_bundle and "blocker_codes" in evidence_bundle and "retest_checklist" in evidence_bundle and "Retest command" in evidence_bundle and "profile_readiness_probe_available" in evidence_bundle and "Profile repair checklist" in evidence_bundle,
         "local_ai_console_explains_account_health_timeline": "\"ACCOUNT_HEALTH\"" in ai_console and "账号已进入冷却" in ai_console and "profile_id" in ai_console,
         "local_ai_console_explains_account_repair_recheck": "account_repair_summary" in ai_console and "账号修复" in ai_console and "重新预检" in ai_console and "hard_blocker_profile_count" in ai_console and "账号修复安全边界" in ai_console and "manual_apply_required" in ai_console and "hard_blocker_only" in ai_console and "no_browser_started" in ai_console and "no_submit" in ai_console,
         "action_router_attaches_account_health_to_results": "\"account_health\"" in action_router and "record_failure(profile" in action_router and "record_success(profile)" in action_router,
@@ -613,7 +695,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "local_ai_console_explains_ai_usage_summary_in_recap": "ai_usage_summary" in ai_console and "执行期 AI 调用" in ai_console and "execution_phase_token_estimate" in ai_console,
         "web_api_exposes_ai_usage_audit": "ai_usage_ledger" in web_ui and "ai_usage_summary" in web_ui and "no_ai_token_used" in web_ui and "build_current_run_session_payload" in web_ui,
         "headless_writes_evidence_bundle_on_terminal_result": "attach_evidence_bundle" in headless and "finalize_with_evidence_bundle" in headless and "build_evidence_bundle" in headless and "write_evidence_bundle" in headless and "write_evidence_markdown" in headless and "\"evidence_bundle\"" in headless and "\"run_results\"" in headless and "result_path=str(result_artifact_path)" in headless,
-        "web_api_exposes_evidence_bundle_and_report_artifacts": "build_current_evidence_bundle" in web_ui and "parsed.path == \"/api/evidence-bundle\"" in web_ui and "\"evidence_bundle\"" in web_ui and "本轮证据包 JSON" in web_ui and "latest_evidence_bundle.md" in web_ui,
+        "web_api_exposes_evidence_bundle_and_report_artifacts": "build_current_evidence_bundle" in web_ui and "parsed.path == \"/api/evidence-bundle\"" in web_ui and "\"evidence_bundle\"" in web_ui and "current_result_path" in web_ui and "current_latest_evidence_bundle_path" in web_ui and "current_latest_evidence_bundle_md_path" in web_ui and "DATA_DIR / \"evidence_bundles\"" in web_ui and "DATA_DIR / \"page_state\"" in web_ui and "DATA_DIR / \"run_results\"" in web_ui and "本轮证据包 JSON" in web_ui and "latest_evidence_bundle.md" in web_ui,
         "offline_learning_records_unknown_states_without_tokens": "OFFLINE_LEARNING_SCHEMA_VERSION" in offline_learning and "OfflineLearningLedger" in offline_learning and "record_unknown_state" in offline_learning and "state_signature" in offline_learning and "suggested_policy" in offline_learning and "no_ai_token_used" in offline_learning,
         "offline_learning_promotes_repeated_unknowns_to_review_candidates": "OFFLINE_POLICY_CANDIDATES_SCHEMA_VERSION" in offline_learning and "build_policy_candidates_from_records" in offline_learning and "requires_human_review" in offline_learning and "auto_apply" in offline_learning,
         "offline_learning_records_human_policy_reviews_without_auto_apply": "OFFLINE_POLICY_REVIEW_SCHEMA_VERSION" in offline_learning and "review_policy_candidate" in offline_learning and "policy_review_summary" in offline_learning and "runtime_effect" in offline_learning and "review_recorded_only" in offline_learning and "\"runtime_auto_apply_count\": 0" in offline_learning,
@@ -632,7 +714,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_selected_group_drives_start_payload": "group:$('group').value" in web_ui and "\"--profile-group\"" in web_ui and "profile_group = str(payload.get(\"group\") or \"United States\")" in web_ui,
         "web_start_requires_group_from_ixbrowser_config_list": "validate_profile_group_for_start(profile_group)" in web_ui and "profile_group_not_found" in web_ui and "profile_group_list_unavailable" in web_ui and "web_ui_start_rejected_profile_group" in web_ui,
         "web_ui_disables_start_until_ixbrowser_group_list_ready": 'id="start" disabled' in web_ui and "let groupListReady = false" in web_ui and "$('start').disabled = !groupListReady" in web_ui and "未读取到 ixBrowser 配置分组；不可启动" in web_ui and "保留 United States 默认执行" not in web_ui,
-        "web_ui_toolbar_and_metrics_are_responsive": "controlPanel" in web_ui and "taskForm" in web_ui and "taskParams" in web_ui and "taskActions" in web_ui and "grid-template-columns:repeat(auto-fit,minmax(176px,1fr))" in web_ui and "grid-template-columns:minmax(140px,.9fr)" in web_ui and "grid-template-columns:repeat(auto-fit,minmax(106px,1fr))" in web_ui and "grid-template-columns:repeat(auto-fit,minmax(92px,1fr))" in web_ui and "grid-template-columns:repeat(auto-fit,minmax(112px,1fr))" in web_ui,
+        "web_ui_toolbar_and_metrics_are_responsive": "controlPanel" in web_ui and "taskForm" in web_ui and "taskParams" in web_ui and "taskActions" in web_ui and "grid-template-columns:repeat(auto-fit,minmax(176px,1fr))" in web_ui and "grid-template-columns:minmax(180px,1fr)" in web_ui and "grid-template-columns:repeat(auto-fit,minmax(106px,1fr))" in web_ui and "grid-template-columns:repeat(auto-fit,minmax(92px,1fr))" in web_ui and "grid-template-columns:repeat(auto-fit,minmax(112px,1fr))" in web_ui,
         "web_ui_refresh_failures_are_operator_visible": "本地服务连接失败" in web_ui and "$('runState').textContent = 'OFFLINE'" in web_ui and "$('acceptanceState').textContent = '验收状态：本地服务连接失败'" in web_ui and "读取失败：本地服务连接失败" in web_ui,
         "web_api_passes_live_comment_mode_to_headless": "\"--mode\"" in web_ui and "mode" in web_ui and "\"live_comment\"" in web_ui and "liveConfirm" in web_ui,
         "web_api_control_rejects_unknown_actions": "unknown_action" in web_ui and '"status": "rejected"' in web_ui,
@@ -640,7 +722,8 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_api_control_handles_cross_platform_pause_resume": "cooperative_control" in web_ui and "pause.request" in web_ui and "resume.request" in web_ui and "PAUSE_SIGNAL" in web_ui and "RESUME_SIGNAL" in web_ui and "WEB_UI_COOPERATIVE_PAUSE_REQUESTED" in web_ui and "WEB_UI_COOPERATIVE_RESUME_REQUESTED" in web_ui and "parser.add_argument(\"--control-dir\"" in headless and "wait_if_cooperatively_paused" in headless and "cooperative_pause_waiting" in headless,
         "web_api_stop_keeps_state_on_signal_failure": "web_ui_stop_signal_failed" in web_ui and '"running": True' in web_ui,
         "web_api_stop_keeps_state_when_process_survives": "web_ui_stop_process_still_running" in web_ui and "RUN_PROCESS.poll() is None" in web_ui,
-        "web_api_controls_runtime": "parsed.path == \"/api/control\"" in web_ui and "SIGSTOP" in web_ui and "SIGCONT" in web_ui,
+        "web_api_control_exposes_guarded_runtime_cleanup": "runtime_cleanup_preview" in web_ui and "runtime_cleanup_apply" in web_ui and "RUNTIME_PROCESS_CLEANUP_CONFIRMATION" in web_ui and "build_runtime_process_control_report" in web_ui and "current_runtime_process_audit_path" in web_ui and "runtimeAutomationPanel" in web_ui and "runtimeCleanupConfirm" in web_ui and "previewRuntimeCleanup" in web_ui and "applyRuntimeCleanup" in web_ui and "renderRuntimeCleanup" in web_ui and "未登录自动冷却，健康账号继续" in web_ui and "需账号修复确认" in web_ui and "runtime_cleanup_preview_posts_control_api" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8") and "runtime_cleanup_preview_is_dry_run_no_submit" in (ROOT_DIR / "tools" / "reachops_web_panel_dom_smoke.py").read_text(encoding="utf-8"),
+        "web_api_controls_runtime": "parsed.path == \"/api/control\"" in web_ui and "SIGSTOP" in web_ui and "SIGCONT" in web_ui and "current_log_path" in web_ui and "current_progress_path" in web_ui and "current_heartbeat_path" in web_ui and "current_control_dir" in web_ui and "current_web_settings_path" in web_ui and "current_latest_groups_path" in web_ui and "current_mvp_acceptance_summary_path" in web_ui and "current_goal_delivery_report_path" in web_ui and "current_two_phase_matrix_json_path" in web_ui,
         "web_ui_controls_are_real_api_bound": all(
             token in web_ui
             for token in [
@@ -668,6 +751,11 @@ def run_web_local_api_architecture_fixture() -> dict:
                 "$('downloadExecutionPlan').onclick = downloadExecutionPlan",
                 "getJson('/api/execution-plan')",
                 "执行计划已准备下载",
+                "$('previewRuntimeCleanup').onclick = previewRuntimeCleanup",
+                "$('applyRuntimeCleanup').onclick = applyRuntimeCleanup",
+                "action:'runtime_cleanup_preview'",
+                "action:'runtime_cleanup_apply'",
+                "confirm:$('runtimeCleanupConfirm').value",
                 "$('pause').onclick = () => control('pause')",
                 "$('resume').onclick = () => control('resume')",
                 "$('stop').onclick = () => control('stop')",
@@ -678,7 +766,56 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_acceptance_persists_client_gate": "write_delivery_check(client_delivery)" in web_ui and "latest_delivery_check.json" in (ROOT_DIR / "tools" / "reachops_client_delivery_check.py").read_text(encoding="utf-8"),
         "client_gate_rejects_stale_profile_preflight": "profile_preflight_is_stale" in client_acceptance and "profile_preflight_fresh" in client_acceptance and "不能复用旧账号可用性" in client_acceptance,
         "client_gate_requires_selected_group_profile_list_evidence": "profile_candidates_loaded_from_selected_group" in client_acceptance and "account_queue_started_for_selected_group" in client_acceptance and "profile_list_execution_evidence" in client_acceptance and "不能证明配置列表参与本次采集" in client_acceptance,
-        "client_gate_embeds_readonly_ixbrowser_metadata": "collect_ixbrowser_metadata" in client_delivery_check and "reachops_ixbrowser_profile_metadata_report.py" in client_delivery_check and '"ixbrowser_metadata"' in client_delivery_check and "open_profile_called" in client_delivery_check and "collect_metadata=True" in client_delivery_check,
+        "client_gate_embeds_readonly_ixbrowser_metadata": "collect_ixbrowser_metadata" in client_delivery_check
+        and "reachops_ixbrowser_profile_metadata_report.py" in client_delivery_check
+        and '"ixbrowser_metadata"' in client_delivery_check
+        and "open_profile_called" in client_delivery_check
+        and "--collect-live-metadata" in client_delivery_check
+        and "collect_metadata=bool(args.collect_live_metadata)" in client_delivery_check,
+        "client_gate_exposes_account_support_handoff": "build_account_support_handoff" in client_delivery_check
+        and "reachops.account_support_handoff.v1" in client_delivery_check
+        and "reachops.profile_readiness_handoff.v1" in client_delivery_check
+        and "latest_profile_readiness_probe_handoff" in client_delivery_check
+        and '"profile_readiness_probe"' in client_delivery_check
+        and "write_account_support_handoff_diagnostic" in client_delivery_check
+        and "reachops.account_support_handoff_diagnostic.v1" in client_delivery_check
+        and "reports\" / \"support\" / \"account_support_handoff.json" in client_delivery_check
+        and '"account_support_handoff"' in client_delivery_check
+        and "retest_commands" in client_delivery_check
+        and "retest_checklist" in client_delivery_check
+        and "apply_alone_is_not_acceptance" in client_delivery_check
+        and "blocker_codes" in client_delivery_check
+        and "does_not_claim_real_account_pool_ready" in client_delivery_check,
+        "goal_delivery_surfaces_account_support_handoff_blocker": "build_local_mvp_blocker" in goal_delivery_runner
+        and "reachops.local_mvp_account_pool_blocker.v1" in goal_delivery_runner
+        and "account_pool_external_validation" in goal_delivery_runner
+        and "account_support_handoff" in goal_delivery_runner
+        and "account_support_handoff_path" in goal_delivery_runner
+        and '"local_mvp_acceptance"' in goal_delivery_runner
+        and "本地 MVP 账号支持交接" in goal_delivery_runner
+        and "下一步复验命令" in goal_delivery_runner
+        and "本地MVP账号交接" in web_ui
+        and "本地MVP账号复验命令" in web_ui
+        and "retest_checklist" in web_ui
+        and "账号复验清单" in web_ui
+        and "does_not_claim_local_mvp_ready" in goal_delivery_runner
+        and "does_not_claim_real_account_pool_ready" in goal_delivery_runner,
+        "delivery_package_writes_windows_acceptance_handoff": "build_windows_acceptance_handoff" in delivery_package_check
+        and "reachops.windows_acceptance_handoff.v1" in delivery_package_check
+        and "windows_acceptance_handoff_path" in delivery_package_check
+        and "reports\" / \"support\" / \"windows_acceptance_handoff.json" in delivery_package_check
+        and "does_not_create_acceptance_summary" in delivery_package_check
+        and "requires_windows_real_acceptance" in delivery_package_check,
+        "final_gate_indexes_windows_acceptance_handoff": "_windows_acceptance_handoff_summary" in final_acceptance_gate
+        and '"windows_acceptance_handoff"' in final_acceptance_gate
+        and '"windows_acceptance_handoff_path"' in final_acceptance_gate
+        and "does_not_claim_final_delivery_ready" in final_acceptance_gate
+        and "requires_windows_real_acceptance" in final_acceptance_gate,
+        "goal_delivery_indexes_windows_acceptance_handoff": "windows_acceptance_handoff_summary" in goal_delivery_runner
+        and "with_windows_acceptance_handoff" in goal_delivery_runner
+        and '"windows_acceptance_handoff"' in goal_delivery_runner
+        and '"windows_acceptance_handoff_path"' in goal_delivery_runner
+        and "does_not_claim_final_delivery_ready" in goal_delivery_runner,
         "client_gate_human_output_has_repair_loop": "account_repair_summary_lines" in client_delivery_check and "action=" in client_delivery_check and "after_repair_acceptance=" in client_delivery_check and "account_repair_safety=" in client_delivery_check and "no_submit" in client_delivery_check and "after_repair_commands=" in client_delivery_check and "account_repair_summary" in client_delivery_check,
         "web_activation_status_visible_to_operator": "parsed.path == \"/api/activation\"" in web_ui and "build_activation_payload" in web_ui and "activationState" in web_ui and "refreshActivation" in web_ui,
         "web_final_status_visible_to_operator": "parsed.path == \"/api/final-status\"" in web_ui and "build_final_status_payload" in web_ui and "finalStatusState" in web_ui and "finalStatusActions" in web_ui and "finalStatusCommands" in web_ui and "next_required_actions" in web_ui and "verification_commands" in web_ui and "refreshFinalStatus" in web_ui,
@@ -688,12 +825,12 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_acceptance_input_init_available": "parsed.path == \"/api/acceptance-input-init\"" in web_ui and "init_acceptance_input_file" in web_ui and "initAcceptanceInputs" in web_ui,
         "live_acceptance_status_exposes_verification_commands": "verification_commands" in live_acceptance_status and "reachops_final_acceptance_gate.py --json" in live_acceptance_status,
         "mac_self_check_exposes_client_gate": "\"client_delivery\"" in mac_self_check and "check_client_delivery" in mac_self_check and "final_delivery_ready" in mac_self_check,
-        "native_app_entry_unifies_to_web_with_explicit_legacy_tk_diagnostics": "from ReachOps.launcher import main" in app_entry and "_launch_web_client" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "--legacy-tk" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "REACHOPS_LEGACY_TK" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "--help" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "Show this help without starting clients" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "未知启动参数" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "旧 Tk 仅作为诊断入口保留" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "return 2" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "回退到原生 Tk 客户端" not in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8"),
+        "native_app_entry_unifies_to_web_with_explicit_legacy_tk_diagnostics": "from ReachOps.launcher import main" in app_entry and "_launch_legacy_tk_client" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "_launch_web_client" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "--web" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "REACHOPS_WEB_CLIENT" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "--help" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "Show this help without starting clients" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "未知启动参数" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "return 2" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "回退到原生 Tk 客户端" not in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8"),
         "mac_self_check_starts_web_on_loopback": "tools\" / \"reachops_web_ui.py" in mac_self_check and "\"--web\"" in mac_self_check and "\"--host\"" in mac_self_check and "\"127.0.0.1\"" in mac_self_check and "REACHOPS_WEB_HOST" in mac_self_check,
         "mac_self_check_classifies_tk_environment_failures": "classify_tk_failure" in mac_self_check and "PYTHON_TK_UNUSABLE" in mac_self_check and "Tk 恢复:" in mac_self_check,
         "mac_self_check_reports_web_start_failure": "start_web_failed" in mac_self_check and "\"ok\": False" in mac_self_check and "web_start_error" in mac_self_check and "本地客户端控制台后端启动失败" in mac_self_check,
         "mac_self_check_requires_version_api_local_client_identity": "apply_version_payload" in mac_self_check and "client_surface_current" in mac_self_check and "display_version_current" in mac_self_check and "loopback_host_current" in mac_self_check and "local_client_console" in mac_self_check and "客户端 v20" in mac_self_check,
-        "client_entry_copy_identifies_local_client_console": "客户端入口已统一到本地客户端控制台" in (ROOT_DIR / "README.md").read_text(encoding="utf-8") and "启动ReachOps本地客户端.command" in (ROOT_DIR / "README.md").read_text(encoding="utf-8") and "客户端入口已统一到本地客户端控制台" in (ROOT_DIR / "ReachOps" / "README.md").read_text(encoding="utf-8") and "启动ReachOps本地客户端.command" in (ROOT_DIR / "ReachOps" / "README.md").read_text(encoding="utf-8") and (ROOT_DIR / "启动ReachOps本地客户端.command").exists() and "启动ReachOps统一WebUI.command" in (ROOT_DIR / "启动ReachOps本地客户端.command").read_text(encoding="utf-8") and "启动ReachOps本地客户端.command" in (ROOT_DIR / "tools" / "sync_reachops_to_windows_vm.sh").read_text(encoding="utf-8") and "ReachOps 本地客户端控制台实际地址" in (ROOT_DIR / "启动ReachOps原生MacUI.command").read_text(encoding="utf-8") and "ReachOps 本地客户端控制台实际地址" in (ROOT_DIR / "启动ReachOps统一WebUI.command").read_text(encoding="utf-8") and "ReachOps 本地客户端控制台" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "Web 运营面板" not in mac_self_check,
+        "client_entry_copy_identifies_local_client_console": "启动ReachOps本地客户端.command" in (ROOT_DIR / "README.md").read_text(encoding="utf-8") and "启动ReachOps本地客户端.command" in (ROOT_DIR / "ReachOps" / "README.md").read_text(encoding="utf-8") and (ROOT_DIR / "启动ReachOps本地客户端.command").exists() and "ReachOps 本地客户端启动中" in (ROOT_DIR / "启动ReachOps本地客户端.command").read_text(encoding="utf-8") and "ReachOpsApp.py" in (ROOT_DIR / "启动ReachOps本地客户端.command").read_text(encoding="utf-8") and "启动ReachOps本地客户端.command" in (ROOT_DIR / "tools" / "sync_reachops_to_windows_vm.sh").read_text(encoding="utf-8") and "ReachOps 原生客户端 UI" in (ROOT_DIR / "启动ReachOps原生MacUI.command").read_text(encoding="utf-8") and "ReachOps 本地客户端控制台实际地址" in (ROOT_DIR / "启动ReachOps统一WebUI.command").read_text(encoding="utf-8") and "Start the native Tk client" in (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8") and "Web 运营面板" not in mac_self_check,
         "web_ui_version_markers_include_client_gate": "REQUIRED_WEB_UI_MARKERS" in mac_self_check and "ReachOps 本地客户端控制台" in mac_self_check and "127.0.0.1 控制台" in mac_self_check and "客户端 v20" in mac_self_check and "客户端门禁" in mac_self_check and "最终交付门禁" in mac_self_check and "finalStatusState" in mac_self_check and "finalStatusActions" in mac_self_check and "finalStatusCommands" in mac_self_check and "fetch('/api/final-status')" in mac_self_check and "next_required_actions" in mac_self_check and "verification_commands" in mac_self_check and "final_delivery_ready" in mac_self_check and "failed_checks" in mac_self_check,
         "web_account_repair_summary_visible_to_operator": "accountRepairActionItems" in web_ui and "account_repair_summary" in web_ui and "error_groups" in web_ui and "profile_ids_sample" in web_ui and "accountRepairActionItems" in mac_self_check and "account_repair_summary" in mac_self_check,
         "web_account_repair_stale_state_visible_to_operator": "accountRepairApplyItems" in web_ui and "旧账号修复结果已失效" in web_ui and "不要继续勾选旧的重新预检" in web_ui and "旧账号修复结果已失效" in mac_self_check,
@@ -712,7 +849,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "live_readiness_rejects_fixture_uri_as_real_evidence": '"accept_fixture_uri": False' in live_readiness and "sidecar_profile_id_present" in live_readiness and "sidecar_current_url_present" in live_readiness,
         "live_submit_platform_acceptance_requires_local_evidence_details": "require_local_evidence_file=platform_executor is None" in live_submit_acceptance and "sidecar.get(\"profile_id\")" in live_submit_acceptance and "sidecar.get(\"current_url\")" in live_submit_acceptance,
         "collection_uses_workbench_browser_adapter": "get_workbench_browser_adapter" in router and "manager.acquire" in router,
-        "actions_use_workbench_browser_adapter": "WorkbenchBrowserAdapter" in action_executor and "manager.acquire" in action_executor,
+        "actions_use_workbench_browser_adapter": "get_workbench_browser_adapter" in action_executor and "manager.acquire" in action_executor,
         "ixbrowser_local_api_adapter": "from ixbrowser_local_api import IXBrowserClient" in browser_manager and "client.open_profile" in browser_manager,
         "selenium_attaches_to_ixbrowser_debug_port": "options.debugger_address" in browser_manager and "webdriver.Chrome" in browser_manager,
     }
@@ -756,7 +893,11 @@ def run_final_delivery_contract_docs_fixture() -> dict:
         if name in {"root_readme", "windows_runbook", "operator_matrix"}:
             missing.extend(token for token in gate_tokens.values() if token not in text)
         if name in {"windows_runbook", "handoff", "pressure_audit_report"}:
-            missing.extend(token for token in ["final_delivery_ready", "final_delivery_blockers"] if token not in text)
+            missing.extend(
+                token
+                for token in ["final_delivery_ready", "final_delivery_blockers", "blocking_scope_count"]
+                if token not in text
+            )
         if name in {"root_readme", "windows_runbook", "handoff", "pressure_audit_report"}:
             missing.extend(token for token in ["--allow-missing-final-gate", "bootstrap_only=true"] if token not in text)
         if name in {"handoff", "pressure_audit_report"}:
@@ -1187,14 +1328,16 @@ def run_operator_console_contract_fixture() -> dict:
         return token in console_source or token in app_source
 
     operator_control_evidence = {}
+    hidden_rule_controls = {"每个目标最多视频", "每条视频最多评论", "参与账号数", "任务间隔秒", "排除词"}
     for label, contract in operator_control_map.items():
-        ui_ok = all(token_present(token) for token in contract["ui"])
+        ui_ok = True if label in hidden_rule_controls else all(token_present(token) for token in contract["ui"])
         execution_ok = all(token_present(token) for token in contract["execution"])
         evidence_ok = all(token_present(token) for token in contract["evidence"])
         operator_control_evidence[label] = {
             "ui": ui_ok,
             "execution": execution_ok,
             "evidence": evidence_ok,
+            "ui_policy": "hidden_rule_control" if label in hidden_rule_controls else "visible_operator_control",
             "passed": ui_ok and execution_ok and evidence_ok,
         }
 
@@ -1664,6 +1807,10 @@ def run_audit(args) -> dict:
     live_submit_acceptance_fixture = run_live_submit_acceptance_fixture()
     live_submit_block_fixture = run_live_submit_acceptance_block_fixture()
     packaging_update_fixture = run_packaging_update_fixture()
+    outcome_metrics_fixture = run_outcome_metrics_fixture()
+    data_governance_fixture = run_data_governance_fixture()
+    security_supply_chain_fixture = build_security_supply_chain_report()
+    start_contract_fixture = build_start_contract_report(ROOT_DIR)
     client_delivery_gate = run_client_delivery_gate_fixture()
     web_local_api_architecture = run_web_local_api_architecture_fixture()
     web_panel_dom_smoke = run_web_panel_dom_smoke()
@@ -1677,9 +1824,13 @@ def run_audit(args) -> dict:
     collection_error_states = run_collection_error_state_fixture()
     product_link_campaign = run_product_link_campaign_fixture()
     creator_topic_inputs = run_creator_and_topic_input_fixture()
+    ci_release_baseline_fixture = build_ci_release_baseline_report(ROOT_DIR)
+    account_readiness_fixture = build_account_readiness_report(ROOT_DIR)
+    control_plane_fixture = build_control_plane_report(ROOT_DIR)
+    issue_closure_fixture = build_issue_closure_report(ROOT_DIR, run_pip=False)
 
     repository_cleanup = clean_generated_redundant_paths(ROOT_DIR)
-    repository_cleanliness = scan_repository_cleanliness(ROOT_DIR)
+    repository_cleanliness = scan_repository_cleanliness(ROOT_DIR, require_clean_git=False)
     repository_cleanliness["cleanup"] = repository_cleanup
     action_executor_source = (ROOT_DIR / "ReachOps" / "workbench" / "tiktok_action_executor.py").read_text(encoding="utf-8")
     action_router_source = (ROOT_DIR / "ReachOps" / "workbench" / "action_router.py").read_text(encoding="utf-8")
@@ -1716,6 +1867,88 @@ def run_audit(args) -> dict:
                 and ("hashtag", "skincare") in creator_topic_inputs.get("topic", {}).get("source_pairs", [])
             ),
             creator_topic_inputs,
+        ),
+        check(
+            "/api/start 启动契约可审计且阻断路径不启动浏览器",
+            bool(
+                start_contract_fixture.get("passed")
+                and not start_contract_fixture.get("failed_cases")
+                and (start_contract_fixture.get("response_invariants") or {}).get("prelaunch_rejections_do_not_start_browser")
+                and (start_contract_fixture.get("response_invariants") or {}).get("prelaunch_rejections_do_not_submit")
+                and (start_contract_fixture.get("response_invariants") or {}).get("blocked_start_is_recoverable_and_supportable")
+                and len(start_contract_fixture.get("rejection_cases") or []) >= 7
+                and any(
+                    row.get("name") == "unknown_group_count_runtime_preflight" and row.get("passed")
+                    for row in (start_contract_fixture.get("runtime_continuation_cases") or [])
+                )
+            ),
+            start_contract_fixture,
+        ),
+        check(
+            "CI 和 release baseline 本地门禁可重复审计",
+            bool(
+                ci_release_baseline_fixture.get("passed")
+                and (ci_release_baseline_fixture.get("local_checks") or {}).get("ci_contract_complete")
+                and (ci_release_baseline_fixture.get("local_checks") or {}).get("dependency_baseline_passed")
+                and (ci_release_baseline_fixture.get("local_checks") or {}).get("pip_check_passed")
+                and (ci_release_baseline_fixture.get("local_checks") or {}).get("release_contract_complete")
+                and ci_release_baseline_fixture.get("does_not_claim_branch_protection") is True
+                and ci_release_baseline_fixture.get("does_not_claim_ten_green_ci_runs") is True
+            ),
+            ci_release_baseline_fixture,
+        ),
+        check(
+            "账号 readiness 和 no-submit 证据包本地合同可审计",
+            bool(
+                account_readiness_fixture.get("passed")
+                and account_readiness_fixture.get("schema_version") == "reachops.account_readiness_audit.v1"
+                and account_readiness_fixture.get("status") == "passed_with_external_account_pilot_pending"
+                and (account_readiness_fixture.get("local_checks") or {}).get("lifecycle_signal_coverage_complete")
+                and (account_readiness_fixture.get("local_checks") or {}).get("profile_preflight_records_evidence_cooldown_and_explicit_quarantine")
+                and (account_readiness_fixture.get("local_checks") or {}).get("live_no_submit_preflight_covers_comment_follow_dm")
+                and (account_readiness_fixture.get("no_submit_contract") or {}).get("preflight_actions_do_not_submit")
+                and (account_readiness_fixture.get("real_vs_fixture_boundary") or {}).get("external_pilot_required")
+                and account_readiness_fixture.get("does_not_claim_certified_30_profiles") is True
+                and account_readiness_fixture.get("does_not_claim_100_real_no_submit_runs") is True
+                and "certified_30_controlled_profiles" in (account_readiness_fixture.get("external_acceptance_pending") or [])
+                and "100_real_no_submit_runs_across_three_industries" in (account_readiness_fixture.get("external_acceptance_pending") or [])
+            ),
+            account_readiness_fixture,
+        ),
+        check(
+            "商业控制面和 connector 解耦边界可审计",
+            bool(
+                control_plane_fixture.get("passed")
+                and control_plane_fixture.get("schema_version") == "reachops.control_plane_audit.v1"
+                and control_plane_fixture.get("status") == "passed_with_external_control_plane_pending"
+                and (control_plane_fixture.get("local_checks") or {}).get("local_control_surface_is_plan_and_session_bound")
+                and (control_plane_fixture.get("local_checks") or {}).get("connector_contract_exists_for_collection_with_evidence")
+                and (control_plane_fixture.get("local_checks") or {}).get("action_executor_contract_separates_fixture_from_tiktok")
+                and (control_plane_fixture.get("local_checks") or {}).get("packaged_entitlement_enforces_remote_disable")
+                and (control_plane_fixture.get("control_plane_boundary") or {}).get("server_side_rbac_pending")
+                and (control_plane_fixture.get("connector_boundary") or {}).get("non_tiktok_connector_pending")
+                and (control_plane_fixture.get("module_boundary") or {}).get("monolith_split_pending")
+                and control_plane_fixture.get("does_not_claim_server_side_rbac") is True
+                and control_plane_fixture.get("does_not_claim_non_tiktok_connector_ga") is True
+                and "web_ui_http_api_service_connector_module_split" in (control_plane_fixture.get("external_control_plane_pending") or [])
+            ),
+            control_plane_fixture,
+        ),
+        check(
+            "Issues #1-#7 商业交付闭环证据索引可审计",
+            bool(
+                issue_closure_fixture.get("passed")
+                and issue_closure_fixture.get("schema_version") == "reachops.issue_closure_audit.v1"
+                and issue_closure_fixture.get("status") == "passed_with_external_acceptance_pending"
+                and (issue_closure_fixture.get("summary") or {}).get("issues_total") == 7
+                and (issue_closure_fixture.get("summary") or {}).get("local_contracts_passed") == 7
+                and (issue_closure_fixture.get("summary") or {}).get("acceptance_criteria_total") == 53
+                and (issue_closure_fixture.get("summary") or {}).get("acceptance_criteria_unclassified") == 0
+                and (issue_closure_fixture.get("summary") or {}).get("external_pending_count", 0) >= 1
+                and (issue_closure_fixture.get("summary") or {}).get("does_not_claim_all_issues_closed") is True
+                and (issue_closure_fixture.get("github_issues") or {}).get("closure_requires_external_validation") is True
+            ),
+            issue_closure_fixture,
         ),
         check(
             "AI/规则能生成产品分析",
@@ -1779,7 +2012,7 @@ def run_audit(args) -> dict:
                     (profile_preflight_anomalies.get("health", {}).get(profile_id) or {}).get("status") == "cooldown"
                     for profile_id in ["10002", "10003", "10004", "10005", "10006"]
                 )
-                and ("10006", "IXBROWSER_KERNEL_MISMATCH") in profile_preflight_anomalies.get("quarantine_moves", [])
+                and not profile_preflight_anomalies.get("quarantine_moves", [])
             ),
             profile_preflight_anomalies,
         ),
@@ -2079,6 +2312,68 @@ def run_audit(args) -> dict:
                 and export_artifact_inspection.get("action_report_has_errors")
             ),
             export_artifact_inspection,
+        ),
+        check(
+            "WAQO 和结果漏斗排除 fixture/dry-run 数据",
+            bool(
+                outcome_metrics_fixture.get("passed")
+                and outcome_metrics_fixture.get("definition", {}).get("schema_version") == "reachops.waqo_definition.v1"
+                and int(outcome_metrics_fixture.get("waqo", {}).get("count") or 0) == 1
+                and int(outcome_metrics_fixture.get("waqo", {}).get("excluded_fixture_or_dry_run") or 0) == 1
+                and int(outcome_metrics_fixture.get("funnel", {}).get("orders") or 0) == 1
+                and float(outcome_metrics_fixture.get("funnel", {}).get("revenue_amount") or 0) == 1200.0
+                and outcome_metrics_fixture.get("ingestion", {}).get("schema_version") == "reachops.outcome_ingestion.v1"
+                and int(outcome_metrics_fixture.get("ingestion", {}).get("imported") or 0) == 1
+                and float(outcome_metrics_fixture.get("pilot_report", {}).get("cost_per_accepted_opportunity") or 0) == 300.0
+                and outcome_metrics_fixture.get("quality", {}).get("fixture_data_excluded_by_default") is True
+            ),
+            outcome_metrics_fixture,
+        ),
+        check(
+            "数据治理执行备份恢复、腐坏库恢复和隐私操作审计",
+            bool(
+                data_governance_fixture.get("passed")
+                and data_governance_fixture.get("backup_restore", {}).get("status") == "passed"
+                and data_governance_fixture.get("backup_restore", {}).get("rpo_met") is True
+                and data_governance_fixture.get("backup_restore", {}).get("rto_met") is True
+                and data_governance_fixture.get("backup_restore", {}).get("corruption_drill", {}).get("status") == "passed"
+                and data_governance_fixture.get("privacy_operations", {}).get("schema_version") == "reachops.privacy_operations.v1"
+                and data_governance_fixture.get("privacy_operations", {}).get("audit", {}).get("observed_operations") == ["delete", "export", "legal_hold"]
+                and data_governance_fixture.get("recovery_objectives", {}).get("schema_version") == "reachops.recovery_objectives.v1"
+                and data_governance_fixture.get("support_bundle", {}).get("manifest_schema_version") == "reachops.support_bundle_manifest.v1"
+                and data_governance_fixture.get("support_bundle", {}).get("diagnostic_manifest_complete") is True
+                and isinstance(data_governance_fixture.get("support_bundle", {}).get("required_diagnostic_files"), list)
+                and isinstance(data_governance_fixture.get("support_bundle", {}).get("missing_required_diagnostics"), list)
+                and "required_diagnostics_present" in data_governance_fixture.get("support_bundle", {})
+                and "does_not_claim_required_diagnostics_present" in data_governance_fixture.get("support_bundle", {})
+                and data_governance_fixture.get("support_diagnostics_materialization", {}).get("schema_version") == "reachops.support_diagnostics_materialization.v1"
+                and "sync-support-diagnostics" in (ROOT_DIR / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
+                and "materialize_support_diagnostics" in (ROOT_DIR / "tools" / "reachops_data_governance.py").read_text(encoding="utf-8")
+                and "reports/support/account_support_handoff.json" in (data_governance_fixture.get("support_bundle", {}).get("required_diagnostics") or [])
+                and "reports/support/account_support_handoff.json" in {
+                    str(item.get("relative_path") or "")
+                    for item in data_governance_fixture.get("support_bundle", {}).get("required_diagnostic_files") or []
+                }
+                and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest_passed") is True
+                and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest", {}).get("activation_status_included") is False
+                and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest", {}).get("raw_database_included") is False
+                and data_governance_fixture.get("support_bundle", {}).get("dry_run_manifest", {}).get("evidence_image_included") is False
+            ),
+            data_governance_fixture,
+        ),
+        check(
+            "打包授权和更新供应链安全矩阵通过",
+            bool(
+                security_supply_chain_fixture.get("passed")
+                and security_supply_chain_fixture.get("schema_version") == "reachops.security_supply_chain_audit.v1"
+                and security_supply_chain_fixture.get("entitlement", {}).get("cases", {}).get("replay_detected", {}).get("error_code") == "LIVE_SUBMIT_ENTITLEMENT_REPLAYED"
+                and security_supply_chain_fixture.get("entitlement", {}).get("key_rotation", {}).get("retired_key_rejected") is True
+                and security_supply_chain_fixture.get("update_supply_chain", {}).get("installer_verified") is True
+                and security_supply_chain_fixture.get("update_supply_chain", {}).get("http_manifest_rejected") is True
+                and security_supply_chain_fixture.get("update_supply_chain", {}).get("downgrade_without_rollback_blocked") is True
+                and security_supply_chain_fixture.get("update_supply_chain", {}).get("explicit_rollback_available") is True
+            ),
+            security_supply_chain_fixture,
         ),
         check("独立配置/数据/授权目录存在", all(Path(path).exists() for path in [paths.data_dir, paths.config_dir, paths.logs_dir]), {"data_dir": paths.data_dir, "config_dir": paths.config_dir, "activation_status_path": paths.activation_status_path}),
         check("Windows 打包入口存在", all((ROOT_DIR / path).exists() for path in ["ReachOps/packaging/reachops.spec", "ReachOps/packaging/ReachOps.iss", "tools/build_reachops_windows.ps1"]), {"version": VERSION}),

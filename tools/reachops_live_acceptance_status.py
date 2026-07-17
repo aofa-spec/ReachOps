@@ -25,6 +25,7 @@ REQUIRED_PACKAGE_REPORT_FILES = (
     "ui_startup",
     "activation_status",
     "live_acceptance_status",
+    "authorization_handoff",
     "live_validation",
     "repository_cleanliness",
     "windows_package_preflight",
@@ -34,10 +35,13 @@ REQUIRED_PACKAGE_REPORT_FILES = (
     "goal_status",
     "live_submit",
     "final_acceptance_gate",
+    "issue_closure",
 )
 FINAL_VERIFICATION_COMMANDS = [
     "python tools\\reachops_client_delivery_check.py --json",
+    "python tools\\reachops_goal_delivery_runner.py --json",
     "python tools\\reachops_delivery_package_check.py --json",
+    "python tools\\reachops_issue_closure_audit.py --json",
     "python tools\\reachops_final_acceptance_gate.py --json",
 ]
 OPERATOR_COMMANDS = [
@@ -205,6 +209,46 @@ def load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def package_blocker_summary(package: dict[str, Any]) -> dict[str, Any]:
+    package_artifacts = package.get("artifacts") if isinstance(package.get("artifacts"), dict) else {}
+    package_reports = package.get("report_files") if isinstance(package.get("report_files"), dict) else {}
+    acceptance_verification = (
+        package.get("acceptance_verification")
+        if isinstance(package.get("acceptance_verification"), dict)
+        else {}
+    )
+    missing_artifact_paths = {
+        name: str(payload.get("path") or "")
+        for name, payload in sorted(package_artifacts.items())
+        if isinstance(payload, dict) and not bool(payload.get("exists"))
+    }
+    missing_report_files = [
+        name
+        for name, payload in sorted(package_reports.items())
+        if isinstance(payload, dict) and not bool(payload.get("exists"))
+    ]
+    return {
+        "schema_version": "reachops.windows_final_artifacts_blocker_summary.v1",
+        "status": str(package.get("status") or ""),
+        "final_delivery_ready": bool(package.get("final_delivery_ready")),
+        "bootstrap_only": bool(package.get("bootstrap_only")),
+        "missing_artifacts": [str(item) for item in (package.get("missing_artifacts") or []) if str(item or "").strip()],
+        "missing_artifact_paths": missing_artifact_paths,
+        "failures": [str(item) for item in (package.get("failures") or []) if str(item or "").strip()],
+        "acceptance_verification_passed": bool(acceptance_verification.get("passed")),
+        "acceptance_verification_failures": [
+            str(item) for item in (acceptance_verification.get("failures") or []) if str(item or "").strip()
+        ],
+        "acceptance_verification_pending": [
+            str(item) for item in (acceptance_verification.get("pending") or []) if str(item or "").strip()
+        ],
+        "missing_report_files": missing_report_files,
+        "next_required_command": "python tools\\reachops_delivery_package_check.py --json",
+        "windows_acceptance_command": "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_acceptance_windows.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
+        "does_not_claim_final_delivery_ready": not bool(package.get("final_delivery_ready")),
+    }
+
+
 def latest_acceptance_report(reports_dir: str | Path = "") -> dict[str, Any]:
     root = Path(reports_dir or (ROOT_DIR / "reports" / "reachops_acceptance"))
     if not root.exists():
@@ -306,6 +350,7 @@ def latest_acceptance_report(reports_dir: str | Path = "") -> dict[str, Any]:
         "package_final_delivery_ready": bool(package.get("final_delivery_ready")),
         "package_bootstrap_only": bool(package.get("bootstrap_only")),
         "package_not_final_delivery_reasons": list(package.get("not_final_delivery_reasons") or []),
+        "package_blocker_summary": package_blocker_summary(package) if package else {},
         "package_root": package_root,
         "package_root_matches": package_root_matches,
         "package_artifacts_ready": package_artifacts_ready,
@@ -358,7 +403,10 @@ def pending_acceptance_actions(acceptance: dict[str, Any]) -> list[str]:
 
 def final_gate_actions(acceptance: dict[str, Any]) -> list[str]:
     if not acceptance.get("exists"):
-        return []
+        return [
+            "先在 Windows 实机运行 tools\\run_reachops_acceptance_windows.ps1 生成 acceptance_summary.json 和 final_acceptance_gate.json。",
+            "再运行 tools\\reachops_final_acceptance_gate.py --json 并确认 status=passed、final_delivery_ready=true。",
+        ]
     if acceptance.get("final_gate_status") == "passed" and acceptance.get("final_gate_ready"):
         return []
     explicit = [str(item) for item in (acceptance.get("final_gate_next_actions") or []) if str(item or "").strip()]
@@ -664,8 +712,14 @@ def build_status(args: argparse.Namespace, snapshot: dict[str, Any] | None = Non
     gate_actions = final_gate_actions(acceptance)
     input_actions = missing_input_actions(deduped_missing)
     next_required_actions: list[str] = []
-    for action in input_actions + activation_actions(activation) + acceptance_actions + gate_actions:
+    early_actions = input_actions + activation_actions(activation) + acceptance_actions
+    for action in early_actions:
         _append_unique(next_required_actions, action)
+    if not next_required_actions and stage3_ready_for_preflight and not acceptance.get("exists") and not final_delivery_ready:
+        next_required_actions = ["运行受控真实提交并生成 live submit evidence"]
+    elif not next_required_actions:
+        for action in gate_actions:
+            _append_unique(next_required_actions, action)
     if not next_required_actions and not final_delivery_ready:
         next_required_actions = ["运行受控真实提交并生成 live submit evidence"]
     blocked_reasons, failed_checks = build_blocked_reasons(
@@ -808,6 +862,18 @@ def render_markdown_report(status: dict[str, Any]) -> str:
     lines.append(f"- package_check: {latest_acceptance.get('package_check_path') or ''}")
     lines.append(f"- package_passed: {str(bool(latest_acceptance.get('package_passed'))).lower()}")
     lines.append(f"- package_final_delivery_ready: {str(bool(latest_acceptance.get('package_final_delivery_ready'))).lower()}")
+    package_summary = (
+        latest_acceptance.get("package_blocker_summary")
+        if isinstance(latest_acceptance.get("package_blocker_summary"), dict)
+        else {}
+    )
+    if package_summary:
+        lines.append(f"- package_blocker_schema: {package_summary.get('schema_version') or ''}")
+        missing = ", ".join(str(item) for item in (package_summary.get("missing_artifacts") or []))
+        failures = ", ".join(str(item) for item in (package_summary.get("failures") or []))
+        lines.append(f"- package_missing_artifacts: {missing}")
+        lines.append(f"- package_failures: {failures}")
+        lines.append(f"- package_next_required_command: {package_summary.get('next_required_command') or ''}")
     lines.extend(["", "## Next Required Actions", ""])
     next_actions = [str(item) for item in (status.get("next_required_actions") or [])]
     lines.extend([f"- {item}" for item in next_actions] or ["- None"])

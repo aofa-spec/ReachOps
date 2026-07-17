@@ -1,0 +1,11 @@
+# ReachOps deterministic dependency lock.
+# Updated: 2026-07-14
+#
+# This file is the single install input for CI and the Windows commercial build.
+# Do not add range specifiers here; update the license inventory and run
+# tools/verify_reachops_dependency_baseline.py after every dependency change.
+requests==2.33.0
+Pillow==10.4.0
+selenium==4.41.0
+ixbrowser-local-api==1.2.3
+pyinstaller==6.21.0

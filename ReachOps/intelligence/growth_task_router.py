@@ -141,16 +141,19 @@ class GrowthTaskRouter:
                     "max_sources_per_profile": int(getattr(config, "max_sources_per_profile", 0) or 0),
                 },
             )
+        consecutive_empty_result_sources = 0
         try:
             for index, source_input in enumerate(source_list):
                 datasource = self.datasource_manager.create(source_input["type"], source_input["value"])
                 ok, error = self._run_source_with_profile_fallback(datasource, batch_id, profiles, index, config, profile_usage)
                 if ok:
                     processed += 1
+                    consecutive_empty_result_sources = 0
                     self.storage.update_collection_batch(batch_id, "running", processed_delta=1)
                 else:
                     if not error:
                         error = {"error_code": "UNKNOWN", "message": ""}
+                    error_code = str(error.get("error_code") or "UNKNOWN")
                     self.storage.update_collection_batch(batch_id, "running", failed_delta=1)
                     self.storage.log_event(
                         "collection_source_failed",
@@ -161,10 +164,30 @@ class GrowthTaskRouter:
                             "source_type": datasource.type,
                             "source_value": datasource.value,
                             "source_index": index + 1,
-                            "error_code": str(error.get("error_code") or "UNKNOWN"),
+                            "error_code": error_code,
                             "message": str(error.get("message") or ""),
                         },
                     )
+                    if error_code in {"COMMENT_USERS_EMPTY_RETRY", "EMPTY_RESULT_RETRY"}:
+                        consecutive_empty_result_sources += 1
+                    else:
+                        consecutive_empty_result_sources = 0
+                    empty_breaker_limit = int(getattr(config, "max_consecutive_empty_result_sources", 0) or 0)
+                    if empty_breaker_limit > 0 and consecutive_empty_result_sources >= empty_breaker_limit:
+                        self.storage.log_event(
+                            "collection_empty_result_circuit_breaker",
+                            batch_id,
+                            {
+                                "batch_id": batch_id,
+                                "error_code": error_code,
+                                "consecutive_empty_result_sources": consecutive_empty_result_sources,
+                                "limit": empty_breaker_limit,
+                                "source_index": index + 1,
+                                "remaining_sources": max(0, len(source_list) - index - 1),
+                                "action": "stop_remaining_sources_to_avoid_repeated_page_opens",
+                            },
+                        )
+                        break
                 if index < len(source_list) - 1:
                     self._sleep_between_tasks(config)
         finally:
@@ -241,6 +264,7 @@ class GrowthTaskRouter:
         last_error = {}
         attempted_profile_ids = set()
         profile_usage = profile_usage if profile_usage is not None else {}
+        comment_users_empty_attempts = 0
         for profile in self._profile_candidates_for_index(profiles, index, config, profile_usage):
             profile_id = str(profile.get("profile_id") or profile.get("id") or "").strip()
             if profile_id in attempted_profile_ids:
@@ -281,6 +305,7 @@ class GrowthTaskRouter:
                     str(profile.get("group_name") or getattr(config, "profile_group", "") or ""),
                     error_code,
                     error_message,
+                    allow_remote_quarantine=bool(getattr(config, "quarantine_failed_profiles", False)),
                 )
                 self.storage.update_collection_task(task.id, "failed", error_code, error_message)
                 last_error = {"error_code": error_code, "message": error_message}
@@ -329,6 +354,7 @@ class GrowthTaskRouter:
                             datasource.id,
                             {"profile_id": profile_id, "reason": empty_retry["error_code"]},
                         )
+                        self._record_profile_failure(profile_id)
                         self._discard_reusable_profile_session(profile_id, reason=empty_retry["error_code"])
                         self._log_profile_queue_event(
                             "profile_queue_source_failed",
@@ -341,6 +367,25 @@ class GrowthTaskRouter:
                             usage=profile_usage.get(profile_id, 0),
                         )
                         last_error = {"error_code": empty_retry["error_code"], "message": empty_retry["message"]}
+                        if empty_retry["error_code"] == "COMMENT_USERS_EMPTY_RETRY":
+                            comment_users_empty_attempts += 1
+                            retry_limit = max(
+                                1,
+                                int(getattr(config, "max_comment_users_empty_profile_retries_per_source", 2) or 2),
+                            )
+                            if comment_users_empty_attempts >= retry_limit:
+                                self.storage.log_event(
+                                    "profile_comment_users_empty_retry_limited",
+                                    datasource.id,
+                                    {
+                                        "profile_id": profile_id,
+                                        "error_code": empty_retry["error_code"],
+                                        "attempts": comment_users_empty_attempts,
+                                        "limit": retry_limit,
+                                        "action": "stop_profile_switch_for_source",
+                                    },
+                                )
+                                return False, last_error
                         continue
                     self.storage.update_collection_task(task.id, "completed")
                     profile_usage[profile_id] = profile_usage.get(profile_id, 0) + 1
@@ -377,6 +422,7 @@ class GrowthTaskRouter:
                         str(profile.get("group_name") or getattr(config, "profile_group", "") or ""),
                         error_code,
                         str(last_error.get("message") or error_code),
+                        allow_remote_quarantine=bool(getattr(config, "quarantine_failed_profiles", False)),
                     )
                     self.storage.log_event("profile_runtime_failed_retry", datasource.id, {"profile_id": profile_id, "error_code": error_code})
                     self._log_profile_queue_event(
@@ -1076,7 +1122,14 @@ class GrowthTaskRouter:
             ]
         )
 
-    def _record_blocking_profile_state(self, profile_id: str, group_name: str, error_code: str, message: str = ""):
+    def _record_blocking_profile_state(
+        self,
+        profile_id: str,
+        group_name: str,
+        error_code: str,
+        message: str = "",
+        allow_remote_quarantine: bool = False,
+    ):
         if error_code in {"LOGIN_REQUIRED", "CAPTCHA_DETECTED", "PROXY_FAILED", "COMMENT_ACCESS_GATED", "IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
             self.storage.force_profile_cooldown(
                 profile_id,
@@ -1084,8 +1137,39 @@ class GrowthTaskRouter:
                 error_code=error_code,
                 error_message=message or f"page state detected: {error_code}",
             )
-            if error_code not in {"IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
+            if allow_remote_quarantine and error_code not in {"IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
+                self.storage.log_event(
+                    "profile_remote_group_update_requested",
+                    profile_id,
+                    {
+                        "profile_id": str(profile_id or ""),
+                        "group_name": str(group_name or ""),
+                        "reason": error_code,
+                        "automatic_local_grouping_enabled": True,
+                        "local_grouping_action": "cooldown_profile_and_continue_queue",
+                        "remote_group_update_enabled": True,
+                        "remote_group_update_mode": "account_repair_mode",
+                        "normal_logged_in_profiles_continue": True,
+                    },
+                )
                 self._move_profile_to_quarantine(profile_id, error_code, message or f"page state detected: {error_code}")
+            elif error_code not in {"IXBROWSER_KERNEL_MISMATCH", "BROWSER_CRASHED"}:
+                self.storage.log_event(
+                    "profile_quarantine_move_skipped",
+                    profile_id,
+                    {
+                        "profile_id": str(profile_id or ""),
+                        "group_name": str(group_name or ""),
+                        "reason": error_code,
+                        "automatic_local_grouping_enabled": True,
+                        "local_grouping_action": "cooldown_profile_and_continue_queue",
+                        "remote_group_update_enabled": False,
+                        "remote_group_update_mode": "requires_explicit_account_repair_mode",
+                        "account_repair_mode_required": True,
+                        "normal_logged_in_profiles_continue": True,
+                        "next_action": "continue_with_next_available_profile_or_apply_account_repair_plan",
+                    },
+                )
             return
         self.storage.record_profile_health(
             profile_id,
@@ -1712,7 +1796,13 @@ class GrowthTaskRouter:
                 };
                 const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span, [aria-label], [data-e2e]'))
                   .filter(visible)
-                  .map(el => ({el, label: labelOf(el), rect: el.getBoundingClientRect()}));
+                  .map(el => {
+                    const ownText = norm(Array.from(el.childNodes || [])
+                      .filter(node => node && node.nodeType === Node.TEXT_NODE)
+                      .map(node => node.textContent || '')
+                      .join(' '));
+                    return {el, label: labelOf(el), ownText, rect: el.getBoundingClientRect()};
+                  });
                 const panelSeen = nodes.some(item =>
                   item.label.includes('add comment') ||
                   item.label.includes('view more comments') ||
@@ -1734,20 +1824,35 @@ class GrowthTaskRouter:
                 if (panelSeen) {
                   return {clicked: false, reason: 'comments_already_visible', panelSeen, recommendationActive};
                 }
-                if (recommendationActive) {
-                  const x = Math.round((window.innerWidth || 1200) * 0.76);
-                  const y = Math.round((window.innerHeight || 900) * 0.30);
-                  if (clickPoint(x, y)) {
-                    return {clicked: true, reason: 'comments_tab_coordinate', x, y, recommendationActive};
-                  }
-                }
                 const commentTab = nodes.find(item =>
-                  /^(comments?|commentaires|comentarios|comentários|评论)$/.test(item.label) &&
-                  item.rect.left > (window.innerWidth || 1200) * 0.55
+                  (
+                    /^(comments?|commentaires|comentarios|comentários|评论)$/.test(item.label) ||
+                    /^(comments?|commentaires|comentarios|comentários|评论)$/.test(item.ownText) ||
+                    (/^comments?\b/.test(item.label) && item.rect.top < (window.innerHeight || 900) * 0.25)
+                  ) &&
+                  item.rect.left > (window.innerWidth || 1200) * 0.55 &&
+                  item.rect.top < (window.innerHeight || 900) * 0.35
                 );
                 if (commentTab) {
                   click(commentTab.el);
                   return {clicked: true, reason: 'comments_tab', label: commentTab.label, recommendationActive};
+                }
+                if (recommendationActive) {
+                  const width = window.innerWidth || 1200;
+                  const height = window.innerHeight || 900;
+                  const coordinateAttempts = [
+                    [0.76, 0.115],
+                    [0.74, 0.115],
+                    [0.78, 0.115],
+                    [0.76, 0.14]
+                  ];
+                  for (const [xRatio, yRatio] of coordinateAttempts) {
+                    const x = Math.round(width * xRatio);
+                    const y = Math.round(height * yRatio);
+                    if (clickPoint(x, y)) {
+                      return {clicked: true, reason: 'comments_tab_top_rail_coordinate', x, y, recommendationActive};
+                    }
+                  }
                 }
                 const commentButton = nodes.find(item =>
                   /comment/.test(item.label) &&
@@ -2213,6 +2318,13 @@ class GrowthTaskRouter:
                 "sources_done": int(usage or 0),
                 "max_sources_per_profile": max(1, int(getattr(config, "max_sources_per_profile", 1) or 1)),
                 "requested_concurrency": max(1, int(getattr(config, "requested_concurrency", 1) or 1)),
+                "runtime_auto_grouping": True,
+                "automatic_local_grouping_enabled": True,
+                "normal_logged_in_profiles_continue": True,
+                "remote_group_update_enabled": bool(getattr(config, "quarantine_failed_profiles", False)),
+                "remote_group_update_mode": "account_repair_mode"
+                if bool(getattr(config, "quarantine_failed_profiles", False))
+                else "requires_explicit_account_repair_mode",
                 "source_id": str(getattr(datasource, "id", "") or ""),
                 "source_type": str(getattr(datasource, "type", "") or ""),
                 "source_value": str(getattr(datasource, "value", "") or ""),
@@ -2244,6 +2356,7 @@ class GrowthTaskRouter:
                 str(profile.get("group_name") or getattr(config, "profile_group", "") or ""),
                 "PROFILE_START_FAILED",
                 "profile start failed",
+                allow_remote_quarantine=bool(getattr(config, "quarantine_failed_profiles", False)),
             )
             self.storage.log_event("profile_start_failed_retry", source_id, {"profile_id": profile_id, "reason": "start_failed"})
         return None, last_profile

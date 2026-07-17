@@ -13,9 +13,12 @@ from pathlib import Path
 from tkinter import simpledialog, ttk
 from urllib.parse import urlparse
 
+from ReachOps.execution_plan import build_execution_plan, write_execution_plan
+from ReachOps.client_operator_summary import attach_client_operator_summary
 from ReachOps.intelligence import GrowthIntelligenceService, GrowthTaskConfig
 from ReachOps.intelligence.schemas import ActionQueueItem
 from ReachOps.intelligence.storage import new_id
+from ReachOps.run_session import create_run_session, read_run_session, transition_run_session, write_run_session
 from ReachOps.runtime_paths import RuntimePaths
 
 from .console import GrowthOpsConsole, normalize_source_type, quick_send_mode_key, quick_send_preset
@@ -85,6 +88,40 @@ def parse_keyword_list(value: str) -> list[str]:
         seen.add(keyword.lower())
         items.append(keyword)
     return items
+
+
+def collection_profile_preflight_timing(volume_key: str, batch_size: int, *, recovery: bool = False) -> dict:
+    """Bounded profile preflight timings tuned for real ixBrowser startup variance."""
+
+    quick = str(volume_key or "") == "quick"
+    batch_size = max(1, int(batch_size or 1))
+    if recovery:
+        if quick:
+            return {
+                "page_timeout": 24,
+                "wait_after_open": 1.0,
+                "total_timeout": max(60, min(150, batch_size * 35)),
+                "launch_stagger": 1.5,
+            }
+        return {
+            "page_timeout": 18,
+            "wait_after_open": 1.2,
+            "total_timeout": max(35, min(180, batch_size * 28)),
+            "launch_stagger": 2.0,
+        }
+    if quick:
+        return {
+            "page_timeout": 18,
+            "wait_after_open": 1.0,
+            "total_timeout": max(45, min(120, batch_size * 24)),
+            "launch_stagger": 1.2,
+        }
+    return {
+        "page_timeout": 10,
+        "wait_after_open": 0.8,
+        "total_timeout": max(30, min(90, batch_size * 18)),
+        "launch_stagger": 2.0,
+    }
 
 
 def normalize_ixbrowser_profile(row: dict) -> dict:
@@ -945,7 +982,7 @@ class MacQuickConsole(tk.Frame):
         self.action_execution_workers_var.set(int(preset["workers"]))
         live_comment_mode = quick_send_mode_key(self.quick_send_mode_var.get()) == "live_comment"
         self.action_execution_mode_var.set("真实提交" if live_comment_mode else "预检，不提交")
-        self.action_execution_live_confirm_var.set(bool(live_comment_mode))
+        self.action_execution_live_confirm_var.set(False)
 
     def set_profile_group_options(self, display_values: list[str], selected: str = ""):
         values = stable_combobox_values(display_values or []) or ["请刷新账号分组"]
@@ -1046,6 +1083,9 @@ class GrowthIntelligenceStandaloneApp:
         self.active_batch_id = ""
         self._collection_start_lock = threading.Lock()
         self._collection_start_in_progress = False
+        self.active_run_session_path = ""
+        self.active_run_session_latest_path = ""
+        self.active_run_result_path = ""
         self._group_count_refresh_in_progress = False
         self._runtime_event_last_rowid = self._current_growth_event_rowid()
         self._last_runtime_status_line = ""
@@ -1299,6 +1339,124 @@ class GrowthIntelligenceStandaloneApp:
             batch_id=self.active_batch_id,
         )
 
+    def _create_native_run_contract(
+        self,
+        *,
+        target: str,
+        source_type: str,
+        mode: str,
+        volume: str,
+        profile_group: str,
+        profile_limit: int,
+        max_videos: int,
+        max_comments: int,
+        comment_text: str = "",
+        live_confirmed: bool = False,
+    ) -> dict:
+        plan = build_execution_plan(
+            target=target,
+            source_type=source_type,
+            mode=mode,
+            volume=volume,
+            profile_group=profile_group,
+            profile_limit=profile_limit,
+            max_videos=max_videos,
+            max_comments=max_comments,
+            timeout_seconds=1800,
+            comment_text=comment_text,
+            live_confirmed=live_confirmed,
+            base_dir=str(self.base_dir),
+            origin="native_tk_client",
+        )
+        plan_id = str(plan.get("plan_id") or new_id("plan"))
+        plan_path = Path(self.base_dir) / "plans" / f"{plan_id}.json"
+        write_execution_plan(plan, plan_path)
+        latest_plan_path = Path(self.base_dir) / "plans" / "latest_execution_plan.json"
+        write_execution_plan(plan, latest_plan_path)
+
+        result_path = Path(self.base_dir) / "run_results" / f"{plan_id}.json"
+        session = create_run_session(
+            plan,
+            execution_plan_path=str(plan_path),
+            result_path=str(result_path),
+            log_path=str(self.runtime_log_path),
+        )
+        session_path = Path(self.base_dir) / "runs" / f"{session.get('session_id') or new_id('run')}.json"
+        latest_session_path = Path(self.base_dir) / "runs" / "latest_run_session.json"
+        session = transition_run_session(
+            session,
+            "PRECHECK",
+            pid=os.getpid(),
+            last_stage="native_client_start_requested",
+            checkpoint_update={
+                "target": target,
+                "profile_group": profile_group,
+                "mode": mode,
+                "volume": volume,
+                "no_submit": not bool(live_confirmed and mode == "live_comment"),
+            },
+        )
+        write_run_session(session, session_path, latest_session_path)
+        self.active_run_session_path = str(session_path)
+        self.active_run_session_latest_path = str(latest_session_path)
+        self.active_run_result_path = str(result_path)
+        self._log(
+            f"RUNSESSION created id={session.get('session_id', '')} plan={plan_id} "
+            f"path={session_path} no_submit={str(not bool(live_confirmed and mode == 'live_comment')).lower()}"
+        )
+        return {
+            "plan": plan,
+            "plan_path": str(plan_path),
+            "session_id": str(session.get("session_id") or ""),
+            "session_path": str(session_path),
+            "latest_session_path": str(latest_session_path),
+            "result_path": str(result_path),
+        }
+
+    def _update_native_run_session(self, state: str, *, last_stage: str = "", result: dict | None = None, evidence: dict | None = None):
+        path = str(self.active_run_session_path or "")
+        if not path:
+            return {}
+        session = read_run_session(path)
+        if not session:
+            return {}
+        checkpoint_update = {
+            "active_batch_id": self.active_batch_id,
+            "active_campaign_id": self.active_campaign_id,
+            "log_path": str(self.runtime_log_path),
+            "result_path": str(self.active_run_result_path or ""),
+        }
+        updated = transition_run_session(
+            session,
+            state,
+            pid=os.getpid(),
+            last_stage=last_stage,
+            checkpoint_update=checkpoint_update,
+            result=result,
+            evidence=evidence,
+        )
+        write_run_session(updated, path, self.active_run_session_latest_path or None)
+        return updated
+
+    def _finalize_native_run_session(
+        self,
+        state: str,
+        *,
+        last_stage: str,
+        result: dict,
+        evidence: dict | None = None,
+    ):
+        result = attach_client_operator_summary(result)
+        result_path = str(self.active_run_result_path or "")
+        if result_path:
+            try:
+                target = Path(result_path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            except Exception as exc:
+                self._thread_log(f"WARN   run_session result_write_failed error={exc}")
+        return self._update_native_run_session(state, last_stage=last_stage, result=result, evidence=evidence)
+
     def _selected_profiles(self) -> list[dict]:
         group = self._selected_group_name()
         limit_var = getattr(self.console, "scan_profile_limit_var", None)
@@ -1352,6 +1510,13 @@ class GrowthIntelligenceStandaloneApp:
             if ranked:
                 return ranked
             if rank_source:
+                transient_recheck = self._transient_recheck_profile_candidates(rank_source, limit)
+                if transient_recheck:
+                    self._log(
+                        f"WARN   selected_profiles transient_recheck_candidates count={len(transient_recheck)} "
+                        "reason=only_retryable_start_failures_remain policy=bounded_runtime_preflight"
+                    )
+                    return transient_recheck
                 self._log(
                     "WARN   selected_profiles health_rank_empty selected=0 "
                     "policy=avoid_restarting_known_unusable_profiles"
@@ -1361,6 +1526,10 @@ class GrowthIntelligenceStandaloneApp:
         except Exception as exc:
             self._log(f"WARN   selected_profiles health_rank_failed error={exc}")
             return list(rank_source or [])[:limit]
+
+    def _remote_account_quarantine_enabled(self) -> bool:
+        value = str(os.environ.get("REACHOPS_QUARANTINE_FAILED_PROFILES") or "").strip().lower()
+        return value in {"1", "true", "yes", "on"}
 
     def _recoverable_profile_candidates(self, candidate_profiles: list[dict]) -> list[dict]:
         unrecoverable_error_codes = {
@@ -1380,6 +1549,92 @@ class GrowthIntelligenceStandaloneApp:
                 continue
             recoverable.append(profile)
         return recoverable
+
+    def _append_recoverable_shortfall_profiles(
+        self,
+        profiles: list[dict],
+        candidate_profiles: list[dict],
+        requested_limit: int,
+        *,
+        log_prefix: str,
+    ) -> list[dict]:
+        rows = list(profiles or [])
+        requested_limit = max(1, int(requested_limit or 1))
+        if len(rows) >= requested_limit:
+            return rows
+        seen = {self._profile_id(row) for row in rows if self._profile_id(row)}
+        shortfall = [
+            row
+            for row in self._recoverable_profile_candidates(candidate_profiles)
+            if self._profile_id(row) and self._profile_id(row) not in seen
+        ]
+        if not shortfall:
+            return rows
+        needed = requested_limit - len(rows)
+        rows.extend(shortfall)
+        self._thread_log(
+            f"{log_prefix} recoverable_shortfall candidates={len(shortfall)} "
+            f"needed={needed} requested={requested_limit} "
+            "policy=bounded_recheck_before_collection"
+        )
+        return rows
+
+    def _transient_recheck_profile_candidates(self, candidate_profiles: list[dict], limit: int) -> list[dict]:
+        transient_error_codes = {
+            "PAGE_OPEN_FAILED",
+            "PROFILE_PREFLIGHT_TIMEOUT",
+            "IXBROWSER_NETWORK_ERROR",
+            "IXBROWSER_SERVER_BUSY",
+        }
+        hard_error_codes = {
+            "PROFILE_MISSING",
+            "LOGIN_REQUIRED",
+            "IXBROWSER_KERNEL_MISMATCH",
+            "CAPTCHA_DETECTED",
+            "PROXY_FAILED",
+            "ACCOUNT_RESTRICTED",
+            "COMMENT_ACCESS_GATED",
+            "BROWSER_CRASHED",
+        }
+        try:
+            health_rows = {
+                str(row.get("profile_id") or ""): row
+                for row in self.service.storage.list_profile_health(limit=10000)
+            }
+        except Exception:
+            health_rows = {}
+        rows: list[dict] = []
+        for profile in candidate_profiles or []:
+            profile_id = self._profile_id(profile)
+            if not profile_id:
+                continue
+            health = health_rows.get(profile_id, {})
+            code = str(health.get("last_error_code") or profile.get("last_error_code") or "")
+            status = str(health.get("status") or profile.get("status") or "").lower()
+            if code in hard_error_codes:
+                continue
+            if status == "cooldown" and code not in transient_error_codes:
+                continue
+            if code not in transient_error_codes:
+                continue
+            row = dict(profile)
+            row["_transient_recheck"] = True
+            row["_transient_error_code"] = code
+            row["_health_score"] = int(health.get("health_score") or profile.get("health_score") or 0)
+            row["_consecutive_failures"] = int(
+                health.get("consecutive_failures") or profile.get("consecutive_failures") or 0
+            )
+            rows.append(row)
+        rows = sorted(
+            rows,
+            key=lambda row: (
+                int(row.get("_consecutive_failures") or 0),
+                -int(row.get("_health_score") or 0),
+                str(row.get("_transient_error_code") or ""),
+                self._profile_id(row),
+            ),
+        )
+        return rows[: max(1, int(limit or 1))]
 
     def _exclude_recent_hard_failed_profiles(self, candidate_profiles: list[dict]) -> tuple[list[dict], int]:
         hard_error_codes = {
@@ -1729,6 +1984,12 @@ class GrowthIntelligenceStandaloneApp:
             except Exception as exc:
                 self._thread_log(f"WARN   profile_preflight backfill_registry_failed stage={stage} error={exc}")
         ranked_candidates = self._rank_profile_candidates(candidate_profiles, candidate_limit)
+        ranked_candidates = self._append_recoverable_shortfall_profiles(
+            ranked_candidates,
+            candidate_profiles,
+            requested_limit,
+            log_prefix=f"CHECK  profile_preflight stage={stage}",
+        )
         remaining = [
             profile
             for profile in ranked_candidates
@@ -2306,6 +2567,23 @@ class GrowthIntelligenceStandaloneApp:
         task_interval = max(1, int(self.console.scan_interval_var.get() or quick_preset.get("task_interval") or 3))
         if quick_mode == "live_comment":
             task_interval = max(12, task_interval)
+            if not self._quick_send_live_submit_confirmed(quick_mode):
+                self._log(
+                    "BLOCK  campaign not_started reason=LIVE_COMMENT_CONFIRMATION_REQUIRED "
+                    "next=真实评论必须单独勾选确认；M3 验收请使用采集 + 触达预检 no-submit"
+                )
+                release_start_lock()
+                return
+            authorization = self._live_submit_authorization_decision()
+            if not bool(getattr(authorization, "allowed", False)):
+                code = str(getattr(authorization, "error_code", "") or "LIVE_SUBMIT_NOT_AUTHORIZED")
+                message = str(getattr(authorization, "error_message", "") or "live submit not authorized")
+                self._log(
+                    f"BLOCK  campaign not_started reason={code} message={message} "
+                    "next=完成激活/授权后再进入真实评论；M3 验收继续使用 no-submit"
+                )
+                release_start_lock()
+                return
         profile_limit = max(1, int(self.console.scan_profile_limit_var.get() or 3))
         profile_group = self._selected_group_name()
         intent_keywords = parse_keyword_list(self.console.scan_intent_keywords_var.get())
@@ -2357,14 +2635,38 @@ class GrowthIntelligenceStandaloneApp:
             "max_comments": max_comments,
             "profile_limit": profile_limit,
             "queue_profile_target": max(profile_limit, min(max(profile_limit * 2, len(planned_sources)), 12)),
-            "max_sources_per_profile": 100,
+            "max_sources_per_profile": 3 if quick_volume_label == "快速" else 20,
             "task_interval": task_interval,
             "quick_mode": quick_mode_label,
             "quick_volume": quick_volume_label,
         }
+        plan_mode = "collect" if quick_mode == "collect_only" else quick_mode
+        native_run = {}
+        try:
+            native_run = self._create_native_run_contract(
+                target=source_value,
+                source_type=source_type,
+                mode=plan_mode,
+                volume="quick" if quick_volume_label == "快速" else "standard" if quick_volume_label == "标准" else "stress",
+                profile_group=profile_group or "United States",
+                profile_limit=profile_limit,
+                max_videos=max_videos,
+                max_comments=max_comments,
+                comment_text=self._quick_comment_text(),
+                live_confirmed=self._quick_send_live_submit_confirmed(quick_mode),
+            )
+        except Exception as exc:
+            self._log(
+                f"BLOCK  campaign not_started campaign={campaign.get('id', '')} "
+                f"reason=RUN_CONTRACT_CREATE_FAILED error={exc}"
+            )
+            release_start_lock()
+            return
         display_plan = {
             **plan,
             "sources": planned_sources,
+            "execution_plan_path": native_run.get("plan_path", ""),
+            "run_session_path": native_run.get("session_path", ""),
         }
         try:
             self.console.show_campaign_plan(display_plan, range_config, profile_group)
@@ -2424,12 +2726,29 @@ class GrowthIntelligenceStandaloneApp:
                 f"status=pending stage=profile_preflight target={source_value} group={profile_group or '未指定'} "
                 f"sources={len(planned_sources)}"
             )
+            self._update_native_run_session(
+                "PROFILE_PREFLIGHT",
+                last_stage=f"native_collection_batch_created batch={precreated_batch.id}",
+                evidence={"collection_batch_id": precreated_batch.id, "campaign_id": str(campaign.get("id") or "")},
+            )
             try:
                 self.console.refresh(self._current_snapshot())
             except Exception:
                 pass
         except Exception as exc:
             self._log(f"BLOCK  campaign not_started campaign={campaign.get('id', '')} reason=BATCH_CREATE_FAILED error={exc}")
+            self._finalize_native_run_session(
+                "BLOCKED",
+                last_stage="native_batch_create_failed",
+                result={
+                    "status": "blocked",
+                    "error_code": "BATCH_CREATE_FAILED",
+                    "error_message": str(exc),
+                    "target": source_value,
+                    "profile_group": profile_group,
+                    "no_submit": True,
+                },
+            )
             release_start_lock()
             return
 
@@ -2439,6 +2758,12 @@ class GrowthIntelligenceStandaloneApp:
             try:
                 retained_profile_ids: set[str] = set()
                 preflight_checkers: list[Any] = []
+                remote_account_quarantine = self._remote_account_quarantine_enabled()
+                if remote_account_quarantine:
+                    self._thread_log(
+                        "CONFIG account_repair_mode remote_group_update_enabled=true "
+                        "policy=quarantine_failed_profiles_and_continue_ready_accounts"
+                    )
                 quick_volume_key = "quick" if quick_volume_label == "快速" else "standard" if quick_volume_label == "标准" else "stress"
                 if quick_volume_key == "quick":
                     fast_preflight_limit = max(profile_limit * 2, 6)
@@ -2446,7 +2771,7 @@ class GrowthIntelligenceStandaloneApp:
                 else:
                     fast_preflight_limit = max(profile_limit * 3, 9)
                     auto_preflight_limit = max(fast_preflight_limit, profile_limit * 20, 60)
-                min_collection_profiles = 1
+                min_collection_profiles = profile_limit
                 cached_profiles = self._cached_profiles_from_storage(profile_group, limit=auto_preflight_limit)
                 profiles = list(cached_profiles)
                 if len(cached_profiles) >= min_collection_profiles:
@@ -2470,6 +2795,12 @@ class GrowthIntelligenceStandaloneApp:
                             and self._profile_id(row) not in selected_profile_ids
                         ],
                     ]
+                    ranked_profiles = self._append_recoverable_shortfall_profiles(
+                        ranked_profiles,
+                        candidate_profiles,
+                        profile_limit,
+                        log_prefix=f"CONFIG quick_preflight_candidates group={profile_group or '全部'}",
+                    )
                     if ranked_profiles:
                         profiles = ranked_profiles
                         self._thread_log(
@@ -2487,59 +2818,55 @@ class GrowthIntelligenceStandaloneApp:
                         "BLOCK  campaign failed reason=没有可用账号 error=NO_PROFILE_SELECTED "
                         "next=点击刷新账号分组，并选择 discovery/comment/action 分组"
                     )
+                    self._finalize_native_run_session(
+                        "BLOCKED",
+                        last_stage="native_no_profile_selected",
+                        result={
+                            "status": "blocked",
+                            "error_code": "NO_PROFILE_SELECTED",
+                            "target": source_value,
+                            "profile_group": profile_group,
+                            "checked_profiles": 0,
+                            "available_profiles": 0,
+                            "no_submit": True,
+                        },
+                        evidence={"collection_batch_id": self.active_batch_id},
+                    )
                     self.root.after(0, lambda: self.console.refresh(self._current_snapshot()))
                     return
                 def checker_factory(batch_size: int):
-                    if quick_volume_key == "quick":
-                        page_timeout = 12
-                        wait_after_open = 1.0
-                        total_timeout = max(30, min(72, max(1, batch_size) * 12))
-                        launch_stagger = 0.8
-                    else:
-                        page_timeout = 10
-                        wait_after_open = 0.8
-                        total_timeout = max(30, min(90, max(1, batch_size) * 18))
-                        launch_stagger = 2.0
+                    timing = collection_profile_preflight_timing(quick_volume_key, batch_size)
                     checker = ProfilePreflightChecker(
                         self.service.storage,
                         ProfilePreflightConfig(
                             max_workers=1,
-                            page_load_timeout_seconds=page_timeout,
-                            wait_after_open_seconds=wait_after_open,
-                            total_timeout_seconds=total_timeout,
-                            launch_stagger_seconds=launch_stagger,
+                            page_load_timeout_seconds=timing["page_timeout"],
+                            wait_after_open_seconds=timing["wait_after_open"],
+                            total_timeout_seconds=timing["total_timeout"],
+                            launch_stagger_seconds=timing["launch_stagger"],
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
-                            retain_successful_browser_after_check=True,
-                            quarantine_on_failure=True,
+                            retain_successful_browser_after_check=False,
+                            quarantine_on_failure=remote_account_quarantine,
                         ),
                     )
                     preflight_checkers.append(checker)
                     return checker
 
                 def recovery_checker_factory(batch_size: int):
-                    if quick_volume_key == "quick":
-                        page_timeout = 16
-                        wait_after_open = 1.0
-                        total_timeout = max(36, min(90, max(1, batch_size) * 15))
-                        launch_stagger = 1.0
-                    else:
-                        page_timeout = 18
-                        wait_after_open = 1.2
-                        total_timeout = max(35, min(180, max(1, batch_size) * 28))
-                        launch_stagger = 2.0
+                    timing = collection_profile_preflight_timing(quick_volume_key, batch_size, recovery=True)
                     checker = ProfilePreflightChecker(
                         self.service.storage,
                         ProfilePreflightConfig(
                             max_workers=1,
-                            page_load_timeout_seconds=page_timeout,
-                            wait_after_open_seconds=wait_after_open,
-                            total_timeout_seconds=total_timeout,
-                            launch_stagger_seconds=launch_stagger,
+                            page_load_timeout_seconds=timing["page_timeout"],
+                            wait_after_open_seconds=timing["wait_after_open"],
+                            total_timeout_seconds=timing["total_timeout"],
+                            launch_stagger_seconds=timing["launch_stagger"],
                             evidence_dir=str(Path(self.service.paths.reports_dir) / "collection_profile_preflight_evidence"),
                             close_browser_after_check=True,
-                            retain_successful_browser_after_check=True,
-                            quarantine_on_failure=True,
+                            retain_successful_browser_after_check=False,
+                            quarantine_on_failure=remote_account_quarantine,
                         ),
                     )
                     preflight_checkers.append(checker)
@@ -2626,7 +2953,7 @@ class GrowthIntelligenceStandaloneApp:
                     ),
                 )
                 self.root.after(0, lambda: self.console.refresh(self._current_snapshot()))
-                if not executable_profiles:
+                if len(executable_profiles) < min_collection_profiles:
                     self.service.storage.update_collection_batch(
                         self.active_batch_id,
                         "failed",
@@ -2635,26 +2962,49 @@ class GrowthIntelligenceStandaloneApp:
                     self.root.after(
                         0,
                         lambda: self._log(
-                            f"BLOCK  campaign failed reason=无可用账号 required={min_collection_profiles} available={len(executable_profiles)} "
+                            f"BLOCK  campaign failed reason=可用账号不足 required={min_collection_profiles} available={len(executable_profiles)} "
                             f"checked={profile_preflight.get('checked', 0)} auto_limit={auto_preflight_limit} "
-                            "error=INSUFFICIENT_LOGGED_IN_PROFILES next=系统已自动跳过异常账号；请补充至少1个已登录可用账号或稍后再次执行"
+                            "error=INSUFFICIENT_LOGGED_IN_PROFILES next=系统已自动重检同分组账号；请保留至少3个已登录可用账号后再次执行"
                         ),
+                    )
+                    self._finalize_native_run_session(
+                        "BLOCKED",
+                        last_stage="native_profile_preflight_insufficient_profiles",
+                        result={
+                            "status": "blocked",
+                            "error_code": "INSUFFICIENT_LOGGED_IN_PROFILES",
+                            "target": source_value,
+                            "profile_group": profile_group,
+                            "checked_profiles": int(profile_preflight.get("checked") or 0),
+                            "available_profiles": len(executable_profiles),
+                            "required_profiles": min_collection_profiles,
+                            "unavailable_profiles": int(profile_preflight.get("unavailable") or 0),
+                            "errors": dict(profile_preflight.get("errors") or {}),
+                            "no_submit": True,
+                        },
+                        evidence={
+                            "collection_batch_id": self.active_batch_id,
+                            "profile_preflight": profile_preflight,
+                        },
                     )
                     self.root.after(0, lambda: self.console.refresh(self._current_snapshot()))
                     return
-                if len(executable_profiles) < profile_limit:
-                    self.root.after(
-                        0,
-                        lambda: self._log(
-                            f"WARN   profile_preflight degraded_run requested={profile_limit} available={len(executable_profiles)} "
-                            "action=用可用账号先执行，避免空转等待"
-                        ),
-                    )
                 self._thread_log(
                     f"QUEUE  account_queue_effective batch={self.active_batch_id} "
                     f"requested_concurrency={profile_limit} effective_concurrency={min(profile_limit, len(executable_profiles))} "
                     f"available_profiles={len(executable_profiles)} queue_target={queue_profile_target} "
                     f"profile_ids={','.join([self._profile_id(row) for row in executable_profiles][:8])}"
+                )
+                self._update_native_run_session(
+                    "COLLECTING",
+                    last_stage=(
+                        f"native_profile_preflight_completed checked={profile_preflight.get('checked', 0)} "
+                        f"available={len(executable_profiles)}"
+                    ),
+                    evidence={
+                        "collection_batch_id": self.active_batch_id,
+                        "profile_preflight": profile_preflight,
+                    },
                 )
                 if len(executable_profiles) >= profile_limit and len(executable_profiles) < queue_profile_target:
                     self.root.after(
@@ -2735,8 +3085,11 @@ class GrowthIntelligenceStandaloneApp:
                         active_batch_id=self.active_batch_id,
                         account_queue_enabled=True,
                         max_sources_per_profile=int(range_config.get("max_sources_per_profile") or 1),
+                        max_comment_users_empty_profile_retries_per_source=1,
+                        max_consecutive_empty_result_sources=2,
                         retain_profile_sessions_after_collection=True,
                         requested_concurrency=profile_limit,
+                        quarantine_failed_profiles=remote_account_quarantine,
                         task_delay_min_seconds=task_interval,
                         task_delay_max_seconds=task_interval,
                     ),
@@ -2750,6 +3103,23 @@ class GrowthIntelligenceStandaloneApp:
                     f"FAST   collection_result mode={quick_mode} used_profiles={len(executable_profiles)} "
                     f"processed_sources={getattr(result, 'processed_sources', 0)} failed_sources={getattr(result, 'failed_sources', 0)} "
                     f"no_submit={str(not self._quick_send_live_submit_confirmed(quick_mode)).lower()}"
+                )
+                self._update_native_run_session(
+                    "SCORING",
+                    last_stage=(
+                        f"native_collection_finished processed={getattr(result, 'processed_sources', 0)} "
+                        f"failed={getattr(result, 'failed_sources', 0)}"
+                    ),
+                    evidence={
+                        "collection_batch_id": self.active_batch_id,
+                        "collection_report_json": str(getattr(result, "report_json_path", "") or ""),
+                        "collection_report_csv": str(getattr(result, "report_csv_path", "") or ""),
+                    },
+                )
+                self._update_native_run_session(
+                    "ACTION_PLANNING",
+                    last_stage="native_action_plan_ready",
+                    evidence={"collection_batch_id": self.active_batch_id},
                 )
                 if getattr(result, "failed_sources", 0) and not getattr(result, "processed_sources", 0):
                     errors = getattr(result, "errors", {}) or {}
@@ -2770,8 +3140,29 @@ class GrowthIntelligenceStandaloneApp:
                         f"FAST   acceptance status=pending reason=collect_only video_log=true touch_log=skipped "
                         f"next=切换到采集+触达预检或真实评论"
                     )
+                    self._finalize_native_run_session(
+                        "DEGRADED",
+                        last_stage="native_collect_only_completed_without_touch_preflight",
+                        result={
+                            "status": "degraded",
+                            "mode": plan_mode,
+                            "target": source_value,
+                            "profile_group": profile_group,
+                            "processed_sources": int(getattr(result, "processed_sources", 0) or 0),
+                            "failed_sources": int(getattr(result, "failed_sources", 0) or 0),
+                            "used_profiles": len(executable_profiles),
+                            "no_submit": True,
+                            "next_action": "Run no-submit action preflight before M2/M3 acceptance.",
+                        },
+                        evidence={"collection_batch_id": self.active_batch_id},
+                    )
                 else:
                     try:
+                        self._update_native_run_session(
+                            "EXECUTING",
+                            last_stage="native_action_preflight_started",
+                            evidence={"collection_batch_id": self.active_batch_id},
+                        )
                         action_result = self._start_action_queue_processing(str(campaign.get("id") or ""), profile_group, executable_profiles)
                         action_error = str((action_result or {}).get("error_code") or "")
                         acceptance_status = "blocked" if action_error else "executed"
@@ -2782,8 +3173,67 @@ class GrowthIntelligenceStandaloneApp:
                             f"no_submit={str(not self._quick_send_live_submit_confirmed(quick_mode)).lower()} "
                             f"error={action_error or '无'}"
                         )
+                        action_failed = int((action_result or {}).get("failed") or 0)
+                        collection_failed = int(getattr(result, "failed_sources", 0) or 0)
+                        terminal_state = "COMPLETED" if not action_error and not action_failed and not collection_failed else "DEGRADED"
+                        terminal_status = "completed" if terminal_state == "COMPLETED" else "degraded"
+                        self._finalize_native_run_session(
+                            terminal_state,
+                            last_stage=f"native_acceptance_{acceptance_status}",
+                            result={
+                                "status": terminal_status,
+                                "mode": plan_mode,
+                                "target": source_value,
+                                "profile_group": profile_group,
+                                "processed_sources": int(getattr(result, "processed_sources", 0) or 0),
+                                "failed_sources": collection_failed,
+                                "used_profiles": len(executable_profiles),
+                                "actions": int((action_result or {}).get("selected_actions") or 0),
+                                "action_success": int((action_result or {}).get("success") or 0),
+                                "action_failed": action_failed,
+                                "action_skipped": int((action_result or {}).get("skipped") or 0),
+                                "error_code": action_error,
+                                "no_submit": not self._quick_send_live_submit_confirmed(quick_mode),
+                            },
+                            evidence={
+                                "collection_batch_id": self.active_batch_id,
+                                "action_report_json": str((action_result or {}).get("report_path") or ""),
+                            },
+                        )
                     except Exception as e:
                         self._thread_log(f"ERROR  action_preflight failed error={str(e)}")
+                        self._finalize_native_run_session(
+                            "DEGRADED",
+                            last_stage="native_action_preflight_exception",
+                            result={
+                                "status": "degraded",
+                                "error_code": "ACTION_PREFLIGHT_FAILED",
+                                "error_message": str(e),
+                                "target": source_value,
+                                "profile_group": profile_group,
+                                "processed_sources": int(getattr(result, "processed_sources", 0) or 0),
+                                "failed_sources": int(getattr(result, "failed_sources", 0) or 0),
+                                "used_profiles": len(executable_profiles),
+                                "no_submit": True,
+                            },
+                            evidence={"collection_batch_id": self.active_batch_id},
+                        )
+            except Exception as exc:
+                self._thread_log(f"ERROR  native_run failed error={exc}")
+                self._finalize_native_run_session(
+                    "BLOCKED",
+                    last_stage="native_run_unhandled_exception",
+                    result={
+                        "status": "blocked",
+                        "error_code": "NATIVE_RUN_UNHANDLED_EXCEPTION",
+                        "error_message": str(exc),
+                        "target": source_value,
+                        "profile_group": profile_group,
+                        "active_batch_id": self.active_batch_id,
+                        "no_submit": True,
+                    },
+                    evidence={"collection_batch_id": self.active_batch_id},
+                )
             finally:
                 try:
                     self.service.router._close_reusable_profile_sessions(self.active_batch_id)
@@ -2810,6 +3260,37 @@ class GrowthIntelligenceStandaloneApp:
             return bool(live_confirm_var.get()) if live_confirm_var else False
         except Exception:
             return False
+
+    def _live_submit_authorization_decision(self):
+        try:
+            from .authorization_gate import AuthorizationDecision, LiveSubmitAuthorizationGate
+
+            gate = LiveSubmitAuthorizationGate.from_storage(self.service.storage)
+            return gate.authorize_live_submit(
+                {"action_type": "comment_reply", "id": "native_live_submit_preflight"},
+                {"profile_id": "native_live_submit_preflight"},
+                feature="live_submit",
+            )
+        except Exception as exc:
+            try:
+                from .authorization_gate import AuthorizationDecision
+
+                return AuthorizationDecision(
+                    False,
+                    "LIVE_SUBMIT_AUTHORIZATION_CHECK_FAILED",
+                    str(exc),
+                    {"source": "native_tk_client"},
+                )
+            except Exception:
+                return type(
+                    "Decision",
+                    (),
+                    {
+                        "allowed": False,
+                        "error_code": "LIVE_SUBMIT_AUTHORIZATION_CHECK_FAILED",
+                        "error_message": str(exc),
+                    },
+                )()
 
     def _scope_quick_direct_target_sources(
         self,
@@ -2846,6 +3327,8 @@ class GrowthIntelligenceStandaloneApp:
         text = str(source_value or "").strip().lower()
         if "tiktok.com" in text and ("/video/" in text or "/@" in text or "/live" in text):
             return 1
+        if text.startswith(("http://", "https://")):
+            return 6
         return 100
 
     def _running_collection_batch(self) -> dict:
@@ -3084,6 +3567,7 @@ class GrowthIntelligenceStandaloneApp:
                 f"workers={workers} per_profile={per_profile_limit} min_lead_score={min_lead_score} no_submit={str(not live_submit).lower()}"
             )
             preflight_checkers: list[Any] = []
+            remote_account_quarantine = self._remote_account_quarantine_enabled()
 
             def checker_factory(batch_size: int):
                 checker = ProfilePreflightChecker(
@@ -3096,7 +3580,7 @@ class GrowthIntelligenceStandaloneApp:
                         evidence_dir=str(Path(self.service.paths.reports_dir) / "action_profile_preflight_evidence"),
                         close_browser_after_check=True,
                         retain_successful_browser_after_check=True,
-                        quarantine_on_failure=True,
+                        quarantine_on_failure=remote_account_quarantine,
                     ),
                 )
                 preflight_checkers.append(checker)

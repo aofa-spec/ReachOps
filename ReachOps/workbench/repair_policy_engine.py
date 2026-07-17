@@ -189,30 +189,6 @@ class RepairPolicyEngine:
             ).to_dict()
 
         if code in self.ACTION_DEGRADE:
-            if action_type == "comment_reply" and code in {"COMMENT_BOX_MISSING", "COMMENT_BOX_NOT_FOUND", "SUBMIT_BUTTON_MISSING", "COMMENT_SUBMIT_FAILED", "COMMENT_INPUT_NOT_FILLED", "COMMENT_SUBMIT_BUTTON_DISABLED", "COMMENT_SUBMIT_NOT_CONFIRMED"}:
-                can_retry = attempt <= max_retries
-                retry_after_seconds = min(60, 5 * attempt)
-                return RepairDecision(
-                    error_code=code,
-                    action="retry_same_profile_with_backoff" if can_retry else "switch_profile_after_retry_exhausted",
-                    reason="comment_composer_not_ready",
-                    retry_same_profile=can_retry,
-                    switch_profile=not can_retry,
-                    max_retries=max_retries,
-                    retry_after_seconds=retry_after_seconds if can_retry else 0,
-                    executable_steps=[
-                        {"step": "capture_page_state_bundle", "required": True},
-                        {"step": "refresh_page", "when": True},
-                        {"step": "backoff", "seconds": retry_after_seconds if can_retry else 0},
-                        {"step": "retry_same_profile", "allowed": can_retry},
-                        {"step": "switch_profile", "allowed": not can_retry, "scope": "same_profile_group"},
-                    ],
-                    next_actions=[
-                        "重新打开或刷新评论区域。",
-                        "退避后重试当前账号。",
-                        "重试耗尽后切换同分组账号继续执行。",
-                    ],
-                ).to_dict()
             return RepairDecision(
                 error_code=code,
                 action="degrade_to_collect",

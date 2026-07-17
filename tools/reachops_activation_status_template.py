@@ -23,15 +23,35 @@ def build_template(args) -> dict[str, Any]:
         expires_at = (datetime.now(timezone.utc) + timedelta(days=max(1, int(args.days)))).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return {
         "template_only": True,
+        "entitlement_id": "",
+        "issued_at": "",
         "active": bool(getattr(args, "active", False)),
         "device_id": current_device_id if bool(getattr(args, "bind_current_device", False)) else "",
+        "device_registration": {
+            "device_id": current_device_id if bool(getattr(args, "bind_current_device", False)) else "",
+            "max_concurrent_devices": 1,
+            "registered_device_count": 1,
+        },
         "expires_at": expires_at,
+        "offline_grace_until": expires_at,
+        "revoked": False,
+        "revoked_at": "",
         "license_tier": str(getattr(args, "license_tier", "") or "enterprise"),
         "capabilities": {
             "live_submit": bool(getattr(args, "enable_live_submit", False)),
             "comment_reply": bool(getattr(args, "enable_comment_reply", False)),
             "follow_review": bool(getattr(args, "enable_follow_review", False)),
             "dm_review": bool(getattr(args, "enable_dm_review", False)),
+        },
+        "emergency_disabled_features": [],
+        "audit": {
+            "issued_by": "",
+            "event_id": "",
+        },
+        "entitlement_signature": {
+            "algorithm": "hmac-sha256",
+            "key_id": "",
+            "digest": "",
         },
         "generated_by": "reachops_activation_status_template",
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),

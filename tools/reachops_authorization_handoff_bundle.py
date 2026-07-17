@@ -100,6 +100,12 @@ def build_handoff_bundle(args: argparse.Namespace, snapshot: dict[str, Any] | No
     status["report_path"] = str(write_markdown_report(status, markdown_path))
     status["json_report_path"] = str(write_json_report(status, json_path))
     commands = command_text(status)
+    latest_acceptance = status.get("latest_acceptance") if isinstance(status.get("latest_acceptance"), dict) else {}
+    windows_package_blocker_summary = (
+        latest_acceptance.get("package_blocker_summary")
+        if isinstance(latest_acceptance.get("package_blocker_summary"), dict)
+        else {}
+    )
     phase2_json_path = output_path.parent / "latest_phase2_handoff_check.json"
     phase2_md_path = output_path.parent / "latest_phase2_handoff_check.md"
     phase2_json = phase2_json_path.read_text(encoding="utf-8") if phase2_json_path.is_file() else "{}"
@@ -134,6 +140,8 @@ def build_handoff_bundle(args: argparse.Namespace, snapshot: dict[str, Any] | No
         "next_required_actions": status.get("next_required_actions") or [],
         "operator_commands": status.get("operator_commands") or [],
         "verification_commands": status.get("verification_commands") or [],
+        "commercial_issue_closure_command": "python tools\\reachops_issue_closure_audit.py --json",
+        "windows_package_blocker_summary": windows_package_blocker_summary,
     }
 
     readme = "\n".join(
@@ -149,6 +157,11 @@ def build_handoff_bundle(args: argparse.Namespace, snapshot: dict[str, Any] | No
             f"- json_report: latest_live_acceptance_readiness.json",
             f"- phase2_handoff_report: latest_phase2_handoff_check.md",
             f"- phase2_handoff_json: latest_phase2_handoff_check.json",
+            "- commercial_issue_closure_command: python tools\\reachops_issue_closure_audit.py --json",
+            f"- windows_package_blocker_schema: {windows_package_blocker_summary.get('schema_version') or ''}",
+            f"- windows_package_missing_artifacts: {', '.join(str(item) for item in (windows_package_blocker_summary.get('missing_artifacts') or []))}",
+            f"- windows_package_failures: {', '.join(str(item) for item in (windows_package_blocker_summary.get('failures') or []))}",
+            f"- windows_package_next_required_command: {windows_package_blocker_summary.get('next_required_command') or ''}",
             "",
             "## Required external inputs",
             "",
@@ -171,6 +184,8 @@ def build_handoff_bundle(args: argparse.Namespace, snapshot: dict[str, Any] | No
     return {
         "status": "created",
         "bundle_path": str(output_path),
+        "readiness_report_path": str(markdown_path),
+        "readiness_json_path": str(json_path),
         "exists": output_path.is_file(),
         "size": output_path.stat().st_size if output_path.is_file() else 0,
         "no_browser_started": True,
@@ -244,8 +259,13 @@ def verify_handoff_bundle(path: str | Path = "") -> dict[str, Any]:
             failures.append("no_submit_not_declared")
         if not manifest.get("operator_commands"):
             failures.append("operator_commands_missing")
+        verification_commands = "\n".join(str(item) for item in (manifest.get("verification_commands") or []))
+        if "reachops_issue_closure_audit.py --json" not in verification_commands:
+            failures.append("issue_closure_command_not_declared")
     if "init_reachops_acceptance_inputs_windows.ps1 -Json" not in commands_text:
         failures.append("init_command_missing")
+    if "reachops_issue_closure_audit.py --json" not in commands_text:
+        failures.append("issue_closure_command_missing")
     if "reachops_final_acceptance_gate.py --json" not in commands_text:
         failures.append("final_gate_command_missing")
     return {

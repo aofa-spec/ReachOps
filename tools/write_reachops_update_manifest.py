@@ -13,7 +13,29 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from ReachOps.security_signing import sign_payload
 from ReachOps.version import BUILD_CHANNEL, PRODUCT_ID, PRODUCT_NAME, VERSION
+
+MANIFEST_EVIDENCE_SCHEMA_VERSION = "reachops.update_manifest_evidence.v1"
+REQUIRED_FINAL_REPORT_FILES = [
+    "delivery_audit",
+    "operator_pressure",
+    "installer_smoke",
+    "ui_startup",
+    "activation_status",
+    "live_acceptance_status",
+    "authorization_handoff",
+    "live_validation",
+    "repository_cleanliness",
+    "windows_package_preflight",
+    "client_delivery",
+    "live_readiness",
+    "live_preflight",
+    "goal_status",
+    "live_submit",
+    "issue_closure",
+    "final_acceptance_gate",
+]
 
 
 def sha256_file(path: Path) -> str:
@@ -24,11 +46,19 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def build_manifest(installer: Path, version: str, build: str, channel: str, download_url: str = "") -> dict:
+def build_manifest(
+    installer: Path,
+    version: str,
+    build: str,
+    channel: str,
+    download_url: str = "",
+    signing_key_id: str = "",
+    signing_key: str = "",
+) -> dict:
     installer = installer.resolve()
     if not installer.exists():
         raise FileNotFoundError(str(installer))
-    return {
+    manifest = {
         "product_id": PRODUCT_ID,
         "product_name": PRODUCT_NAME,
         "version": version,
@@ -48,8 +78,33 @@ def build_manifest(installer: Path, version: str, build: str, channel: str, down
             "preserve_data": True,
             "preserve_activation_status": True,
         },
+        "rollback_policy": {
+            "allow_downgrade": False,
+            "minimum_version": "0.0.0",
+        },
+        "evidence": {
+            "schema_version": MANIFEST_EVIDENCE_SCHEMA_VERSION,
+            "release_evidence_required": True,
+            "acceptance_summary_required": True,
+            "final_package_check_required": True,
+            "final_acceptance_gate_required": True,
+            "issue_closure_required": True,
+            "release_evidence_dir": "reports/reachops_release",
+            "release_evidence_name": "reachops-release-evidence.json",
+            "rollback_note_name": "reachops-rollback-note.md",
+            "acceptance_summary_path": "reports/reachops_acceptance/acceptance_summary.json",
+            "required_report_files": list(REQUIRED_FINAL_REPORT_FILES),
+            "verification_commands": [
+                "python tools\\reachops_delivery_package_check.py --json",
+                "python tools\\reachops_issue_closure_audit.py --json",
+                "python tools\\reachops_final_acceptance_gate.py --json",
+            ],
+        },
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     }
+    if signing_key_id and signing_key:
+        manifest = sign_payload(manifest, signing_key_id, signing_key, signature_field="manifest_signature")
+    return manifest
 
 
 def parse_args():
@@ -59,6 +114,8 @@ def parse_args():
     parser.add_argument("--build", default="0")
     parser.add_argument("--channel", default=BUILD_CHANNEL)
     parser.add_argument("--download-url", default="")
+    parser.add_argument("--signing-key-id", default="")
+    parser.add_argument("--signing-key", default="")
     parser.add_argument("--output", default="", help="Defaults to dist/installer/reachops-update-manifest.json")
     return parser.parse_args()
 
@@ -67,7 +124,15 @@ def main() -> int:
     args = parse_args()
     installer = Path(args.installer)
     output = Path(args.output) if args.output else ROOT_DIR / "dist" / "installer" / "reachops-update-manifest.json"
-    manifest = build_manifest(installer, args.version, args.build, args.channel, args.download_url)
+    manifest = build_manifest(
+        installer,
+        args.version,
+        args.build,
+        args.channel,
+        args.download_url,
+        signing_key_id=args.signing_key_id,
+        signing_key=args.signing_key,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(str(output))

@@ -1,0 +1,49 @@
+{
+  "schema_version": "reachops.dependency_license_inventory.v1",
+  "product": "ReachOps",
+  "updated_at": "2026-07-14",
+  "lock_file": "requirements.lock",
+  "policy": {
+    "install_source": "requirements.lock",
+    "range_specifiers_allowed": false,
+    "license_required": true,
+    "commercial_review_required_for_unknown_license": true
+  },
+  "dependencies": [
+    {
+      "name": "requests",
+      "version": "2.33.0",
+      "license": "Apache-2.0",
+      "purpose": "HTTP client for local and remote service calls",
+      "runtime_scope": ["ci", "windows_client"]
+    },
+    {
+      "name": "Pillow",
+      "version": "10.4.0",
+      "license": "HPND",
+      "purpose": "Image handling for evidence and UI assets",
+      "runtime_scope": ["ci", "windows_client"]
+    },
+    {
+      "name": "selenium",
+      "version": "4.41.0",
+      "license": "Apache-2.0",
+      "purpose": "Browser automation for controlled TikTok connector execution",
+      "runtime_scope": ["ci", "windows_client"]
+    },
+    {
+      "name": "ixbrowser-local-api",
+      "version": "1.2.3",
+      "license": "MIT",
+      "purpose": "ixBrowser Local API integration",
+      "runtime_scope": ["ci", "windows_client"]
+    },
+    {
+      "name": "pyinstaller",
+      "version": "6.21.0",
+      "license": "GPL-2.0-or-later with bootloader exception",
+      "purpose": "Windows executable packaging",
+      "runtime_scope": ["windows_build"]
+    }
+  ]
+}

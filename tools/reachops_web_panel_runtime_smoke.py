@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import signal
 import sys
 import tempfile
@@ -213,6 +214,7 @@ def run_runtime_smoke() -> dict:
     old_goal_build_report = reachops_goal_delivery_runner.build_report
     old_goal_out_path = reachops_goal_delivery_runner.OUT_PATH
     old_goal_summary_path = reachops_goal_delivery_runner.SUMMARY_PATH
+    old_require_activation = os.environ.get("REACHOPS_REQUIRE_ACTIVATION")
 
     server = None
     thread = None
@@ -221,8 +223,9 @@ def run_runtime_smoke() -> dict:
     checks: dict[str, bool] = {}
     diagnostics: dict[str, object] = {}
 
-    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-", ignore_cleanup_errors=True) as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-") as tmpdir:
         try:
+            os.environ["REACHOPS_REQUIRE_ACTIVATION"] = "1"
             reachops_web_ui.DATA_DIR = Path(tmpdir)
             reachops_web_ui.WEB_SETTINGS_PATH = Path(tmpdir) / "config" / "reachops_web_settings.json"
             reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
@@ -286,6 +289,8 @@ def run_runtime_smoke() -> dict:
                     "client_gate_final_delivery_ready_is_not_overall_final_delivery": True,
                     "blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
                 },
+                "blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
+                "blocking_scope_count": 2,
                 "failed_checks": ["delivery_package:passed"],
                 "final_delivery_blockers": [
                     {
@@ -352,6 +357,8 @@ def run_runtime_smoke() -> dict:
                 "external_validation_pending": True,
                 "windows_final_artifacts_pending": True,
                 "pending_scopes": ["external_authorized_execution", "windows_final_artifacts"],
+                "goal_blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
+                "goal_blocking_scope_count": 2,
                 "product_capability_summary": {
                     "schema_version": "reachops.product_capability_summary.v1",
                     "ready": True,
@@ -415,6 +422,8 @@ def run_runtime_smoke() -> dict:
                         "client_gate_final_delivery_ready_is_not_overall_final_delivery": True,
                         "blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
                     },
+                    "blocking_scopes": ["windows_final_artifacts", "external_authorized_execution"],
+                    "blocking_scope_count": 2,
                     "final_delivery_blockers": [
                         {
                             "scope": "external_authorized_execution",
@@ -595,7 +604,7 @@ def run_runtime_smoke() -> dict:
                     "taskParams",
                     "taskActions",
                     "grid-template-columns:repeat(auto-fit,minmax(176px,1fr))",
-                    "grid-template-columns:minmax(140px,.9fr)",
+                    "grid-template-columns:minmax(180px,1fr)",
                     "grid-template-columns:repeat(auto-fit,minmax(106px,1fr))",
                     "本地服务连接失败",
                     "$('runState').textContent = 'OFFLINE'",
@@ -624,15 +633,18 @@ def run_runtime_smoke() -> dict:
             launcher_tests = (ROOT_DIR / "tests" / "test_launcher.py").read_text(encoding="utf-8")
             checks["client_launch_entrypoints_are_unified_local_console"] = (
                 "from ReachOps.launcher import main" in app_entry
+                and "return _launch_legacy_tk_client()" in launcher_source
                 and "return _launch_web_client()" in launcher_source
-                and "legacy_requested = \"--legacy-tk\" in args or os.environ.get(\"REACHOPS_LEGACY_TK\") == \"1\""
+                and "web_requested = \"--web\" in args or os.environ.get(\"REACHOPS_WEB_CLIENT\") == \"1\""
                 in launcher_source
                 and "回退到原生 Tk 客户端" not in launcher_source
-                and "exec ./启动ReachOps统一WebUI.command" in local_client_command
+                and "ReachOps 本地客户端启动中" in local_client_command
+                and "ReachOpsApp.py" in local_client_command
                 and "tools/reachops_mac_self_check.py --start-web" in unified_web_command
-                and "ReachOps 客户端入口已统一到本地客户端控制台" in native_mac_command
-                and "ReachOpsApp.py --legacy-tk" in native_mac_command
-                and "test_default_entry_starts_unified_web_client" in launcher_tests
+                and "ReachOps 原生客户端 UI" in native_mac_command
+                and "ReachOpsApp.py" in native_mac_command
+                and "test_default_entry_starts_native_tk_client" in launcher_tests
+                and "test_web_client_requires_explicit_flag" in launcher_tests
                 and "test_missing_web_launcher_does_not_silently_fallback_to_legacy_tk" in launcher_tests
             )
 
@@ -673,7 +685,6 @@ def run_runtime_smoke() -> dict:
                 and preview_decision.get("status") == "blocked"
                 and preview_decision.get("start_allowed") is False
                 and "target_required" in (preview_decision.get("blockers") or [])
-                and "profile_group_list_not_ready" in (preview_decision.get("blockers") or [])
                 and preview_decision.get("no_ai_token_used") is True
                 and preview_decision.get("no_browser_started") is True
                 and preview_decision.get("no_submit") is True
@@ -684,7 +695,6 @@ def run_runtime_smoke() -> dict:
                 and preview_forecast.get("status") == "blocked"
                 and preview_forecast.get("start_allowed") is False
                 and "target_required" in (preview_forecast.get("predicted_blockers") or [])
-                and "profile_group_list_not_ready" in (preview_forecast.get("predicted_blockers") or [])
                 and any((row or {}).get("gate") == "live_action_authorization" for row in (preview_forecast.get("risk_gates") or []))
                 and any((row or {}).get("state") == "UNKNOWN_PAGE_STATE" for row in (preview_forecast.get("repair_routes") or []))
                 and "run_session_state_history" in (preview_forecast.get("evidence_requirements") or [])
@@ -969,19 +979,29 @@ def run_runtime_smoke() -> dict:
                     "error": "",
                 }
 
+            old_group_cache = reachops_web_ui.GROUP_CACHE
             reachops_web_ui.load_groups = fake_incomplete_group_counts
+            reachops_web_ui.GROUP_CACHE = {
+                **fake_incomplete_group_counts(refresh=True),
+                "loaded_at": time.time(),
+                "stale_cache": False,
+                "background_refresh": False,
+            }
             status, incomplete_group_counts = _json_request(
-                base + "/api/start",
-                {"target": "anti aging serum", "group": "Canada"},
-                expect_error=400,
+                base + "/api/start-preview",
+                {"target": "anti aging serum", "group": "United States"},
             )
-            checks["start_rejects_incomplete_group_counts"] = (
-                status == 400
-                and incomplete_group_counts.get("error") == "profile_group_counts_incomplete"
-                and (incomplete_group_counts.get("run_session") or {}).get("path")
-                and (incomplete_group_counts.get("execution_plan") or {}).get("path")
+            checks["start_preview_allows_unknown_group_count_for_runtime_preflight"] = (
+                status == 200
+                and incomplete_group_counts.get("start_allowed") is True
+                and incomplete_group_counts.get("profile_group_count_known") is False
+                and incomplete_group_counts.get("profile_group_runtime_count_required") is True
+                and "实时读取账号列表" in str(incomplete_group_counts.get("profile_group_count_warning") or "")
+                and incomplete_group_counts.get("no_browser_started") is True
+                and incomplete_group_counts.get("no_submit") is True
                 and not captured.get("cmd")
             )
+            reachops_web_ui.GROUP_CACHE = old_group_cache
             reachops_web_ui.load_groups = original_fake_load_groups
 
             status, unconfirmed_live = _json_request(
@@ -1974,6 +1994,10 @@ def run_runtime_smoke() -> dict:
                 and (final_status.get("mvp_acceptance") or {}).get("mvp_local_ready") is True
                 and (final_status.get("goal_delivery") or {}).get("windows_build_ready") is True
                 and (final_status.get("goal_delivery") or {}).get("final_delivery_ready") is False
+                and (final_status.get("goal_delivery") or {}).get("blocking_scope_count") == 2
+                and final_status.get("goal_blocking_scope_count") == 2
+                and set(final_status.get("goal_blocking_scopes") or [])
+                == {"external_authorized_execution", "windows_final_artifacts"}
                 and ((final_status.get("goal_delivery") or {}).get("delivery_boundary") or {}).get("overall_final_delivery_scope_ready") is False
                 and (final_status.get("goal_delivery") or {}).get("summary_path") == str(reachops_web_ui.GOAL_DELIVERY_SUMMARY_PATH)
                 and {row.get("scope") for row in ((final_status.get("goal_delivery") or {}).get("final_delivery_blockers") or [])}
@@ -2253,6 +2277,10 @@ def run_runtime_smoke() -> dict:
             reachops_web_ui.GOAL_DELIVERY_SUMMARY_PATH = old_web_goal_summary_path
             reachops_web_ui.TWO_PHASE_MATRIX_JSON_PATH = old_web_two_phase_json_path
             reachops_web_ui.TWO_PHASE_MATRIX_MD_PATH = old_web_two_phase_md_path
+            if old_require_activation is None:
+                os.environ.pop("REACHOPS_REQUIRE_ACTIVATION", None)
+            else:
+                os.environ["REACHOPS_REQUIRE_ACTIVATION"] = old_require_activation
             if old_ixbrowser_env is None:
                 reachops_web_ui.os.environ.pop("REACHOPS_IXBROWSER_API_PORT", None)
             else:

@@ -308,7 +308,7 @@ def scope_log_lines(batch: dict, log_lines: list[str]) -> list[str]:
 
 PROFILE_DETAIL_RE = re.compile(
     r"profile=(?P<profile>\S+)\s+status=(?P<status>\S+)\s+error=(?P<error>\S+)\s+"
-    r"evidence=(?P<evidence>\S+)"
+    r"evidence=(?P<evidence>.*?)"
     r"(?:\s+close_action=(?P<close_action>\S+)\s+operator_hint=(?P<operator_hint>.*?))?"
     r"\s+"
     r"message=(?P<message>.*)$"
@@ -564,6 +564,25 @@ def dedupe_profile_remediation_details(details: list[dict]) -> list[dict]:
     return [{key: value for key, value in by_profile[profile_id].items() if key != "_order"} for profile_id in order]
 
 
+def account_operator_steps(error_groups: list[dict]) -> list[str]:
+    errors = {str(row.get("error") or "").strip() for row in error_groups or [] if int(row.get("count") or 0) > 0}
+    steps: list[str] = []
+    if "IXBROWSER_KERNEL_MISMATCH" in errors:
+        steps.append("处理 IXBROWSER_KERNEL_MISMATCH：把对应配置内核改为 ixBrowser 当前支持版本 138，或移出执行分组。")
+    if "LOGIN_REQUIRED" in errors:
+        steps.append("处理 LOGIN_REQUIRED：手动打开配置完成 TikTok 登录；无法登录则移入封禁/不可用分组。")
+    if "PROFILE_PREFLIGHT_TIMEOUT" in errors or "PAGE_OPEN_FAILED" in errors:
+        present = "/".join(error for error in ("PROFILE_PREFLIGHT_TIMEOUT", "PAGE_OPEN_FAILED") if error in errors)
+        steps.append(f"处理 {present}：确认代理、TikTok 页面加载速度和账号稳定性，必要时降低并发或移出本轮执行。")
+    for row in error_groups or []:
+        error = str(row.get("error") or "").strip()
+        if not error or error in {"IXBROWSER_KERNEL_MISMATCH", "LOGIN_REQUIRED", "PROFILE_PREFLIGHT_TIMEOUT", "PAGE_OPEN_FAILED"}:
+            continue
+        steps.append(f"处理 {error}：{recommended_profile_action(error)}")
+    steps.append("至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑开始获客。")
+    return steps
+
+
 def build_account_repair_plan(batch: dict, details: list[dict], preflight_errors: dict | None = None) -> dict:
     groups: dict[str, dict] = {}
     for item in details or []:
@@ -610,18 +629,30 @@ def build_account_repair_plan(batch: dict, details: list[dict], preflight_errors
         else:
             bucket.setdefault("count_source", "profile_preflight_detail")
     ordered = sorted(groups.values(), key=lambda row: (remediation_error_priority(row["error"]), row["error"]))
+    unique_profile_ids: list[str] = []
+    total_error_events = 0
+    summary_only_error_count = 0
+    for row in ordered:
+        profile_ids = [str(item) for item in (row.get("profile_ids") or []) if str(item).strip()]
+        profile_id_count = len(profile_ids)
+        row["profile_ids_total"] = profile_id_count
+        row_count = int(row.get("count") or 0)
+        total_error_events += row_count
+        missing_profile_id_count = max(0, row_count - profile_id_count)
+        row["summary_only_count"] = missing_profile_id_count
+        summary_only_error_count += missing_profile_id_count
+        for profile_id in profile_ids:
+            if profile_id not in unique_profile_ids:
+                unique_profile_ids.append(profile_id)
     return {
         "batch_id": str(batch.get("id") or ""),
         "batch_status": str(batch.get("status") or ""),
         "profile_group": str(batch.get("profile_group") or ""),
-        "total_unique_profiles_by_error": sum(int(row.get("count") or 0) for row in ordered),
+        "total_unique_profiles_by_error": len(unique_profile_ids),
+        "total_error_events_by_error": total_error_events,
+        "summary_only_error_count": summary_only_error_count,
         "groups": ordered,
-        "operator_steps": [
-            "先处理 IXBROWSER_KERNEL_MISMATCH：把对应配置内核改为 ixBrowser 当前支持版本 138，或移出执行分组。",
-            "再处理 LOGIN_REQUIRED：手动打开配置完成 TikTok 登录；无法登录则移入封禁/不可用分组。",
-            "最后处理 PROFILE_PREFLIGHT_TIMEOUT/PAGE_OPEN_FAILED：确认代理和 TikTok 页面加载稳定，必要时降低并发或移出本轮执行。",
-            "至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑开始获客。",
-        ],
+        "operator_steps": account_operator_steps(ordered),
         "acceptance_after_repair": [
             "reachops_client_delivery_check.py --json 返回 status=passed。",
             "profile_available>=1。",
@@ -637,6 +668,9 @@ def render_account_repair_plan_markdown(plan: dict, json_path: Path) -> str:
         f"- 批次: `{plan.get('batch_id') or '-'}`",
         f"- 状态: `{plan.get('batch_status') or '-'}`",
         f"- 分组: `{plan.get('profile_group') or '-'}`",
+        f"- 带 profile_id 的唯一账号数: `{int(plan.get('total_unique_profiles_by_error') or 0)}`",
+        f"- 错误事件总数: `{int(plan.get('total_error_events_by_error') or plan.get('total_unique_profiles_by_error') or 0)}`",
+        f"- 仅汇总、缺少 profile_id 的错误数: `{int(plan.get('summary_only_error_count') or 0)}`",
         f"- JSON: `{json_path}`",
         "",
         "## 处理顺序",
@@ -644,11 +678,21 @@ def render_account_repair_plan_markdown(plan: dict, json_path: Path) -> str:
     ]
     for step in plan.get("operator_steps") or []:
         lines.append(f"- {step}")
-    lines.extend(["", "## 错误分组", "", "| error | count | profile_ids | 处理动作 |", "| --- | ---: | --- | --- |"])
+    lines.extend(
+        [
+            "",
+            "## 错误分组",
+            "",
+            "| error | count | profile_ids_total | summary_only | profile_ids | 处理动作 |",
+            "| --- | ---: | ---: | ---: | --- | --- |",
+        ]
+    )
     for row in plan.get("groups") or []:
         profile_ids = ", ".join(f"`{item}`" for item in (row.get("profile_ids") or []))
         lines.append(
-            f"| `{row.get('error') or ''}` | {int(row.get('count') or 0)} | {profile_ids} | {row.get('recommended_action') or ''} |"
+            f"| `{row.get('error') or ''}` | {int(row.get('count') or 0)} | "
+            f"{int(row.get('profile_ids_total') or len(row.get('profile_ids') or []))} | "
+            f"{int(row.get('summary_only_count') or 0)} | {profile_ids} | {row.get('recommended_action') or ''} |"
         )
     lines.extend(["", "## 修复后复测标准", ""])
     for item in plan.get("acceptance_after_repair") or []:
@@ -753,6 +797,7 @@ def write_remediation_report(
         index_path,
         account_plan_md_path=account_plan_md_path,
         account_plan_json_path=account_plan_json_path,
+        account_plan=account_plan,
     )
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     latest_manifest_path = report_dir / "latest_acceptance_manifest.json"
@@ -799,9 +844,10 @@ def build_acceptance_manifest(
     *,
     account_plan_md_path: Path | None = None,
     account_plan_json_path: Path | None = None,
+    account_plan: dict | None = None,
 ) -> dict:
     root = ROOT_DIR
-    return {
+    manifest = {
         "batch_id": str(batch.get("id") or ""),
         "batch_status": str(batch.get("status") or ""),
         "profile_group": str(batch.get("profile_group") or ""),
@@ -846,6 +892,27 @@ def build_acceptance_manifest(
             for row in rows
         ],
     }
+    if account_plan:
+        manifest["account_repair_summary"] = {
+            "batch_id": str(account_plan.get("batch_id") or ""),
+            "batch_status": str(account_plan.get("batch_status") or ""),
+            "profile_group": str(account_plan.get("profile_group") or ""),
+            "total_unique_profiles_by_error": int(account_plan.get("total_unique_profiles_by_error") or 0),
+            "total_error_events_by_error": int(account_plan.get("total_error_events_by_error") or 0),
+            "summary_only_error_count": int(account_plan.get("summary_only_error_count") or 0),
+            "error_groups": [
+                {
+                    "error": str(row.get("error") or ""),
+                    "count": int(row.get("count") or 0),
+                    "profile_ids_total": int(row.get("profile_ids_total") or len(row.get("profile_ids") or [])),
+                    "summary_only_count": int(row.get("summary_only_count") or 0),
+                    "count_source": str(row.get("count_source") or "profile_preflight_detail"),
+                    "recommended_action": str(row.get("recommended_action") or ""),
+                }
+                for row in account_plan.get("groups") or []
+            ],
+        }
+    return manifest
 
 
 def build_acceptance_markdown(batch: dict, rows: list[dict], csv_path: Path, json_path: Path) -> str:

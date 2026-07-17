@@ -90,6 +90,7 @@ def verify_summary(
     live_submit = summary.get("live_submit") or {}
     goal_status = summary.get("goal_status") or {}
     final_acceptance_gate = summary.get("final_acceptance_gate") or {}
+    issue_closure = summary.get("issue_closure") or {}
     preflight_environment = (
         live_preflight.get("environment_diagnostics")
         if isinstance(live_preflight.get("environment_diagnostics"), dict)
@@ -329,6 +330,14 @@ def verify_summary(
         summary_path,
         authorization_handoff.get("json_path") if isinstance(authorization_handoff, dict) else "",
     )
+    authorization_handoff_readiness_report = report_path_status(
+        summary_path,
+        authorization_handoff.get("readiness_report_path") if isinstance(authorization_handoff, dict) else "",
+    )
+    authorization_handoff_readiness_json = report_path_status(
+        summary_path,
+        authorization_handoff.get("readiness_json_path") if isinstance(authorization_handoff, dict) else "",
+    )
     if status == STATUS_PASSED and not authorization_handoff:
         failures.append("authorization_handoff_missing")
     if authorization_handoff:
@@ -345,6 +354,10 @@ def verify_summary(
             failures.append("authorization_handoff_bundle_path_missing")
         if status == STATUS_PASSED and not str(authorization_handoff.get("json_path") or "").strip():
             failures.append("authorization_handoff_json_path_missing")
+        if status == STATUS_PASSED and not str(authorization_handoff.get("readiness_report_path") or "").strip():
+            failures.append("authorization_handoff_readiness_report_path_missing")
+        if status == STATUS_PASSED and not str(authorization_handoff.get("readiness_json_path") or "").strip():
+            failures.append("authorization_handoff_readiness_json_path_missing")
         if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("json_path") or "").strip():
             if not authorization_handoff_json["exists"]:
                 failures.append("authorization_handoff_json_missing")
@@ -352,6 +365,20 @@ def verify_summary(
                 failures.append("authorization_handoff_json_empty")
             elif not bool(authorization_handoff_json.get("inside_summary_dir")):
                 failures.append("authorization_handoff_json_outside_summary_dir")
+        if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("readiness_report_path") or "").strip():
+            if not authorization_handoff_readiness_report["exists"]:
+                failures.append("authorization_handoff_readiness_report_missing")
+            elif int(authorization_handoff_readiness_report.get("size") or 0) <= 0:
+                failures.append("authorization_handoff_readiness_report_empty")
+            elif not bool(authorization_handoff_readiness_report.get("inside_summary_dir")):
+                failures.append("authorization_handoff_readiness_report_outside_summary_dir")
+        if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("readiness_json_path") or "").strip():
+            if not authorization_handoff_readiness_json["exists"]:
+                failures.append("authorization_handoff_readiness_json_missing")
+            elif int(authorization_handoff_readiness_json.get("size") or 0) <= 0:
+                failures.append("authorization_handoff_readiness_json_empty")
+            elif not bool(authorization_handoff_readiness_json.get("inside_summary_dir")):
+                failures.append("authorization_handoff_readiness_json_outside_summary_dir")
     else:
         authorization_handoff_status = ""
 
@@ -558,6 +585,54 @@ def verify_summary(
     else:
         final_gate_json = report_path_status(summary_path, "")
 
+    issue_closure_json = report_path_status(
+        summary_path,
+        str(issue_closure.get("json_path") or "") if isinstance(issue_closure, dict) else "",
+    )
+    if status == STATUS_PASSED and not issue_closure:
+        failures.append("issue_closure_missing")
+        passed = False
+    if issue_closure:
+        issue_summary = issue_closure.get("summary") if isinstance(issue_closure.get("summary"), dict) else {}
+        issue_github = issue_closure.get("github_issues") if isinstance(issue_closure.get("github_issues"), dict) else {}
+        if not bool(issue_closure.get("passed")):
+            failures.append("issue_closure_not_passed")
+            passed = False
+        if int(issue_summary.get("issues_total") or 0) != 7:
+            failures.append("issue_closure_issue_count_invalid")
+            passed = False
+        if int(issue_summary.get("acceptance_criteria_total") or 0) != 53:
+            failures.append("issue_closure_criteria_count_invalid")
+            passed = False
+        if int(issue_summary.get("acceptance_criteria_unclassified") or 0) != 0:
+            failures.append("issue_closure_unclassified_criteria")
+            passed = False
+        if status == STATUS_PASSED and int(issue_summary.get("acceptance_criteria_external_pending") or 0) != 0:
+            failures.append("issue_closure_external_pending")
+            passed = False
+        if status == STATUS_PASSED and int(issue_summary.get("external_pending_count") or 0) != 0:
+            failures.append("issue_closure_external_pending_items")
+            passed = False
+        if status == STATUS_PASSED and issue_closure.get("external_acceptance_pending"):
+            failures.append("issue_closure_external_acceptance_pending")
+            passed = False
+        if status == STATUS_PASSED and issue_github.get("closure_requires_external_validation") is not False:
+            failures.append("issue_closure_requires_external_validation")
+            passed = False
+        if status == STATUS_PASSED and not str(issue_closure.get("json_path") or "").strip():
+            failures.append("issue_closure_json_path_missing")
+            passed = False
+        if status == STATUS_PASSED and summary_path and str(issue_closure.get("json_path") or "").strip():
+            if not issue_closure_json["exists"]:
+                failures.append("issue_closure_json_missing")
+                passed = False
+            elif int(issue_closure_json.get("size") or 0) <= 0:
+                failures.append("issue_closure_json_empty")
+                passed = False
+            elif not bool(issue_closure_json.get("inside_summary_dir")):
+                failures.append("issue_closure_json_outside_summary_dir")
+                passed = False
+
     return {
         "passed": passed,
         "status": status,
@@ -682,6 +757,14 @@ def verify_summary(
             "no_submit": bool(authorization_handoff.get("no_submit", True)),
             "bundle_path": str(authorization_handoff.get("bundle_path") or ""),
             "readiness_status": str(authorization_handoff.get("readiness_status") or ""),
+            "readiness_report_path": str(authorization_handoff.get("readiness_report_path") or ""),
+            "readiness_report_exists": bool(authorization_handoff_readiness_report.get("exists")),
+            "readiness_report_size": int(authorization_handoff_readiness_report.get("size") or 0),
+            "readiness_report_inside_summary_dir": bool(authorization_handoff_readiness_report.get("inside_summary_dir")),
+            "readiness_json_path": str(authorization_handoff.get("readiness_json_path") or ""),
+            "readiness_json_exists": bool(authorization_handoff_readiness_json.get("exists")),
+            "readiness_json_size": int(authorization_handoff_readiness_json.get("size") or 0),
+            "readiness_json_inside_summary_dir": bool(authorization_handoff_readiness_json.get("inside_summary_dir")),
             "json_path": str(authorization_handoff.get("json_path") or ""),
             "json_exists": bool(authorization_handoff_json.get("exists")),
             "json_size": int(authorization_handoff_json.get("size") or 0),
@@ -717,6 +800,19 @@ def verify_summary(
             "json_exists": bool(final_gate_json.get("exists")),
             "json_size": int(final_gate_json.get("size") or 0),
             "json_inside_summary_dir": bool(final_gate_json.get("inside_summary_dir")),
+        },
+        "issue_closure": {
+            "status": str(issue_closure.get("status") or ""),
+            "passed": bool(issue_closure.get("passed")),
+            "issues_total": int(((issue_closure.get("summary") or {}) if isinstance(issue_closure.get("summary"), dict) else {}).get("issues_total") or 0),
+            "acceptance_criteria_total": int(((issue_closure.get("summary") or {}) if isinstance(issue_closure.get("summary"), dict) else {}).get("acceptance_criteria_total") or 0),
+            "acceptance_criteria_external_pending": int(((issue_closure.get("summary") or {}) if isinstance(issue_closure.get("summary"), dict) else {}).get("acceptance_criteria_external_pending") or 0),
+            "external_pending_count": int(((issue_closure.get("summary") or {}) if isinstance(issue_closure.get("summary"), dict) else {}).get("external_pending_count") or 0),
+            "closure_requires_external_validation": (issue_closure.get("github_issues") or {}).get("closure_requires_external_validation") if isinstance(issue_closure.get("github_issues"), dict) else None,
+            "json_path": str(issue_closure.get("json_path") or ""),
+            "json_exists": bool(issue_closure_json.get("exists")),
+            "json_size": int(issue_closure_json.get("size") or 0),
+            "json_inside_summary_dir": bool(issue_closure_json.get("inside_summary_dir")),
         },
     }
 

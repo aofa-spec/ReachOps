@@ -141,8 +141,9 @@ ReachOps/docs/REACHOPS_PHASE2_WINDOWS_AUTH_HANDOFF.md
 - `tools/reachops_goal_status_report.py --json` 返回 `passed`，且 `effective_pending_external_validation=0`。
 - `tools/reachops_client_delivery_check.py --json` 返回 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`。
 - `tools/reachops_delivery_package_check.py --json` 返回 `status=passed`、`final_delivery_ready=true`。
-- `tools/reachops_final_acceptance_gate.py --json` 返回 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`。
-- Windows 最终包存在并可校验：`ReachOps.exe`、安装包、update manifest、`acceptance_summary.json`、`windows_package_preflight.json`、`authorization_handoff_payload.json`、`latest_reachops_authorization_handoff.zip`、`final_acceptance_gate.json`。
+- `tools/reachops_issue_closure_audit.py --json` 返回 Issues #1-#7 全部本地合同通过、`acceptance_criteria_external_pending=0`、`external_pending_count=0`、`closure_requires_external_validation=false`。
+- `tools/reachops_final_acceptance_gate.py --json` 返回 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`，且包含通过的 `commercial_issue_closure:closed` 检查。
+- Windows 最终包存在并可校验：`ReachOps.exe`、安装包、update manifest、`acceptance_summary.json`、`windows_package_preflight.json`、`issue_closure_payload.json`、`authorization_handoff_payload.json`、`latest_reachops_authorization_handoff.zip`、`final_acceptance_gate.json`。
 - Windows acceptance 必须生成授权交接证据：`latest_live_acceptance_readiness.md`、`latest_live_acceptance_readiness.json`、`authorization_handoff_payload.json`、`latest_reachops_authorization_handoff.zip`。
 - 授权真实提交证据完整，评论动作必须证明 `submitted_text` 和 `comment_visible_confirmed`。
 
@@ -167,6 +168,7 @@ powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1
 powershell -ExecutionPolicy Bypass -File tools\init_reachops_acceptance_inputs_windows.ps1
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.ps1 -InputFile .\tools\reachops_acceptance_inputs.local.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets
 python tools\reachops_delivery_package_check.py --json
+python tools\reachops_issue_closure_audit.py --json
 python tools\reachops_final_acceptance_gate.py --json
 ```
 
@@ -200,6 +202,8 @@ Windows acceptance 会把授权交接结果写入 `acceptance_summary.authorizat
 - `latest_reachops_authorization_handoff.zip`
 - `latest_live_acceptance_readiness.md`
 - `latest_live_acceptance_readiness.json`
+- `issue_closure_payload.json`
+- `final_acceptance_gate.json`
 
 当前 Mac 侧已生成并验证通过的安全交接包：
 
@@ -209,7 +213,7 @@ reports/reachops/mac_gui/runtime/reports/acceptance_remediation/latest_reachops_
 
 该包排除了 `tools/reachops_acceptance_inputs.local.ps1`、真实激活状态和授权目标值，只用于 Windows acceptance 准备，不等同于授权真实提交完成。
 
-`tools/reachops_delivery_package_check.py --json` 会把 `authorization_handoff` 当作最终包必备报告项；缺失时最终包不能通过。
+`tools/reachops_delivery_package_check.py --json` 会把 `authorization_handoff` 和 `issue_closure` 当作最终包必备报告项；缺失时最终包不能通过。最终门禁还必须通过 `commercial_issue_closure:closed`，不能在 Issues #1-#7 仍有外部验收挂起时宣称完成。
 
 `--allow-missing-final-gate` 只能用于 Windows acceptance 脚本 bootstrap 阶段；带有 `bootstrap_only=true` 的结果不是最终交付证据。
 

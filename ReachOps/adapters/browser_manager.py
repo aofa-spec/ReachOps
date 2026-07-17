@@ -33,6 +33,9 @@ class BrowserDriverAdapter(Protocol):
     def close_profile(self, client: Any, profile_id: str):
         ...
 
+    def close_profile_by_id(self, profile_id: str):
+        ...
+
 
 class IxBrowserLocalAdapter:
     """Standalone ixBrowser adapter for ReachOps.
@@ -102,6 +105,17 @@ class IxBrowserLocalAdapter:
         try:
             if client is not None and profile_id:
                 client.close_profile(self._normalize_profile_id(profile_id))
+        except Exception:
+            pass
+
+    def close_profile_by_id(self, profile_id: str):
+        profile_id = str(profile_id or "").strip()
+        if not profile_id:
+            return
+        try:
+            from ixbrowser_local_api import IXBrowserClient
+
+            self.close_profile(IXBrowserClient(), profile_id)
         except Exception:
             pass
 
@@ -338,6 +352,15 @@ class WorkbenchBrowserAdapter:
             instance_id = self._profile_to_instance.get(profile_id, "")
         if instance_id:
             self.release(instance_id, reason)
+
+    def force_close_profile(self, profile_id: str, reason: str):
+        profile_id = str(profile_id or "").strip()
+        if not profile_id:
+            return
+        self.release_profile(profile_id, reason)
+        close_by_id = getattr(self.driver_adapter, "close_profile_by_id", None)
+        if callable(close_by_id):
+            close_by_id(profile_id)
 
     def last_error(self) -> str:
         return self._last_error

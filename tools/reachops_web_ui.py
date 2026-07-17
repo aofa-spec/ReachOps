@@ -43,6 +43,10 @@ from ReachOps.run_session import (
     write_run_session,
 )
 from ReachOps.run_recovery import recover_interrupted_run_session
+from tools.reachops_runtime_process_audit import (
+    RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+    build_runtime_process_audit,
+)
 
 DATA_DIR = ROOT_DIR / "reports/reachops/mac_gui/runtime"
 LOG_PATH = DATA_DIR / "logs/growth_ops_runtime.log"
@@ -51,9 +55,19 @@ PROGRESS_PATH = DATA_DIR / "reachops_web_ui_progress.json"
 HEARTBEAT_PATH = DATA_DIR / "reachops_web_ui_heartbeat.json"
 LATEST_EXECUTION_PLAN_PATH = DATA_DIR / "plans/latest_execution_plan.json"
 LATEST_RUN_SESSION_PATH = DATA_DIR / "runs/latest_run_session.json"
+DEFAULT_DATA_DIR = DATA_DIR
+DEFAULT_LOG_PATH = LOG_PATH
+DEFAULT_PROGRESS_PATH = PROGRESS_PATH
+DEFAULT_HEARTBEAT_PATH = HEARTBEAT_PATH
+DEFAULT_RESULT_PATH = RESULT_PATH
+DEFAULT_LATEST_EXECUTION_PLAN_PATH = LATEST_EXECUTION_PLAN_PATH
+DEFAULT_LATEST_RUN_SESSION_PATH = LATEST_RUN_SESSION_PATH
 LATEST_EVIDENCE_BUNDLE_PATH = DATA_DIR / "evidence_bundles/latest_evidence_bundle.json"
 LATEST_EVIDENCE_BUNDLE_MD_PATH = DATA_DIR / "evidence_bundles/latest_evidence_bundle.md"
+DEFAULT_LATEST_EVIDENCE_BUNDLE_PATH = LATEST_EVIDENCE_BUNDLE_PATH
+DEFAULT_LATEST_EVIDENCE_BUNDLE_MD_PATH = LATEST_EVIDENCE_BUNDLE_MD_PATH
 CONTROL_DIR = DATA_DIR / "control"
+DEFAULT_CONTROL_DIR = CONTROL_DIR
 DEFAULT_TARGET = ""
 WEB_UI_VERSION = "reachops-unified-ui-2026-07-05-v20-ai-machine-actions"
 CLIENT_DISPLAY_VERSION = "客户端 v20"
@@ -87,6 +101,8 @@ GROUP_REFRESH_LOG_SIGNATURE = ""
 IXBROWSER_API_PORT_OVERRIDE = ""
 WEB_SETTINGS_PATH = DATA_DIR / "config/reachops_web_settings.json"
 LATEST_GROUPS_PATH = DATA_DIR / "config/latest_ixbrowser_groups.json"
+DEFAULT_WEB_SETTINGS_PATH = WEB_SETTINGS_PATH
+DEFAULT_LATEST_GROUPS_PATH = LATEST_GROUPS_PATH
 GROUP_REFRESH_TIMEOUT_SECONDS = 10.0
 GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS = 20.0
 GROUP_COUNT_RESOLVE_WORKERS = 1
@@ -97,11 +113,17 @@ GOAL_DELIVERY_REPORT_PATH = DATA_DIR / "reports/acceptance_remediation/latest_go
 GOAL_DELIVERY_SUMMARY_PATH = DATA_DIR / "reports/acceptance_remediation/latest_goal_delivery_summary.md"
 TWO_PHASE_MATRIX_JSON_PATH = DATA_DIR / "reports/acceptance_remediation/latest_two_phase_acceptance_matrix.json"
 TWO_PHASE_MATRIX_MD_PATH = DATA_DIR / "reports/acceptance_remediation/latest_two_phase_acceptance_matrix.md"
+DEFAULT_MVP_ACCEPTANCE_SUMMARY_PATH = MVP_ACCEPTANCE_SUMMARY_PATH
+DEFAULT_GOAL_DELIVERY_REPORT_PATH = GOAL_DELIVERY_REPORT_PATH
+DEFAULT_GOAL_DELIVERY_SUMMARY_PATH = GOAL_DELIVERY_SUMMARY_PATH
+DEFAULT_TWO_PHASE_MATRIX_JSON_PATH = TWO_PHASE_MATRIX_JSON_PATH
+DEFAULT_TWO_PHASE_MATRIX_MD_PATH = TWO_PHASE_MATRIX_MD_PATH
 FINAL_VERIFICATION_COMMANDS = [
     "python tools\\reachops_client_delivery_check.py --json",
     "python tools\\reachops_goal_delivery_runner.py --json",
     "python tools\\reachops_two_phase_acceptance_matrix.py --refresh --write --require-final --json",
     "python tools\\reachops_delivery_package_check.py --json",
+    "python tools\\reachops_issue_closure_audit.py --json",
     "python tools\\reachops_final_acceptance_gate.py --json",
 ]
 
@@ -144,10 +166,11 @@ def read_text_tail(path: Path, limit: int = 4000) -> str:
 
 
 def read_runtime_progress_payload() -> dict:
-    if not PROGRESS_PATH.is_file():
+    progress_path = current_progress_path()
+    if not progress_path.is_file():
         return {}
     try:
-        payload = json.loads(PROGRESS_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(progress_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     if not isinstance(payload, dict):
@@ -156,12 +179,13 @@ def read_runtime_progress_payload() -> dict:
 
 
 def read_runtime_heartbeat_payload() -> dict:
-    if not HEARTBEAT_PATH.is_file():
+    heartbeat_path = current_heartbeat_path()
+    if not heartbeat_path.is_file():
         return {}
     try:
-        payload = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(heartbeat_path.read_text(encoding="utf-8"))
     except Exception:
-        return {"status": "read_failed", "path": str(HEARTBEAT_PATH)}
+        return {"status": "read_failed", "path": str(heartbeat_path)}
     if not isinstance(payload, dict):
         return {}
     return payload
@@ -184,27 +208,51 @@ def build_runtime_heartbeat_payload() -> dict:
     run_age = int(time.time() - RUN_STARTED_AT) if RUN_STARTED_AT and running else 0
     session = read_current_run_session()
     terminal = str((session or {}).get("state") or "") in TERMINAL_RUN_SESSION_STATES
-    missing_stale = bool(running and not heartbeat and run_age > HEARTBEAT_STALE_SECONDS and not terminal)
+    current_session_id = str((session or {}).get("session_id") or "")
+    current_session_path = str(run_session_path_for(session)) if session else ""
+    heartbeat_session_id = str(heartbeat.get("run_session_id") or "")
+    heartbeat_session_path = str(heartbeat.get("run_session_path") or "")
+    heartbeat_matches_session = bool(
+        heartbeat
+        and (
+            (current_session_id and heartbeat_session_id == current_session_id)
+            or (current_session_path and heartbeat_session_path == current_session_path)
+        )
+    )
+    heartbeat_superseded = bool(heartbeat and current_session_id and not heartbeat_matches_session)
+    effective_heartbeat = heartbeat if (not heartbeat or heartbeat_matches_session) else {}
+    effective_age = age if effective_heartbeat else None
+    missing_stale = bool(
+        running
+        and not terminal
+        and not effective_heartbeat
+        and run_age > HEARTBEAT_STALE_SECONDS
+    )
     stale = bool(
         running
         and not terminal
         and (
             missing_stale
-            or (age is not None and age > HEARTBEAT_STALE_SECONDS)
+            or (effective_age is not None and effective_age > HEARTBEAT_STALE_SECONDS)
         )
     )
     return {
         "schema_version": "reachops.web_runtime_heartbeat.v1",
-        "status": "missing_stale" if missing_stale else ("missing" if not heartbeat else ("stale" if stale else "healthy")),
+        "status": "missing_stale" if missing_stale else ("superseded" if heartbeat_superseded else ("missing" if not heartbeat else ("stale" if stale else "healthy"))),
         "running": running,
         "stale": stale,
         "stale_after_seconds": HEARTBEAT_STALE_SECONDS,
-        "age_seconds": age,
+        "age_seconds": effective_age,
+        "raw_age_seconds": age,
         "run_age_seconds": run_age,
         "heartbeat": heartbeat,
+        "heartbeat_matches_session": heartbeat_matches_session,
+        "heartbeat_superseded": heartbeat_superseded,
+        "heartbeat_run_session_id": heartbeat_session_id,
+        "heartbeat_run_session_path": heartbeat_session_path,
         "run_session_state": str((session or {}).get("state") or ""),
-        "run_session_id": str((session or {}).get("session_id") or ""),
-        "path": str(HEARTBEAT_PATH),
+        "run_session_id": current_session_id,
+        "path": str(current_heartbeat_path()),
         "no_ai_token_used": True,
     }
 
@@ -220,7 +268,7 @@ def read_json_file(path: Path) -> dict:
 
 
 def summarize_mvp_acceptance(path: Path | None = None) -> dict:
-    path = path or MVP_ACCEPTANCE_SUMMARY_PATH
+    path = path or current_mvp_acceptance_summary_path()
     payload = read_json_file(path)
     return {
         "status": payload.get("status", ""),
@@ -232,21 +280,31 @@ def summarize_mvp_acceptance(path: Path | None = None) -> dict:
 
 
 def summarize_goal_delivery(path: Path | None = None) -> dict:
-    path = path or GOAL_DELIVERY_REPORT_PATH
+    path = path or current_goal_delivery_report_path()
     payload = read_json_file(path)
     evidence_files = payload.get("evidence_files") if isinstance(payload.get("evidence_files"), dict) else {}
-    summary_path = str(evidence_files.get("goal_delivery_summary") or GOAL_DELIVERY_SUMMARY_PATH)
+    summary_path = str(evidence_files.get("goal_delivery_summary") or current_goal_delivery_summary_path())
     sections = payload.get("sections") if isinstance(payload.get("sections"), dict) else {}
     windows_section = sections.get("windows_package_preflight") if isinstance(sections.get("windows_package_preflight"), dict) else {}
     windows_payload = windows_section.get("payload") if isinstance(windows_section.get("payload"), dict) else {}
     build_contract = windows_payload.get("build_contract") if isinstance(windows_payload.get("build_contract"), dict) else {}
     delivery_boundary = payload.get("delivery_boundary") if isinstance(payload.get("delivery_boundary"), dict) else {}
+    blocking_scopes = payload.get("blocking_scopes")
+    if not isinstance(blocking_scopes, list):
+        blocking_scopes = delivery_boundary.get("blocking_scopes") if isinstance(delivery_boundary.get("blocking_scopes"), list) else []
+    blocking_scopes = [str(item) for item in blocking_scopes if str(item or "").strip()]
+    try:
+        blocking_scope_count = int(payload.get("blocking_scope_count"))
+    except Exception:
+        blocking_scope_count = len(blocking_scopes)
     return {
         "status": payload.get("status", ""),
         "local_mvp_ready": bool(payload.get("local_mvp_ready")),
         "windows_build_ready": bool(payload.get("windows_build_ready")),
         "final_delivery_ready": bool(payload.get("final_delivery_ready")),
         "delivery_boundary": delivery_boundary,
+        "blocking_scopes": blocking_scopes,
+        "blocking_scope_count": blocking_scope_count,
         "deliverable_index": payload.get("deliverable_index") if isinstance(payload.get("deliverable_index"), dict) else {},
         "failed_checks": payload.get("failed_checks") or [],
         "final_delivery_blockers": payload.get("final_delivery_blockers") if isinstance(payload.get("final_delivery_blockers"), list) else [],
@@ -268,8 +326,9 @@ def summarize_goal_delivery(path: Path | None = None) -> dict:
 
 
 def summarize_two_phase_acceptance(path: Path | None = None) -> dict:
-    path = path or TWO_PHASE_MATRIX_JSON_PATH
+    path = path or current_two_phase_matrix_json_path()
     payload = read_json_file(path)
+    markdown_path = current_two_phase_matrix_md_path()
     return {
         "status": payload.get("status", ""),
         "local_mvp_ready": bool(payload.get("local_mvp_ready")),
@@ -277,7 +336,7 @@ def summarize_two_phase_acceptance(path: Path | None = None) -> dict:
         "failed_items": payload.get("failed_items") or [],
         "blocking_scopes": payload.get("blocking_scopes") or [],
         "path": str(path) if path.is_file() else "",
-        "markdown_path": str(TWO_PHASE_MATRIX_MD_PATH) if TWO_PHASE_MATRIX_MD_PATH.is_file() else "",
+        "markdown_path": str(markdown_path) if markdown_path.is_file() else "",
     }
 
 
@@ -294,6 +353,7 @@ def fallback_final_delivery_evidence_plan(final_blockers: list[dict]) -> dict:
             "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_acceptance_windows.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
             "python tools\\reachops_delivery_package_check.py --json",
         ],
+        "commercial_issue_closure": ["python tools\\reachops_issue_closure_audit.py --json"],
     }
     proof_by_scope = {
         "external_authorized_execution": [
@@ -317,11 +377,19 @@ def fallback_final_delivery_evidence_plan(final_blockers: list[dict]) -> dict:
             "delivery_package.acceptance_verification.failures=[]",
             "delivery_package.acceptance_verification.pending=[]",
         ],
+        "commercial_issue_closure": [
+            "issue_closure.summary.issues_total=7",
+            "issue_closure.summary.acceptance_criteria_total=53",
+            "issue_closure.summary.acceptance_criteria_external_pending=0",
+            "issue_closure.summary.external_pending_count=0",
+            "issue_closure.github_issues.closure_requires_external_validation=false",
+        ],
     }
     title_by_scope = {
         "external_authorized_execution": "授权真实平台执行证据",
         "client_delivery_gate": "客户端交付门禁证据",
         "windows_final_artifacts": "Windows 最终客户端包证据",
+        "commercial_issue_closure": "Issues #1-#7 商业交付闭环证据",
     }
     for blocker in final_blockers:
         if not isinstance(blocker, dict):
@@ -487,7 +555,7 @@ def extract_last_json_object(text: str) -> dict:
 
 
 def read_run_result_payload(path: Path | None = None) -> dict:
-    path = path or RESULT_PATH
+    path = path or current_result_path()
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
@@ -500,7 +568,7 @@ def read_run_result_payload(path: Path | None = None) -> dict:
 
 
 def write_run_result_payload(payload: dict, path: Path | None = None) -> bool:
-    path = path or RESULT_PATH
+    path = path or current_result_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -514,18 +582,154 @@ def run_session_path_for(session: dict) -> Path:
     return DATA_DIR / "runs" / f"{session_id}.json"
 
 
+def current_log_path() -> Path:
+    log_path = Path(LOG_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and log_path == Path(DEFAULT_LOG_PATH):
+        return Path(DATA_DIR) / "logs" / "growth_ops_runtime.log"
+    return log_path
+
+
+def current_result_path() -> Path:
+    result_path = Path(RESULT_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and result_path == Path(DEFAULT_RESULT_PATH):
+        return Path(DATA_DIR) / "reachops_web_ui_last_run.json"
+    return result_path
+
+
+def current_progress_path() -> Path:
+    progress_path = Path(PROGRESS_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and progress_path == Path(DEFAULT_PROGRESS_PATH):
+        return Path(DATA_DIR) / "reachops_web_ui_progress.json"
+    return progress_path
+
+
+def current_heartbeat_path() -> Path:
+    heartbeat_path = Path(HEARTBEAT_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and heartbeat_path == Path(DEFAULT_HEARTBEAT_PATH):
+        return Path(DATA_DIR) / "reachops_web_ui_heartbeat.json"
+    return heartbeat_path
+
+
+def current_control_dir() -> Path:
+    control_dir = Path(CONTROL_DIR)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and control_dir == Path(DEFAULT_CONTROL_DIR):
+        return Path(DATA_DIR) / "control"
+    return control_dir
+
+
+def current_web_settings_path() -> Path:
+    settings_path = Path(WEB_SETTINGS_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and settings_path == Path(DEFAULT_WEB_SETTINGS_PATH):
+        return Path(DATA_DIR) / "config" / "reachops_web_settings.json"
+    return settings_path
+
+
+def current_latest_groups_path() -> Path:
+    groups_path = Path(LATEST_GROUPS_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and groups_path == Path(DEFAULT_LATEST_GROUPS_PATH):
+        return Path(DATA_DIR) / "config" / "latest_ixbrowser_groups.json"
+    return groups_path
+
+
+def current_latest_execution_plan_path() -> Path:
+    latest_path = Path(LATEST_EXECUTION_PLAN_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_EXECUTION_PLAN_PATH):
+        return Path(DATA_DIR) / "plans" / "latest_execution_plan.json"
+    return latest_path
+
+
+def current_latest_run_session_path() -> Path:
+    latest_path = Path(LATEST_RUN_SESSION_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_RUN_SESSION_PATH):
+        return Path(DATA_DIR) / "runs" / "latest_run_session.json"
+    return latest_path
+
+
+def current_latest_evidence_bundle_path() -> Path:
+    latest_path = Path(LATEST_EVIDENCE_BUNDLE_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_EVIDENCE_BUNDLE_PATH):
+        return Path(DATA_DIR) / "evidence_bundles" / "latest_evidence_bundle.json"
+    return latest_path
+
+
+def current_latest_evidence_bundle_md_path() -> Path:
+    latest_path = Path(LATEST_EVIDENCE_BUNDLE_MD_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and latest_path == Path(DEFAULT_LATEST_EVIDENCE_BUNDLE_MD_PATH):
+        return Path(DATA_DIR) / "evidence_bundles" / "latest_evidence_bundle.md"
+    return latest_path
+
+
+def current_mvp_acceptance_summary_path() -> Path:
+    path = Path(MVP_ACCEPTANCE_SUMMARY_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_MVP_ACCEPTANCE_SUMMARY_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_mvp_acceptance_summary.json"
+    return path
+
+
+def current_goal_delivery_report_path() -> Path:
+    path = Path(GOAL_DELIVERY_REPORT_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_GOAL_DELIVERY_REPORT_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_goal_delivery_report.json"
+    return path
+
+
+def current_goal_delivery_summary_path() -> Path:
+    path = Path(GOAL_DELIVERY_SUMMARY_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_GOAL_DELIVERY_SUMMARY_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_goal_delivery_summary.md"
+    return path
+
+
+def current_two_phase_matrix_json_path() -> Path:
+    path = Path(TWO_PHASE_MATRIX_JSON_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_TWO_PHASE_MATRIX_JSON_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_two_phase_acceptance_matrix.json"
+    return path
+
+
+def current_two_phase_matrix_md_path() -> Path:
+    path = Path(TWO_PHASE_MATRIX_MD_PATH)
+    if Path(DATA_DIR) != Path(DEFAULT_DATA_DIR) and path == Path(DEFAULT_TWO_PHASE_MATRIX_MD_PATH):
+        return Path(DATA_DIR) / "reports/acceptance_remediation/latest_two_phase_acceptance_matrix.md"
+    return path
+
+
+def current_runtime_process_audit_path() -> Path:
+    return Path(DATA_DIR) / "reports" / "support" / "runtime_process_audit.json"
+
+
 def read_current_run_session() -> dict:
     if CURRENT_RUN_SESSION_PATH:
         payload = read_run_session(CURRENT_RUN_SESSION_PATH)
         if payload:
             return payload
-    return read_run_session(LATEST_RUN_SESSION_PATH)
+    return read_run_session(current_latest_run_session_path())
+
+
+def build_runtime_process_control_report(*, apply_cleanup: bool = False, confirm_cleanup: str = "") -> dict:
+    report = build_runtime_process_audit(
+        latest_session_path=current_latest_run_session_path(),
+        base_dir=Path(DATA_DIR),
+        apply_cleanup=bool(apply_cleanup),
+        confirm_cleanup=str(confirm_cleanup or ""),
+    )
+    path = current_runtime_process_audit_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        report["path"] = str(path)
+        report["persisted"] = True
+    except Exception as exc:
+        report["path"] = str(path)
+        report["persisted"] = False
+        report["persist_error"] = str(exc)
+    return report
 
 
 def persist_run_session(session: dict) -> dict:
     global CURRENT_RUN_SESSION_PATH
     path = run_session_path_for(session)
-    write_run_session(session, path, LATEST_RUN_SESSION_PATH)
+    write_run_session(session, path, current_latest_run_session_path())
     CURRENT_RUN_SESSION_PATH = str(path)
     return session
 
@@ -539,17 +743,17 @@ def update_current_run_session(state: str, **kwargs) -> dict:
 
 
 def cooperative_control_path(name: str) -> Path:
-    return CONTROL_DIR / name
+    return current_control_dir() / name
 
 
 def write_cooperative_control(name: str, payload: dict) -> None:
-    CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    current_control_dir().mkdir(parents=True, exist_ok=True)
     cooperative_control_path(name).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def clear_cooperative_control() -> None:
     try:
-        CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        current_control_dir().mkdir(parents=True, exist_ok=True)
         for name in ["pause.request", "resume.request"]:
             path = cooperative_control_path(name)
             if path.exists():
@@ -653,13 +857,13 @@ def persist_precheck_blocked_start(
     plan_id = str(execution_plan.get("plan_id") or "")
     plan_path = DATA_DIR / "plans" / f"{plan_id or 'execution_plan'}.json"
     write_execution_plan(execution_plan, plan_path)
-    write_execution_plan(execution_plan, LATEST_EXECUTION_PLAN_PATH)
+    write_execution_plan(execution_plan, current_latest_execution_plan_path())
     run_session = create_run_session(
         execution_plan,
         execution_plan_path=str(plan_path),
-        result_path=str(RESULT_PATH),
-        log_path=str(LOG_PATH),
-        log_offset=len(read_lines(LOG_PATH)),
+        result_path=str(current_result_path()),
+        log_path=str(current_log_path()),
+        log_offset=len(read_lines(current_log_path())),
     )
     result = {
         "status": "blocked",
@@ -785,9 +989,10 @@ def persist_precheck_blocked_start(
 
 def append_web_log(message: str):
     try:
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        log_path = current_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with LOG_PATH.open("a", encoding="utf-8") as fh:
+        with log_path.open("a", encoding="utf-8") as fh:
             fh.write(f"{ts}  {message}\n")
     except Exception:
         pass
@@ -857,6 +1062,9 @@ def safe_report_download_path(raw_path: str) -> Path | None:
         allowed_roots = [
             (DATA_DIR / "reports").resolve(),
             (DATA_DIR / "data/growth_intelligence/reports").resolve(),
+            (DATA_DIR / "evidence_bundles").resolve(),
+            (DATA_DIR / "page_state").resolve(),
+            (DATA_DIR / "run_results").resolve(),
         ]
         if not any(_is_relative_to(path, root) for root in allowed_roots):
             return None
@@ -1035,14 +1243,15 @@ def active_ixbrowser_api_port() -> str:
 
 def load_web_settings() -> dict:
     try:
-        return json.loads(WEB_SETTINGS_PATH.read_text(encoding="utf-8"))
+        return json.loads(current_web_settings_path().read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
 def write_web_settings(settings: dict):
-    WEB_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    WEB_SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    settings_path = current_web_settings_path()
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def write_latest_groups_payload(payload: dict):
@@ -1051,9 +1260,10 @@ def write_latest_groups_payload(payload: dict):
         groups = [dict(row) for row in (payload.get("groups") or []) if isinstance(row, dict)]
         if not groups:
             return
-        if groups and LATEST_GROUPS_PATH.exists():
+        latest_groups_path = current_latest_groups_path()
+        if groups and latest_groups_path.exists():
             try:
-                previous = json.loads(LATEST_GROUPS_PATH.read_text(encoding="utf-8"))
+                previous = json.loads(latest_groups_path.read_text(encoding="utf-8"))
             except Exception:
                 previous = {}
             previous_groups = {
@@ -1077,8 +1287,8 @@ def write_latest_groups_payload(payload: dict):
             if known_total and int(payload.get("profile_count") or 0) < known_total:
                 payload["profile_count"] = known_total
             payload["known_group_count"] = len([row for row in merged_groups if row.get("count_known")])
-        LATEST_GROUPS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        LATEST_GROUPS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        latest_groups_path.parent.mkdir(parents=True, exist_ok=True)
+        latest_groups_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 
@@ -1088,7 +1298,7 @@ def cached_groups_payload_with_error(error: str, detail: str) -> dict:
     cached = GROUP_CACHE if GROUP_CACHE.get("groups") else {}
     if not cached:
         try:
-            previous = json.loads(LATEST_GROUPS_PATH.read_text(encoding="utf-8"))
+            previous = json.loads(current_latest_groups_path().read_text(encoding="utf-8"))
             if previous.get("groups"):
                 cached = previous
         except Exception:
@@ -1135,11 +1345,50 @@ def group_cache_quality(payload: dict) -> tuple[int, int]:
     return known_group_count(payload), safe_int((payload or {}).get("profile_count"), 0)
 
 
+def start_preview_group_list_ready(payload: dict, profile_group: str) -> bool:
+    if payload.get("group_list_ready") or payload.get("groupListReady"):
+        return True
+    cached = GROUP_CACHE if GROUP_CACHE.get("groups") else {}
+    if not cached:
+        return False
+    if time.time() - float(cached.get("loaded_at") or 0) >= 60:
+        return False
+    if cached.get("error") or cached.get("stale_cache") or cached.get("background_refresh"):
+        return False
+    groups = [row for row in cached.get("groups") or [] if isinstance(row, dict)]
+    if not groups:
+        return False
+    names = {str(row.get("name") or "").strip().lower(): row for row in groups}
+    selected = names.get(str(profile_group or "").strip().lower())
+    if not selected:
+        return False
+    return True
+
+
+def selected_group_count_runtime_notice(group_payload: dict, profile_group: str) -> dict:
+    groups = [row for row in (group_payload.get("groups") or []) if isinstance(row, dict)]
+    names = {str(row.get("name") or "").strip().lower(): row for row in groups}
+    selected = names.get(str(profile_group or "").strip().lower()) or {}
+    count_known = bool(selected.get("count_known"))
+    if count_known and group_payload.get("live_all_group_counts_known") is True:
+        return {}
+    return {
+        "profile_group_count_known": count_known,
+        "profile_group_count_status": str(selected.get("count_status") or ("known" if count_known else "unknown")),
+        "profile_group_count_warning": (
+            "ixBrowser 未返回该分组账号数量；启动后会实时读取账号列表、逐个登录预检，并自动跳过不可用账号。"
+            if not count_known
+            else "ixBrowser 未返回全部分组账号数量；本次只使用已选择分组，启动后仍会实时读取账号列表并预检。"
+        ),
+        "profile_group_runtime_count_required": not count_known,
+    }
+
+
 def read_cached_groups_payload() -> dict:
     global GROUP_CACHE
     cached = GROUP_CACHE if GROUP_CACHE.get("groups") else {}
     try:
-        previous = json.loads(LATEST_GROUPS_PATH.read_text(encoding="utf-8"))
+        previous = json.loads(current_latest_groups_path().read_text(encoding="utf-8"))
         if previous.get("groups") and group_cache_quality(previous) > group_cache_quality(cached):
             cached = previous
             GROUP_CACHE = dict(previous)
@@ -1383,6 +1632,11 @@ def build_final_status_payload() -> dict:
         payload["external_validation_pending"] = bool(delivery_boundary.get("external_validation_pending"))
         payload["windows_final_artifacts_pending"] = bool(delivery_boundary.get("windows_final_artifacts_pending"))
         payload["pending_scopes"] = delivery_boundary.get("pending_scopes") or []
+        payload["goal_blocking_scopes"] = goal_delivery.get("blocking_scopes") or []
+        try:
+            payload["goal_blocking_scope_count"] = int(goal_delivery.get("blocking_scope_count"))
+        except Exception:
+            payload["goal_blocking_scope_count"] = len(payload["goal_blocking_scopes"])
         payload["product_capability_summary"] = product_capability
         payload["product_development_goals"] = product_development_goals
         return payload
@@ -1556,33 +1810,39 @@ def build_start_preview(payload: dict | None) -> dict:
     comment_text = str(payload.get("comment_text") or payload.get("commentText") or "")
     live_confirmed = truthy(payload.get("live_confirm", payload.get("liveConfirm")))
     account_repair_confirmed = truthy(payload.get("account_repair_confirmed", payload.get("accountRepairConfirmed")))
-    force_account_recheck = (
-        account_repair_confirmed
-        and truthy(payload.get("account_gate_blocked", payload.get("accountGateBlocked")))
-    )
+    account_gate_blocked = truthy(payload.get("account_gate_blocked", payload.get("accountGateBlocked")))
+    group_list_ready = start_preview_group_list_ready(payload, profile_group)
+    group_count_notice = selected_group_count_runtime_notice(GROUP_CACHE if GROUP_CACHE.get("groups") else {}, profile_group) if group_list_ready else {}
+    force_account_recheck = account_gate_blocked and account_repair_confirmed
     submit_policy = "真实评论提交" if mode == "live_comment" and live_confirmed else "预检，不提交"
     gate_state = "分组未刷新"
-    if payload.get("group_list_ready") or payload.get("groupListReady"):
+    if group_list_ready:
         gate_state = "可启动"
     if mode == "live_comment" and not live_confirmed:
         gate_state = "需确认真实评论"
-    if (payload.get("account_gate_blocked") or payload.get("accountGateBlocked")) and not account_repair_confirmed:
-        gate_state = "账号修复后启动"
+    if account_gate_blocked and group_list_ready:
+        gate_state = "账号待修复" if not account_repair_confirmed else "自动重检账号"
     blockers: list[str] = []
     next_actions: list[str] = []
     if not target.strip():
         blockers.append("target_required")
         next_actions.append("输入产品链接、关键词、达人主页、视频链接、话题或直播间。")
-    if not (payload.get("group_list_ready") or payload.get("groupListReady")):
+    if not group_list_ready:
         blockers.append("profile_group_list_not_ready")
-        next_actions.append("先刷新 ixBrowser 配置分组，确认所选分组账号数量。")
+        next_actions.append("先刷新 ixBrowser 配置分组，确认所选分组存在。")
+    elif group_count_notice.get("profile_group_count_warning"):
+        next_actions.append(str(group_count_notice["profile_group_count_warning"]))
     if mode == "live_comment" and not live_confirmed:
         blockers.append("live_comment_confirmation_required")
         next_actions.append("真实评论前必须勾选授权确认。")
-    if (payload.get("account_gate_blocked") or payload.get("accountGateBlocked")) and not account_repair_confirmed:
+    if account_gate_blocked and group_list_ready and not account_repair_confirmed:
         blockers.append("account_repair_required")
-        next_actions.append("执行账号修复计划或勾选已修复账号后重新预检。")
+        next_actions.append("当前分组最近一次账号预检已阻断；先修复账号或应用账号修复计划，再勾选允许重新预检。")
+    elif account_gate_blocked and group_list_ready:
+        next_actions.append("启动后会重新读取配置列表，自动跳过或移组未登录账号，并继续尝试后续账号。")
     start_allowed = not blockers
+    if start_allowed:
+        next_actions.append("可以启动本地执行。")
     preflight_decision = {
         "schema_version": "reachops.start_preflight_decision.v1",
         "status": "ready" if start_allowed else "blocked",
@@ -1593,6 +1853,7 @@ def build_start_preview(payload: dict | None) -> dict:
         "submit_policy": submit_policy,
         "mode": mode,
         "profile_group": profile_group,
+        **group_count_notice,
         "no_ai_token_used": True,
         "no_browser_started": True,
         "no_submit": True,
@@ -1646,6 +1907,7 @@ def build_start_preview(payload: dict | None) -> dict:
         "start_allowed": start_allowed,
         "blockers": blockers,
         "next_actions": preflight_decision["next_actions"],
+        **group_count_notice,
         "submit_policy": submit_policy,
         "gate_state": gate_state,
         "no_browser_started": True,
@@ -1682,7 +1944,7 @@ def build_start_preflight_decision_for_plan(
 
 
 def build_start_from_plan_preview(path: str | Path | None = None) -> dict:
-    plan_path = Path(path or LATEST_EXECUTION_PLAN_PATH)
+    plan_path = Path(path) if path is not None else current_latest_execution_plan_path()
     if not plan_path.is_file():
         return {
             "status": "missing",
@@ -1747,7 +2009,7 @@ def build_start_from_plan_preview(path: str | Path | None = None) -> dict:
 
 
 def build_execution_plan_contract_preview(path: str | Path | None = None) -> dict:
-    plan_path = Path(path or LATEST_EXECUTION_PLAN_PATH)
+    plan_path = Path(path) if path is not None else current_latest_execution_plan_path()
     if not plan_path.is_absolute():
         plan_path = (ROOT_DIR / plan_path).resolve()
     if not plan_path.is_file():
@@ -1892,7 +2154,7 @@ def build_ai_console_payload(payload: dict | None) -> dict:
 
 
 def build_current_execution_plan_payload() -> dict:
-    path = LATEST_EXECUTION_PLAN_PATH
+    path = current_latest_execution_plan_path()
     if not path.is_file():
         return {
             "status": "missing",
@@ -1955,15 +2217,18 @@ def payload_from_execution_plan(plan: dict) -> dict:
 
 
 def build_current_run_session_payload() -> dict:
-    path = Path(CURRENT_RUN_SESSION_PATH) if CURRENT_RUN_SESSION_PATH else LATEST_RUN_SESSION_PATH
-    if not path.is_file() and LATEST_RUN_SESSION_PATH.is_file():
-        path = LATEST_RUN_SESSION_PATH
+    recovery = recover_current_run_session_if_interrupted("RUN_SESSION_STATUS_RECOVERY")
+    latest_run_session_path = current_latest_run_session_path()
+    path = Path(CURRENT_RUN_SESSION_PATH) if CURRENT_RUN_SESSION_PATH else latest_run_session_path
+    if not path.is_file() and latest_run_session_path.is_file():
+        path = latest_run_session_path
     if not path.is_file():
         return {
             "status": "missing",
             "schema_version": "reachops.run_session.v1",
             "path": str(path),
             "exists": False,
+            "recovery": recovery,
             "no_browser_started": True,
             "no_submit": True,
         }
@@ -1993,6 +2258,7 @@ def build_current_run_session_payload() -> dict:
             },
             "ai_usage_ledger": session.get("ai_usage_ledger") or {},
             "execution_runtime_contract": session.get("execution_runtime_contract") or {},
+            "recovery": recovery,
             "run_session": session,
             "no_ai_token_used": bool((session.get("ai_usage_ledger") or {}).get("no_ai_token_used", True)),
             "no_browser_started": True,
@@ -2005,6 +2271,7 @@ def build_current_run_session_payload() -> dict:
             "path": str(path),
             "exists": True,
             "error": str(exc),
+            "recovery": recovery,
             "no_browser_started": True,
             "no_submit": True,
         }
@@ -2015,7 +2282,10 @@ def build_current_evidence_bundle() -> dict:
         from ReachOps.evidence_bundle import build_evidence_bundle, write_evidence_bundle, write_evidence_markdown
 
         run_session = read_current_run_session()
-        run_session_path = CURRENT_RUN_SESSION_PATH or str(LATEST_RUN_SESSION_PATH if LATEST_RUN_SESSION_PATH.is_file() else "")
+        latest_run_session_path = current_latest_run_session_path()
+        run_session_path = CURRENT_RUN_SESSION_PATH or str(
+            latest_run_session_path if latest_run_session_path.is_file() else ""
+        )
         candidate_execution_plan_path = Path(
             str(
                 run_session.get("execution_plan_path")
@@ -2023,41 +2293,46 @@ def build_current_evidence_bundle() -> dict:
                 or ""
             )
         )
-        if not candidate_execution_plan_path.is_file() and LATEST_EXECUTION_PLAN_PATH.is_file():
-            candidate_execution_plan_path = LATEST_EXECUTION_PLAN_PATH
+        latest_execution_plan_path = current_latest_execution_plan_path()
+        if not candidate_execution_plan_path.is_file() and latest_execution_plan_path.is_file():
+            candidate_execution_plan_path = latest_execution_plan_path
         execution_plan_path = str(candidate_execution_plan_path if candidate_execution_plan_path.is_file() else "")
         result_payload = read_run_result_payload()
-        log_path = str(result_payload.get("log_path") or (run_session.get("evidence") or {}).get("log_path") or LOG_PATH)
+        log_path = str(result_payload.get("log_path") or (run_session.get("evidence") or {}).get("log_path") or current_log_path())
         bundle = build_evidence_bundle(
             base_dir=DATA_DIR,
             execution_plan_path=execution_plan_path,
             run_session_path=run_session_path,
-            result_path=str(RESULT_PATH if RESULT_PATH.is_file() else ""),
+            result_path=str(current_result_path() if current_result_path().is_file() else ""),
             log_path=log_path,
             offline_learning_path=str(DATA_DIR / "offline_learning" / "unknown_states.json"),
             extra_artifacts=[
-                {"kind": "mvp_acceptance", "label": "MVP acceptance", "path": str(MVP_ACCEPTANCE_SUMMARY_PATH)},
-                {"kind": "goal_delivery", "label": "Goal delivery report", "path": str(GOAL_DELIVERY_REPORT_PATH)},
-                {"kind": "two_phase_matrix", "label": "Two phase matrix", "path": str(TWO_PHASE_MATRIX_JSON_PATH)},
+                {"kind": "mvp_acceptance", "label": "MVP acceptance", "path": str(current_mvp_acceptance_summary_path())},
+                {"kind": "goal_delivery", "label": "Goal delivery report", "path": str(current_goal_delivery_report_path())},
+                {"kind": "two_phase_matrix", "label": "Two phase matrix", "path": str(current_two_phase_matrix_json_path())},
             ],
         )
         session_id = str(bundle.get("session_id") or "latest_evidence_bundle")
         bundle_path = DATA_DIR / "evidence_bundles" / f"{session_id}.json"
         markdown_path = DATA_DIR / "evidence_bundles" / f"{session_id}.md"
-        write_evidence_bundle(bundle, bundle_path, LATEST_EVIDENCE_BUNDLE_PATH)
-        write_evidence_markdown(bundle, markdown_path, LATEST_EVIDENCE_BUNDLE_MD_PATH)
+        latest_bundle_path = current_latest_evidence_bundle_path()
+        latest_markdown_path = current_latest_evidence_bundle_md_path()
+        write_evidence_bundle(bundle, bundle_path, latest_bundle_path)
+        write_evidence_markdown(bundle, markdown_path, latest_markdown_path)
         bundle["path"] = str(bundle_path)
         bundle["markdown_path"] = str(markdown_path)
-        bundle["latest_path"] = str(LATEST_EVIDENCE_BUNDLE_PATH)
-        bundle["latest_markdown_path"] = str(LATEST_EVIDENCE_BUNDLE_MD_PATH)
+        bundle["latest_path"] = str(latest_bundle_path)
+        bundle["latest_markdown_path"] = str(latest_markdown_path)
         return bundle
     except Exception as exc:
+        latest_bundle_path = current_latest_evidence_bundle_path()
+        latest_markdown_path = current_latest_evidence_bundle_md_path()
         return {
             "schema_version": "reachops.evidence_bundle.v1",
             "status": "failed",
             "error": str(exc),
-            "path": str(LATEST_EVIDENCE_BUNDLE_PATH),
-            "markdown_path": str(LATEST_EVIDENCE_BUNDLE_MD_PATH),
+            "path": str(latest_bundle_path),
+            "markdown_path": str(latest_markdown_path),
         }
 
 
@@ -2255,12 +2530,27 @@ def review_offline_policy_candidate(payload: dict) -> dict:
         }
 
 
+def run_result_belongs_to_session(run_result: dict, session: dict) -> bool:
+    if not isinstance(run_result, dict) or not isinstance(session, dict):
+        return False
+    result_session = run_result.get("run_session") if isinstance(run_result.get("run_session"), dict) else {}
+    result_plan = run_result.get("execution_plan") if isinstance(run_result.get("execution_plan"), dict) else {}
+    result_session_id = str(run_result.get("run_session_id") or result_session.get("session_id") or "").strip()
+    if result_session_id:
+        return result_session_id == str(session.get("session_id") or "").strip()
+    result_plan_id = str(run_result.get("plan_id") or result_plan.get("plan_id") or "").strip()
+    if result_plan_id:
+        return result_plan_id == str(session.get("plan_id") or "").strip()
+    return False
+
+
 def recover_current_run_session_if_interrupted(reason: str = "WEB_UI_RECOVERY") -> dict:
     running = run_is_active()
-    run_result = read_run_result_payload()
+    raw_run_result = read_run_result_payload()
     session = read_current_run_session()
     if not session:
         return {"recovered": False}
+    run_result = raw_run_result if run_result_belongs_to_session(raw_run_result, session) else {}
     session_state = str(session.get("state") or "")
     session_started = parse_utc(str(session.get("started_at") or session.get("created_at") or ""))
     if (
@@ -2597,6 +2887,13 @@ def html_page() -> bytes:
     .previewItem.wide {{ display:none; }}
     .previewItem ul {{ margin:7px 0 0; padding-left:18px; color:var(--muted); line-height:1.45; font-size:12px; }}
     .previewItem li {{ overflow-wrap:anywhere; word-break:break-word; }}
+    .runtimeAutomationPanel {{ border:1px solid #314151; border-radius:8px; background:#151c22; padding:10px; display:grid; gap:8px; }}
+    .runtimeAutomationGrid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(136px,1fr)); gap:8px; }}
+    .runtimeCleanupActions {{ display:grid; grid-template-columns:repeat(2,minmax(112px,.32fr)) minmax(180px,1fr); gap:8px; align-items:center; }}
+    .runtimeCleanupActions input {{ height:32px; }}
+    .runtimeCleanupActions button {{ height:32px; padding:0 10px; font-size:12px; }}
+    .runtimeCleanupDetails {{ color:var(--muted); font-size:12px; line-height:1.45; overflow-wrap:anywhere; }}
+    .runtimeCleanupDetails ul {{ margin:0; padding-left:18px; }}
     .decision {{ display:grid; grid-template-columns:1.2fr 1fr; gap:10px; }}
     .decision .notice {{ min-height:86px; }}
     .steps {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(92px,1fr)); gap:8px; }}
@@ -2802,14 +3099,28 @@ def html_page() -> bytes:
 	            <button class="okBtn" id="resume">继续</button>
 	            <button id="stop">停止</button>
 	          </div>
-	          <div class="secondaryActions" aria-label="次级操作">
-	            <button id="previewPlanReplay">预检重放计划</button>
-	            <button class="okBtn" id="startFromPlan">重放计划执行</button>
-	            <button id="downloadExecutionPlan">下载执行计划</button>
-	            <button class="warn" id="applyAccountRepair" disabled>隔离坏账号</button>
-	          </div>
-	        </div>
-	      </div>
+          <div class="secondaryActions" aria-label="次级操作">
+            <button id="previewPlanReplay">预检重放计划</button>
+            <button class="okBtn" id="startFromPlan">重放计划执行</button>
+            <button id="downloadExecutionPlan">下载执行计划</button>
+            <button class="warn" id="applyAccountRepair" disabled>隔离坏账号</button>
+          </div>
+          <div class="runtimeAutomationPanel" id="runtimeAutomationPanel">
+            <div class="runtimeAutomationGrid">
+              <div class="previewItem ok"><span>账号自动处理</span><b id="runtimeAccountGrouping">未登录自动冷却，健康账号继续</b></div>
+              <div class="previewItem warn"><span>远端分组更新</span><b id="runtimeRemoteGroupMode">需账号修复确认</b></div>
+              <div class="previewItem" id="runtimeCleanupStatusBox"><span>运行时清理</span><b id="runtimeCleanupStatus">未检查</b></div>
+              <div class="previewItem" id="runtimeCleanupCandidatesBox"><span>遗留进程候选</span><b id="runtimeCleanupCandidates">0</b></div>
+            </div>
+            <div class="runtimeCleanupActions" aria-label="运行时进程清理">
+              <button id="previewRuntimeCleanup">预览清理</button>
+              <button class="warn" id="applyRuntimeCleanup">执行清理</button>
+              <input id="runtimeCleanupConfirm" placeholder="输入 CLEANUP_RUNTIME_PROCESSES 才会执行" />
+            </div>
+            <div class="runtimeCleanupDetails" id="runtimeCleanupDetails">预览只生成诊断，不打开浏览器、不提交动作；执行清理必须输入确认令牌。</div>
+          </div>
+        </div>
+      </div>
       <div class="copyNotice" id="copyModeNotice">
         <strong>评论文案：自动识别生成</strong>
         <span>评论内容留空时，系统会根据线索意图自动生成回复；只有达到触达分数的线索才会进入评论队列，低意向用户会自动跳过。</span>
@@ -4603,6 +4914,10 @@ def html_page() -> bytes:
 	        if (localProductBoundary.boundary_note) boundaryRows.push('本地边界说明：' + localProductBoundary.boundary_note);
 	        if (boundary.summary) boundaryRows.push('交付边界：' + boundary.summary);
 	        if (goal.summary_path) boundaryRows.push('目标摘要：' + goal.summary_path);
+	        const goalBlockingScopes = data.goal_blocking_scopes || goal.blocking_scopes || boundary.blocking_scopes || [];
+	        const rawGoalBlockingCount = data.goal_blocking_scope_count ?? goal.blocking_scope_count ?? goalBlockingScopes.length;
+	        const goalBlockingCount = Number.isFinite(Number(rawGoalBlockingCount)) ? Number(rawGoalBlockingCount) : goalBlockingScopes.length;
+	        if (goalBlockingCount || goalBlockingScopes.length) boundaryRows.push(`目标阻断范围：${{goalBlockingCount}}项 / ${{goalBlockingScopes.join(', ') || '-'}}`);
 	        if (twoPhase.status) boundaryRows.push(`两阶段矩阵：${{twoPhase.status}} / 本地MVP=${{twoPhase.local_mvp_ready === true ? 'true' : 'false'}} / 最终交付=${{twoPhase.final_delivery_ready === true ? 'true' : 'false'}}`);
 	        if ((twoPhase.blocking_scopes || []).length) boundaryRows.push('两阶段阻断：' + twoPhase.blocking_scopes.join(', '));
 	        if (twoPhase.path) boundaryRows.push({{text:'两阶段矩阵JSON：' + twoPhase.path, href:safeDownload(twoPhase.path)}});
@@ -4610,10 +4925,26 @@ def html_page() -> bytes:
 	        if ('overall_final_delivery_scope_ready' in boundary) boundaryRows.push(`PM边界：本地MVP=${{boundary.local_mvp_scope_ready === true ? 'true' : 'false'}} / 客户端门禁=${{boundary.client_gate_scope_ready === true ? 'true' : 'false'}} / Windows构建输入=${{boundary.windows_build_input_scope_ready === true ? 'true' : 'false'}} / 整体最终交付=${{boundary.overall_final_delivery_scope_ready === true ? 'true' : 'false'}}`);
 	        if (boundary.client_gate_final_delivery_ready_is_not_overall_final_delivery) boundaryRows.push('边界说明：client_delivery.final_delivery_ready 只代表客户端门禁自身通过，不代表整项目最终交付完成。');
 	        if (deliverableIndex.windows_final_package) boundaryRows.push(`交付索引：本地MVP=${{deliverableIndex.local_mvp_acceptance && deliverableIndex.local_mvp_acceptance.ready === true ? 'ready' : 'blocked'}} / Windows最终包=${{deliverableIndex.windows_final_package.ready === true ? 'ready' : 'missing'}} / 最终门禁=${{deliverableIndex.final_acceptance_gate && deliverableIndex.final_acceptance_gate.ready === true ? 'ready' : 'blocked'}}`);
+	        const localMvpIndex = deliverableIndex.local_mvp_acceptance || {{}};
+	        const localMvpBlocker = localMvpIndex.blocker_summary || {{}};
+	        if (localMvpBlocker.schema_version) {{
+	          boundaryRows.push(`本地MVP账号交接：${{localMvpBlocker.status || '-'}} / ${{localMvpBlocker.priority_action || '-'}} / ${{localMvpBlocker.support_case || '-'}}`);
+	          if (localMvpIndex.account_support_handoff_path) boundaryRows.push('本地MVP账号交接文件：' + localMvpIndex.account_support_handoff_path);
+	          if (localMvpBlocker.next_required_command) boundaryRows.push('本地MVP账号复验命令：' + localMvpBlocker.next_required_command);
+	        }}
 	        const finalBlockerRows = [];
 	        (goal.final_delivery_blockers || []).forEach(blocker => {{
 	          finalBlockerRows.push(`最终阻断：${{blocker.scope || '-'}} / ${{blocker.status || '-'}}`);
 	          if (blocker.next_action) finalBlockerRows.push('  下一步：' + blocker.next_action);
+	          const handoff = blocker.account_support_handoff || {{}};
+	          if (handoff.schema_version) {{
+	            finalBlockerRows.push(`  账号支持交接：${{handoff.status || '-'}} / ${{handoff.priority_action || '-'}} / 分组=${{handoff.profile_group || '-'}}`);
+	            const repairPlan = handoff.repair_plan || {{}};
+	            if (repairPlan.available) finalBlockerRows.push(`    修复计划：账号=${{repairPlan.profile_count || 0}} 事件=${{repairPlan.event_count || 0}} 自动可处理=${{repairPlan.auto_apply_profile_count || 0}} 非自动错误=${{(repairPlan.non_auto_error_codes || []).join(', ') || '-'}}`);
+	            ((handoff.impacted_accounts || {{}}).error_groups || []).slice(0, 3).forEach(group => finalBlockerRows.push(`    账号错误：${{group.error || '-'}} count=${{group.count || 0}} sample=${{(group.profile_ids_sample || []).slice(0, 4).join(',') || '-'}}`));
+	            (handoff.retest_checklist || []).slice(0, 5).forEach(item => finalBlockerRows.push(`    账号复验清单：${{item.id || '-'}} / ${{item.title || '-'}} / ${{item.expected || '-'}}`));
+	            (handoff.retest_commands || []).slice(0, 3).forEach(cmd => finalBlockerRows.push('    账号复测命令：' + cmd));
+	          }}
 	          (blocker.required_evidence || []).forEach(item => finalBlockerRows.push('  必需证据：' + item));
 	          (blocker.required_artifacts || []).forEach(item => finalBlockerRows.push('  必需产物：' + item));
 	        }});
@@ -4653,7 +4984,7 @@ def html_page() -> bytes:
 	        $('finalStatusNotice').className = 'notice blocked';
 	        $('finalStatusActions').innerHTML = listItems(['最终验收状态读取失败：' + String(err)]);
 	        $('finalCommandNotice').className = 'notice blocked';
-	        $('finalStatusCommands').innerHTML = listItems(['python tools\\\\reachops_final_acceptance_gate.py --json']);
+	        $('finalStatusCommands').innerHTML = listItems(['python tools\\\\reachops_issue_closure_audit.py --json', 'python tools\\\\reachops_final_acceptance_gate.py --json']);
 	      }}
     }}
     async function getJson(url) {{
@@ -4827,6 +5158,52 @@ def html_page() -> bytes:
       }}
       refreshLogs(); refreshSnapshot(); refreshAcceptance();
     }}
+    function renderRuntimeCleanup(result) {{
+      const audit = result.runtime_process_audit || {{}};
+      const cleanup = result.cleanup_result || audit.cleanup_result || {{}};
+      const count = Number(result.cleanup_candidate_count || audit.cleanup_candidate_count || 0);
+      const status = String(cleanup.status || result.status || audit.status || 'unknown');
+      const applied = cleanup.applied === true;
+      const attempted = Array.isArray(cleanup.attempted) ? cleanup.attempted.length : 0;
+      if ($('runtimeCleanupStatus')) $('runtimeCleanupStatus').textContent = applied ? '已执行' : status;
+      if ($('runtimeCleanupCandidates')) $('runtimeCleanupCandidates').textContent = String(count);
+      const statusBox = $('runtimeCleanupStatusBox');
+      const candidatesBox = $('runtimeCleanupCandidatesBox');
+      if (statusBox) statusBox.className = applied ? 'previewItem ok' : (status === 'dry_run' ? 'previewItem warn' : 'previewItem bad');
+      if (candidatesBox) candidatesBox.className = count > 0 ? 'previewItem warn' : 'previewItem ok';
+      if ($('runtimeCleanupDetails')) {{
+        $('runtimeCleanupDetails').innerHTML = listItems([
+          `清理状态：${{status}}`,
+          `候选进程：${{count}}`,
+          `已尝试终止：${{attempted}}`,
+          `安全边界：no_browser_started=${{result.no_browser_started === true}}，no_submit=${{result.no_submit === true}}`,
+          `诊断文件：${{audit.path || result.path || '未写入'}}`
+        ]);
+      }}
+    }}
+    async function previewRuntimeCleanup() {{
+      let result = {{}};
+      try {{
+        result = await postJson('/api/control', {{action:'runtime_cleanup_preview'}});
+      }} catch (err) {{
+        result = {{status:'failed', error:'network_error', message:String(err), no_browser_started:true, no_submit:true}};
+      }}
+      renderRuntimeCleanup(result);
+      showApiNotice(result.status === 'runtime_cleanup_preview' ? '运行时清理预览已生成' : '运行时清理预览失败', result, result.status === 'runtime_cleanup_preview' ? '' : 'blocked', 12000);
+      refreshLogs(); refreshSnapshot(); refreshAcceptance();
+    }}
+    async function applyRuntimeCleanup() {{
+      let result = {{}};
+      try {{
+        result = await postJson('/api/control', {{action:'runtime_cleanup_apply', confirm:$('runtimeCleanupConfirm').value}});
+      }} catch (err) {{
+        result = {{status:'confirmation_required', error:'network_error_or_confirmation_required', message:String(err), no_browser_started:true, no_submit:true}};
+      }}
+      renderRuntimeCleanup(result);
+      const ok = result.status === 'applied' || (result.cleanup_result || {{}}).applied === true;
+      showApiNotice(ok ? '运行时清理已执行' : '运行时清理未执行', result, ok ? '' : 'blocked', 20000);
+      refreshLogs(); refreshSnapshot(); refreshAcceptance();
+    }}
     async function applyAccountRepairPlan() {{
       if (!accountGateAppliesToCurrentGroup()) {{
         showApiNotice(
@@ -4912,7 +5289,7 @@ def html_page() -> bytes:
       document.querySelectorAll('.tab,.page').forEach(el => el.classList.remove('active'));
       btn.classList.add('active'); $(btn.dataset.page).classList.add('active');
     }});
-	    $('start').onclick = start; $('previewPlanReplay').onclick = previewPlanReplay; $('startFromPlan').onclick = startFromPlan; $('downloadExecutionPlan').onclick = downloadExecutionPlan; $('applyAccountRepair').onclick = applyAccountRepairPlan; $('pause').onclick = () => control('pause'); $('resume').onclick = () => control('resume'); $('stop').onclick = () => control('stop');
+	    $('start').onclick = start; $('previewPlanReplay').onclick = previewPlanReplay; $('startFromPlan').onclick = startFromPlan; $('downloadExecutionPlan').onclick = downloadExecutionPlan; $('applyAccountRepair').onclick = applyAccountRepairPlan; $('previewRuntimeCleanup').onclick = previewRuntimeCleanup; $('applyRuntimeCleanup').onclick = applyRuntimeCleanup; $('pause').onclick = () => control('pause'); $('resume').onclick = () => control('resume'); $('stop').onclick = () => control('stop');
 	    $('refresh').onclick = () => {{ refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus(); }};
 	    $('refreshGroups').onclick = refreshGroups;
 	    $('refreshGroupsInline').onclick = () => {{ refreshIxBrowserStatus(); refreshGroups(); }};
@@ -5077,16 +5454,23 @@ def summarize_account_repair_plan(path_value: str | Path) -> dict:
         if not isinstance(row, dict):
             continue
         profile_ids = [str(item) for item in (row.get("profile_ids") or []) if str(item).strip()]
+        count = safe_int(row.get("count"), 0)
+        profile_ids_total = safe_int(row.get("profile_ids_total"), len(profile_ids))
+        summary_only_count = safe_int(row.get("summary_only_count"), max(0, count - len(profile_ids)))
         groups.append(
             {
                 "error": str(row.get("error") or ""),
-                "count": safe_int(row.get("count"), 0),
+                "count": count,
                 "profile_ids_sample": profile_ids[:12],
-                "profile_ids_total": len(profile_ids),
+                "profile_ids_total": profile_ids_total,
+                "summary_only_count": summary_only_count,
+                "count_source": str(row.get("count_source") or ""),
                 "recommended_action": str(row.get("recommended_action") or ""),
                 "sample_message": str(row.get("sample_message") or ""),
             }
         )
+    computed_total_events = sum(safe_int(row.get("count"), 0) for row in groups)
+    computed_summary_only = sum(safe_int(row.get("summary_only_count"), 0) for row in groups)
     return {
         "status": "ok",
         "path": str(path),
@@ -5094,6 +5478,11 @@ def summarize_account_repair_plan(path_value: str | Path) -> dict:
         "batch_status": str(plan.get("batch_status") or ""),
         "profile_group": str(plan.get("profile_group") or ""),
         "total_unique_profiles_by_error": safe_int(plan.get("total_unique_profiles_by_error"), 0),
+        "total_error_events_by_error": safe_int(
+            plan.get("total_error_events_by_error"),
+            computed_total_events or safe_int(plan.get("total_unique_profiles_by_error"), 0),
+        ),
+        "summary_only_error_count": safe_int(plan.get("summary_only_error_count"), computed_summary_only),
         "safety_contract": {
             "schema_version": "reachops.account_repair_safety_contract.v1",
             "manual_apply_required": True,
@@ -5171,9 +5560,9 @@ def apply_latest_account_repair_plan_from_web(profile_group: str = "") -> dict:
             "message": f"{type(exc).__name__}: {exc}",
         }
     result["profile_group_requested"] = str(profile_group or "")
+    result_path = write_account_repair_apply_result(result)
+    result["apply_result_path"] = str(result_path)
     if result.get("status") == "applied":
-        result_path = write_account_repair_apply_result(result)
-        result["apply_result_path"] = str(result_path)
         append_web_log(
             f"CONFIG account_repair_apply status=applied group={result.get('profile_group') or profile_group or '-'} "
             f"selected={result.get('selected_count', 0)} moved={result.get('moved_count', 0)} failed={result.get('failed_count', 0)}"
@@ -5182,6 +5571,19 @@ def apply_latest_account_repair_plan_from_web(profile_group: str = "") -> dict:
             [
                 "点击刷新分组确认坏账号已移入封禁账号分组。",
                 "确认至少 1 个可用账号保留在执行分组后，再勾选重新预检并开始获客。",
+            ]
+        )
+    elif result.get("status") == "no_applicable_profiles":
+        append_web_log(
+            f"WARN   account_repair_apply status=no_applicable_profiles group={result.get('profile_group') or profile_group or '-'} "
+            f"selected={result.get('selected_count', 0)} moved={result.get('moved_count', 0)} failed={result.get('failed_count', 0)} "
+            f"errors={','.join(result.get('non_auto_error_codes') or []) or '-'}"
+        )
+        result.setdefault("next_actions", []).extend(
+            [
+                "最新账号修复计划没有默认可自动隔离的账号，未移动任何 ixBrowser 配置。",
+                "手动打开受影响账号，确认登录状态、内核版本、代理和 TikTok 页面加载；不可用账号再移入封禁账号分组。",
+                "至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑真实执行复测。",
             ]
         )
     else:
@@ -5227,7 +5629,7 @@ def build_acceptance_payload() -> dict:
             if isinstance(runtime_progress.get("profile_preflight_progress"), dict)
             else {}
         )
-        acceptance = derive_acceptance(batch, preflight, read_acceptance_lines(LOG_PATH))
+        acceptance = derive_acceptance(batch, preflight, read_acceptance_lines(current_log_path()))
         db_details = load_batch_profile_preflight_details(db_path, batch)
         acceptance["profile_preflight_details"] = db_details or enrich_profile_quarantine_moves(
             db_path,
@@ -5244,7 +5646,7 @@ def build_acceptance_payload() -> dict:
             or remediation_report.get("account_plan_json_path")
             or ""
         )
-        operations = build_operations_payload(db_path, batch, acceptance, read_acceptance_lines(LOG_PATH, limit=800))
+        operations = build_operations_payload(db_path, batch, acceptance, read_acceptance_lines(current_log_path(), limit=800))
         annotate_acceptance_with_operations(acceptance, operations, batch)
         from tools.reachops_client_delivery_check import build_delivery_check, write_delivery_check
 
@@ -5280,6 +5682,8 @@ def build_acceptance_payload() -> dict:
                 "failed_checks": client_delivery.get("failed_checks") or [],
                 "blockers": client_delivery.get("blockers") or [],
                 "next_actions": client_delivery.get("next_actions") or [],
+                "account_blocker_resolution": client_delivery.get("account_blocker_resolution") or {},
+                "account_support_handoff": client_delivery.get("account_support_handoff") or {},
                 "account_repair_apply": client_delivery.get("account_repair_apply") or {},
                 "delivery_check_path": client_delivery.get("delivery_check_path", ""),
                 "ixbrowser_metadata": {
@@ -6189,23 +6593,6 @@ def validate_profile_group_for_start(profile_group: str) -> tuple[bool, dict]:
             groups = retry_groups
             error = ""
         else:
-            cached_names = {str(row.get("name") or "").strip().lower(): row for row in retry_groups or groups}
-            cached_selected = cached_names.get(profile_group.strip().lower())
-            api_health = build_ixbrowser_status_payload()
-            if cached_selected and (cached_selected.get("count_known") or api_health.get("ready")):
-                append_web_log(
-                    f"WARN   profile_group_live_refresh_degraded group={profile_group} "
-                    f"error={retry_error or error} policy=allow_cached_group_with_headless_start_gate"
-                )
-                return True, {
-                    "group": cached_selected,
-                    "status": "ready_with_cached_group_after_refresh_retry",
-                    "warning": "profile_group_live_refresh_required",
-                    "group_error": retry_error or error,
-                    "stale_cache": bool(retry_payload.get("stale_cache", group_payload.get("stale_cache"))),
-                    "ixbrowser_status": api_health.get("status"),
-                    "next_actions": ["已用缓存分组启动，执行器会继续校验 ixBrowser Local API 和账号可用性。"],
-                }
             return False, {
                 "status": "rejected",
                 "error": "profile_group_live_refresh_required",
@@ -6234,28 +6621,31 @@ def validate_profile_group_for_start(profile_group: str) -> tuple[bool, dict]:
             "available_groups": [str(row.get("name") or "") for row in groups],
             "next_actions": ["点击“刷新分组”后重新选择账号分组，再启动采集。"],
         }
-    if group_payload.get("live_all_group_counts_known") is not True:
-        return False, {
-            "status": "rejected",
-            "error": "profile_group_counts_incomplete",
-            "message": "启动前必须通过 ixBrowser Local API 完整读取全部配置分组账号数量；当前分组数量不完整，已拒绝启动。",
-            "profile_group": profile_group,
-            "group_count": len(groups),
-            "known_group_count": int(group_payload.get("live_known_group_count") or group_payload.get("known_group_count") or 0),
-            "count_resolution_error": group_payload.get("count_resolution_error") or "",
-            "next_actions": ["重新点击“刷新分组”，等待全部分组账号数量读取完成后再启动采集。"],
-        }
     selected_group = names[profile_group.strip().lower()]
+    count_notice = selected_group_count_runtime_notice(group_payload, profile_group)
     if not selected_group.get("count_known"):
-        return False, {
-            "status": "rejected",
-            "error": "profile_group_count_unknown",
-            "message": "选中的账号分组账号数量未知，不能证明配置列表可用于本次采集，已拒绝启动。",
-            "profile_group": profile_group,
-            "group_id": selected_group.get("group_id") or "",
-            "next_actions": ["重新刷新分组，确认该分组显示账号数量后再启动采集。"],
-        }
-    return True, {"group": selected_group}
+        append_web_log(
+            f"WARN   web_ui_start_group_count_unknown group={profile_group} "
+            f"group_id={selected_group.get('group_id') or ''} runtime_profile_preflight=true"
+        )
+    elif group_payload.get("live_all_group_counts_known") is not True:
+        append_web_log(
+            f"WARN   web_ui_start_group_counts_partial group={profile_group} "
+            f"known_group_count={int(group_payload.get('live_known_group_count') or group_payload.get('known_group_count') or 0)} "
+            f"group_count={len(groups)} runtime_profile_preflight=true"
+        )
+    return True, {
+        "group": selected_group,
+        "group_count": len(groups),
+        "known_group_count": int(group_payload.get("live_known_group_count") or group_payload.get("known_group_count") or 0),
+        "count_resolution_error": group_payload.get("count_resolution_error") or "",
+        **count_notice,
+        "next_actions": (
+            [str(count_notice["profile_group_count_warning"]), "可以启动本地执行。"]
+            if count_notice.get("profile_group_count_warning")
+            else ["可以启动本地执行。"]
+        ),
+    }
 
 
 def validate_account_repair_for_start(profile_group: str, account_repair_confirmed: bool) -> tuple[bool, dict]:
@@ -6295,26 +6685,31 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
         account_repair_summary = summarize_account_repair_plan(plan_paths[3] or plan_paths[1])
         stale_repair = account_repair_apply.get("stale") is True
         append_web_log(
-            f"WARN   web_ui_account_gate_stale_recheck group={profile_group} "
-            "policy=allow_start_with_forced_account_recheck"
+            f"WARN   web_ui_account_gate_rejected group={profile_group} "
+            "policy=account_repair_required_before_recheck"
         )
-        return True, {
-            "status": "ready_for_account_recheck",
+        payload = {
+            "status": "rejected",
+            "readiness": status,
             "error": "account_repair_required",
-            "message": (
-                "旧账号修复结果已失效；本次启动将重新读取 ixBrowser 分组并重新预检账号。"
-                if stale_repair
-                else "当前分组最近一次预检没有可用账号；本次启动将重新读取 ixBrowser 分组并重新预检账号。"
-            ),
             "profile_group": profile_group,
             "profile_available": profile_available,
             "same_group": same_group,
-            "force_account_recheck": True,
+            "force_account_recheck": False,
+            "auto_account_recheck": False,
+            "runtime_auto_grouping": True,
+            "previous_error": "account_repair_required",
+            "message": (
+                "旧账号修复结果已失效；为避免重复打开账号，已在启动前阻断。请先修复或应用账号修复计划，再勾选允许重新预检。"
+                if stale_repair
+                else "当前分组最近一次预检没有可用账号；为避免重复打开账号，已在启动前阻断。请先修复或应用账号修复计划，再勾选允许重新预检。"
+            ),
             "blockers": blockers,
             "next_actions": next_actions
             or [
-                "在 ixBrowser 中修复该分组账号登录状态、内核版本和代理可用性。",
-                "确认至少 1 个账号可正常打开 TikTok 后再次启动；程序会重新筛选可用账号。",
+                "先修复当前分组中未登录、验证码、代理失败或访问门禁账号。",
+                "可应用账号修复计划，将硬阻断账号移入隔离分组。",
+                "确认账号池已修复后勾选允许重新预检，再启动真实 M3。",
             ],
             "account_repair_apply": account_repair_apply,
             "account_repair_plan_paths": visible_paths,
@@ -6326,6 +6721,7 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
             "no_browser_started": True,
             "no_submit": True,
         }
+        return False, payload
     if blocked and account_repair_confirmed:
         append_web_log(
             f"WARN   web_ui_account_recheck_confirmed group={profile_group} "
@@ -6371,7 +6767,7 @@ def mark_run_session_blocked_by_watchdog(reason: str, heartbeat_payload: dict | 
             "watchdog_reason": reason,
             "heartbeat_stale": bool((heartbeat or {}).get("stale")),
             "heartbeat_age_seconds": (heartbeat or {}).get("age_seconds"),
-            "heartbeat_path": str(HEARTBEAT_PATH),
+            "heartbeat_path": str(current_heartbeat_path()),
             "running": run_is_active(),
             "no_ai_token_used": True,
         },
@@ -6484,12 +6880,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reject_untrusted_api_request(self) -> bool:
         if not is_local_api_host(self.headers.get("Host", "")):
-            self._send_json({"status": "rejected", "error": "untrusted_host"}, 403)
+            self._send_json(
+                {"status": "rejected", "error": "untrusted_host", "no_browser_started": True, "no_submit": True},
+                403,
+            )
             return True
         for header_name, error_code in (("Origin", "untrusted_origin"), ("Referer", "untrusted_referer")):
             header_value = self.headers.get(header_name, "")
             if header_value and not is_local_api_host(header_value):
-                self._send_json({"status": "rejected", "error": error_code}, 403)
+                self._send_json(
+                    {"status": "rejected", "error": error_code, "no_browser_started": True, "no_submit": True},
+                    403,
+                )
                 return True
         return False
 
@@ -6537,7 +6939,7 @@ class Handler(BaseHTTPRequestHandler):
             running = run_is_active()
             if not running:
                 RUN_PAUSED = False
-            all_lines = read_lines(LOG_PATH)
+            all_lines = read_lines(current_log_path())
             lines = all_lines[RUN_LOG_OFFSET:] if RUN_LOG_OFFSET and RUN_LOG_OFFSET <= len(all_lines) else all_lines[-80:]
             last_stage = ""
             for line in reversed(lines):
@@ -6735,11 +7137,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"status": "rejected", "error": error}, 400)
                 return
             try:
-                from tools.reachops_mvp_acceptance_summary import OUT_PATH, build_summary
+                from tools.reachops_mvp_acceptance_summary import build_summary
 
                 summary = build_summary()
-                OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-                OUT_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+                mvp_summary_path = current_mvp_acceptance_summary_path()
+                mvp_summary_path.parent.mkdir(parents=True, exist_ok=True)
+                mvp_summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
                 append_web_log(
                     f"CHECK  mvp_acceptance_refresh status={summary.get('status')} mvp_local_ready={str(bool(summary.get('mvp_local_ready'))).lower()}"
                 )
@@ -6758,18 +7161,22 @@ class Handler(BaseHTTPRequestHandler):
                 from tools.reachops_two_phase_acceptance_matrix import build_matrix, render_markdown
 
                 report = build_report()
-                report.setdefault("execution_contract", {})["authoritative_report"] = str(GOAL_DELIVERY_REPORT_PATH)
-                report.setdefault("execution_contract", {})["operator_summary"] = str(GOAL_DELIVERY_SUMMARY_PATH)
-                report.setdefault("evidence_files", {})["goal_delivery_report"] = str(GOAL_DELIVERY_REPORT_PATH)
-                report.setdefault("evidence_files", {})["goal_delivery_summary"] = str(GOAL_DELIVERY_SUMMARY_PATH)
-                GOAL_DELIVERY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-                GOAL_DELIVERY_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-                GOAL_DELIVERY_SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
-                GOAL_DELIVERY_SUMMARY_PATH.write_text(render_markdown_summary(report), encoding="utf-8")
+                goal_report_path = current_goal_delivery_report_path()
+                goal_summary_path = current_goal_delivery_summary_path()
+                two_phase_json_path = current_two_phase_matrix_json_path()
+                two_phase_md_path = current_two_phase_matrix_md_path()
+                report.setdefault("execution_contract", {})["authoritative_report"] = str(goal_report_path)
+                report.setdefault("execution_contract", {})["operator_summary"] = str(goal_summary_path)
+                report.setdefault("evidence_files", {})["goal_delivery_report"] = str(goal_report_path)
+                report.setdefault("evidence_files", {})["goal_delivery_summary"] = str(goal_summary_path)
+                goal_report_path.parent.mkdir(parents=True, exist_ok=True)
+                goal_report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+                goal_summary_path.parent.mkdir(parents=True, exist_ok=True)
+                goal_summary_path.write_text(render_markdown_summary(report), encoding="utf-8")
                 matrix = build_matrix(report)
-                TWO_PHASE_MATRIX_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
-                TWO_PHASE_MATRIX_JSON_PATH.write_text(json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8")
-                TWO_PHASE_MATRIX_MD_PATH.write_text(render_markdown(matrix), encoding="utf-8")
+                two_phase_json_path.parent.mkdir(parents=True, exist_ok=True)
+                two_phase_json_path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8")
+                two_phase_md_path.write_text(render_markdown(matrix), encoding="utf-8")
                 append_web_log(
                     f"CHECK  goal_delivery_refresh status={report.get('status')} local_mvp_ready={str(bool(report.get('local_mvp_ready'))).lower()} windows_build_ready={str(bool(report.get('windows_build_ready'))).lower()} final_delivery_ready={str(bool(report.get('final_delivery_ready'))).lower()} two_phase={matrix.get('status')}"
                 )
@@ -6811,6 +7218,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"status": "rejected", "error": error}, 400)
                 return
             action = str(payload.get("action") or "").lower()
+            if action in {"runtime_cleanup_preview", "runtime_process_cleanup_preview"}:
+                report = build_runtime_process_control_report(apply_cleanup=False)
+                self._send_json(
+                    {
+                        "status": "runtime_cleanup_preview",
+                        "runtime_process_audit": report,
+                        "cleanup_result": report.get("cleanup_result") or {},
+                        "cleanup_candidate_count": report.get("cleanup_candidate_count", 0),
+                        "no_browser_started": True,
+                        "no_submit": True,
+                    }
+                )
+                return
+            if action in {"runtime_cleanup_apply", "runtime_process_cleanup_apply"}:
+                confirm = str(payload.get("confirm") or payload.get("confirmation") or "")
+                report = build_runtime_process_control_report(apply_cleanup=True, confirm_cleanup=confirm)
+                cleanup_result = report.get("cleanup_result") if isinstance(report.get("cleanup_result"), dict) else {}
+                status_code = 200 if cleanup_result.get("applied") else 409
+                self._send_json(
+                    {
+                        "status": str(cleanup_result.get("status") or "runtime_cleanup_apply"),
+                        "runtime_process_audit": report,
+                        "cleanup_result": cleanup_result,
+                        "cleanup_candidate_count": report.get("cleanup_candidate_count", 0),
+                        "confirmation_required": RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+                        "no_browser_started": True,
+                        "no_submit": True,
+                    },
+                    status_code,
+                )
+                return
             with RUN_STATE_LOCK:
                 if not run_is_active():
                     RUN_PAUSED = False
@@ -6939,6 +7377,15 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     append_web_log(f"WARN   web_ui_stop_requested pid={pid} result={str(ok).lower()}")
                     RUN_PROCESS = None
+                    cleanup_report = build_runtime_process_control_report(
+                        apply_cleanup=True,
+                        confirm_cleanup=RUNTIME_PROCESS_CLEANUP_CONFIRMATION,
+                    )
+                    cleanup_result = (
+                        cleanup_report.get("cleanup_result")
+                        if isinstance(cleanup_report.get("cleanup_result"), dict)
+                        else {}
+                    )
                     session = update_current_run_session(
                         "BLOCKED",
                         pid=pid,
@@ -6949,14 +7396,29 @@ class Handler(BaseHTTPRequestHandler):
                             "ok": bool(ok),
                             "reason": "WEB_UI_STOP_REQUESTED",
                         },
-                        result={"status": "stopped", "reason": "WEB_UI_STOP_REQUESTED"},
+                        result={
+                            "status": "stopped",
+                            "reason": "WEB_UI_STOP_REQUESTED",
+                            "runtime_cleanup": cleanup_result,
+                            "runtime_cleanup_path": cleanup_report.get("path", ""),
+                            "no_submit": True,
+                        },
                     )
                     finalize_stale_web_batch_if_needed(
                         DATA_DIR / "data/growth_intelligence/growth_intelligence.db",
                         force=True,
                         reason="WEB_UI_STOP_REQUESTED",
                     )
-                    self._send_json({"status": "stopped" if ok else "failed", "pid": pid, "run_session": session})
+                    self._send_json(
+                        {
+                            "status": "stopped" if ok else "failed",
+                            "pid": pid,
+                            "run_session": session,
+                            "runtime_cleanup": cleanup_result,
+                            "runtime_cleanup_path": cleanup_report.get("path", ""),
+                            "no_submit": True,
+                        }
+                    )
                     return
                 self._send_json({"status": "rejected", "error": "unknown_action"}, 400)
             return
@@ -6991,12 +7453,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         payload, error = self._read_json_payload()
         if error:
-            self._send_json({"status": "rejected", "error": error}, 400)
+            self._send_json({"status": "rejected", "error": error, "no_browser_started": True, "no_submit": True}, 400)
             return
         replay_execution_plan: dict = {}
         replay_source_path = ""
         if start_from_plan:
-            replay_source_path = str((payload or {}).get("execution_plan_path") or LATEST_EXECUTION_PLAN_PATH)
+            replay_source_path = str(
+                (payload or {}).get("execution_plan_path") or current_latest_execution_plan_path()
+            )
             try:
                 replay_execution_plan = read_execution_plan(replay_source_path)
                 payload = payload_from_execution_plan(replay_execution_plan)
@@ -7022,6 +7486,8 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "rejected",
                     "error": "target_required",
                     "message": "请输入产品链接、关键词、达人主页、视频链接、话题或直播间后再开始获客。",
+                    "no_browser_started": True,
+                    "no_submit": True,
                 },
                 400,
             )
@@ -7035,6 +7501,8 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "rejected",
                     "error": "live_comment_confirmation_required",
                     "message": "选择采集 + 真实评论前必须勾选确认真实评论。",
+                    "no_browser_started": True,
+                    "no_submit": True,
                 },
                 400,
             )
@@ -7122,7 +7590,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"status": "already_running", "pid": RUN_PROCESS.pid})
                 return
             RUN_PAUSED = False
-            RUN_LOG_OFFSET = len(read_lines(LOG_PATH))
+            RUN_LOG_OFFSET = len(read_lines(current_log_path()))
             timeout_seconds = headless_timeout_seconds(volume, profile_limit, max_videos, max_comments)
             execution_plan = dict(replay_execution_plan) if replay_execution_plan else build_execution_plan(
                 target=target,
@@ -7142,12 +7610,15 @@ class Handler(BaseHTTPRequestHandler):
                 origin="web_ui_start",
             )
             if not replay_execution_plan:
+                start_next_actions = list(group_check.get("next_actions") or [])
+                if not start_next_actions:
+                    start_next_actions = ["可以启动本地执行。"]
                 preflight_decision = build_start_preflight_decision_for_plan(
                     execution_plan,
                     start_allowed=True,
                     gate_state="可启动",
                     blockers=[],
-                    next_actions=["可以启动本地执行。"],
+                    next_actions=start_next_actions,
                     no_submit=mode != "live_comment",
                 )
                 execution_plan = attach_autonomous_preflight_forecast(
@@ -7158,7 +7629,7 @@ class Handler(BaseHTTPRequestHandler):
             plan_path = DATA_DIR / "plans" / f"{plan_id or 'execution_plan'}.json"
             try:
                 write_execution_plan(execution_plan, plan_path)
-                write_execution_plan(execution_plan, LATEST_EXECUTION_PLAN_PATH)
+                write_execution_plan(execution_plan, current_latest_execution_plan_path())
             except Exception as exc:
                 RUN_PROCESS = None
                 RUN_PAUSED = False
@@ -7177,8 +7648,8 @@ class Handler(BaseHTTPRequestHandler):
             run_session = create_run_session(
                 execution_plan,
                 execution_plan_path=str(plan_path),
-                result_path=str(RESULT_PATH),
-                log_path=str(LOG_PATH),
+                result_path=str(current_result_path()),
+                log_path=str(current_log_path()),
                 log_offset=RUN_LOG_OFFSET,
             )
             run_session_path = run_session_path_for(run_session)
@@ -7212,7 +7683,7 @@ class Handler(BaseHTTPRequestHandler):
                 "--base-dir",
                 str(DATA_DIR),
                 "--control-dir",
-                str(CONTROL_DIR),
+                str(current_control_dir()),
                 "--execution-plan",
                 str(plan_path),
                 "--run-session",
@@ -7239,13 +7710,17 @@ class Handler(BaseHTTPRequestHandler):
                 str(timeout_seconds),
                 "--json",
             ]
+            remote_account_group_update = bool(force_account_recheck)
+            if remote_account_group_update:
+                cmd.append("--quarantine-failed-profiles")
             try:
-                RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
-                out = RESULT_PATH.open("w", encoding="utf-8")
+                result_path = current_result_path()
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                out = result_path.open("w", encoding="utf-8")
             except Exception as exc:
                 RUN_PROCESS = None
                 RUN_PAUSED = False
-                append_web_log(f"ERROR  web_ui_result_file_open_failed path={RESULT_PATH} error={exc}")
+                append_web_log(f"ERROR  web_ui_result_file_open_failed path={current_result_path()} error={exc}")
                 self._send_json({"status": "failed", "error": "result_file_open_failed", "message": str(exc)}, 500)
                 return
             env = os.environ.copy()
@@ -7254,6 +7729,7 @@ class Handler(BaseHTTPRequestHandler):
             env["no_proxy"] = env["NO_PROXY"]
             if force_account_recheck:
                 env["REACHOPS_FORCE_ACCOUNT_RECHECK"] = "1"
+                env["REACHOPS_QUARANTINE_FAILED_PROFILES"] = "1"
             try:
                 clear_cooperative_control()
                 process = subprocess.Popen(
@@ -7305,7 +7781,7 @@ class Handler(BaseHTTPRequestHandler):
                 RUN_PROCESS = None
                 RUN_STARTED_AT = 0.0
                 RUN_PAUSED = False
-                output_tail = read_text_tail(RESULT_PATH)
+                output_tail = read_text_tail(current_result_path())
                 write_run_result_payload(
                     {
                         "status": "headless_exited_immediately",

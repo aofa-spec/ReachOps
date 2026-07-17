@@ -5,6 +5,7 @@ from ReachOps.intelligence.storage import GrowthStorage
 
 
 COOLDOWN_ERROR_CODES = {
+    "PROFILE_MISSING",
     "LOGIN_REQUIRED",
     "CAPTCHA_DETECTED",
     "PROXY_FAILED",
@@ -20,6 +21,7 @@ COOLDOWN_ERROR_CODES = {
 }
 
 IMMEDIATE_COOLDOWN_ERROR_CODES = {
+    "PROFILE_MISSING",
     "LOGIN_REQUIRED",
     "CAPTCHA_DETECTED",
     "PROXY_FAILED",

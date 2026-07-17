@@ -117,6 +117,7 @@ Run:
 ```powershell
 python tools\reachops_phase2_handoff_check.py --write --json
 python tools\reachops_delivery_package_check.py --json
+python tools\reachops_issue_closure_audit.py --json
 python tools\reachops_final_acceptance_gate.py --json
 python tools\reachops_two_phase_acceptance_matrix.py --refresh --write --require-final --json
 ```

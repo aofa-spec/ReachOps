@@ -1,0 +1,165 @@
+name: ReachOps CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reachops-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-full-unit:
+    name: Linux full unit suite (Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+          python tools/verify_reachops_dependency_baseline.py --json
+
+      - name: Compile Python sources
+        run: python -m compileall -q ReachOps tools tests
+
+      - name: Run full unit-test suite
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONUNBUFFERED: "1"
+        run: python tools/run_reachops_ci_unittest.py --output "reports/ci/unittest-Linux.log"
+
+  windows-core-contract:
+    name: Windows core contracts (Python 3.11)
+    runs-on: windows-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+          python tools/verify_reachops_dependency_baseline.py --json
+
+      - name: Compile Python sources
+        run: python -m compileall -q ReachOps tools tests
+
+      - name: Run commercial security contract
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests -p "test_commercial_security_contract.py" -v
+
+      - name: Run execution-plan contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python -m unittest discover -s tests -p "test_execution_plan.py" -v
+          python -m unittest discover -s tests -p "test_headless_execution_plan_contract.py" -v
+
+      - name: Run lifecycle and risk contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python -m unittest discover -s tests -p "test_launcher.py" -v
+          python -m unittest discover -s tests -p "test_run_recovery.py" -v
+          python -m unittest discover -s tests -p "test_risk_gate.py" -v
+
+  deterministic-audit:
+    name: Deterministic delivery audits
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs:
+      - linux-full-unit
+      - windows-core-contract
+    if: ${{ always() }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+          python tools/verify_reachops_dependency_baseline.py --json
+
+      - name: Run fixture-based delivery audit
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tools/reachops_delivery_audit.py --json
+
+      - name: Run Web-panel DOM smoke
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tools/reachops_web_panel_dom_smoke.py --json
+
+      - name: Run Web-panel runtime smoke
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tools/reachops_web_panel_runtime_smoke.py --json
+
+      - name: Verify repository cleanliness
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tools/reachops_repository_cleanliness_check.py --json
+
+  external-acceptance-boundary:
+    name: Declare external acceptance boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Record non-CI acceptance scope
+        shell: bash
+        run: |
+          cat <<'EOF'
+          GitHub CI intentionally does not claim:
+          - full Windows packaged-client acceptance;
+          - live ixBrowser account readiness;
+          - authorized TikTok comment/follow/DM submission;
+          - Windows installer and signed release acceptance;
+          - customer outcome or commercial-effectiveness acceptance.
+
+          Those gates require controlled target environments and evidence packs.
+          See ReachOps/docs/REACHOPS_PRODUCT_COMMERCIAL_AUDIT_2026-07-13.md.
+          EOF

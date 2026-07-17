@@ -19,6 +19,7 @@ from ReachOps.intelligence import GrowthIntelligenceService, GrowthTaskConfig
 from ReachOps.workbench.profile_preflight import ProfilePreflightChecker, ProfilePreflightConfig
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from tools.reachops_live_validation_manifest import load_profile_snapshot, select_numeric_profiles, split_csv
+from tools.reachops_run_id import unique_run_dir
 
 
 def utc_stamp() -> str:
@@ -290,9 +291,13 @@ def build_operator_diagnosis(report: dict) -> dict:
     attempts = report.get("profile_attempts") or []
     errors = report.get("errors") or {}
     profile_preflight = report.get("profile_preflight") or {}
+    duplicate_suppression = report.get("duplicate_suppression") if isinstance(report.get("duplicate_suppression"), dict) else {}
     if int(funnel.get("customer_leads") or 0) > 0:
         status = "leads_found"
         next_action = "进入客户池和触达执行预检"
+    elif duplicate_suppression.get("duplicate_suppressed"):
+        status = "duplicate_suppressed"
+        next_action = "目标已采集过且线索/动作已存在；系统已跳过重复动作生成，保持 no-submit。"
     elif int(funnel.get("comment_users") or 0) > 0:
         status = "comment_users_found"
         next_action = "检查意图分数和动作队列"
@@ -354,13 +359,96 @@ def build_operator_diagnosis(report: dict) -> dict:
     }
 
 
+def build_no_action_reason(funnel: dict) -> dict:
+    return build_no_action_reason_with_duplicate(funnel, {})
+
+
+def build_no_action_reason_with_duplicate(funnel: dict, duplicate_suppression: dict | None = None) -> dict:
+    duplicate_suppression = duplicate_suppression if isinstance(duplicate_suppression, dict) else {}
+    if duplicate_suppression.get("duplicate_suppressed"):
+        return {
+            "code": "duplicate_suppressed",
+            "message": "本轮打开并采集了目标，但候选/线索/动作已在持久状态中存在，系统保持 no-submit 并跳过重复动作生成。",
+            "candidate_count": int(duplicate_suppression.get("prior_candidate_user_count") or 0),
+            "qualified_lead_count": int(duplicate_suppression.get("prior_operation_lead_count") or 0),
+            "action_count": int(duplicate_suppression.get("prior_action_queue_count") or 0),
+            "no_submit": True,
+        }
+    candidates = int((funnel or {}).get("comment_users") or 0)
+    leads = int((funnel or {}).get("customer_leads") or 0)
+    actions = int((funnel or {}).get("outreach_actions") or 0)
+    if actions > 0:
+        return {}
+    if candidates > 0 and leads <= 0:
+        return {
+            "code": "low_intent_candidates",
+            "message": "本轮采集到候选用户，但评分未达到触达线，系统保持 no-submit 并跳过动作生成。",
+            "candidate_count": candidates,
+            "qualified_lead_count": leads,
+            "action_count": actions,
+            "no_submit": True,
+        }
+    if candidates <= 0:
+        return {
+            "code": "no_candidates",
+            "message": "本轮没有采集到有效评论用户，系统保持 no-submit 并停止动作生成。",
+            "candidate_count": candidates,
+            "qualified_lead_count": leads,
+            "action_count": actions,
+            "no_submit": True,
+        }
+    return {}
+
+
+def build_duplicate_suppression(service: GrowthIntelligenceService, sources: list[dict], funnel: dict, processed_sources: int) -> dict:
+    source_summaries = []
+    for source in sources or []:
+        source_type = str(source.get("type") or source.get("source_type") or "").strip()
+        source_value = str(source.get("value") or source.get("source_value") or "").strip()
+        if not source_type or not source_value:
+            continue
+        try:
+            source_summaries.append(service.storage.datasource_history_summary("tiktok", source_type, source_value))
+        except Exception as exc:
+            source_summaries.append(
+                {
+                    "source_type": source_type,
+                    "source_value": source_value,
+                    "source_seen": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    prior_candidate_count = sum(int(row.get("candidate_user_count") or 0) for row in source_summaries)
+    prior_lead_count = sum(int(row.get("operation_lead_count") or 0) for row in source_summaries)
+    prior_action_count = sum(int(row.get("action_queue_count") or 0) for row in source_summaries)
+    current_new = sum(
+        int((funnel or {}).get(key) or 0)
+        for key in ("content_found", "comment_users", "customer_leads", "outreach_actions")
+    )
+    source_attempted = int(processed_sources or 0) > 0 or int((funnel or {}).get("page_opened") or 0) > 0
+    duplicate_suppressed = (
+        source_attempted
+        and current_new == 0
+        and (prior_candidate_count > 0 or prior_lead_count > 0 or prior_action_count > 0)
+    )
+    return {
+        "duplicate_suppressed": bool(duplicate_suppressed),
+        "source_attempted": bool(source_attempted),
+        "source_previously_seen": any(bool(row.get("source_seen")) for row in source_summaries),
+        "prior_candidate_user_count": prior_candidate_count,
+        "prior_operation_lead_count": prior_lead_count,
+        "prior_action_queue_count": prior_action_count,
+        "sources": source_summaries,
+    }
+
+
 def run_visual_preflight(args) -> dict:
     base_dir = Path(args.base_dir).resolve()
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    evidence_dir = base_dir / "evidence" / run_id
+    state_dir = Path(args.state_dir).resolve() if str(args.state_dir or "").strip() else base_dir
+    run_id, evidence_dir = unique_run_dir(base_dir / "evidence")
     profiles, profile_snapshot = select_profiles(args)
     factory = VisualEvidenceBrowserFactory(evidence_dir)
-    service = GrowthIntelligenceService(base_dir=str(base_dir), browser_factory=factory)
+    service = GrowthIntelligenceService(base_dir=str(state_dir), browser_factory=factory)
     workflow = GrowthWorkflowService(service)
     profile_preflight = {"skipped": True}
     executable_profiles = profiles
@@ -374,7 +462,7 @@ def run_visual_preflight(args) -> dict:
                 total_timeout_seconds=max(5, int(args.profile_preflight_timeout or 0)),
                 evidence_dir=str(evidence_dir / "profile_preflight"),
                 close_browser_after_check=True,
-                quarantine_on_failure=not bool(args.no_quarantine_failed_profiles),
+                quarantine_on_failure=bool(args.quarantine_failed_profiles),
             ),
         )
         executable_profiles, profile_preflight = checker.available_profiles(profiles)
@@ -411,6 +499,8 @@ def run_visual_preflight(args) -> dict:
         )
     batch = service.storage.latest_collection_batch_for_campaign(campaign_id) if campaign_id else {}
     funnel = workflow.build_campaign_funnel(campaign_id=campaign_id, batch_id=str(batch.get("id") or ""))
+    processed_sources = int(getattr(result, "processed_sources", 0) if result else 0)
+    duplicate_suppression = build_duplicate_suppression(service, sources, funnel, processed_sources)
     errors = dict((funnel or {}).get("error_counts") or {})
     profile_attempts = build_profile_attempts(service, str(batch.get("id") or ""), factory.evidence_rows)
     report = {
@@ -420,6 +510,8 @@ def run_visual_preflight(args) -> dict:
         "mode": "visual_browser_read_only_preflight",
         "no_submit": True,
         "dry_run_actions": True,
+        "state_dir": str(state_dir),
+        "state_db_path": str(service.paths.db_path),
         "target": str(args.target or ""),
         "source_type": str(args.source_type or "auto"),
         "profile_group": str(args.profile_group or ""),
@@ -437,7 +529,8 @@ def run_visual_preflight(args) -> dict:
         "sources": sources,
         "batch": batch,
         "funnel": funnel,
-        "processed_sources": int(getattr(result, "processed_sources", 0) if result else 0),
+        "processed_sources": processed_sources,
+        "duplicate_suppression": duplicate_suppression,
         "report_json_path": str(getattr(result, "report_json_path", "") if result else ""),
         "report_csv_path": str(getattr(result, "report_csv_path", "") if result else ""),
         "browser_started": factory.browser_started,
@@ -447,6 +540,9 @@ def run_visual_preflight(args) -> dict:
         "errors": errors,
     }
     report["operator_diagnosis"] = build_operator_diagnosis(report)
+    no_action_reason = build_no_action_reason_with_duplicate(funnel or {}, duplicate_suppression)
+    if no_action_reason:
+        report["no_action_reason"] = no_action_reason
     failures = []
     if not profiles:
         failures.append("no_profile_selected")
@@ -458,9 +554,13 @@ def run_visual_preflight(args) -> dict:
         failures.append("browser_not_started")
     if not factory.evidence_rows:
         failures.append("evidence_screenshot_missing")
-    if not result or int(getattr(result, "processed_sources", 0) or 0) < 1:
+    if (not result or int(getattr(result, "processed_sources", 0) or 0) < 1) and not duplicate_suppression.get("duplicate_suppressed"):
         failures.append("collection_not_completed")
-    if int((funnel or {}).get("comment_users") or 0) < 1 and int((funnel or {}).get("customer_leads") or 0) < 1:
+    if (
+        int((funnel or {}).get("comment_users") or 0) < 1
+        and int((funnel or {}).get("customer_leads") or 0) < 1
+        and not duplicate_suppression.get("duplicate_suppressed")
+    ):
         failures.append("effective_acquisition_not_completed")
     if failures:
         report["status"] = "failed"
@@ -476,6 +576,7 @@ def run_visual_preflight(args) -> dict:
 def parse_args():
     parser = argparse.ArgumentParser(description="ReachOps visual read-only browser collection preflight.")
     parser.add_argument("--base-dir", default="reports/reachops/visual_collection_preflight")
+    parser.add_argument("--state-dir", default="", help="Persistent Growth Intelligence state dir. Defaults to --base-dir.")
     parser.add_argument("--target", default="anti aging serum")
     parser.add_argument("--source-type", default="auto", choices=["auto", "keyword", "hashtag", "creator_url", "content_url", "live_room_url"])
     parser.add_argument("--profile-group", default="US")
@@ -488,7 +589,8 @@ def parse_args():
     parser.add_argument("--profile-page-timeout", type=int, default=20)
     parser.add_argument("--profile-wait", type=float, default=2.0)
     parser.add_argument("--profile-preflight-timeout", type=int, default=25)
-    parser.add_argument("--no-quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--no-quarantine-failed-profiles", action="store_true", help="Deprecated no-op; failed profiles are not moved unless --quarantine-failed-profiles is set.")
     parser.add_argument("--max-videos", type=int, default=1)
     parser.add_argument("--max-comments", type=int, default=5)
     parser.add_argument("--min-views", type=int, default=0)

@@ -191,10 +191,13 @@ function Write-AcceptanceSummary {
         [string]$ActivationStatusJsonPath,
         [string]$LiveAcceptanceStatusJsonPath,
         [string]$AuthorizationHandoffJsonPath,
+        [string]$AuthorizationHandoffReadinessJsonPath,
+        [string]$AuthorizationHandoffReadinessMdPath,
         [string]$LiveValidationJsonPath,
         [string]$RepositoryCleanlinessJsonPath,
         [string]$WindowsPackagePreflightJsonPath,
         [string]$ClientDeliveryJsonPath,
+        [string]$IssueClosureJsonPath,
         [string]$ReadinessJsonPath,
         [string]$PreflightJsonPath,
         [string]$LiveSubmitJsonPath,
@@ -210,6 +213,7 @@ function Write-AcceptanceSummary {
     $liveValidation = Read-JsonObject $LiveValidationJsonPath
     $windowsPackagePreflight = Read-JsonObject $WindowsPackagePreflightJsonPath
     $clientDelivery = Read-JsonObject $ClientDeliveryJsonPath
+    $issueClosure = Read-JsonObject $IssueClosureJsonPath
     $readiness = Read-JsonObject $ReadinessJsonPath
     $preflight = Read-JsonObject $PreflightJsonPath
     $liveSubmit = Read-JsonObject $LiveSubmitJsonPath
@@ -370,6 +374,8 @@ function Write-AcceptanceSummary {
             no_submit = if ($authorizationHandoff) { [bool]$authorizationHandoff.no_submit } else { $true }
             bundle_path = if ($authorizationHandoff) { [string]$authorizationHandoff.bundle_path } else { "" }
             readiness_status = if ($authorizationHandoff) { [string]$authorizationHandoff.readiness_status } else { "" }
+            readiness_report_path = if (Test-Path $AuthorizationHandoffReadinessMdPath) { $AuthorizationHandoffReadinessMdPath } else { "" }
+            readiness_json_path = if (Test-Path $AuthorizationHandoffReadinessJsonPath) { $AuthorizationHandoffReadinessJsonPath } else { "" }
             json_path = if (Test-Path $AuthorizationHandoffJsonPath) { $AuthorizationHandoffJsonPath } else { "" }
         }
         live_preflight = [ordered]@{
@@ -416,6 +422,14 @@ function Write-AcceptanceSummary {
             delivery_check_path = if ($clientDelivery) { [string]$clientDelivery.delivery_check_path } else { "" }
             checks = if ($clientDelivery) { @($clientDelivery.checks) } else { Empty-JsonArray }
             json_path = if (Test-Path $ClientDeliveryJsonPath) { $ClientDeliveryJsonPath } else { "" }
+        }
+        issue_closure = [ordered]@{
+            status = if ($issueClosure) { [string]$issueClosure.status } else { "skipped" }
+            passed = if ($issueClosure) { [bool]$issueClosure.passed } else { $false }
+            github_issues = if ($issueClosure) { $issueClosure.github_issues } else { @{} }
+            summary = if ($issueClosure) { $issueClosure.summary } else { @{} }
+            external_acceptance_pending = if ($issueClosure) { @($issueClosure.external_acceptance_pending) } else { Empty-JsonArray }
+            json_path = if (Test-Path $IssueClosureJsonPath) { $IssueClosureJsonPath } else { "" }
         }
         live_readiness = [ordered]@{
             status = if ($readiness) { [string]$readiness.status } else { "skipped" }
@@ -514,6 +528,8 @@ $windowsPackagePreflightStdout = Join-Path $root "windows_package_preflight_stdo
 $windowsPackagePreflightJson = Join-Path $root "windows_package_preflight.json"
 $clientDeliveryStdout = Join-Path $root "client_delivery_stdout.json"
 $clientDeliveryJson = Join-Path $root "client_delivery.json"
+$issueClosureStdout = Join-Path $root "issue_closure_stdout.json"
+$issueClosureJson = Join-Path $root "issue_closure_payload.json"
 $goalStatusStdout = Join-Path $root "goal_status_stdout.json"
 $goalStatusJson = Join-Path $root "goal_status_report.json"
 $packageCheckStdout = Join-Path $root "delivery_package_check_stdout.json"
@@ -699,6 +715,10 @@ $clientDeliveryOutput | ForEach-Object { Write-Host $_ }
 Write-Utf8NoBom -Path $clientDeliveryStdout -Content ($clientDeliveryOutput -join [Environment]::NewLine)
 Convert-StdoutJson -StdoutPath $clientDeliveryStdout -OutputPath $clientDeliveryJson | Out-Null
 
+Write-Step "ReachOps issue closure audit"
+Invoke-PythonCapture -StepName "ReachOps issue closure audit" -StdoutPath $issueClosureStdout -Arguments @("tools\reachops_issue_closure_audit.py", "--json")
+Convert-StdoutJson -StdoutPath $issueClosureStdout -OutputPath $issueClosureJson | Out-Null
+
 Write-Step "ReachOps live submit readiness check without browser"
 $readinessArgs = @("tools\reachops_live_readiness.py", "--limit", ([string]$Limit), "--json")
 if ($ProfileIds) {
@@ -797,7 +817,7 @@ if ($RunLiveSubmit) {
     Write-Step "Skipping controlled live submit: RunLiveSubmit not set"
 }
 
-Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveAcceptanceStatusJsonPath $liveAcceptanceStatusJson -AuthorizationHandoffJsonPath $authorizationHandoffJson -LiveValidationJsonPath $liveValidationJson -RepositoryCleanlinessJsonPath $repositoryCleanlinessJson -WindowsPackagePreflightJsonPath $windowsPackagePreflightJson -ClientDeliveryJsonPath $clientDeliveryJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
+Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveAcceptanceStatusJsonPath $liveAcceptanceStatusJson -AuthorizationHandoffJsonPath $authorizationHandoffJson -AuthorizationHandoffReadinessJsonPath $authorizationHandoffReadinessJson -AuthorizationHandoffReadinessMdPath $authorizationHandoffReadinessMd -LiveValidationJsonPath $liveValidationJson -RepositoryCleanlinessJsonPath $repositoryCleanlinessJson -WindowsPackagePreflightJsonPath $windowsPackagePreflightJson -ClientDeliveryJsonPath $clientDeliveryJson -IssueClosureJsonPath $issueClosureJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
 
 Write-Step "ReachOps goal status report"
 Invoke-PythonCapture -StepName "ReachOps goal status report" -StdoutPath $goalStatusStdout -Arguments @("tools\reachops_goal_status_report.py", "--audit-json", $auditJson, "--acceptance-summary", $acceptanceSummaryJson, "--json")
@@ -830,6 +850,7 @@ $finalGateArgs = @(
     "--pressure-json", $operatorPressureJson,
     "--goal-status-json", $goalStatusJson,
     "--package-check-json", $packageCheckJson,
+    "--issue-closure-json", $issueClosureJson,
     "--acceptance-summary", $acceptanceSummaryJson,
     "--json"
 )
@@ -892,6 +913,7 @@ Write-Host "LIVE_VALIDATION_MANIFEST_JSON=$liveValidationJson"
 Write-Host "REPOSITORY_CLEANLINESS_JSON=$repositoryCleanlinessJson"
 Write-Host "WINDOWS_PACKAGE_PREFLIGHT_JSON=$windowsPackagePreflightJson"
 Write-Host "CLIENT_DELIVERY_JSON=$clientDeliveryJson"
+Write-Host "ISSUE_CLOSURE_JSON=$issueClosureJson"
 Write-Host "GOAL_STATUS_JSON=$goalStatusJson"
 Write-Host "PACKAGE_CHECK_JSON=$packageCheckJson"
 Write-Host "FINAL_ACCEPTANCE_GATE_JSON=$finalGateJson"

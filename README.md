@@ -85,6 +85,40 @@ python3 tools/reachops_goal_status_report.py --json
 - goal status 可到 `ready_for_external_validation`；真实平台提交前不应宣称 `passed`。
 - `tools/reachops_delivery_package_check.py` 需要 Windows 产物和 acceptance reports；本机没有这些产物时返回缺失是预期状态。
 
+CI/release baseline 本地审计：
+
+```bash
+python tools/reachops_ci_release_baseline_audit.py --json
+```
+
+该审计只证明本地可重复门禁：Linux/Windows Python 3.11 CI 矩阵、依赖锁、`pip check`、dependency-license inventory、deterministic delivery audits、release evidence、完整 final report set 索引和 rollback note 恢复证据合同。GitHub `main` 分支保护、强制 PR review 和十连 CI 绿灯仍是外部治理门禁，不能用本地 JSON 代替。
+
+账号 readiness / no-submit 证据包本地审计：
+
+```bash
+python tools/reachops_account_readiness_audit.py --json
+```
+
+该审计只证明账号生命周期、profile preflight、隔离/修复、no-submit 预检证据、fixture/dry-run 指标隔离和 acceptance summary 边界都能被本地重复检查。30 个受控真实账号、100 次真实 no-submit 试点、页面状态/评论采集/去重/精召回准确率和每次真实运行证据包仍是外部验收项，不能用本地审计 JSON 代替。
+
+商业控制面 / connector 解耦本地审计：
+
+```bash
+python tools/reachops_control_plane_audit.py --json
+```
+
+该审计只证明当前本地客户端已有可审计的执行计划/RunSession 控制面边界、collector/action executor contract、CSV/Webhook outcome ingestion、packaged entitlement remote disable，以及带 dry-run manifest 的 redacted support bundle 策略。organization/workspace/member/role/seat 服务端控制面、server-side RBAC、plan/seat metering、非 TikTok connector、Web UI/API/服务拆分和产品 telemetry/crash reporting 仍是外部/后续交付项，不能用本地 JSON 代替。
+
+Issues #1-#7 商业交付闭环索引审计：
+
+```bash
+python tools/reachops_issue_closure_audit.py --json
+```
+
+该审计把 Issues #1-#7 映射到现有本地证据：CI/release baseline、`/api/start` contract、账号 readiness、授权/升级供应链、数据治理、WAQO/outcome funnel 和商业控制面边界。它还展开 53 条 acceptance criteria，要求 `acceptance_criteria_unclassified=0`，并把每条标成 `local_passed` 或 `external_pending`。输出中的 `closure_requires_external_validation=true` 和 `does_not_claim_all_issues_closed=true` 表示本地合同可重复验收，但仍不能替代 GitHub issue 关闭、真实账号/真实平台试点、服务端 RBAC、connector GA、三家试点客户归因等外部验收。
+
+`tools/reachops_final_acceptance_gate.py --json` 和 `tools/reachops_goal_delivery_runner.py --json` 会消费该审计，并在 `commercial_issue_closure` 未 ready 时阻断最终交付；`tools/reachops_delivery_package_check.py --json` 也会拒绝缺少 `commercial_issue_closure:closed` 检查的旧版 final gate 报告。最终客户交付要求 `acceptance_criteria_external_pending=0`、`external_pending_count=0`。
+
 ## Windows 客户端
 
 启动 UI：
@@ -162,7 +196,7 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_readiness_windo
 powershell -ExecutionPolicy Bypass -File tools\run_reachops_live_preflight_windows.ps1
 ```
 
-`tools\reachops_activation_status_template.py` 只生成授权状态模板；模板文件带有 `template_only=true`，不能作为真实授权通过。
+`tools\reachops_activation_status_template.py` 只生成授权状态模板；模板文件带有 `template_only=true`，不能作为真实授权通过。打包商业运行时还要求真实授权文件带有服务端签发的 `entitlement_signature`，并会校验设备绑定、到期时间、撤销状态、离线宽限、并发设备限制和紧急禁用项。
 
 `tools\reachops_live_acceptance_status.py` 只读状态，不打开浏览器、不提交动作，用来汇总当前还缺本地输入、有效授权、目标 URL、真实提交证据或客户端交付门禁。若已有 acceptance summary，它会在 `next_required_actions` 中展开具体待处理项。
 
@@ -179,10 +213,10 @@ python tools\reachops_client_delivery_check.py --base-dir "reports\reachops\mac_
 
 - `tools\reachops_goal_delivery_runner.py --json` 当前应以实时门禁为准；在最新 Mac 证据中客户端门禁为 `status=blocked_by_accounts`、`profile_available=0`，因此 Mac 本地 MVP 不能声明通过。Windows 最终包和授权真实提交仍然是最终交付阻断项。
 - 目标模式总报告的 `deliverable_index` 是交付物索引；当前账号门禁失败时，`web_operator_panel.ready` 和 `local_mvp_acceptance.ready` 必须跟随实时门禁显示 blocked，不能用历史 ready 快照覆盖。`windows_final_package.ready=false`、`authorized_live_submit.ready=false`、`final_acceptance_gate.ready=false` 仍然阻断最终交付。
-- 当前 `/Users/aofa/Documents/New project` 没有 Windows `dist\` 交付产物，也没有本地最终 `acceptance_summary.json`。
+- 当前 `/Users/aofa/Documents/New project` 有 Windows `dist\ReachOps\ReachOps.exe`、`dist\installer\ReachOps-Setup-0.4.0.exe` 和 `dist\installer\reachops-update-manifest.json`，但没有本地最终 `acceptance_summary.json`。
 - `tools\reachops_client_delivery_check.py --json` 当前返回 `status=blocked_by_accounts`、`readiness=blocked_by_accounts`、`acceptance_ready=false`、`profile_available=0`；最新账号预检阻断为 `IXBROWSER_KERNEL_MISMATCH`、`LOGIN_REQUIRED` 和页面打开超时。
-- `tools\reachops_delivery_package_check.py --allow-external-pending --json` 当前返回 `status=failed`、`final_delivery_ready=false`，缺失 `exe`、`installer`、`manifest`、`acceptance_summary`。
-- `tools\reachops_final_acceptance_gate.py --json` 当前返回 `status=not_ready`、`final_delivery_ready=false`，失败项为 `goal_status:passed`、`delivery_package:passed`。
+- `tools\reachops_delivery_package_check.py --json` 当前返回 `status=failed`、`final_delivery_ready=false`，缺失 `acceptance_summary`，失败项为 `acceptance_summary_missing` 和 `acceptance_summary_not_passed`。
+- `tools\reachops_final_acceptance_gate.py --json` 当前返回 `status=not_ready`、`final_delivery_ready=false`，失败项包括 `goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed` 和 `commercial_issue_closure:closed`。
 - 旧 Windows VM 验收记录只能作为诊断参考，不能作为当前工作区最终交付通过证据。
 
 历史 Windows VM 诊断记录：
@@ -211,7 +245,8 @@ powershell -ExecutionPolicy Bypass -File tools\run_reachops_acceptance_windows.p
 - `dist\installer\ReachOps-Setup-0.4.0.exe` 存在。
 - `dist\installer\reachops-update-manifest.json` hash 校验通过。
 - `reports\reachops_acceptance\<timestamp>\acceptance_summary.json` 中 `status=passed`。
-- `reports\reachops_acceptance\<timestamp>\repository_cleanliness_payload.json` 和 `windows_package_preflight.json` 存在，且 package `report_files.repository_cleanliness`、`report_files.windows_package_preflight` 通过。
+- `reports\reachops_acceptance\<timestamp>\repository_cleanliness_payload.json`、`windows_package_preflight.json`、`authorization_handoff_payload.json`、`issue_closure_payload.json` 和 `final_acceptance_gate.json` 存在，`reports\acceptance_remediation\latest_delivery_check.json` 可追溯，且 package `report_files.repository_cleanliness`、`report_files.windows_package_preflight`、`report_files.authorization_handoff`、`report_files.client_delivery`、`report_files.issue_closure`、`report_files.final_acceptance_gate` 全部通过。
+- `tools\reachops_issue_closure_audit.py --json` 返回 Issues #1-#7 无外部 closure pending，`acceptance_criteria_external_pending=0`、`external_pending_count=0`、`closure_requires_external_validation=false`。
 - `effective_pending_external_validation=0`。
 - 真实 comment/follow/DM 尝试都有执行记录、错误码或截图证据。
 
@@ -224,10 +259,11 @@ python tools\reachops_delivery_package_check.py --json
 严格最终验收 gate：
 
 ```powershell
+python tools\reachops_issue_closure_audit.py --json
 python tools\reachops_final_acceptance_gate.py --json
 ```
 
-最终交付必须同时让 package check 返回 `status=passed`、`final_delivery_ready=true`，并让 final acceptance gate 返回 `status=passed`、`final_delivery_ready=true`。最终 package check 默认必须验证 `final_acceptance_gate.json`、`repository_cleanliness_payload.json` 和 `windows_package_preflight.json`；`--allow-missing-final-gate` 只允许 Windows acceptance 脚本首次 bootstrap 包检查使用，此时 JSON 会标记 `bootstrap_only=true`、`final_delivery_ready=false`，不能作为最终交付标准。`ready_for_external_validation`、`blocked_by_environment` 或缺少 `exe/installer/manifest/acceptance_summary/final_acceptance_gate/repository_cleanliness/windows_package_preflight` 都不是最终交付通过。
+最终交付必须同时让 package check 返回 `status=passed`、`final_delivery_ready=true`，并让 final acceptance gate 返回 `status=passed`、`final_delivery_ready=true`。最终 package check 默认必须验证完整 final report set，包括 `final_acceptance_gate.json`、`issue_closure_payload.json`、`repository_cleanliness_payload.json`、`windows_package_preflight.json`、`authorization_handoff_payload.json`、`latest_live_acceptance_readiness.md`、`latest_live_acceptance_readiness.json`、`client_delivery.json` 以及 live/preflight/installer/UI/activation/operator/goal/delivery audit 报告；`--allow-missing-final-gate` 只允许 Windows acceptance 脚本首次 bootstrap 包检查使用，此时 JSON 会标记 `bootstrap_only=true`、`final_delivery_ready=false`，不能作为最终交付标准。`ready_for_external_validation`、`blocked_by_environment` 或缺少 `exe/installer/manifest/acceptance_summary/final_acceptance_gate/issue_closure/repository_cleanliness/windows_package_preflight/authorization_handoff/client_delivery/live_readiness/live_preflight` 都不是最终交付通过。
 
 中间态检查允许外部真实平台 pending：
 

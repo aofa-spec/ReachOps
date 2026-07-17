@@ -51,7 +51,7 @@ RISK_FILTER_LABELS = {"all": "全部风险", "low": "低风险", "medium": "中�
 REVIEW_FILTER_LABELS = {"all": "全部审核", "pending": "待审核", "approved": "已批准", "rejected": "已拒绝"}
 TEMPLATE_STATUS_LABELS = {"active": "启用", "paused": "暂停"}
 
-OPERATOR_VIEW_NAMES = ["获客任务", "信息沙漏", "线索分析", "触达执行", "账号诊断", "报告中心"]
+OPERATOR_VIEW_NAMES = ["获客任务", "线索分析", "触达执行", "账号诊断", "报告中心"]
 
 
 def safe_tk_option(value: str) -> str:
@@ -556,6 +556,15 @@ class GrowthOpsConsole(ttk.Frame):
         ).grid(row=0, column=0, sticky="ew")
         tk.Label(
             page_header,
+            textvariable=self.page_subtitle_var,
+            bg=UI_COLORS["surface"],
+            fg=UI_COLORS["muted"],
+            font=ui_font(9),
+            anchor="w",
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", pady=(3, 0))
+        tk.Label(
+            page_header,
             textvariable=self.operator_status_var,
             bg=UI_COLORS["accent_soft"],
             fg=UI_COLORS["accent"],
@@ -570,7 +579,7 @@ class GrowthOpsConsole(ttk.Frame):
         self.stack.columnconfigure(0, weight=1)
         self.stack.rowconfigure(0, weight=1)
         self.views = {}
-        hidden_view_names = ["数据源", "定时扫描", "采集批次", "采集任务", "执行计划", "执行记录", "设置/风控"]
+        hidden_view_names = ["信息沙漏", "数据源", "定时扫描", "采集批次", "采集任务", "执行计划", "执行记录", "设置/风控"]
         for name in view_names + hidden_view_names:
             frame = tk.Frame(self.stack, bg=UI_COLORS["bg"], highlightthickness=0)
             frame.grid(row=0, column=0, sticky="nsew")
@@ -1146,7 +1155,7 @@ class GrowthOpsConsole(ttk.Frame):
         mode_key = quick_send_mode_key(self.quick_send_mode_var.get())
         if mode_key == "live_comment":
             self.action_execution_mode_var.set("真实提交")
-            self.action_execution_live_confirm_var.set(True)
+            self.action_execution_live_confirm_var.set(False)
         else:
             self.action_execution_mode_var.set("预检，不提交")
             self.action_execution_live_confirm_var.set(False)
@@ -2042,9 +2051,7 @@ class GrowthOpsConsole(ttk.Frame):
         ttk.Spinbox(execution_frame, from_=1, to=200, textvariable=self.action_execution_hour_limit_var, width=6).grid(row=1, column=1, sticky="w", padx=(4, 12), pady=(6, 0))
         ttk.Label(execution_frame, text="同视频/小时").grid(row=1, column=2, sticky="w", pady=(6, 0))
         ttk.Spinbox(execution_frame, from_=1, to=20, textvariable=self.action_execution_video_hour_limit_var, width=6).grid(row=1, column=3, sticky="w", padx=(4, 12), pady=(6, 0))
-        self.action_execution_live_confirm_var.set(
-            quick_send_mode_key(self.quick_send_mode_var.get()) == "live_comment"
-        )
+        self.action_execution_live_confirm_var.set(False)
         ttk.Checkbutton(
             execution_frame,
             text="确认真实提交",

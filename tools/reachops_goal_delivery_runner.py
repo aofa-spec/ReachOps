@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,18 +22,68 @@ LIVE_READINESS_REPORT_PATH = ACCEPTANCE_REMEDIATION_DIR / "latest_live_acceptanc
 LIVE_READINESS_JSON_PATH = ACCEPTANCE_REMEDIATION_DIR / "latest_live_acceptance_readiness.json"
 AUTHORIZATION_HANDOFF_BUNDLE_PATH = ACCEPTANCE_REMEDIATION_DIR / "latest_reachops_authorization_handoff.zip"
 RUNTIME_LOG_PATH = ROOT_DIR / "reports/reachops/mac_gui/runtime/logs/growth_ops_runtime.log"
+SECTION_TIMEOUT_RETURN_CODE = 124
+PM_SECTION_TIMEOUTS = {
+    "mvp_acceptance": 15,
+    "mac_loop_acceptance": 45,
+    "client_delivery": 15,
+    "windows_package_preflight": 20,
+    "issue_closure": 20,
+    "delivery_package": 20,
+    "final_gate": 30,
+    "repository_cleanliness": 15,
+}
+SECTION_EXECUTION_PHASES = [
+    (
+        "evidence_collection",
+        (
+            "mvp_acceptance",
+            "mac_loop_acceptance",
+            "windows_package_preflight",
+            "issue_closure",
+            "delivery_package",
+            "repository_cleanliness",
+        ),
+    ),
+    ("client_gate_snapshot", ("client_delivery",)),
+    ("final_gate_snapshot", ("final_gate",)),
+]
+
+
+def _timeout_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace").strip()
+    return str(value).strip()
 
 
 def run_json(command: list[str], timeout: int = 120) -> tuple[dict[str, Any], int, str]:
-    completed = subprocess.run(
-        command,
-        cwd=str(ROOT_DIR),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-        env={"PYTHONDONTWRITEBYTECODE": "1", **dict(os.environ)},
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env={"PYTHONDONTWRITEBYTECODE": "1", **dict(os.environ)},
+        )
+    except subprocess.TimeoutExpired as exc:
+        return (
+            {
+                "status": "timeout",
+                "passed": False,
+                "timed_out": True,
+                "timeout_seconds": timeout,
+                "command": " ".join(command),
+                "stdout_tail": _timeout_text(exc.output)[-4000:],
+                "stderr_tail": _timeout_text(exc.stderr)[-4000:],
+                "next_action": "Run this section command directly, fix the slow or blocked dependency, then rerun goal delivery.",
+            },
+            SECTION_TIMEOUT_RETURN_CODE,
+            f"timeout_after_{timeout}s",
+        )
     stdout = (completed.stdout or "").strip()
     stderr = (completed.stderr or "").strip()
     if not stdout:
@@ -49,13 +100,113 @@ def command_payload(command: list[str], timeout: int = 120) -> dict[str, Any]:
         "command": " ".join(command),
         "returncode": returncode,
         "stderr": stderr,
+        "timeout_seconds": timeout,
+        "timed_out": bool(isinstance(payload, dict) and payload.get("timed_out")),
         "payload": payload,
     }
+
+
+def build_section_commands(python: str | None = None) -> dict[str, tuple[list[str], int]]:
+    interpreter = python or sys.executable
+    return {
+        "mvp_acceptance": (
+            [interpreter, "tools/reachops_mvp_acceptance_summary.py", "--json"],
+            PM_SECTION_TIMEOUTS["mvp_acceptance"],
+        ),
+        "mac_loop_acceptance": (
+            [interpreter, "tools/reachops_mac_loop_acceptance.py", "--base-url", "http://127.0.0.1:8769", "--json"],
+            PM_SECTION_TIMEOUTS["mac_loop_acceptance"],
+        ),
+        "client_delivery": (
+            [interpreter, "tools/reachops_client_delivery_check.py", "--json"],
+            PM_SECTION_TIMEOUTS["client_delivery"],
+        ),
+        "windows_package_preflight": (
+            [interpreter, "tools/reachops_windows_package_preflight.py", "--json"],
+            PM_SECTION_TIMEOUTS["windows_package_preflight"],
+        ),
+        "issue_closure": (
+            [interpreter, "tools/reachops_issue_closure_audit.py", "--json"],
+            PM_SECTION_TIMEOUTS["issue_closure"],
+        ),
+        "delivery_package": (
+            [interpreter, "tools/reachops_delivery_package_check.py", "--allow-external-pending", "--json"],
+            PM_SECTION_TIMEOUTS["delivery_package"],
+        ),
+        "final_gate": (
+            [interpreter, "tools/reachops_final_acceptance_gate.py", "--json"],
+            PM_SECTION_TIMEOUTS["final_gate"],
+        ),
+        "repository_cleanliness": (
+            [interpreter, "tools/reachops_repository_cleanliness_check.py", "--clean", "--json"],
+            PM_SECTION_TIMEOUTS["repository_cleanliness"],
+        ),
+    }
+
+
+def run_section_batch(section_commands: dict[str, tuple[list[str], int]]) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=len(section_commands)) as executor:
+        futures = {
+            executor.submit(command_payload, command, timeout=timeout): name
+            for name, (command, timeout) in section_commands.items()
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+    return results
+
+
+def run_sections(
+    section_commands: dict[str, tuple[list[str], int]],
+    phases: list[tuple[str, tuple[str, ...]]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
+    for _phase_name, phase_names in (phases or SECTION_EXECUTION_PHASES):
+        phase_commands = {name: section_commands[name] for name in phase_names if name in section_commands}
+        if not phase_commands:
+            continue
+        results.update(run_section_batch(phase_commands))
+        seen.update(phase_commands)
+    remaining = {name: spec for name, spec in section_commands.items() if name not in seen}
+    if remaining:
+        results.update(run_section_batch(remaining))
+    return {name: results[name] for name in section_commands}
 
 
 def _payload(section: dict[str, Any]) -> dict[str, Any]:
     payload = section.get("payload")
     return payload if isinstance(payload, dict) else {}
+
+
+def _section_timed_out(section: dict[str, Any]) -> bool:
+    payload = _payload(section)
+    return (
+        bool(section.get("timed_out"))
+        or int(section.get("returncode") or 0) == SECTION_TIMEOUT_RETURN_CODE
+        or bool(payload.get("timed_out"))
+        or str(payload.get("status") or "") == "timeout"
+    )
+
+
+def _timed_out_sections(sections: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    timed_out = []
+    for name, section in sections.items():
+        if not _section_timed_out(section):
+            continue
+        payload = _payload(section)
+        timed_out.append(
+            {
+                "section": name,
+                "command": section.get("command") or payload.get("command") or "",
+                "timeout_seconds": int(section.get("timeout_seconds") or payload.get("timeout_seconds") or 0),
+                "returncode": int(section.get("returncode") or 0),
+                "stderr": str(section.get("stderr") or ""),
+                "next_action": payload.get("next_action")
+                or "Run the section command directly, fix the slow dependency, then rerun goal delivery.",
+            }
+        )
+    return timed_out
 
 
 def build_execution_contract() -> dict[str, Any]:
@@ -65,6 +216,7 @@ def build_execution_contract() -> dict[str, Any]:
         "mode": "local_pm_goal_gate",
         "does_not_submit": True,
         "does_not_open_browser_profile": True,
+        "section_timeouts": dict(PM_SECTION_TIMEOUTS),
         "authoritative_report": str(OUT_PATH),
         "operator_summary": str(SUMMARY_PATH),
     }
@@ -112,7 +264,7 @@ def build_deliverables() -> list[dict[str, Any]]:
             "name": "Windows 最终交付包",
             "path": "dist/ReachOps + dist/installer + reports/reachops_acceptance/<timestamp>/acceptance_summary.json",
             "required_for": "final_delivery",
-            "acceptance": "exe、installer、update manifest、acceptance_summary、windows_package_preflight、authorization_handoff、repository_cleanliness、final_acceptance_gate 全部存在且被 package check 验证。",
+            "acceptance": "exe、installer、update manifest、acceptance_summary、windows_package_preflight、issue_closure_payload、authorization_handoff、repository_cleanliness、final_acceptance_gate 全部存在且被 package check 验证。",
         },
         {
             "name": "授权真实提交证据",
@@ -289,6 +441,115 @@ def final_gate_authorized_live_submit_ready(final_gate: dict[str, Any]) -> bool:
     return not any(str(row.get("scope") or "") == "external_authorized_execution" for row in blockers if isinstance(row, dict))
 
 
+def final_gate_blocker_summary(final_gate: dict[str, Any], scope: str) -> dict[str, Any]:
+    blockers = final_gate.get("final_delivery_blockers") if isinstance(final_gate.get("final_delivery_blockers"), list) else []
+    for row in blockers:
+        if not isinstance(row, dict) or str(row.get("scope") or "") != scope:
+            continue
+        summary = row.get("blocker_summary") if isinstance(row.get("blocker_summary"), dict) else {}
+        if summary:
+            return summary
+    evidence_plan = (
+        final_gate.get("final_delivery_evidence_plan")
+        if isinstance(final_gate.get("final_delivery_evidence_plan"), dict)
+        else {}
+    )
+    items = evidence_plan.get("items") if isinstance(evidence_plan.get("items"), list) else []
+    for row in items:
+        if not isinstance(row, dict) or str(row.get("scope") or "") != scope:
+            continue
+        summary = row.get("blocker_summary") if isinstance(row.get("blocker_summary"), dict) else {}
+        if summary:
+            return summary
+    return {}
+
+
+def windows_acceptance_handoff_summary(package: dict[str, Any]) -> dict[str, Any]:
+    handoff = (
+        package.get("windows_acceptance_handoff")
+        if isinstance(package.get("windows_acceptance_handoff"), dict)
+        else {}
+    )
+    if not handoff:
+        return {}
+    safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    execution_environment = (
+        handoff.get("execution_environment")
+        if isinstance(handoff.get("execution_environment"), dict)
+        else package.get("execution_environment")
+        if isinstance(package.get("execution_environment"), dict)
+        else {}
+    )
+    environment_blocker = (
+        handoff.get("environment_blocker")
+        if isinstance(handoff.get("environment_blocker"), dict)
+        else package.get("environment_blocker")
+        if isinstance(package.get("environment_blocker"), dict)
+        else {}
+    )
+    return {
+        "schema_version": str(handoff.get("schema_version") or ""),
+        "path": str(package.get("windows_acceptance_handoff_path") or ""),
+        "support_required": bool(handoff.get("support_required")),
+        "support_case": str(handoff.get("support_case") or ""),
+        "final_delivery_ready": bool(handoff.get("final_delivery_ready")),
+        "does_not_claim_final_delivery_ready": bool(handoff.get("does_not_claim_final_delivery_ready", True)),
+        "acceptance_summary_path": str(handoff.get("acceptance_summary_path") or ""),
+        "manifest_path": str(handoff.get("manifest_path") or ""),
+        "execution_environment": execution_environment,
+        "environment_blocker": environment_blocker,
+        "missing_artifacts": [
+            str(item) for item in (handoff.get("missing_artifacts") or []) if str(item or "").strip()
+        ],
+        "failure_codes": [
+            str(item) for item in (handoff.get("failure_codes") or []) if str(item or "").strip()
+        ],
+        "pending_external_validation": [
+            str(item)
+            for item in (handoff.get("pending_external_validation") or [])
+            if str(item or "").strip()
+        ],
+        "retest_commands": [
+            str(item) for item in (handoff.get("retest_commands") or []) if str(item or "").strip()
+        ],
+        "acceptance_required": [
+            str(item) for item in (handoff.get("acceptance_required") or []) if str(item or "").strip()
+        ],
+        "does_not_create_acceptance_summary": bool(safety_contract.get("does_not_create_acceptance_summary")),
+        "requires_windows_real_acceptance": bool(safety_contract.get("requires_windows_real_acceptance")),
+        "safety_contract": safety_contract,
+    }
+
+
+def with_windows_acceptance_handoff(
+    blocker_summary: dict[str, Any],
+    package: dict[str, Any],
+) -> dict[str, Any]:
+    handoff_summary = windows_acceptance_handoff_summary(package)
+    if not handoff_summary:
+        return blocker_summary
+    summary = dict(blocker_summary)
+    if not summary:
+        summary = {
+            "schema_version": "reachops.windows_final_artifacts_blocker_summary.v1",
+            "status": str(package.get("status") or "failed"),
+            "final_delivery_ready": bool(package.get("final_delivery_ready")),
+            "missing_artifacts": [
+                str(item) for item in (package.get("missing_artifacts") or []) if str(item or "").strip()
+            ],
+            "failures": [
+                str(item) for item in (package.get("failures") or []) if str(item or "").strip()
+            ],
+            "next_required_command": "python tools\\reachops_delivery_package_check.py --json",
+            "does_not_claim_final_delivery_ready": not bool(package.get("final_delivery_ready")),
+        }
+    summary.setdefault("windows_acceptance_handoff", handoff_summary)
+    summary.setdefault("windows_acceptance_handoff_path", handoff_summary["path"])
+    summary.setdefault("execution_environment", handoff_summary.get("execution_environment") or package.get("execution_environment") or {})
+    summary.setdefault("environment_blocker", handoff_summary.get("environment_blocker") or package.get("environment_blocker") or {})
+    return summary
+
+
 def build_deliverable_index(
     *,
     local_ready: bool,
@@ -301,11 +562,42 @@ def build_deliverable_index(
     final_gate: dict[str, Any],
     clean: dict[str, Any],
     blockers: list[dict[str, Any]],
+    issue_closure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blocker_by_scope = {str(row.get("scope") or ""): row for row in blockers if isinstance(row, dict)}
+    local_mvp_blocker = blocker_by_scope.get("local_mvp", {})
+    local_mvp_blocker_summary = (
+        local_mvp_blocker.get("blocker_summary")
+        if isinstance(local_mvp_blocker.get("blocker_summary"), dict)
+        else {}
+    )
     windows_blocker = blocker_by_scope.get("windows_final_artifacts", {})
+    windows_blocker_summary = (
+        windows_blocker.get("blocker_summary")
+        if isinstance(windows_blocker.get("blocker_summary"), dict)
+        else {}
+    ) or final_gate_blocker_summary(final_gate, "windows_final_artifacts")
+    windows_blocker_summary = with_windows_acceptance_handoff(windows_blocker_summary, package)
+    windows_missing_artifacts = sorted(
+        {
+            str(item)
+            for item in list(package.get("missing_artifacts") or [])
+            + list(windows_preflight.get("missing_final_artifacts") or [])
+            if str(item or "").strip()
+        }
+    )
     pending_external = final_gate_pending_external_validation(final_gate)
     authorized_live_ready = final_gate_authorized_live_submit_ready(final_gate)
+    issue_summary = (issue_closure or {}).get("summary") if isinstance((issue_closure or {}).get("summary"), dict) else {}
+    issue_closure_ready = bool(
+        issue_closure
+        and issue_closure.get("passed")
+        and int(issue_summary.get("acceptance_criteria_total") or 0) == 53
+        and int(issue_summary.get("acceptance_criteria_unclassified") or 0) == 0
+        and int(issue_summary.get("acceptance_criteria_external_pending") or 0) == 0
+        and int(issue_summary.get("external_pending_count") or 0) == 0
+        and (issue_closure.get("github_issues") or {}).get("closure_requires_external_validation") is False
+    )
     return {
         "web_operator_panel": {
             "required_for": "local_mvp",
@@ -322,6 +614,8 @@ def build_deliverable_index(
                 str(client.get("delivery_check_path") or ""),
             ],
             "failed_checks": list(mvp.get("failed_checks") or []) + list(client.get("failed_checks") or []),
+            "blocker_summary": local_mvp_blocker_summary,
+            "account_support_handoff_path": str(client.get("support_account_handoff_path") or ""),
             "blocking_scope": "" if local_ready else "local_mvp",
         },
         "windows_build_inputs": {
@@ -336,9 +630,13 @@ def build_deliverable_index(
             "required_for": "final_delivery",
             "ready": str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready")),
             "status": package.get("status"),
-            "missing_artifacts": package.get("missing_artifacts") or [],
+            "missing_artifacts": windows_missing_artifacts,
+            "failures": [str(item) for item in (package.get("failures") or []) if str(item or "").strip()],
+            "execution_environment": package.get("execution_environment") if isinstance(package.get("execution_environment"), dict) else {},
+            "environment_blocker": package.get("environment_blocker") if isinstance(package.get("environment_blocker"), dict) else {},
             "artifacts": package.get("artifacts") or {},
             "remediation_plan": windows_blocker.get("remediation_plan") or package.get("remediation_plan") or {},
+            "blocker_summary": windows_blocker_summary,
             "blocking_scope": "" if str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready")) else "windows_final_artifacts",
         },
         "authorized_live_submit": {
@@ -348,6 +646,16 @@ def build_deliverable_index(
             "blocking_scope": "external_authorized_execution"
             if (not authorized_live_ready or blocker_by_scope.get("external_authorized_execution"))
             else "",
+        },
+        "commercial_issue_closure": {
+            "required_for": "final_delivery",
+            "ready": issue_closure_ready,
+            "status": (issue_closure or {}).get("status") or "",
+            "acceptance_criteria_total": issue_summary.get("acceptance_criteria_total"),
+            "acceptance_criteria_external_pending": issue_summary.get("acceptance_criteria_external_pending"),
+            "acceptance_criteria_unclassified": issue_summary.get("acceptance_criteria_unclassified"),
+            "external_pending_count": issue_summary.get("external_pending_count"),
+            "blocking_scope": "" if issue_closure_ready else "commercial_issue_closure",
         },
         "final_acceptance_gate": {
             "required_for": "final_delivery",
@@ -462,31 +770,119 @@ def infer_start_contract_from_runtime_log(no_action_reason: dict[str, Any] | Non
     }
 
 
-def build_report() -> dict[str, Any]:
-    python = sys.executable
-    sections = {
-        "mvp_acceptance": command_payload([python, "tools/reachops_mvp_acceptance_summary.py", "--json"], timeout=180),
-        "mac_loop_acceptance": command_payload(
-            [python, "tools/reachops_mac_loop_acceptance.py", "--base-url", "http://127.0.0.1:8769", "--json"],
-            timeout=180,
-        ),
-        "client_delivery": command_payload([python, "tools/reachops_client_delivery_check.py", "--json"], timeout=120),
-        "windows_package_preflight": command_payload([python, "tools/reachops_windows_package_preflight.py", "--json"], timeout=60),
-        "delivery_package": command_payload(
-            [python, "tools/reachops_delivery_package_check.py", "--allow-external-pending", "--json"],
-            timeout=60,
-        ),
-        "final_gate": command_payload([python, "tools/reachops_final_acceptance_gate.py", "--json"], timeout=180),
-        "repository_cleanliness": command_payload(
-            [python, "tools/reachops_repository_cleanliness_check.py", "--clean", "--json"],
-            timeout=60,
-        ),
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def build_local_mvp_blocker(
+    mvp: dict[str, Any],
+    mac_loop: dict[str, Any],
+    client: dict[str, Any],
+    clean: dict[str, Any],
+) -> dict[str, Any]:
+    status = mac_loop.get("status") or mvp.get("status") or client.get("status") or clean.get("status")
+    failed_checks = (
+        _string_list(mvp.get("failed_checks"))
+        + _string_list(mac_loop.get("failed_checks"))
+        + _string_list(client.get("failed_checks"))
+        + _string_list(clean.get("failed_checks"))
+    )
+    real_pilot = client.get("real_pilot_evidence") if isinstance(client.get("real_pilot_evidence"), dict) else {}
+    account_handoff = (
+        client.get("account_support_handoff") if isinstance(client.get("account_support_handoff"), dict) else {}
+    )
+    account_resolution = (
+        client.get("account_blocker_resolution")
+        if isinstance(client.get("account_blocker_resolution"), dict)
+        else {}
+    )
+    external_pending = _string_list(real_pilot.get("external_acceptance_pending")) + _string_list(
+        client.get("external_acceptance_pending")
+    )
+
+    blocker = {
+        "scope": "local_mvp",
+        "status": status,
+        "classification": "local_mvp_contract_or_runtime_failure",
+        "failed_checks": failed_checks,
+        "mac_loop_checks": mac_loop.get("checks") or {},
+        "next_actions": mac_loop.get("next_actions") or [],
+        "action": "修复 Mac 本地自动循环、客户端门禁或项目清洁度失败项。",
+        "does_not_claim_local_mvp_ready": True,
     }
+
+    account_pool_blocked = bool(account_handoff or account_resolution) or str(client.get("readiness") or "") in {
+        "blocked_by_accounts",
+        "blocked_by_environment",
+    }
+    if account_pool_blocked:
+        retest_commands = _string_list(account_handoff.get("retest_commands"))
+        acceptance_required = _string_list(account_handoff.get("acceptance_required"))
+        support_summary = {
+            "schema_version": "reachops.local_mvp_account_pool_blocker.v1",
+            "status": account_handoff.get("status") or account_resolution.get("status") or client.get("status"),
+            "support_required": bool(account_handoff.get("support_required", True)),
+            "support_case": account_handoff.get("support_case") or "account_pool_blocked",
+            "profile_group": account_handoff.get("profile_group") or account_resolution.get("profile_group"),
+            "batch_id": account_handoff.get("batch_id") or account_resolution.get("batch_id") or client.get("batch_id"),
+            "priority_action": account_handoff.get("priority_action") or account_resolution.get("priority_action"),
+            "ready_for_retest": bool(account_handoff.get("ready_for_retest") or account_resolution.get("ready_for_retest")),
+            "requires_latest_repair_apply": bool(
+                account_handoff.get("requires_latest_repair_apply")
+                or account_resolution.get("requires_latest_repair_apply")
+            ),
+            "requires_manual_account_work": bool(
+                account_handoff.get("requires_manual_account_work")
+                or account_resolution.get("requires_manual_account_work")
+            ),
+            "does_not_claim_real_account_pool_ready": True,
+            "external_acceptance_pending": external_pending,
+            "retest_commands": retest_commands,
+            "acceptance_required": acceptance_required,
+            "next_required_command": retest_commands[0] if retest_commands else "python tools\\reachops_client_delivery_check.py --json",
+        }
+        if account_resolution:
+            support_summary["blocker_codes"] = _string_list(account_resolution.get("blocker_codes"))
+            support_summary["profile_available"] = account_resolution.get("profile_available")
+        if account_handoff:
+            support_summary["repair_plan"] = account_handoff.get("repair_plan") or {}
+            support_summary["latest_apply"] = account_handoff.get("latest_apply") or {}
+
+        blocker.update(
+            {
+                "classification": "account_pool_external_validation",
+                "external_acceptance_pending": external_pending,
+                "account_blocker_resolution": account_resolution,
+                "account_support_handoff": account_handoff,
+                "blocker_summary": support_summary,
+                "next_actions": _string_list(account_handoff.get("operator_steps"))
+                or mac_loop.get("next_actions")
+                or [],
+                "action": "按账号支持交接修复或替换真实账号池，然后复跑客户端交付门禁和目标模式总门禁。",
+            }
+        )
+    elif external_pending:
+        blocker.update(
+            {
+                "classification": "external_validation_pending",
+                "external_acceptance_pending": external_pending,
+                "action": "补齐外部验收输入和真实运行证据后复跑目标模式总门禁。",
+            }
+        )
+    return blocker
+
+
+def build_report() -> dict[str, Any]:
+    sections = run_sections(build_section_commands(sys.executable))
+    section_timeouts = _timed_out_sections(sections)
 
     mvp = _payload(sections["mvp_acceptance"])
     mac_loop = _payload(sections["mac_loop_acceptance"])
     client = _payload(sections["client_delivery"])
     windows_preflight = _payload(sections["windows_package_preflight"])
+    issue_closure = _payload(sections["issue_closure"])
     package = _payload(sections["delivery_package"])
     final_gate = _payload(sections["final_gate"])
     clean = _payload(sections["repository_cleanliness"])
@@ -502,16 +898,18 @@ def build_report() -> dict[str, Any]:
     final_ready = str(final_gate.get("status") or "") == "passed" and bool(final_gate.get("final_delivery_ready"))
 
     blockers: list[dict[str, Any]] = []
-    if not local_ready:
+    if section_timeouts:
         blockers.append(
             {
-                "scope": "local_mvp",
-                "status": mac_loop.get("status") or mvp.get("status") or client.get("status") or clean.get("status"),
-                "mac_loop_checks": mac_loop.get("checks") or {},
-                "next_actions": mac_loop.get("next_actions") or [],
-                "action": "修复 Mac 本地自动循环、客户端门禁或项目清洁度失败项。",
+                "scope": "goal_delivery_section_timeout",
+                "status": "timeout",
+                "timed_out_sections": [row["section"] for row in section_timeouts],
+                "section_timeouts": section_timeouts,
+                "action": "先单独运行超时 section 的命令，修复慢依赖或环境阻断，再复跑 tools\\reachops_goal_delivery_runner.py --json。",
             }
         )
+    if not local_ready:
+        blockers.append(build_local_mvp_blocker(mvp, mac_loop, client, clean))
     if not windows_build_ready:
         blockers.append(
             {
@@ -521,14 +919,23 @@ def build_report() -> dict[str, Any]:
                 "action": "补齐 Windows 打包输入文件和脚本合同。",
             }
         )
-    if package.get("missing_artifacts"):
+    if package.get("missing_artifacts") or package.get("failures") or not (
+        str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready"))
+    ):
         remediation = package.get("remediation_plan") if isinstance(package.get("remediation_plan"), dict) else {}
+        package_blocker_summary = with_windows_acceptance_handoff(
+            final_gate_blocker_summary(final_gate, "windows_final_artifacts"),
+            package,
+        )
         blockers.append(
             {
                 "scope": "windows_final_artifacts",
                 "status": package.get("status"),
                 "missing_artifacts": package.get("missing_artifacts") or [],
+                "failures": package.get("failures") or [],
+                "environment_blocker": package.get("environment_blocker") if isinstance(package.get("environment_blocker"), dict) else {},
                 "remediation_plan": remediation,
+                "blocker_summary": package_blocker_summary,
                 "action": "在 Windows 实机运行 build 和 acceptance，生成 exe、installer、manifest、acceptance_summary。",
             }
         )
@@ -543,6 +950,24 @@ def build_report() -> dict[str, Any]:
                 "action": "在明确授权目标、账号分组、评论内容和有效激活状态后完成真实 TikTok 平台提交验收。",
             }
         )
+    issue_summary = issue_closure.get("summary") if isinstance(issue_closure.get("summary"), dict) else {}
+    issue_closure_ready = bool(
+        issue_closure.get("passed")
+        and int(issue_summary.get("acceptance_criteria_total") or 0) == 53
+        and int(issue_summary.get("acceptance_criteria_unclassified") or 0) == 0
+        and int(issue_summary.get("acceptance_criteria_external_pending") or 0) == 0
+        and int(issue_summary.get("external_pending_count") or 0) == 0
+        and (issue_closure.get("github_issues") or {}).get("closure_requires_external_validation") is False
+    )
+    if not issue_closure_ready:
+        blockers.append(
+            {
+                "scope": "commercial_issue_closure",
+                "status": issue_closure.get("status"),
+                "summary": issue_summary,
+                "action": "完成 Issues #1-#7 中仍标记 external_pending 的验收标准，并复跑 tools\\reachops_issue_closure_audit.py --json。",
+            }
+        )
 
     status = "final_delivery_ready" if final_ready else "local_mvp_accepted_final_pending" if local_ready else "not_ready"
     delivery_boundary = build_delivery_boundary(
@@ -555,6 +980,7 @@ def build_report() -> dict[str, Any]:
         authorized_live_ready=authorized_live_ready,
         blockers=blockers,
     )
+    blocking_scopes = [str(scope) for scope in (delivery_boundary.get("blocking_scopes") or []) if str(scope)]
     deliverable_index = build_deliverable_index(
         local_ready=local_ready,
         windows_build_ready=windows_build_ready,
@@ -566,6 +992,7 @@ def build_report() -> dict[str, Any]:
         final_gate=final_gate,
         clean=clean,
         blockers=blockers,
+        issue_closure=issue_closure,
     )
     local_mvp_evidence = build_local_mvp_evidence(mvp, mac_loop, client)
     final_delivery_blockers = (
@@ -586,11 +1013,14 @@ def build_report() -> dict[str, Any]:
         "windows_build_ready": windows_build_ready,
         "final_delivery_ready": final_ready,
         "delivery_boundary": delivery_boundary,
+        "blocking_scopes": blocking_scopes,
+        "blocking_scope_count": len(blocking_scopes),
         "deliverable_index": deliverable_index,
         "local_mvp_evidence": local_mvp_evidence,
         "failed_checks": final_gate.get("failed_checks") or [],
         "final_delivery_blockers": final_delivery_blockers,
         "goal_pending_external_validation": goal_pending,
+        "section_timeouts": section_timeouts,
         "blockers": blockers,
         "sections": sections,
         "next_actions": [
@@ -662,11 +1092,75 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         "windows_build_inputs",
         "windows_final_package",
         "authorized_live_submit",
+        "commercial_issue_closure",
         "final_acceptance_gate",
         "repository_cleanliness",
     ):
         item = index.get(key) if isinstance(index.get(key), dict) else {}
         lines.append(f"| `{key}` | `{_markdown_bool(item.get('ready'))}` | `{item.get('blocking_scope') or ''}` |")
+    windows_index = index.get("windows_final_package") if isinstance(index.get("windows_final_package"), dict) else {}
+    windows_blocker_summary = (
+        windows_index.get("blocker_summary")
+        if isinstance(windows_index.get("blocker_summary"), dict)
+        else {}
+    )
+    windows_environment_blocker = (
+        windows_index.get("environment_blocker")
+        if isinstance(windows_index.get("environment_blocker"), dict)
+        else windows_blocker_summary.get("environment_blocker")
+        if isinstance(windows_blocker_summary.get("environment_blocker"), dict)
+        else {}
+    )
+    if windows_index and not windows_index.get("ready"):
+        lines.extend(["", "## Windows 最终包支持交接", ""])
+        lines.append(f"- 状态：`{windows_index.get('status') or '-'}`")
+        if windows_index.get("failures"):
+            lines.append(f"- 失败码：`{', '.join(str(item) for item in windows_index.get('failures') or [])}`")
+        if windows_index.get("missing_artifacts"):
+            lines.append(f"- 缺失产物：`{', '.join(str(item) for item in windows_index.get('missing_artifacts') or [])}`")
+        if windows_environment_blocker:
+            lines.append(f"- 环境阻断：`{windows_environment_blocker.get('code') or windows_environment_blocker.get('failure_code') or '-'}`")
+            lines.append(f"- 当前平台：`{windows_environment_blocker.get('platform_system') or '-'}`")
+            lines.append(f"- 所需环境：{windows_environment_blocker.get('required_environment') or '-'}")
+        next_required_command = windows_blocker_summary.get("next_required_command")
+        if next_required_command:
+            lines.append(f"- 下一步复验命令：`{next_required_command}`")
+    local_index = index.get("local_mvp_acceptance") if isinstance(index.get("local_mvp_acceptance"), dict) else {}
+    local_blocker_summary = (
+        local_index.get("blocker_summary")
+        if isinstance(local_index.get("blocker_summary"), dict)
+        else {}
+    )
+    if local_blocker_summary:
+        repair_plan = (
+            local_blocker_summary.get("repair_plan")
+            if isinstance(local_blocker_summary.get("repair_plan"), dict)
+            else {}
+        )
+        lines.extend(["", "## 本地 MVP 账号支持交接", ""])
+        lines.append(f"- 支持交接：`{local_index.get('account_support_handoff_path') or '-'}`")
+        lines.append(
+            "- 阻断摘要："
+            f"`{local_blocker_summary.get('status') or '-'}` / "
+            f"`{local_blocker_summary.get('support_case') or '-'}` / "
+            f"`{local_blocker_summary.get('priority_action') or '-'}`"
+        )
+        lines.append(f"- 账号分组：`{local_blocker_summary.get('profile_group') or '-'}`")
+        lines.append(f"- 可用账号：`{local_blocker_summary.get('profile_available', '-')}`")
+        lines.append(f"- 可复测：`{_markdown_bool(local_blocker_summary.get('ready_for_retest'))}`")
+        lines.append(f"- 需要人工账号工作：`{_markdown_bool(local_blocker_summary.get('requires_manual_account_work'))}`")
+        lines.append(f"- 不声明真实账号池 ready：`{_markdown_bool(local_blocker_summary.get('does_not_claim_real_account_pool_ready'))}`")
+        if repair_plan:
+            lines.append(
+                "- 修复计划："
+                f"账号={repair_plan.get('profile_count', 0)}，"
+                f"事件={repair_plan.get('event_count', 0)}，"
+                f"自动可处理={repair_plan.get('auto_apply_profile_count', 0)}，"
+                f"非自动错误={', '.join(str(item) for item in (repair_plan.get('non_auto_error_codes') or [])) or '-'}"
+            )
+        next_required_command = local_blocker_summary.get("next_required_command")
+        if next_required_command:
+            lines.append(f"- 下一步复验命令：`{next_required_command}`")
     lines.extend(["", "## 本地 MVP 证据", ""])
     lines.append(f"- Mac 循环验收：`{local_evidence.get('mac_loop_status') or '-'}`")
     lines.append(f"- 客户端门禁：`{local_evidence.get('client_delivery_status') or '-'}` / `{local_evidence.get('client_delivery_readiness') or '-'}`")

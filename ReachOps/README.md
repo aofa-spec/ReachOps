@@ -101,11 +101,52 @@ powershell -ExecutionPolicy Bypass -File tools\build_reachops_windows.ps1 -SkipI
 升级流程使用 `reachops-update-manifest.json`：
 
 ```text
-读取 manifest → 校验 product/platform/version → 比较版本
-→ 校验安装包 size/sha256 → 生成静默安装参数
+读取 manifest → 校验 product/platform/channel/version/signature/rollback_policy/evidence contract
+→ 比较版本 → 校验安装包 size/sha256 → 生成静默安装参数
 ```
 
-升级策略默认保留独立配置目录、数据目录和授权状态。
+远程 manifest 必须使用 HTTPS 且带 `manifest_signature`；本地 manifest 只用于离线构建、恢复和测试。manifest 还必须带 `reachops.update_manifest_evidence.v1` evidence contract，声明 release evidence、acceptance summary、final package check、final acceptance gate、issue closure 和完整 final report set 的复核要求。升级策略默认保留独立配置目录、数据目录和授权状态；默认禁止降级，只有 manifest 显式声明 `rollback_policy.allow_downgrade=true` 时才进入受控 rollback 路径。
+
+商业运行时的真实触达授权必须来自服务端签发的 `entitlement_signature`。打包运行时会拒绝 unsigned、过期、设备不匹配、撤销、离线宽限过期、超并发设备限制或被紧急禁用的 entitlement；源码开发环境仍可使用无提交的模板和本地 blocked 报告做测试。
+
+本地供应链审计命令：
+
+```bash
+python tools/reachops_security_supply_chain_audit.py --json
+python tools/reachops_start_contract_audit.py --json
+```
+
+该检查会验证 packaged entitlement 的 key rotation、retired key 拒绝、revocation SLA、replay 标记拒绝、设备绑定、离线宽限、超并发设备限制和紧急禁用；同时验证 update manifest 的 HTTPS、`manifest_signature`、installer hash/size、product/channel/version 和 rollback/downgrade 策略。
+
+`reachops_start_contract_audit.py` 会验证 `/api/start` 的 JSON/loopback 请求边界、空目标、ixBrowser 分组不可用/不存在/数量不完整、账号修复未复检、真实评论未授权、重复启动和成功启动响应契约；阻断路径必须带稳定 error code、下一步动作、`no_browser_started=true`、`no_submit=true`，并保留 ExecutionPlan/RunSession/page-state 审计证据。
+
+## 数据治理、迁移和恢复
+
+SQLite schema 迁移由 `ReachOps/intelligence/migrations.py` 注册，运行时初始化会写入 `schema_migrations`，并记录每个迁移的 checksum、rollback policy 和应用时间。隐私操作审计写入 `data_privacy_audit`，用于 export、delete、legal hold、backup 和 restore 证据。
+
+本地数据治理验收命令：
+
+```bash
+python tools/reachops_data_governance.py --create-missing-db --verify-backup --verify-privacy-ops --json
+```
+
+该检查会验证 schema integrity、已应用迁移、备份/恢复 hash、RPO/RTO、corruption drill、retention classes、PII data catalog、export/delete/legal hold 审计记录和带 dry-run manifest 的默认 redacted support bundle policy；manifest 必须证明授权状态、SQLite 数据库和证据图片不会被纳入支持包。当前隐私操作验收是 dry-run 审计证据，不会在本地验收命令中实际删除客户数据。
+
+## WAQO 和商业结果漏斗
+
+商业验收不以评论数、浏览器打开数或 fixture 动作数作为最终指标。`tools/reachops_outcome_metrics.py` 定义 WAQO：一周内由人工 owner 接受、进入 active follow-up、有 source/evidence/dedupe_key 的唯一 qualified opportunity。默认排除 `fixture` 和 `dry_run` 数据。
+
+```bash
+python tools/reachops_outcome_metrics.py --create-missing-db --json
+```
+
+CSV outcome ingestion 用于试点客户先回填人工确认结果，不需要先接入重型 CRM：
+
+```powershell
+python tools/reachops_outcome_metrics.py --db-path data/growth_intelligence.sqlite --create-missing-db --import-csv pilot_outcomes.csv --ingest-source csv --json
+```
+
+该检查会输出 WAQO、accepted/rejected、reply、meaningful conversation、meeting、quote、order、revenue、lost reason、elapsed time、conversion rates、cost per accepted opportunity、precision/recall 占位和 duplicate rate；accepted opportunity 必须有 `contact_policy`，rejected lead 必须具备结构化 rejection reason。Webhook-style JSON payload 可以通过 `--import-webhook-json` 进入同一张 outcome 表，默认仍排除 fixture/dry-run。
 
 ## 交付状态
 

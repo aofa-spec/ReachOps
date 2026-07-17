@@ -263,7 +263,7 @@ Expected result:
 
 `tools\run_reachops_acceptance_windows.ps1` performs this as a strict sequence: bootstrap package check, final gate, write `final_acceptance_gate` back to `acceptance_summary.json`, package final evidence check, then final gate final evidence check. The bootstrap check is the only place that may use `--allow-missing-final-gate`; that interim package JSON is `bootstrap_only=true` and `final_delivery_ready=false`. The final evidence check must validate `final_acceptance_gate.json` before final delivery is accepted.
 
-When recovering a background acceptance run, `tools\get_reachops_acceptance_background_status_windows.ps1 -Json` must show `final_delivery_ready=true` and an empty `final_delivery_blockers` list before the run can be treated as final delivery.
+When recovering a background acceptance run, `tools\get_reachops_acceptance_background_status_windows.ps1 -Json` must show `final_delivery_ready=true`, `blocking_scope_count=0`, and an empty `final_delivery_blockers` list before the run can be treated as final delivery.
 
 For an intermediate package before live submit, use:
 
@@ -309,9 +309,12 @@ reports\reachops_acceptance\<timestamp>\goal_status_report.json
 reports\reachops_acceptance\<timestamp>\delivery_audit_payload.json
 reports\reachops_acceptance\<timestamp>\operator_pressure_payload.json
 reports\reachops_acceptance\<timestamp>\activation_status_payload.json
+reports\reachops_acceptance\<timestamp>\authorization_handoff_payload.json
+reports\reachops_acceptance\<timestamp>\latest_reachops_authorization_handoff.zip
 reports\reachops_acceptance\<timestamp>\live_validation_manifest.json
 reports\reachops_acceptance\<timestamp>\repository_cleanliness_payload.json
 reports\reachops_acceptance\<timestamp>\windows_package_preflight.json
+reports\reachops_acceptance\<timestamp>\issue_closure_payload.json
 reports\reachops_acceptance\<timestamp>\live_readiness_payload.json
 reports\reachops_acceptance\<timestamp>\live_preflight_payload.json
 reports\reachops_acceptance\<timestamp>\live_submit_payload.json
@@ -320,4 +323,4 @@ reports\reachops_acceptance\<timestamp>\final_acceptance_gate.json
 reports\acceptance_remediation\latest_delivery_check.json
 ```
 
-The project is fully delivered only when `acceptance_summary.json` says `passed`, the effective pending external validation count is zero, `tools\reachops_delivery_package_check.py --json` returns `passed`, the package `report_files` include `repository_cleanliness` and `windows_package_preflight`, and `tools\reachops_final_acceptance_gate.py --json` returns `passed` with `final_delivery_ready=true`.
+The project is fully delivered only when `acceptance_summary.json` says `passed`, the effective pending external validation count is zero, `tools\reachops_issue_closure_audit.py --json` has no issue-closure external pending items, `tools\reachops_delivery_package_check.py --json` returns `passed`, the package `report_files` include the full required set including `repository_cleanliness`, `windows_package_preflight`, `authorization_handoff`, `client_delivery`, `issue_closure`, and `final_acceptance_gate`, and `tools\reachops_final_acceptance_gate.py --json` returns `passed` with `final_delivery_ready=true`.

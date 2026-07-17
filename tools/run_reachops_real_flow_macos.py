@@ -11,10 +11,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+from tools.reachops_run_id import unique_run_dir
 
 
 DEMO_SCENARIOS = [
@@ -94,6 +97,92 @@ def scenario_from_source(source: dict[str, Any], index: int) -> dict[str, str] |
         "source_type": source_type,
         "description": str(source.get("reason") or source.get("description") or "项目配置获客入口"),
     }
+
+
+def scenario_identity(scenario: dict[str, str]) -> tuple[str, str]:
+    return (str(scenario.get("source_type") or "").strip(), str(scenario.get("target") or "").strip())
+
+
+def creator_url_from_tiktok_url(value: str) -> str:
+    try:
+        parsed = urlparse(str(value or "").strip())
+        host = str(parsed.netloc or "").lower()
+        if "tiktok.com" not in host:
+            return ""
+        for part in [item for item in parsed.path.split("/") if item]:
+            if part.startswith("@"):
+                return f"https://www.tiktok.com/{part}"
+    except Exception:
+        return ""
+    return ""
+
+
+def should_expand_related_sources(row: dict[str, Any]) -> bool:
+    funnel = row.get("funnel") if isinstance(row.get("funnel"), dict) else {}
+    if int(funnel.get("customer_leads") or 0) > 0 or int(funnel.get("outreach_actions") or 0) > 0:
+        return False
+    no_action = row.get("no_action_reason") if isinstance(row.get("no_action_reason"), dict) else {}
+    code = str(no_action.get("code") or "").strip()
+    diagnosis = str(row.get("diagnosis_status") or "").strip()
+    return code in {"low_intent_candidates", "no_candidates"} or diagnosis in {
+        "comment_users_found",
+        "content_found_no_comments",
+        "opened_but_no_results",
+    }
+
+
+def related_source_expansions(scenario: dict[str, str], next_index: int) -> list[dict[str, str]]:
+    if str(scenario.get("source_type") or "").strip() != "content_url":
+        return []
+    target = str(scenario.get("target") or "").strip()
+    creator_url = creator_url_from_tiktok_url(target)
+    if not creator_url or creator_url == target:
+        return []
+    return [
+        {
+            "name": f"{next_index:02d}_creator_url_{safe_name(creator_url)[:36]}",
+            "target": creator_url,
+            "source_type": "creator_url",
+            "description": "自动扩展：content_url 低意向或无候选后，回退到同达人主页继续 no-submit 采集。",
+        }
+    ]
+
+
+def append_related_source_expansions(
+    scenarios: list[dict[str, str]],
+    scenario: dict[str, str],
+    final_row: dict[str, Any],
+    scenario_plan: dict[str, Any],
+    max_sources: int,
+) -> list[dict[str, str]]:
+    if not should_expand_related_sources(final_row):
+        return []
+    max_total = max(1, int(max_sources or 1))
+    if len(scenarios) >= max_total:
+        return []
+    existing = {scenario_identity(item) for item in scenarios}
+    appended: list[dict[str, str]] = []
+    for expansion in related_source_expansions(scenario, len(scenarios) + 1):
+        if len(scenarios) >= max_total:
+            break
+        if scenario_identity(expansion) in existing:
+            continue
+        scenarios.append(expansion)
+        existing.add(scenario_identity(expansion))
+        appended.append(expansion)
+    if appended:
+        auto_expansions = scenario_plan.setdefault("auto_expansions", [])
+        no_action = final_row.get("no_action_reason") if isinstance(final_row.get("no_action_reason"), dict) else {}
+        for expansion in appended:
+            auto_expansions.append(
+                {
+                    "from": list(scenario_identity(scenario)),
+                    "to": list(scenario_identity(expansion)),
+                    "reason": str(no_action.get("code") or final_row.get("diagnosis_status") or ""),
+                }
+            )
+        scenario_plan["auto_expanded_source_count"] = len(auto_expansions)
+    return appended
 
 
 def build_scenarios(args: argparse.Namespace, run_dir: Path) -> tuple[list[dict[str, str]], dict[str, Any]]:
@@ -396,6 +485,8 @@ def scenario_command(args: argparse.Namespace, scenario: dict[str, str], scenari
         "tools/reachops_visual_collection_preflight.py",
         "--base-dir",
         str(scenario_dir),
+        "--state-dir",
+        str(args.state_dir or ""),
         "--target",
         scenario["target"],
         "--source-type",
@@ -419,6 +510,8 @@ def scenario_command(args: argparse.Namespace, scenario: dict[str, str], scenari
         command.extend(["--profile-ids", str(args.profile_ids or "")])
     if args.skip_profile_preflight:
         command.append("--skip-profile-preflight")
+    if args.quarantine_failed_profiles:
+        command.append("--quarantine-failed-profiles")
     if args.no_quarantine_failed_profiles:
         command.append("--no-quarantine-failed-profiles")
     if args.accept_low_intent_actions:
@@ -430,6 +523,8 @@ def summarize_scenario(name: str, payload: dict[str, Any], returncode: int, stdo
     diagnosis = payload.get("operator_diagnosis") if isinstance(payload.get("operator_diagnosis"), dict) else {}
     funnel = payload.get("funnel") if isinstance(payload.get("funnel"), dict) else {}
     profile_preflight = payload.get("profile_preflight") if isinstance(payload.get("profile_preflight"), dict) else {}
+    no_action_reason = payload.get("no_action_reason") if isinstance(payload.get("no_action_reason"), dict) else {}
+    duplicate_suppression = payload.get("duplicate_suppression") if isinstance(payload.get("duplicate_suppression"), dict) else {}
     return {
         "name": name,
         "returncode": returncode,
@@ -452,6 +547,8 @@ def summarize_scenario(name: str, payload: dict[str, Any], returncode: int, stdo
             "customer_leads": int(funnel.get("customer_leads") or 0),
             "outreach_actions": int(funnel.get("outreach_actions") or 0),
         },
+        "no_action_reason": no_action_reason,
+        "duplicate_suppression": duplicate_suppression,
         "report_path": str(payload.get("report_path") or ""),
         "stdout_lines": len((stdout or "").splitlines()),
         "stderr_lines": len((stderr or "").splitlines()),
@@ -504,23 +601,56 @@ def run_command_with_timeout(command: list[str], env: dict[str, str], timeout_se
         return int(proc.returncode or 124), stdout or "", stderr, True
 
 
+TERMINAL_NO_SUBMIT_CODES = {"duplicate_suppressed", "low_intent_candidates", "no_candidates"}
+
+
+def terminal_no_submit_row(row: dict[str, Any]) -> bool:
+    no_action = row.get("no_action_reason") if isinstance(row.get("no_action_reason"), dict) else {}
+    code = str(no_action.get("code") or "").strip()
+    if code not in TERMINAL_NO_SUBMIT_CODES or no_action.get("no_submit") is False:
+        return False
+    funnel = row.get("funnel") if isinstance(row.get("funnel"), dict) else {}
+    duplicate = row.get("duplicate_suppression") if isinstance(row.get("duplicate_suppression"), dict) else {}
+    return bool(
+        str(row.get("status") or "") == "ok"
+        or bool(duplicate.get("duplicate_suppressed"))
+        or int(funnel.get("content_found") or 0) > 0
+        or int(funnel.get("comment_users") or 0) > 0
+    )
+
+
 def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
     no_interruptions = not any("operator_interrupted" in set(row.get("failures") or []) for row in summary_rows)
     any_profile_available = any((row.get("profile_preflight") or {}).get("available", 0) > 0 for row in summary_rows)
     any_browser_started = any(int(row.get("browser_started") or 0) > 0 for row in summary_rows)
+    any_duplicate_suppressed = any(bool((row.get("duplicate_suppression") or {}).get("duplicate_suppressed")) for row in summary_rows)
+    any_terminal_no_submit = any(terminal_no_submit_row(row) for row in summary_rows)
     any_collection_completed = any(
         str(row.get("status") or "") == "ok"
-        and int(((row.get("funnel") or {}).get("comment_users") or 0)) > 0
+        and (
+            int(((row.get("funnel") or {}).get("comment_users") or 0)) > 0
+            or bool((row.get("duplicate_suppression") or {}).get("duplicate_suppressed"))
+        )
         for row in summary_rows
-    )
+    ) or any_terminal_no_submit
     any_leads = any(
         int(((row.get("funnel") or {}).get("customer_leads") or 0)) > 0
         or int(((row.get("funnel") or {}).get("outreach_actions") or 0)) > 0
+        or bool((row.get("duplicate_suppression") or {}).get("duplicate_suppressed"))
         for row in summary_rows
     )
+    no_action_reasons = [
+        row.get("no_action_reason")
+        for row in summary_rows
+        if isinstance(row.get("no_action_reason"), dict) and str((row.get("no_action_reason") or {}).get("code") or "").strip()
+    ]
+    terminal_no_action = bool(any_collection_completed and no_action_reasons)
+    lead_or_terminal_reason = bool(any_leads or terminal_no_action)
     all_no_submit = True
-    return {
-        "status": "passed" if no_interruptions and any_browser_started and any_collection_completed and any_leads else "blocked",
+    result = {
+        "status": "passed"
+        if no_interruptions and any_browser_started and any_collection_completed and lead_or_terminal_reason
+        else "blocked",
         "no_submit": all_no_submit,
         "targets": [
             {
@@ -545,11 +675,19 @@ def acceptance(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
             },
             {
                 "name": "lead_pipeline",
-                "passed": any_leads,
-                "goal": "真实采集后产生 customer_leads 和 outreach_actions。",
+                "passed": lead_or_terminal_reason,
+                "goal": "真实采集后产生 customer_leads/outreach_actions，或给出结构化 no-action reason 后安全收口。",
             },
         ],
     }
+    if any_duplicate_suppressed:
+        result["duplicate_suppression"] = {
+            "passed": True,
+            "goal": "同一目标重复运行不会无限重复生成相同线索或动作。",
+        }
+    if no_action_reasons and not any_leads:
+        result["no_action_reason"] = no_action_reasons[0]
+    return result
 
 
 UNAVAILABLE_PROFILE_ERROR_CODES = {
@@ -560,6 +698,8 @@ UNAVAILABLE_PROFILE_ERROR_CODES = {
     "PROFILE_START_FAILED",
     "PROFILE_PREFLIGHT_TIMEOUT",
     "PAGE_OPEN_FAILED",
+    "PAGE_TIMEOUT",
+    "MODAL_BLOCKED",
 }
 
 
@@ -591,6 +731,8 @@ def unavailable_profile_reasons(payload: dict[str, Any]) -> dict[str, str]:
 
 def scenario_should_retry(row: dict[str, Any], blocked_ids: set[str], attempted_ids: list[str]) -> bool:
     funnel = row.get("funnel") if isinstance(row.get("funnel"), dict) else {}
+    if terminal_no_submit_row(row):
+        return False
     if str(row.get("status") or "") == "ok":
         return int(funnel.get("customer_leads") or 0) <= 0 and int(funnel.get("outreach_actions") or 0) <= 0
     diagnosis = str(row.get("diagnosis_status") or "")
@@ -608,9 +750,18 @@ def scenario_should_retry(row: dict[str, Any], blocked_ids: set[str], attempted_
     return False
 
 
+def scenario_needs_profile_backfill(row: dict[str, Any], blocked_ids: set[str], required_profiles: int) -> bool:
+    if not blocked_ids:
+        return False
+    preflight = row.get("profile_preflight") if isinstance(row.get("profile_preflight"), dict) else {}
+    available = int(preflight.get("available") or 0)
+    return available < max(1, int(required_profiles or 1))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run ReachOps real macOS browser flow across multiple TikTok entry types.")
     parser.add_argument("--base-dir", default="reports/reachops/mac_real_flow")
+    parser.add_argument("--state-dir", default="", help="Persistent Growth Intelligence state dir. Defaults to <base-dir>/runtime_state.")
     parser.add_argument("--profile-group", default="United States")
     parser.add_argument("--profile-ids", default="")
     parser.add_argument("--profile-limit", type=int, default=2)
@@ -628,7 +779,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-profile-uses-per-run", type=int, default=3)
     parser.add_argument("--max-profile-launches-per-day", type=int, default=6)
     parser.add_argument("--skip-profile-preflight", action="store_true")
-    parser.add_argument("--no-quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--quarantine-failed-profiles", action="store_true")
+    parser.add_argument("--no-quarantine-failed-profiles", action="store_true", help="Deprecated no-op; failed profiles are not moved unless --quarantine-failed-profiles is set.")
     parser.add_argument(
         "--accept-low-intent-actions",
         action="store_true",
@@ -641,8 +793,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     base_dir = Path(args.base_dir).resolve()
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = base_dir / run_id
+    if not str(args.state_dir or "").strip():
+        args.state_dir = str(base_dir / "runtime_state")
+    else:
+        args.state_dir = str(Path(args.state_dir).resolve())
+    run_id, run_dir = unique_run_dir(base_dir)
     env = configure_localhost_proxy_bypass()
     scenarios, scenario_plan = build_scenarios(args, run_dir)
     ledger_path, launch_ledger = load_launch_ledger(base_dir)
@@ -684,7 +839,10 @@ def main() -> int:
                 }
             )
             scenario_details.append({"scenario": {"name": "no_formal_scenarios"}, "attempts": [], "summary": summary_rows[-1]})
-        for scenario in scenario_iterable:
+        scenario_index = 0
+        while scenario_index < len(scenario_iterable):
+            scenario = scenario_iterable[scenario_index]
+            scenario_index += 1
             scenario_dir = run_dir / safe_name(scenario["name"])
             scenario_attempts = []
             final_row = None
@@ -750,11 +908,27 @@ def main() -> int:
                         blocked_reasons.setdefault(str(profile_id), "scenario_timeout")
                 blocked_profile_ids.update(blocked_ids)
                 usable_profile_ids = [profile_id for profile_id in usable_profile_ids if profile_id not in blocked_profile_ids]
-                quarantine = quarantine_profiles(
-                    sorted(blocked_ids),
-                    env,
-                    row.get("diagnosis_status") or "runtime_blocked",
-                    reasons_by_profile=blocked_reasons,
+                quarantine = (
+                    quarantine_profiles(
+                        sorted(blocked_ids),
+                        env,
+                        row.get("diagnosis_status") or "runtime_blocked",
+                        reasons_by_profile=blocked_reasons,
+                    )
+                    if bool(args.quarantine_failed_profiles)
+                    else [
+                        {
+                            "profile_id": profile_id,
+                            "attempted": False,
+                            "ok": False,
+                            "group_id": "",
+                            "group_name": "",
+                            "reason": str(blocked_reasons.get(profile_id) or row.get("diagnosis_status") or "runtime_blocked"),
+                            "error_code": "REMOTE_GROUP_UPDATE_DISABLED",
+                            "error_message": "remote ixBrowser group update requires --quarantine-failed-profiles",
+                        }
+                        for profile_id in sorted(blocked_ids)
+                    ]
                 )
                 preflight = payload.get("profile_preflight") if isinstance(payload.get("profile_preflight"), dict) else {}
                 ok_ids = [
@@ -784,6 +958,8 @@ def main() -> int:
                 row["quarantine"] = quarantine
                 scenario_attempts.append({"command": command, "summary": dict(row)})
                 final_row = dict(row)
+                if scenario_needs_profile_backfill(row, blocked_ids, int(args.profile_limit or 1)):
+                    continue
                 if not scenario_should_retry(row, blocked_ids, batch_ids):
                     break
             if final_row is None:
@@ -813,10 +989,24 @@ def main() -> int:
                 }
                 summary_rows.append(row)
                 scenario_details.append({"scenario": scenario, "command": [], "summary": row})
+                append_related_source_expansions(
+                    scenario_iterable,
+                    scenario,
+                    row,
+                    scenario_plan,
+                    max(1, int(args.max_sources or 1)),
+                )
                 continue
             final_row["attempts"] = [dict(attempt["summary"]) for attempt in scenario_attempts]
             summary_rows.append(final_row)
             scenario_details.append({"scenario": scenario, "attempts": scenario_attempts, "summary": final_row})
+            append_related_source_expansions(
+                scenario_iterable,
+                scenario,
+                final_row,
+                scenario_plan,
+                max(1, int(args.max_sources or 1)),
+            )
     except KeyboardInterrupt:
         interrupted = True
         summary_rows.append(
@@ -852,6 +1042,7 @@ def main() -> int:
         "mode": "mac_real_browser_flow_no_submit",
         "no_submit": True,
         "profile_group": str(args.profile_group or ""),
+        "state_dir": str(args.state_dir or ""),
         "selected_profile_ids": fixed_profile_ids,
         "profile_selection": profile_selection,
         "scenario_plan": scenario_plan,

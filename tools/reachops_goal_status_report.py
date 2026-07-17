@@ -223,6 +223,45 @@ def _requirement_rows(
     return rows
 
 
+def build_current_stage_gate(audit_result: dict[str, Any], client_delivery: dict[str, Any] | None = None) -> dict[str, Any]:
+    client_delivery = client_delivery if isinstance(client_delivery, dict) else {}
+    audit_summary = audit_result.get("summary") if isinstance(audit_result.get("summary"), dict) else {}
+    real_pilot = client_delivery.get("real_pilot_evidence") if isinstance(client_delivery.get("real_pilot_evidence"), dict) else {}
+    real_pilot_boundary_ok = (
+        real_pilot.get("schema_version") == "reachops.real_pilot_evidence_boundary.v1"
+        and real_pilot.get("fixture_or_dry_run_claimed") is False
+        and real_pilot.get("no_submit_preserved") is True
+    )
+    local_checks = {
+        "delivery_audit_has_no_local_failures": str(audit_result.get("status") or "") == "ok"
+        and int(audit_summary.get("failed") or 0) == 0,
+        "client_delivery_reports_real_pilot_boundary": real_pilot_boundary_ok,
+        "client_delivery_does_not_claim_blocked_real_pilot": not bool(real_pilot.get("real_pilot_ready"))
+        or str(client_delivery.get("status") or "") == PASSED,
+    }
+    external_pending = list(dict.fromkeys(
+        [str(item) for item in (real_pilot.get("external_acceptance_pending") or []) if str(item).strip()]
+        + [str(item) for item in (client_delivery.get("blockers") or []) if str(item).strip()]
+    ))
+    local_passed = all(local_checks.values())
+    status = FAILED if not local_passed else READY_FOR_EXTERNAL_VALIDATION if external_pending else PASSED
+    return {
+        "schema_version": "reachops.current_stage_gate.v1",
+        "status": status,
+        "local_passed": local_passed,
+        "local_checks": local_checks,
+        "external_validation_pending": external_pending,
+        "does_not_claim_real_pilot_when_blocked": not bool(real_pilot.get("real_pilot_ready"))
+        or str(client_delivery.get("status") or "") == PASSED,
+        "real_pilot_evidence": {
+            "real_pilot_ready": bool(real_pilot.get("real_pilot_ready")),
+            "status": str(real_pilot.get("status") or ""),
+            "profile_available": int(real_pilot.get("profile_available") or 0),
+            "operation_counts": real_pilot.get("operation_counts") if isinstance(real_pilot.get("operation_counts"), dict) else {},
+        },
+    }
+
+
 def build_goal_status_report(
     audit_result: dict[str, Any],
     acceptance_summary: dict[str, Any] | None = None,
@@ -292,6 +331,7 @@ def build_goal_status_report(
     )
     failed = [row for row in final_rows if row["status"] == FAILED]
     pending = [row for row in final_rows if row["status"] == LOCAL_PENDING]
+    current_stage_gate = build_current_stage_gate(audit_result, client_delivery)
 
     status = PASSED
     if failed or any(row["status"] == FAILED for row in stage_rows):
@@ -315,6 +355,7 @@ def build_goal_status_report(
             "final_pending_external_validation": len(pending),
             "final_failed": len(failed),
         },
+        "current_stage_gate": current_stage_gate,
         "stages": stage_rows,
         "final_acceptance": final_rows,
         "pending_external_validation": [row["name"] for row in pending],

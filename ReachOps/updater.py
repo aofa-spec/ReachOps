@@ -9,7 +9,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .version import PRODUCT_ID, VERSION
+from .security_signing import load_key_ring, verify_signed_payload
+from .version import BUILD_CHANNEL, PRODUCT_ID, VERSION
+
+MANIFEST_EVIDENCE_SCHEMA_VERSION = "reachops.update_manifest_evidence.v1"
+REQUIRED_FINAL_REPORT_FILES = {
+    "delivery_audit",
+    "operator_pressure",
+    "installer_smoke",
+    "ui_startup",
+    "activation_status",
+    "live_acceptance_status",
+    "authorization_handoff",
+    "live_validation",
+    "repository_cleanliness",
+    "windows_package_preflight",
+    "client_delivery",
+    "live_readiness",
+    "live_preflight",
+    "goal_status",
+    "live_submit",
+    "issue_closure",
+    "final_acceptance_gate",
+}
 
 
 @dataclass
@@ -29,43 +51,121 @@ class ReachOpsUpdateManager:
     tools/write_reachops_update_manifest.py.
     """
 
-    def __init__(self, current_version: str = VERSION, install_dir: str | None = None):
+    def __init__(
+        self,
+        current_version: str = VERSION,
+        install_dir: str | None = None,
+        manifest_key_ring: dict[str, str] | None = None,
+    ):
         self.current_version = str(current_version or VERSION).lstrip("v")
         self.install_dir = os.path.abspath(install_dir or os.getcwd())
+        self.manifest_key_ring = manifest_key_ring
 
     def load_manifest(self, source: str | os.PathLike) -> dict[str, Any]:
         source_text = str(source)
-        if source_text.startswith(("http://", "https://")):
+        require_signature = False
+        if source_text.startswith("https://"):
+            require_signature = True
             with urllib.request.urlopen(source_text, timeout=20) as response:
                 payload = response.read().decode("utf-8")
+        elif source_text.startswith("http://"):
+            raise ValueError("remote update manifest must use https")
         else:
             payload = Path(source).read_text(encoding="utf-8")
         manifest = json.loads(payload)
-        self.validate_manifest(manifest)
+        self.validate_manifest(manifest, require_signature=require_signature)
         return manifest
 
-    def validate_manifest(self, manifest: dict[str, Any]) -> None:
+    def validate_manifest(self, manifest: dict[str, Any], require_signature: bool = False) -> None:
         if str(manifest.get("product_id") or "") != PRODUCT_ID:
             raise ValueError("manifest product_id mismatch")
         if str(manifest.get("platform") or "") != "windows":
             raise ValueError("manifest platform must be windows")
+        if str(manifest.get("channel") or "") != BUILD_CHANNEL:
+            raise ValueError("manifest channel mismatch")
         version = str(manifest.get("version") or "").strip()
         if not version:
             raise ValueError("manifest version is required")
         installer = manifest.get("installer") or {}
         if not isinstance(installer, dict):
             raise ValueError("manifest installer must be an object")
-        if not str(installer.get("sha256") or "").strip():
+        sha256 = str(installer.get("sha256") or "").lower().replace("sha256:", "")
+        if len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256):
             raise ValueError("manifest installer.sha256 is required")
+        try:
+            installer_size = int(installer.get("size_bytes") or 0)
+        except Exception:
+            installer_size = 0
+        if installer_size <= 0:
+            raise ValueError("manifest installer.size_bytes is required")
+        rollback_policy = manifest.get("rollback_policy") if isinstance(manifest.get("rollback_policy"), dict) else {}
+        if "allow_downgrade" not in rollback_policy:
+            raise ValueError("manifest rollback_policy.allow_downgrade is required")
+        minimum_version = str(rollback_policy.get("minimum_version") or "").strip()
+        if not minimum_version:
+            raise ValueError("manifest rollback_policy.minimum_version is required")
+        if self.compare_versions(self.current_version, minimum_version) < 0:
+            raise ValueError("manifest rollback policy blocks this client version")
+        self.validate_evidence_contract(manifest)
+        if require_signature:
+            signature_ok, signature_reason = verify_signed_payload(
+                manifest,
+                key_ring=self.manifest_key_ring if self.manifest_key_ring is not None else load_key_ring(),
+                signature_field="manifest_signature",
+            )
+            if not signature_ok:
+                raise ValueError(f"manifest signature invalid: {signature_reason}")
+
+    def validate_evidence_contract(self, manifest: dict[str, Any]) -> None:
+        evidence = manifest.get("evidence")
+        if not isinstance(evidence, dict):
+            raise ValueError("manifest evidence contract is required")
+        if str(evidence.get("schema_version") or "") != MANIFEST_EVIDENCE_SCHEMA_VERSION:
+            raise ValueError("manifest evidence schema_version mismatch")
+        required_flags = [
+            "release_evidence_required",
+            "acceptance_summary_required",
+            "final_package_check_required",
+            "final_acceptance_gate_required",
+            "issue_closure_required",
+        ]
+        for flag in required_flags:
+            if evidence.get(flag) is not True:
+                raise ValueError(f"manifest evidence.{flag} must be true")
+        required_paths = [
+            "release_evidence_dir",
+            "release_evidence_name",
+            "rollback_note_name",
+            "acceptance_summary_path",
+        ]
+        for field in required_paths:
+            if not str(evidence.get(field) or "").strip():
+                raise ValueError(f"manifest evidence.{field} is required")
+        report_files = {str(item) for item in evidence.get("required_report_files") or [] if str(item)}
+        missing_reports = sorted(REQUIRED_FINAL_REPORT_FILES - report_files)
+        if missing_reports:
+            raise ValueError("manifest evidence.required_report_files missing: " + ", ".join(missing_reports))
+        commands = "\n".join(str(item) for item in evidence.get("verification_commands") or [])
+        for required in [
+            "reachops_delivery_package_check.py --json",
+            "reachops_issue_closure_audit.py --json",
+            "reachops_final_acceptance_gate.py --json",
+        ]:
+            if required not in commands:
+                raise ValueError(f"manifest evidence verification command missing: {required}")
 
     def check_manifest(self, manifest: dict[str, Any]) -> ReachOpsUpdateInfo:
         self.validate_manifest(manifest)
         latest = str(manifest.get("version") or "").lstrip("v")
         comparison = self.compare_versions(self.current_version, latest)
+        rollback_policy = manifest.get("rollback_policy") if isinstance(manifest.get("rollback_policy"), dict) else {}
+        allow_downgrade = bool(rollback_policy.get("allow_downgrade"))
         if comparison < 0:
             return ReachOpsUpdateInfo(True, self.current_version, latest, "new_version_available", manifest)
         if comparison == 0:
             return ReachOpsUpdateInfo(False, self.current_version, latest, "already_latest", manifest)
+        if allow_downgrade:
+            return ReachOpsUpdateInfo(True, self.current_version, latest, "rollback_available", manifest)
         return ReachOpsUpdateInfo(False, self.current_version, latest, "current_version_is_newer", manifest)
 
     def verify_installer(self, installer_path: str | os.PathLike, manifest: dict[str, Any]) -> bool:

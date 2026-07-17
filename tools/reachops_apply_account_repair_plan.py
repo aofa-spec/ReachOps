@@ -35,22 +35,91 @@ def load_plan(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {"status": "error", "error_code": "PLAN_INVALID", "error_message": "plan is not an object"}
 
 
-def profile_ids_for_errors(plan: dict, error_codes: set[str]) -> list[dict]:
-    rows: list[dict] = []
-    seen: set[str] = set()
+def iter_profile_error_groups(plan: dict) -> list[tuple[str, list[Any]]]:
+    rows: list[tuple[str, list[Any]]] = []
     for group in plan.get("groups") or []:
         if not isinstance(group, dict):
             continue
-        error = str(group.get("error") or "").strip()
+        error = str(group.get("error") or group.get("error_code") or "").strip()
+        profile_ids = group.get("profile_ids") if isinstance(group.get("profile_ids"), list) else []
+        if error:
+            rows.append((error, profile_ids))
+    for group in plan.get("error_groups") or []:
+        if not isinstance(group, dict):
+            continue
+        error = str(group.get("error_code") or group.get("error") or "").strip()
+        profile_ids = group.get("profile_ids") if isinstance(group.get("profile_ids"), list) else []
+        if error:
+            rows.append((error, profile_ids))
+    return rows
+
+
+def profile_ids_for_errors(plan: dict, error_codes: set[str]) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for error, profile_ids in iter_profile_error_groups(plan):
         if error not in error_codes:
             continue
-        for profile_id in group.get("profile_ids") or []:
+        for profile_id in profile_ids:
             value = str(profile_id or "").strip()
             if not value or value in seen:
                 continue
             seen.add(value)
             rows.append({"profile_id": value, "reason": error})
     return rows
+
+
+def plan_error_codes_with_profiles(plan: dict) -> set[str]:
+    codes: set[str] = set()
+    for error, profile_ids in iter_profile_error_groups(plan):
+        if error and profile_ids:
+            codes.add(error)
+    return codes
+
+
+def build_post_apply_verification(
+    *,
+    apply: bool,
+    selected_count: int,
+    moved_count: int,
+    failed_count: int,
+    no_applicable_profiles: bool,
+) -> dict[str, Any]:
+    apply_performed = bool(apply and selected_count > 0 and failed_count == 0)
+    return {
+        "schema_version": "reachops.account_repair_post_apply_verification.v1",
+        "apply_alone_is_not_acceptance": True,
+        "apply_performed": apply_performed,
+        "requires_recheck_after_apply": apply_performed,
+        "requires_manual_account_work": bool(no_applicable_profiles),
+        "no_browser_started_by_apply_tool": True,
+        "no_submit": True,
+        "required_commands": [
+            "python tools/reachops_client_delivery_check.py --json",
+            "python tools/reachops_final_acceptance_gate.py --json",
+        ],
+        "pass_conditions": [
+            "client_delivery.status=passed",
+            "client_delivery.readiness=pass",
+            "client_delivery.acceptance_ready=true",
+            "client_delivery.final_delivery_ready=true",
+            "client_delivery.failed_checks=[]",
+            "client_delivery.profile_available>=1",
+        ],
+        "intermediate_states_allowed": [
+            "account_blocker_resolution.status=pending_recheck",
+            "client_delivery.status=blocked_by_accounts",
+        ],
+        "failure_conditions": [
+            "account_blocker_resolution.status=stale_repair_apply",
+            "account_blocker_resolution.status=manual_account_work_required",
+            "client_delivery.profile_available=0",
+            "client_delivery.failed_checks contains acceptance:ready",
+        ],
+        "selected_count": int(selected_count or 0),
+        "moved_count": int(moved_count or 0),
+        "failed_count": int(failed_count or 0),
+    }
 
 
 def apply_account_repair_plan(
@@ -63,7 +132,10 @@ def apply_account_repair_plan(
     plan = load_plan(plan_path)
     if plan.get("status") == "error":
         return {"status": "error", "ok": False, "plan_path": str(plan_path), **plan}
-    selected = profile_ids_for_errors(plan, error_codes or DEFAULT_APPLY_ERRORS)
+    allowed_errors = error_codes or DEFAULT_APPLY_ERRORS
+    selected = profile_ids_for_errors(plan, allowed_errors)
+    plan_profile_errors = plan_error_codes_with_profiles(plan)
+    non_auto_error_codes = sorted(plan_profile_errors - set(allowed_errors))
     results: list[dict] = []
     if apply and selected:
         if manager_factory is None:
@@ -118,9 +190,34 @@ def apply_account_repair_plan(
     moved = [row for row in results if row.get("ok")]
     failed = [row for row in results if row.get("attempted") and not row.get("ok")]
     selected_error_codes = sorted({str(row.get("reason") or "") for row in selected if str(row.get("reason") or "")})
-    allowed_error_codes = sorted(error_codes or DEFAULT_APPLY_ERRORS)
+    allowed_error_codes = sorted(allowed_errors)
+    status = "dry_run"
+    if apply and failed:
+        status = "failed"
+    elif apply and selected:
+        status = "applied"
+    elif apply and not selected:
+        status = "no_applicable_profiles"
+    next_commands = [
+        "python tools/reachops_client_delivery_check.py --json",
+        "python tools/reachops_mac_self_check.py --json",
+    ]
+    next_actions: list[str] = []
+    if not selected:
+        next_actions = [
+            "最新账号修复计划没有默认可自动隔离的账号，未移动任何 ixBrowser 配置。",
+            "手动打开受影响账号，确认登录状态、内核版本、代理和 TikTok 页面加载；不可用账号再移入封禁账号分组。",
+            "至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑真实执行复测。",
+        ]
+    post_apply_verification = build_post_apply_verification(
+        apply=bool(apply),
+        selected_count=len(selected),
+        moved_count=len(moved),
+        failed_count=len(failed),
+        no_applicable_profiles=bool(not selected),
+    )
     return {
-        "status": "applied" if apply and not failed else ("failed" if apply and failed else "dry_run"),
+        "status": status,
         "ok": bool(apply and selected and not failed),
         "apply": bool(apply),
         "plan_path": str(plan_path),
@@ -129,6 +226,8 @@ def apply_account_repair_plan(
         "selected_count": len(selected),
         "moved_count": len(moved),
         "failed_count": len(failed),
+        "no_applicable_profiles": bool(not selected),
+        "non_auto_error_codes": non_auto_error_codes,
         "results": results,
         "safety_contract": {
             "schema_version": "reachops.account_repair_safety_contract.v1",
@@ -145,10 +244,9 @@ def apply_account_repair_plan(
         "no_browser_started": True,
         "no_submit": True,
         "no_ai_token_used": True,
-        "next_commands": [
-            "python tools/reachops_client_delivery_check.py --json",
-            "python tools/reachops_mac_self_check.py --json",
-        ],
+        "next_commands": next_commands,
+        "next_actions": next_actions,
+        "post_apply_verification": post_apply_verification,
     }
 
 

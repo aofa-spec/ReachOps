@@ -153,7 +153,9 @@ def main(argv: list[str] | None = None) -> int:
         "verification_commands": [
             "python tools\\reachops_live_acceptance_status.py --write-report --json",
             "python tools\\reachops_client_delivery_check.py --json",
+            "python tools\\reachops_goal_delivery_runner.py --json",
             "python tools\\reachops_delivery_package_check.py --json",
+            "python tools\\reachops_issue_closure_audit.py --json",
             "python tools\\reachops_final_acceptance_gate.py --json",
         ],
         "next_required_actions": [

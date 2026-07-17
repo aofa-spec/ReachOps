@@ -163,5 +163,6 @@ JSON 报告必须包含：
 - `tools/reachops_goal_delivery_runner.py --json` 返回 `final_delivery_ready=true`，且 `delivery_boundary.overall_final_delivery_scope_ready=true`。
 - `tools/reachops_goal_status_report.py --json` 返回 `passed`，且 `effective_pending_external_validation = 0`。
 - `tools/reachops_client_delivery_check.py --json` 返回 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`。
-- `tools/reachops_delivery_package_check.py --json` 返回 `status=passed`，并验证 Windows exe、installer、update manifest、acceptance summary、`repository_cleanliness_payload.json`、`windows_package_preflight.json` 和 `final_acceptance_gate.json`。
-- `tools/reachops_final_acceptance_gate.py --json` 返回 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`。
+- `tools/reachops_delivery_package_check.py --json` 返回 `status=passed`，并验证 Windows exe、installer、update manifest、acceptance summary、`repository_cleanliness_payload.json`、`windows_package_preflight.json`、`authorization_handoff_payload.json`、`latest_reachops_authorization_handoff.zip`、`reports\acceptance_remediation\latest_delivery_check.json`、`issue_closure_payload.json` 和 `final_acceptance_gate.json`，且 package `report_files.authorization_handoff` 与 `report_files.client_delivery` 通过。
+- `tools/reachops_issue_closure_audit.py --json` 返回 Issues #1-#7 全部本地合同通过、`acceptance_criteria_external_pending=0`、`external_pending_count=0`、`closure_requires_external_validation=false`。
+- `tools/reachops_final_acceptance_gate.py --json` 返回 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`，且包含通过的 `commercial_issue_closure:closed` 检查。

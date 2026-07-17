@@ -580,6 +580,14 @@ def account_repair_paths(base_dir: str | Path) -> dict[str, str]:
     }
 
 
+def account_support_handoff_paths(base_dir: str | Path) -> dict[str, str]:
+    root = Path(base_dir)
+    report_dir = root / "reports" / "acceptance_remediation"
+    return {
+        "delivery_check": str(report_dir / "latest_delivery_check.json"),
+    }
+
+
 def collect_account_repair_artifacts(base_dir: str | Path) -> list[dict[str, Any]]:
     paths = account_repair_paths(base_dir)
     artifacts = [
@@ -588,6 +596,97 @@ def collect_account_repair_artifacts(base_dir: str | Path) -> list[dict[str, Any
         file_artifact(paths["apply_result"], "account_repair_apply", "Account repair apply result"),
     ]
     return [row for row in artifacts if row.get("exists")]
+
+
+def collect_account_support_handoff_artifacts(base_dir: str | Path) -> list[dict[str, Any]]:
+    paths = account_support_handoff_paths(base_dir)
+    artifacts = [
+        file_artifact(paths["delivery_check"], "account_support_handoff", "Account support handoff source"),
+    ]
+    return [row for row in artifacts if row.get("exists")]
+
+
+def build_account_support_handoff_summary(base_dir: str | Path) -> dict[str, Any]:
+    paths = account_support_handoff_paths(base_dir)
+    delivery_check_path = Path(paths["delivery_check"])
+    delivery_check = _read_json(delivery_check_path) if delivery_check_path.is_file() else {}
+    handoff = delivery_check.get("account_support_handoff") if isinstance(delivery_check.get("account_support_handoff"), dict) else {}
+    repair_plan = handoff.get("repair_plan") if isinstance(handoff.get("repair_plan"), dict) else {}
+    profile_readiness = handoff.get("profile_readiness_probe") if isinstance(handoff.get("profile_readiness_probe"), dict) else {}
+    impacted_accounts = handoff.get("impacted_accounts") if isinstance(handoff.get("impacted_accounts"), dict) else {}
+    safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    latest_apply = handoff.get("latest_apply") if isinstance(handoff.get("latest_apply"), dict) else {}
+    circuit_breaker = (
+        latest_apply.get("account_pool_circuit_breaker")
+        if isinstance(latest_apply.get("account_pool_circuit_breaker"), dict)
+        else {}
+    )
+    return {
+        "schema_version": "reachops.account_support_handoff_summary.v1",
+        "handoff_schema_version": _safe_text(handoff.get("schema_version")),
+        "source_path": str(delivery_check_path),
+        "source_exists": delivery_check_path.is_file(),
+        "support_required": bool(handoff.get("support_required")),
+        "support_case": _safe_text(handoff.get("support_case"), "not_available"),
+        "status": _safe_text(handoff.get("status") or handoff.get("readiness_status")),
+        "profile_group": _safe_text(handoff.get("profile_group")),
+        "batch_id": _safe_text(handoff.get("batch_id")),
+        "priority_action": _safe_text(handoff.get("priority_action")),
+        "ready_for_retest": bool(handoff.get("ready_for_retest")),
+        "requires_latest_repair_apply": bool(handoff.get("requires_latest_repair_apply")),
+        "requires_manual_account_work": bool(handoff.get("requires_manual_account_work")),
+        "blocker_codes": [str(item) for item in (handoff.get("blocker_codes") or [])[:12]],
+        "does_not_claim_real_account_pool_ready": bool(handoff.get("does_not_claim_real_account_pool_ready", True)),
+        "account_pool_circuit_breaker": circuit_breaker,
+        "account_pool_circuit_breaker_triggered": bool(circuit_breaker.get("triggered")),
+        "account_pool_circuit_breaker_threshold": int(circuit_breaker.get("threshold") or 0),
+        "account_pool_circuit_breaker_hard_failure_count": int(circuit_breaker.get("hard_failure_count") or 0),
+        "account_pool_circuit_breaker_latest_available": int(circuit_breaker.get("latest_available") or 0),
+        "repair_plan_available": bool(repair_plan.get("available")),
+        "repair_plan_profile_count": int(repair_plan.get("profile_count") or 0),
+        "repair_plan_auto_apply_profile_count": int(repair_plan.get("auto_apply_profile_count") or 0),
+        "repair_plan_non_auto_error_codes": [str(item) for item in (repair_plan.get("non_auto_error_codes") or [])[:12]],
+        "profile_readiness_probe_available": bool(profile_readiness.get("available")),
+        "profile_readiness_probe_status": _safe_text(profile_readiness.get("status")),
+        "profile_readiness_probe_path": _safe_text(profile_readiness.get("path")),
+        "profile_readiness_repair_json_path": _safe_text(profile_readiness.get("repair_json_path")),
+        "profile_readiness_ready_profile_count": int(profile_readiness.get("ready_profile_count") or 0),
+        "profile_readiness_failed_profile_count": int(profile_readiness.get("failed_profile_count") or 0),
+        "profile_readiness_does_not_modify_ixbrowser_groups": bool(
+            profile_readiness.get("does_not_modify_ixbrowser_groups", True)
+        ),
+        "impacted_error_group_count": int(impacted_accounts.get("error_group_count") or 0),
+        "error_groups": [
+            {
+                "error": _safe_text(row.get("error")),
+                "count": int(row.get("count") or 0),
+                "profile_ids_sample": [str(item) for item in (row.get("profile_ids_sample") or [])[:8]],
+            }
+            for row in (impacted_accounts.get("error_groups") or [])[:8]
+            if isinstance(row, dict)
+        ],
+        "operator_steps": [str(item) for item in (handoff.get("operator_steps") or [])[:8]],
+        "retest_commands": [str(item) for item in (handoff.get("retest_commands") or [])[:8]],
+        "retest_checklist": [
+            {
+                "id": _safe_text(row.get("id")),
+                "kind": _safe_text(row.get("kind")),
+                "title": _safe_text(row.get("title")),
+                "command": _safe_text(row.get("command")),
+                "expected": _safe_text(row.get("expected")),
+                "required": bool(row.get("required", True)),
+                "no_submit": bool(row.get("no_submit", True)),
+            }
+            for row in (handoff.get("retest_checklist") or [])[:8]
+            if isinstance(row, dict)
+        ],
+        "acceptance_required": list(handoff.get("acceptance_required") or [])[:8],
+        "safety_contract": safety_contract,
+        "apply_alone_is_not_acceptance": bool(safety_contract.get("apply_alone_is_not_acceptance", True)),
+        "no_browser_started": bool(safety_contract.get("no_browser_started", True)),
+        "no_submit": bool(safety_contract.get("no_submit", True)),
+        "no_ai_token_used": True,
+    }
 
 
 def build_account_repair_summary(base_dir: str | Path) -> dict[str, Any]:
@@ -613,6 +712,11 @@ def build_account_repair_summary(base_dir: str | Path) -> dict[str, Any]:
     for group in repair_groups:
         if _safe_text(group.get("error")) in hard_errors:
             selected_hard_profiles.extend(str(item) for item in (group.get("profile_ids") or []) if str(item))
+    computed_error_events = sum(int(row.get("count") or 0) for row in repair_groups)
+    computed_summary_only = sum(
+        max(0, int(row.get("summary_only_count") or int(row.get("count") or 0) - len(row.get("profile_ids") or [])))
+        for row in repair_groups
+    )
     pending_recheck = bool(
         apply_result
         and _safe_text(apply_result.get("status")) == "applied"
@@ -631,6 +735,10 @@ def build_account_repair_summary(base_dir: str | Path) -> dict[str, Any]:
         "profile_group": _safe_text(plan.get("profile_group")),
         "error_group_count": len(repair_groups),
         "total_profiles_by_error": int(plan.get("total_unique_profiles_by_error") or 0),
+        "total_error_events_by_error": int(
+            plan.get("total_error_events_by_error") or computed_error_events or plan.get("total_unique_profiles_by_error") or 0
+        ),
+        "summary_only_error_count": int(plan.get("summary_only_error_count") or computed_summary_only),
         "hard_blocker_profile_count": len(list(dict.fromkeys(selected_hard_profiles))),
         "operator_steps": list(plan.get("operator_steps") or [])[:8],
         "error_groups": [
@@ -638,6 +746,8 @@ def build_account_repair_summary(base_dir: str | Path) -> dict[str, Any]:
                 "error": _safe_text(row.get("error")),
                 "count": int(row.get("count") or 0),
                 "profile_ids_sample": [str(item) for item in (row.get("profile_ids") or [])[:8]],
+                "profile_ids_total": int(row.get("profile_ids_total") or len(row.get("profile_ids") or [])),
+                "summary_only_count": int(row.get("summary_only_count") or 0),
                 "recommended_action": _safe_text(row.get("recommended_action")),
             }
             for row in repair_groups[:12]
@@ -1203,6 +1313,52 @@ def build_run_session_health_summary(run_session: dict[str, Any]) -> dict[str, A
     }
 
 
+def infer_observed_runtime_states_from_log(log_lines: list[str]) -> list[str]:
+    states: list[str] = []
+
+    def add(state: str) -> None:
+        if state and state not in states:
+            states.append(state)
+
+    for line in log_lines or []:
+        text = _safe_text(line)
+        if not text:
+            continue
+        lowered = text.lower()
+        if "RUN    web_headless_start" in text or "CLICK  start_acquisition" in text:
+            add("PRECHECK")
+        if (
+            "QUEUE  account_queue_start" in text
+            or "QUEUE  account_queue_effective" in text
+            or "preflight_session_handoff" in text
+            or "profile_started" in text
+            or "open_profile" in lowered
+        ):
+            add("PROFILE_OPENING")
+        if (
+            text.startswith("VIDEO  ")
+            or "FAST   collection_result" in text
+            or "comment_scan_started" in text
+            or "comments_collected" in text
+            or "material_discovered" in text
+            or "profile_source_completed" in text
+        ):
+            add("COLLECTING")
+        if "SCORE " in text or "candidate_user_scored" in text or "operation_lead_created" in text:
+            add("SCORING")
+        if "START  action_preflight" in text or "action_queue_created" in text or "queued_total=" in text:
+            add("ACTION_PLANNING")
+        if text.startswith("TOUCH  ") or "DONE   action_preflight" in text or "FAST   acceptance" in text:
+            add("EXECUTING")
+        if "repair" in lowered or "账号修复" in text:
+            add("REPAIRING")
+        if "BLOCK  " in text:
+            add("BLOCKED")
+        if "FAST   acceptance status=executed" in text or "DONE   action_preflight" in text:
+            add("COMPLETED")
+    return states
+
+
 def build_autonomous_execution_summary(
     run_session: dict[str, Any],
     run_session_health: dict[str, Any],
@@ -1236,6 +1392,10 @@ def build_autonomous_execution_summary(
     inferred_state = _safe_text(checkpoint.get("runtime_state_inferred"))
     if inferred_state and inferred_state not in observed_states:
         observed_states.append(inferred_state)
+    log_observed_states = infer_observed_runtime_states_from_log(log_lines)
+    for state in log_observed_states:
+        if state not in observed_states:
+            observed_states.append(state)
 
     implemented_states = [state for state in RUN_SESSION_STATE_ORDER if state]
     session_result = run_session.get("result") if isinstance(run_session.get("result"), dict) else {}
@@ -1300,6 +1460,7 @@ def build_autonomous_execution_summary(
         "implemented_states": implemented_states,
         "observed_state_count": len(observed_states),
         "observed_states": observed_states,
+        "log_observed_states": log_observed_states,
         "missing_core_states": missing_core_states,
         "missing_implemented_states": missing_implemented_states,
         "required_core_states": core_states,
@@ -2081,13 +2242,18 @@ def build_evidence_bundle(
     page_state_artifacts = collect_page_state_artifacts(run_session, result)
     offline_learning_artifacts = collect_offline_learning_artifacts(learning_summary)
     account_repair_artifacts = collect_account_repair_artifacts(base_dir)
+    account_support_handoff_artifacts = collect_account_support_handoff_artifacts(base_dir)
     artifacts = collect_evidence_artifacts(
         execution_plan_path=execution_plan_path or _safe_text(run_session.get("execution_plan_path")),
         run_session_path=run_session_path,
         result_path=result_path,
         log_path=effective_log_path,
         offline_learning_path=offline_learning_path,
-        extra_artifacts=list(extra_artifacts or []) + page_state_artifacts + offline_learning_artifacts + account_repair_artifacts,
+        extra_artifacts=list(extra_artifacts or [])
+        + page_state_artifacts
+        + offline_learning_artifacts
+        + account_repair_artifacts
+        + account_support_handoff_artifacts,
     )
     plan_id = _safe_text(plan.get("plan_id") or run_session.get("plan_id") or (result.get("execution_plan") or {}).get("plan_id"))
     session_id = _safe_text(run_session.get("session_id") or Path(run_session_path).stem if run_session_path else "")
@@ -2109,6 +2275,7 @@ def build_evidence_bundle(
     )
     account_health_summary = build_account_health_summary(log_lines, run_session, result)
     account_repair_summary = build_account_repair_summary(base_dir)
+    account_support_handoff_summary = build_account_support_handoff_summary(base_dir)
     plan_runtime_contract = build_plan_runtime_contract_summary(plan, run_session, result)
     execution_runtime_contract = build_execution_runtime_contract_summary(plan, run_session)
     autonomous_preflight_forecast = build_autonomous_preflight_forecast_summary(plan)
@@ -2152,6 +2319,19 @@ def build_evidence_bundle(
         "page_state_sidecar_artifact_count": len([row for row in page_state_artifacts if row.get("kind") == "page_state_sidecar"]),
         "offline_learning_artifact_count": len(offline_learning_artifacts),
         "account_repair_artifact_count": len(account_repair_artifacts),
+        "account_support_handoff_artifact_count": len(account_support_handoff_artifacts),
+        "account_support_handoff_source_exists": bool(account_support_handoff_summary.get("source_exists")),
+        "account_support_handoff_support_required": bool(account_support_handoff_summary.get("support_required")),
+        "account_support_handoff_ready_for_retest": bool(account_support_handoff_summary.get("ready_for_retest")),
+        "account_support_handoff_does_not_claim_ready": bool(
+            account_support_handoff_summary.get("does_not_claim_real_account_pool_ready", True)
+        ),
+        "account_support_handoff_circuit_breaker_triggered": bool(
+            account_support_handoff_summary.get("account_pool_circuit_breaker_triggered")
+        ),
+        "account_support_handoff_circuit_breaker_hard_failure_count": int(
+            account_support_handoff_summary.get("account_pool_circuit_breaker_hard_failure_count") or 0
+        ),
         "account_repair_error_group_count": int(account_repair_summary.get("error_group_count") or 0),
         "account_repair_pending_recheck": bool(account_repair_summary.get("pending_recheck")),
         "account_repair_manual_apply_required": bool(account_repair_summary.get("manual_apply_required", True)),
@@ -2311,6 +2491,7 @@ def build_evidence_bundle(
         "autonomous_execution_summary": autonomous_execution_summary,
         "account_health_summary": account_health_summary,
         "account_repair_summary": account_repair_summary,
+        "account_support_handoff_summary": account_support_handoff_summary,
         "page_state_repair_coverage": page_state_repair_coverage,
         "plan_runtime_contract": plan_runtime_contract,
         "execution_runtime_contract": execution_runtime_contract,
@@ -2657,6 +2838,61 @@ def render_evidence_markdown(bundle: dict[str, Any]) -> str:
             if isinstance(row, dict):
                 lines.append(
                     f"- {row.get('error', '-')} count={row.get('count', 0)} action={row.get('recommended_action') or '-'}"
+                )
+    account_support_handoff = (
+        bundle.get("account_support_handoff_summary")
+        if isinstance(bundle.get("account_support_handoff_summary"), dict)
+        else {}
+    )
+    if account_support_handoff:
+        lines.extend(
+            [
+                "",
+                "## Account Support Handoff",
+                "",
+                f"- Source exists: {str(bool(account_support_handoff.get('source_exists'))).lower()}",
+                f"- Support required: {str(bool(account_support_handoff.get('support_required'))).lower()}",
+                f"- Support case: {account_support_handoff.get('support_case') or '-'}",
+                f"- Status: {account_support_handoff.get('status') or '-'}",
+                f"- Priority action: {account_support_handoff.get('priority_action') or '-'}",
+                f"- Profile group: {account_support_handoff.get('profile_group') or '-'}",
+                f"- Batch: {account_support_handoff.get('batch_id') or '-'}",
+                f"- Ready for retest: {str(bool(account_support_handoff.get('ready_for_retest'))).lower()}",
+                f"- Does not claim real account pool ready: {str(bool(account_support_handoff.get('does_not_claim_real_account_pool_ready', True))).lower()}",
+                f"- Repair plan profiles: {account_support_handoff.get('repair_plan_profile_count', 0)}",
+            ]
+        )
+        if account_support_handoff.get("account_pool_circuit_breaker_triggered"):
+            lines.append(
+                "- Account pool circuit breaker: triggered "
+                f"hard_failures={account_support_handoff.get('account_pool_circuit_breaker_hard_failure_count', 0)} "
+                f"threshold={account_support_handoff.get('account_pool_circuit_breaker_threshold', 0)} "
+                f"latest_available={account_support_handoff.get('account_pool_circuit_breaker_latest_available', 0)}"
+            )
+        non_auto = account_support_handoff.get("repair_plan_non_auto_error_codes") or []
+        if non_auto:
+            lines.append(f"- Non-auto errors: {', '.join(str(item) for item in non_auto)}")
+        if account_support_handoff.get("profile_readiness_probe_available"):
+            lines.extend(
+                [
+                    f"- Profile readiness probe: {account_support_handoff.get('profile_readiness_probe_status') or '-'}",
+                    f"- Profile readiness probe path: {account_support_handoff.get('profile_readiness_probe_path') or '-'}",
+                    f"- Profile repair checklist: {account_support_handoff.get('profile_readiness_repair_json_path') or '-'}",
+                    f"- Profile readiness ready/failed: {account_support_handoff.get('profile_readiness_ready_profile_count', 0)}/{account_support_handoff.get('profile_readiness_failed_profile_count', 0)}",
+                    f"- Does not modify ixBrowser groups: {str(bool(account_support_handoff.get('profile_readiness_does_not_modify_ixbrowser_groups', True))).lower()}",
+                ]
+            )
+        for row in account_support_handoff.get("error_groups") or []:
+            if isinstance(row, dict):
+                sample = ", ".join(str(item) for item in row.get("profile_ids_sample") or [])
+                lines.append(f"- {row.get('error', '-')} count={row.get('count', 0)} sample={sample or '-'}")
+        for command in account_support_handoff.get("retest_commands") or []:
+            lines.append(f"- Retest command: {command}")
+        for item in account_support_handoff.get("retest_checklist") or []:
+            if isinstance(item, dict):
+                command = item.get("command") or "manual"
+                lines.append(
+                    f"- Retest checklist: {item.get('id') or '-'} / {item.get('title') or '-'} / command={command} / expected={item.get('expected') or '-'}"
                 )
     page_state_summary = bundle.get("page_state_summary") if isinstance(bundle.get("page_state_summary"), dict) else {}
     if page_state_summary:

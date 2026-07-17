@@ -130,7 +130,13 @@
 - `tools/reachops_final_acceptance_gate.py --json`
   - `status=not_ready`
   - `final_delivery_ready=false`
-  - failed：`goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed`
+  - failed：`goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed`、`commercial_issue_closure:closed`
+- `tools/reachops_issue_closure_audit.py --json`
+  - `status=passed_with_external_acceptance_pending`
+  - `issues_total=7`
+  - `acceptance_criteria_total=53`
+  - `acceptance_criteria_external_pending=17`
+  - `external_pending_count=36`
 
 下一步必须先在 ixBrowser 中准备验收账号：
 
@@ -182,7 +188,11 @@
 - `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_final_acceptance_gate.py --json`
   - `status=not_ready`
   - `final_delivery_ready=false`
-  - failed：`goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed`
+  - failed：`goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed`、`commercial_issue_closure:closed`
+- `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_issue_closure_audit.py --json`
+  - `status=passed_with_external_acceptance_pending`
+  - `acceptance_criteria_external_pending=17`
+  - `external_pending_count=36`
 - `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_delivery_package_check.py --json`
   - `status=failed`
   - `final_delivery_ready=false`
@@ -279,7 +289,7 @@ web_ui_http_api
 - `/api/start` 在服务端拒绝空目标并返回 `target_required`，避免无效执行被误记为运营任务。
 - Web UI 提供 `/api/control`、`/api/logs`、`/api/snapshot`、`/api/acceptance`、`/api/final-status` 作为运行控制和验收观察入口。
 - `/api/acceptance` 暴露客户端交付门禁：`status`、`final_delivery_ready`、`failed_checks`。
-- `/api/final-status` 暴露最终交付只读状态：`status`、`final_delivery_ready`、`failed_checks`、`blocked_reasons`、`next_required_actions`、`verification_commands`；接口返回 `no_browser_started=true`、`no_submit=true`，面板“最终交付门禁”会直接显示“不可最终交付”及阻塞原因，“最终复核命令”会显示 `python tools\reachops_client_delivery_check.py --json`、`python tools\reachops_delivery_package_check.py --json`、`python tools\reachops_final_acceptance_gate.py --json`，避免运营只在 CLI 中才能看到最终验收缺口。
+- `/api/final-status` 暴露最终交付只读状态：`status`、`final_delivery_ready`、`failed_checks`、`blocked_reasons`、`next_required_actions`、`verification_commands`；接口返回 `no_browser_started=true`、`no_submit=true`，面板“最终交付门禁”会直接显示“不可最终交付”及阻塞原因，“最终复核命令”会显示 `python tools\reachops_client_delivery_check.py --json`、`python tools\reachops_delivery_package_check.py --json`、`python tools\reachops_issue_closure_audit.py --json`、`python tools\reachops_final_acceptance_gate.py --json`，避免运营只在 CLI 中才能看到最终验收缺口。
 - Mac 自检 `REQUIRED_WEB_UI_MARKERS` 已把“最终交付门禁”、`finalStatusState` 和 `fetch('/api/final-status')` 作为当前 Web 页面必备标记；验收包 manifest 也记录 `web_operator_api.final_status=/api/final-status` 以及 no-browser/no-submit 语义，避免旧页面或不完整验收包被误认为当前交付入口。
 - 已通过真实 HTTP 服务级测试启动 `ThreadingHTTPServer` 并请求 `/api/acceptance`，确认网页端运营接口返回结构化客户端门禁，并同步落盘 `latest_delivery_check.json`，而不是只在函数级构造 payload。
 - 已通过 `tools/reachops_web_panel_runtime_smoke.py` 启动真实本地 Web 服务，实际请求页面和 `/api/start`、`/api/logs`、`/api/control`、`/api/acceptance`、`/api/ixbrowser-status`、`/api/final-status`；冒烟结果证明页面控件不是静态样式，启动按钮会生成 `tools/run_reachops_headless_macos.py` 命令，暂停/继续/停止会进入本地运行态控制，ixBrowser 状态接口和最终门禁接口均只读且不会触发浏览器或平台动作。
@@ -458,6 +468,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_goal_delivery_runner.p
 - `final_delivery_ready=false`
 - failed_checks：`client_delivery:acceptance:ready`、`delivery_package:passed`
 - blockers：`local_mvp`、`windows_final_artifacts`、`external_authorized_execution`
+- `blocking_scope_count` 必须等于 `delivery_boundary.blocking_scopes` 的数量，供支持人员快速确认剩余阻断范围。
 - `delivery_boundary.overall_final_delivery_scope_ready=false`
 - `deliverable_index.web_operator_panel.ready=false`
 - `deliverable_index.local_mvp_acceptance.ready=false`
@@ -553,32 +564,32 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_final_acceptance_gate.
 
 - `status=not_ready`
 - `final_delivery_ready=false`
-- failed_checks：`goal_status:passed`、`delivery_package:passed`
-- evidence：`client_delivery:final_ready` 必须包含 `delivery_check_path` 且 `evidence_ready=true`，并要求该 JSON 文件内容本身也是 `status=passed`、`readiness=pass`、`failed_checks=[]`；`delivery_package:passed` 必须包含 `artifacts`、完整 final report set (`delivery_audit`、`operator_pressure`、`installer_smoke`、`ui_startup`、`activation_status`、`live_acceptance_status`、`live_validation`、`repository_cleanliness`、`windows_package_preflight`、`live_readiness`、`live_preflight`、`goal_status`、`live_submit`、`final_acceptance_gate`) 的 `report_files` 和 `final_gate_report`，终包产物和所有报告的 `size>0`，`final_gate_report.missing_required_checks=[]`、`final_gate_report.failed_required_checks=[]`，且 manifest 的 `expected_sha256/actual_sha256`、`expected_size/actual_size` 必须一致
+- failed_checks：`goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed`、`commercial_issue_closure:closed`
+- evidence：`client_delivery:final_ready` 必须包含 `delivery_check_path` 且 `evidence_ready=true`，并要求该 JSON 文件内容本身也是 `status=passed`、`readiness=pass`、`failed_checks=[]`；`delivery_package:passed` 必须包含 `artifacts`、完整 final report set (`delivery_audit`、`operator_pressure`、`installer_smoke`、`ui_startup`、`activation_status`、`live_acceptance_status`、`authorization_handoff`、`live_validation`、`repository_cleanliness`、`windows_package_preflight`、`client_delivery`、`live_readiness`、`live_preflight`、`goal_status`、`live_submit`、`final_acceptance_gate`、`issue_closure`) 的 `report_files` 和 `final_gate_report`，终包产物和所有报告的 `size>0`，`final_gate_report.missing_required_checks=[]`、`final_gate_report.failed_required_checks=[]`，且 manifest 的 `expected_sha256/actual_sha256`、`expected_size/actual_size` 必须一致
 
 说明：`ready_for_external_validation`、环境阻断、缺交付包产物都不能被最终 gate 误判为交付通过。最终交付必须让该命令返回 `status=passed`、`final_delivery_ready=true`。
 
-Windows acceptance 脚本已自动接入该 gate：`tools/run_reachops_acceptance_windows.ps1` 会在 `delivery_package_check.json` 生成后运行 `tools/reachops_final_acceptance_gate.py`，输出 `final_acceptance_gate.json` 和 `FINAL_ACCEPTANCE_GATE_JSON=...`，并把 `final_acceptance_gate` 回写进 `acceptance_summary.json`。回写后脚本会再次复核 `delivery_package_check.json`，确认最终门禁报告文件也被包检查覆盖，再用复核后的包结果重跑 final gate。若 `acceptance_summary.json` 已经是 `passed` 但 final gate 或最终包复核未通过，脚本会直接失败。
+Windows acceptance 脚本已自动接入该 gate：`tools/run_reachops_acceptance_windows.ps1` 会在 `delivery_package_check.json` 生成前运行 `tools/reachops_issue_closure_audit.py`，输出 `issue_closure_payload.json` 和 `ISSUE_CLOSURE_JSON=...`，随后运行 `tools/reachops_final_acceptance_gate.py`，输出 `final_acceptance_gate.json` 和 `FINAL_ACCEPTANCE_GATE_JSON=...`，并把 `issue_closure` 与 `final_acceptance_gate` 回写进 `acceptance_summary.json`。回写后脚本会再次复核 `delivery_package_check.json`，确认最终门禁报告文件和 Issues #1-#7 闭环报告也被包检查覆盖，再用复核后的包结果重跑 final gate。若 `acceptance_summary.json` 已经是 `passed` 但 issue closure、final gate 或最终包复核未通过，脚本会直接失败。
 
-`tools/verify_reachops_acceptance_summary.py` 会要求 `status=passed` 的 summary 必须包含 `windows_package_preflight` 和 `final_acceptance_gate`，并校验 Windows 构建合同、`final_acceptance_gate.status=passed`、`final_delivery_ready=true`、`failed_checks=[]`。真实 live submit 成功动作还必须包含本地截图 evidence 和 sidecar 细节，sidecar 的 `screenshot_sha256` 必须匹配截图文件，并且必须包含 `action_type`、`profile_id`、`action_id`、`current_url`；评论动作还要求 `submitted_text` 匹配且 `comment_visible_confirmed=true`。`evidence://...` 只能用于预检/fixture 记录，不能作为真实提交成功证据。`tools/reachops_delivery_package_check.py` 的最终模式默认要求 `final_acceptance_gate.json` 和 `windows_package_preflight.json` 存在且非空；只有 Windows acceptance 脚本首次 bootstrap 包检查可以使用 `--allow-missing-final-gate`。该中间 JSON 会标记 `bootstrap_only=true`、`final_delivery_ready=false`，最终复核不能使用该参数。
+`tools/verify_reachops_acceptance_summary.py` 会要求 `status=passed` 的 summary 必须包含 `repository_cleanliness`、`windows_package_preflight`、`authorization_handoff`、`client_delivery`、`issue_closure` 和 `final_acceptance_gate`，并校验 Windows 构建合同、授权交接 bundle、`latest_live_acceptance_readiness.md/json`、`client_delivery.status=passed`、`client_delivery.readiness=pass`、`issue_closure.summary.acceptance_criteria_external_pending=0`、`issue_closure.summary.external_pending_count=0`、`issue_closure.github_issues.closure_requires_external_validation=false`、`final_acceptance_gate.status=passed`、`final_delivery_ready=true`、`failed_checks=[]`。真实 live submit 成功动作还必须包含本地截图 evidence 和 sidecar 细节，sidecar 的 `screenshot_sha256` 必须匹配截图文件，并且必须包含 `action_type`、`profile_id`、`action_id`、`current_url`；评论动作还要求 `submitted_text` 匹配且 `comment_visible_confirmed=true`。`evidence://...` 只能用于预检/fixture 记录，不能作为真实提交成功证据。`tools/reachops_delivery_package_check.py` 的最终模式默认要求完整 final report set 存在且非空，包括 `final_acceptance_gate.json`、`issue_closure_payload.json`、`repository_cleanliness_payload.json`、`windows_package_preflight.json`、`authorization_handoff_payload.json`、`latest_live_acceptance_readiness.md`、`latest_live_acceptance_readiness.json`、`client_delivery.json` 以及 live/preflight/installer/UI/activation/operator/goal/delivery audit 报告；只有 Windows acceptance 脚本首次 bootstrap 包检查可以使用 `--allow-missing-final-gate`。该中间 JSON 会标记 `bootstrap_only=true`、`final_delivery_ready=false`，最终复核不能使用该参数。
 
 `tools/reachops_delivery_package_check.py` 还会读取 `final_acceptance_gate.json` 内容，要求 JSON 本身为 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`，并与 `acceptance_summary.json` 中回写的 `final_acceptance_gate` 一致；内容不一致会返回 `final_acceptance_gate_json_mismatch`。
 
-`final_acceptance_gate.json` 还必须包含完整关键 `checks` 列表，且 `goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed`、`delivery_audit:no_failed_checks`、`operator_pressure:leads_and_actions` 都必须 `ok=true`；缺失或失败会返回 `final_acceptance_gate_json_checks_missing` / `final_acceptance_gate_json_checks_failed`。
+`final_acceptance_gate.json` 还必须包含完整关键 `checks` 列表，且 `goal_status:passed`、`client_delivery:final_ready`、`delivery_package:passed`、`commercial_issue_closure:closed`、`delivery_audit:no_failed_checks`、`operator_pressure:leads_and_actions` 都必须 `ok=true`；缺失或失败会返回 `final_acceptance_gate_json_checks_missing` / `final_acceptance_gate_json_checks_failed`。
 
 `tools/reachops_delivery_package_check.py` 会在输出中保留 `final_gate_report` 摘要，包含 `required_checks`、`missing_required_checks`、`failed_required_checks` 和 `checks_by_name`，因此最终交付包不只给出失败码，还能直接审计每个关键 final gate check 的实际状态。
 
 最终交付包还必须自包含：`acceptance_summary.json` 中所有报告 `json_path` 必须位于同一个 acceptance report 目录内；指向目录外文件会返回 `<section>_json_outside_acceptance_dir`。
 
-后台验收恢复脚本 `tools/get_reachops_acceptance_background_status_windows.ps1` 已暴露 `FINAL_ACCEPTANCE_GATE_JSON`、`WINDOWS_PACKAGE_PREFLIGHT_JSON`、`delivery_package_check_path`、`delivery_package_check_exists`、`delivery_package_check`、`windows_package_preflight_path`、`windows_package_preflight_exists`、`windows_package_preflight`、`final_acceptance_gate_path`、`final_acceptance_gate_exists`、`final_acceptance_gate`、`final_delivery_ready`、`final_delivery_blockers` 和 `verification_commands`。恢复脚本会把 `delivery_package_check_not_final_ready`、`windows_package_preflight_missing` 或 `windows_package_preflight_not_ready` 作为阻断原因，断线恢复后也能直接看到最终门禁状态和包证据阻断原因；非 JSON 输出会打印 `VERIFICATION_COMMANDS=...`，便于人工远程复核直接复制最终验收命令。
+后台验收恢复脚本 `tools/get_reachops_acceptance_background_status_windows.ps1` 已暴露 `FINAL_ACCEPTANCE_GATE_JSON`、`ISSUE_CLOSURE_JSON`、`WINDOWS_PACKAGE_PREFLIGHT_JSON`、`delivery_package_check_path`、`delivery_package_check_exists`、`delivery_package_check`、`required_package_report_files`、`missing_package_report_files`、`windows_package_preflight_path`、`windows_package_preflight_exists`、`windows_package_preflight`、`final_acceptance_gate_path`、`final_acceptance_gate_exists`、`final_acceptance_gate`、`issue_closure`、`final_delivery_ready`、`final_delivery_blockers` 和 `verification_commands`。恢复脚本会把 `delivery_package_check_not_final_ready`、`windows_package_preflight_missing`、`windows_package_preflight_not_ready` 或每个缺失报告对应的 `<report>_report_missing` 作为阻断原因，断线恢复后也能直接看到最终门禁状态、Issues #1-#7 闭环状态和包证据阻断原因；非 JSON 输出会打印 `MISSING_PACKAGE_REPORT_FILES=...` 和 `VERIFICATION_COMMANDS=...`，便于人工远程复核直接复制最终验收命令。
 
 只读状态汇总 `tools/reachops_live_acceptance_status.py` 已把 latest package check 的 `package_final_delivery_ready`、`package_bootstrap_only`、`package_evidence_ready`、`package_final_gate_summary_ready` 和 latest final gate 纳入 `final_delivery_ready` 判定，并在 `latest_acceptance` 中暴露 `summary_exists`、`package_check_exists`、`package_final_delivery_ready`、`package_evidence_ready`、`package_final_gate_summary_ready`、`final_acceptance_gate_exists`。缺失、bootstrap-only、缺少 package 内层验收/产物证据、缺少 `final_gate_report` 摘要或未通过 final gate 的旧报告不能再被识别为最终可交付。该状态汇总还会在阻断时输出顶层 `blocked_reasons` 和 `failed_checks`，在最终通过时二者必须为空，方便 Web/CLI/自动化验收直接显示具体缺口。`tools/reachops_live_environment_blocker_report.py` 会把 package 未最终 ready、`artifacts_ready=false`、`manifest_ready=false`、`report_files_ready=false`、`acceptance_verification_ready=false` 或 `package_final_gate_summary_ready=false` 标记为 `final_delivery_package` blocker，并把缺失或未通过的 final gate 标记为 `final_delivery_gate` blocker。
 
-当 latest acceptance 已存在但 final gate 未通过时，`tools/reachops_live_acceptance_status.py` 会优先展示 final gate 的 `next_actions` 或 `failed_checks`，并在顶层输出 `verification_commands`，让运营/交付人员直接看到需要修复的最终门禁项和三条最终复核命令；尚未生成 acceptance 报告时仍提示先运行受控真实提交并生成 evidence。
+当 latest acceptance 已存在但 final gate 未通过时，`tools/reachops_live_acceptance_status.py` 会优先展示 final gate 的 `next_actions` 或 `failed_checks`，并在顶层输出 `verification_commands`，让运营/交付人员直接看到需要修复的最终门禁项和四条最终复核命令；尚未生成 acceptance 报告时仍提示先运行受控真实提交并生成 evidence。
 
-Windows build 脚本 `tools/build_reachops_windows.ps1` 的 `py_compile` 预检已覆盖 Web 面板与最终验收关键工具，包括 `tools/reachops_web_ui.py`、`tools/reachops_client_acceptance_status.py`、`tools/reachops_client_delivery_check.py`、`tools/reachops_web_panel_dom_smoke.py`、`tools/reachops_web_panel_runtime_smoke.py`、`tools/reachops_delivery_package_check.py`、`tools/reachops_final_acceptance_gate.py`、`tools/reachops_live_acceptance_status.py`、`tools/reachops_live_environment_blocker_report.py` 和 `tools/verify_reachops_acceptance_summary.py`，避免最终验收关键工具在打包后期才暴露语法问题。
+Windows build 脚本 `tools/build_reachops_windows.ps1` 的 `py_compile` 预检已覆盖 Web 面板与最终验收关键工具，包括 `tools/reachops_web_ui.py`、`tools/reachops_client_acceptance_status.py`、`tools/reachops_client_delivery_check.py`、`tools/reachops_web_panel_dom_smoke.py`、`tools/reachops_web_panel_runtime_smoke.py`、`tools/reachops_delivery_package_check.py`、`tools/reachops_issue_closure_audit.py`、`tools/reachops_final_acceptance_gate.py`、`tools/reachops_live_acceptance_status.py`、`tools/reachops_live_environment_blocker_report.py` 和 `tools/verify_reachops_acceptance_summary.py`，避免最终验收关键工具在打包后期才暴露语法问题。
 
-远端同步脚本 `tools/sync_reachops_to_windows_vm.sh --run-tests` 已同步并预检 Web 面板工具链：`reachops_web_ui.py`、`reachops_client_delivery_check.py`、`reachops_web_panel_dom_smoke.py`、`reachops_web_panel_runtime_smoke.py`。同步后的 Windows 侧测试链会检查这些文件存在，运行 `tools\reachops_delivery_audit.py --json` 和 `tools\reachops_final_acceptance_gate.py --json`，写出 `reachops_final_acceptance_gate_sync.json`，并输出 `SYNC_FINAL_ACCEPTANCE_GATE_STATUS` 与 `SYNC_FINAL_DELIVERY_READY`。同步测试允许未具备真实外部证据时返回 `not_ready`，但不允许 Web 面板工具、delivery audit 或 final gate 工具崩溃或缺少 JSON 状态。
+远端同步脚本 `tools/sync_reachops_to_windows_vm.sh --run-tests` 已同步并预检 Web 面板工具链：`reachops_web_ui.py`、`reachops_client_delivery_check.py`、`reachops_web_panel_dom_smoke.py`、`reachops_web_panel_runtime_smoke.py`。同步后的 Windows 侧测试链会检查这些文件存在，运行 `tools\reachops_delivery_audit.py --json`、`tools\reachops_issue_closure_audit.py --json` 和 `tools\reachops_final_acceptance_gate.py --json`，写出 `reachops_issue_closure_sync.json` 和 `reachops_final_acceptance_gate_sync.json`，并输出 `SYNC_ISSUE_CLOSURE_STATUS`、`SYNC_FINAL_ACCEPTANCE_GATE_STATUS` 与 `SYNC_FINAL_DELIVERY_READY`。同步测试允许未具备真实外部证据时返回 `not_ready`，但不允许 Web 面板工具、delivery audit、issue closure audit 或 final gate 工具崩溃或缺少 JSON 状态。
 
 Web 控制 API 的暂停/继续已做跨平台保护：支持 POSIX 信号的平台会发送 `SIGSTOP/SIGCONT`；不支持的平台使用本地 `control/pause.request` 与 `control/resume.request` 协作式控制文件，并把控制事件写入 RunSession，不会因为 Windows 缺少进程组暂停信号而导致 `/api/control` 或 `delivery_audit.py` 崩溃。
 
@@ -593,7 +604,7 @@ Web 控制 API 的暂停/继续已做跨平台保护：支持 POSIX 信号的平
 - `*.bak`
 - `*~`
 
-新增 `tools/reachops_repository_cleanliness_check.py --json` 作为可重复结构清洁度验收；`tools/reachops_delivery_audit.py --json` 已纳入 `项目结构无缓存临时备份冗余文件` 检查，当前结果为 `passed`、`forbidden_count=0`。Windows build 与 VM sync 脚本会在 `py_compile` 预检后立即清理 `__pycache__`、`.pyc`、`.pyo`，避免构建过程自造冗余文件导致审计门禁误失败。Windows acceptance 脚本会写出 `repository_cleanliness_payload.json`、`windows_package_preflight.json`，并把 `repository_cleanliness`、`windows_package_preflight` 写入 `acceptance_summary.json`；最终 `delivery_package_check.py` 和 `final_acceptance_gate.py` 会把这两份报告作为 `report_files` 必备证据，缺失时不能通过最终交付。
+新增 `tools/reachops_repository_cleanliness_check.py --json` 作为可重复结构清洁度验收；`tools/reachops_delivery_audit.py --json` 已纳入 `项目结构无缓存临时备份冗余文件` 检查，当前结果为 `passed`、`forbidden_count=0`。Windows build 与 VM sync 脚本会在 `py_compile` 预检后立即清理 `__pycache__`、`.pyc`、`.pyo`，避免构建过程自造冗余文件导致审计门禁误失败。Windows acceptance 脚本会写出 `repository_cleanliness_payload.json`、`windows_package_preflight.json`、`authorization_handoff_payload.json`、`latest_live_acceptance_readiness.md`、`latest_live_acceptance_readiness.json`、`client_delivery.json`、`issue_closure_payload.json` 和 `final_acceptance_gate.json`，并把 `repository_cleanliness`、`windows_package_preflight`、`authorization_handoff`、`client_delivery`、`issue_closure`、`final_acceptance_gate` 写入 `acceptance_summary.json`；最终 `delivery_package_check.py`、`reachops_release_evidence.py` 和 `final_acceptance_gate.py` 会把这些报告作为 `report_files` 必备证据，缺失时不能通过最终交付，也会在 release evidence/rollback note 中暴露缺失报告。
 
 已清理并复查：
 
@@ -632,5 +643,6 @@ Web 控制 API 的暂停/继续已做跨平台保护：支持 POSIX 信号的平
 4. 运行真实 acceptance，生成 `reports/reachops_acceptance/<timestamp>/acceptance_summary.json`。
 5. 确认 `tools/reachops_client_delivery_check.py --json` 返回 `status=passed`、`final_delivery_ready=true`、`failed_checks=[]`。
 6. 确认 `tools/reachops_delivery_package_check.py --json` 返回 `status=passed`。
-7. 确认 `tools/reachops_final_acceptance_gate.py --json` 返回 `status=passed`、`final_delivery_ready=true`。
-8. 确认 Web “最终复核命令”、`/api/final-status`、`tools/reachops_live_acceptance_status.py --json` 和 `tools/get_reachops_acceptance_background_status_windows.ps1 -Json` 暴露的 `verification_commands` 均包含以上三条命令。
+7. 确认 `tools/reachops_issue_closure_audit.py --json` 返回 Issues #1-#7 闭环无外部 pending。
+8. 确认 `tools/reachops_final_acceptance_gate.py --json` 返回 `status=passed`、`final_delivery_ready=true`。
+9. 确认 Web “最终复核命令”、`/api/final-status`、`tools/reachops_live_acceptance_status.py --json` 和 `tools/get_reachops_acceptance_background_status_windows.ps1 -Json` 暴露的 `verification_commands` 均包含以上四条命令。

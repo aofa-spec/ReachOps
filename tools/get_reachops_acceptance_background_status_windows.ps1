@@ -14,8 +14,47 @@ $FinalVerificationCommands = @(
     "python tools\reachops_client_delivery_check.py --json",
     "python tools\reachops_goal_delivery_runner.py --json",
     "python tools\reachops_delivery_package_check.py --json",
+    "python tools\reachops_issue_closure_audit.py --json",
     "python tools\reachops_final_acceptance_gate.py --json"
 )
+$RequiredPackageReportFiles = @(
+    "delivery_audit",
+    "operator_pressure",
+    "installer_smoke",
+    "ui_startup",
+    "activation_status",
+    "live_acceptance_status",
+    "authorization_handoff",
+    "live_validation",
+    "repository_cleanliness",
+    "windows_package_preflight",
+    "client_delivery",
+    "live_readiness",
+    "live_preflight",
+    "goal_status",
+    "live_submit",
+    "issue_closure",
+    "final_acceptance_gate"
+)
+$RequiredPackageReportBlockers = @{
+    "delivery_audit" = "delivery_audit_report_missing"
+    "operator_pressure" = "operator_pressure_report_missing"
+    "installer_smoke" = "installer_smoke_report_missing"
+    "ui_startup" = "ui_startup_report_missing"
+    "activation_status" = "activation_status_report_missing"
+    "live_acceptance_status" = "live_acceptance_status_report_missing"
+    "authorization_handoff" = "authorization_handoff_report_missing"
+    "live_validation" = "live_validation_report_missing"
+    "repository_cleanliness" = "repository_cleanliness_report_missing"
+    "windows_package_preflight" = "windows_package_preflight_report_missing"
+    "client_delivery" = "client_delivery_report_missing"
+    "live_readiness" = "live_readiness_report_missing"
+    "live_preflight" = "live_preflight_report_missing"
+    "goal_status" = "goal_status_report_missing"
+    "live_submit" = "live_submit_report_missing"
+    "issue_closure" = "issue_closure_report_missing"
+    "final_acceptance_gate" = "final_acceptance_gate_report_missing"
+}
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
@@ -46,6 +85,26 @@ function Convert-StdoutJson {
         }
     }
     return $null
+}
+
+function Test-PackageReportFile {
+    param(
+        [object]$ReportFiles,
+        [string]$Name
+    )
+    if (-not $ReportFiles) {
+        return $false
+    }
+    $property = $ReportFiles.PSObject.Properties[$Name]
+    if (-not $property) {
+        return $false
+    }
+    $reportFile = $property.Value
+    return [bool](
+        $reportFile `
+        -and [bool]$reportFile.exists `
+        -and [int]$reportFile.size -gt 0
+    )
 }
 
 if (-not $RunDir) {
@@ -107,6 +166,7 @@ if (Test-Path $stderrPath) {
 
 $acceptanceSummaryPath = ""
 $finalAcceptanceGatePath = ""
+$issueClosurePath = ""
 $deliveryPackageCheckPath = ""
 $windowsPackagePreflightPath = ""
 if (Test-Path $stdoutPath) {
@@ -122,6 +182,12 @@ if (Test-Path $stdoutPath) {
     if ($finalGateLine) {
         $finalAcceptanceGatePath = [string]$finalGateLine.Substring("FINAL_ACCEPTANCE_GATE_JSON=".Length)
     }
+    $issueClosureLine = Get-Content -Path $stdoutPath -Encoding UTF8 |
+        Where-Object { $_ -like "ISSUE_CLOSURE_JSON=*" } |
+        Select-Object -Last 1
+    if ($issueClosureLine) {
+        $issueClosurePath = [string]$issueClosureLine.Substring("ISSUE_CLOSURE_JSON=".Length)
+    }
     $windowsPreflightLine = Get-Content -Path $stdoutPath -Encoding UTF8 |
         Where-Object { $_ -like "WINDOWS_PACKAGE_PREFLIGHT_JSON=*" } |
         Select-Object -Last 1
@@ -134,11 +200,15 @@ if ($acceptanceSummaryPath) {
     if (-not $windowsPackagePreflightPath) {
         $windowsPackagePreflightPath = Join-Path (Split-Path -Parent $acceptanceSummaryPath) "windows_package_preflight.json"
     }
+    if (-not $issueClosurePath) {
+        $issueClosurePath = Join-Path (Split-Path -Parent $acceptanceSummaryPath) "issue_closure_payload.json"
+    }
 }
 
 $acceptanceSummary = $null
 $acceptanceVerification = $null
 $finalAcceptanceGate = $null
+$issueClosure = $null
 $deliveryPackageCheck = $null
 $windowsPackagePreflight = $null
 if ($acceptanceSummaryPath -and (Test-Path $acceptanceSummaryPath)) {
@@ -149,12 +219,27 @@ if ($acceptanceSummaryPath -and (Test-Path $acceptanceSummaryPath)) {
 if ($finalAcceptanceGatePath -and (Test-Path $finalAcceptanceGatePath)) {
     $finalAcceptanceGate = Read-JsonObject $finalAcceptanceGatePath
 }
+if ($issueClosurePath -and (Test-Path $issueClosurePath)) {
+    $issueClosure = Read-JsonObject $issueClosurePath
+}
 if ($deliveryPackageCheckPath -and (Test-Path $deliveryPackageCheckPath)) {
     $deliveryPackageCheck = Read-JsonObject $deliveryPackageCheckPath
 }
 if ($windowsPackagePreflightPath -and (Test-Path $windowsPackagePreflightPath)) {
     $windowsPackagePreflight = Read-JsonObject $windowsPackagePreflightPath
 }
+
+$missingPackageReportFiles = @()
+foreach ($reportName in $RequiredPackageReportFiles) {
+    if (-not (Test-PackageReportFile -ReportFiles $deliveryPackageCheck.report_files -Name $reportName)) {
+        $missingPackageReportFiles += $reportName
+    }
+}
+$packageReportFilesReady = [bool](
+    $deliveryPackageCheck `
+    -and $deliveryPackageCheck.report_files `
+    -and $missingPackageReportFiles.Count -eq 0
+)
 
 $finalGateFailedChecks = @()
 if ($finalAcceptanceGate -and $finalAcceptanceGate.failed_checks) {
@@ -185,15 +270,24 @@ $deliveryPackageReady = [bool](
     -and (-not $deliveryPackageCheck.final_gate_report.missing_required_checks -or @($deliveryPackageCheck.final_gate_report.missing_required_checks).Count -eq 0) `
     -and (-not $deliveryPackageCheck.final_gate_report.failed_required_checks -or @($deliveryPackageCheck.final_gate_report.failed_required_checks).Count -eq 0) `
     -and $deliveryPackageCheck.final_gate_report.checks_by_name `
-    -and $deliveryPackageCheck.report_files `
-    -and $deliveryPackageCheck.report_files.windows_package_preflight `
-    -and [bool]$deliveryPackageCheck.report_files.windows_package_preflight.exists `
-    -and [int]$deliveryPackageCheck.report_files.windows_package_preflight.size -gt 0 `
-    -and $deliveryPackageCheck.report_files.client_delivery `
-    -and [bool]$deliveryPackageCheck.report_files.client_delivery.exists `
-    -and [int]$deliveryPackageCheck.report_files.client_delivery.size -gt 0
+    -and $packageReportFilesReady
 )
-$finalDeliveryReady = [bool]($acceptanceFinalPassed -and $deliveryPackageReady -and $finalGateReady)
+$issueClosureSummary = if ($issueClosure -and $issueClosure.summary) { $issueClosure.summary } else { $null }
+$issueClosureGithubIssues = if ($issueClosure -and $issueClosure.github_issues) { $issueClosure.github_issues } else { $null }
+$issueClosureReady = [bool](
+    $issueClosure `
+    -and [bool]$issueClosure.passed `
+    -and $issueClosureSummary `
+    -and [int]$issueClosureSummary.issues_total -eq 7 `
+    -and [int]$issueClosureSummary.acceptance_criteria_total -eq 53 `
+    -and [int]$issueClosureSummary.acceptance_criteria_unclassified -eq 0 `
+    -and [int]$issueClosureSummary.acceptance_criteria_external_pending -eq 0 `
+    -and [int]$issueClosureSummary.external_pending_count -eq 0 `
+    -and (-not $issueClosure.external_acceptance_pending -or @($issueClosure.external_acceptance_pending).Count -eq 0) `
+    -and $issueClosureGithubIssues `
+    -and (-not [bool]$issueClosureGithubIssues.closure_requires_external_validation)
+)
+$finalDeliveryReady = [bool]($acceptanceFinalPassed -and $deliveryPackageReady -and $finalGateReady -and $issueClosureReady)
 $finalDeliveryBlockers = @()
 if (-not $acceptanceSummary) {
     $finalDeliveryBlockers += "acceptance_summary_missing"
@@ -220,8 +314,18 @@ if (-not $windowsPackagePreflight) {
 } elseif ([string]$windowsPackagePreflight.status -ne "ready_for_windows_build" -or -not [bool]$windowsPackagePreflight.ready_for_windows_build) {
     $finalDeliveryBlockers += "windows_package_preflight_not_ready"
 }
-if (-not ($deliveryPackageCheck -and $deliveryPackageCheck.report_files -and $deliveryPackageCheck.report_files.client_delivery -and [bool]$deliveryPackageCheck.report_files.client_delivery.exists -and [int]$deliveryPackageCheck.report_files.client_delivery.size -gt 0)) {
-    $finalDeliveryBlockers += "client_delivery_report_missing"
+if (-not $issueClosure) {
+    $finalDeliveryBlockers += "issue_closure_missing"
+} elseif (-not $issueClosureReady) {
+    $finalDeliveryBlockers += "issue_closure_not_closed"
+}
+foreach ($reportName in $missingPackageReportFiles) {
+    $blocker = $RequiredPackageReportBlockers[$reportName]
+    if ($blocker) {
+        $finalDeliveryBlockers += $blocker
+    } else {
+        $finalDeliveryBlockers += "$($reportName)_report_missing"
+    }
 }
 
 $status = "running"
@@ -254,9 +358,15 @@ $result = [ordered]@{
     delivery_package_check_path = $deliveryPackageCheckPath
     delivery_package_check_exists = [bool]($deliveryPackageCheckPath -and (Test-Path $deliveryPackageCheckPath))
     delivery_package_check = $deliveryPackageCheck
+    required_package_report_files = $RequiredPackageReportFiles
+    missing_package_report_files = $missingPackageReportFiles
     windows_package_preflight_path = $windowsPackagePreflightPath
     windows_package_preflight_exists = [bool]($windowsPackagePreflightPath -and (Test-Path $windowsPackagePreflightPath))
     windows_package_preflight = $windowsPackagePreflight
+    issue_closure_path = $issueClosurePath
+    issue_closure_exists = [bool]($issueClosurePath -and (Test-Path $issueClosurePath))
+    issue_closure = $issueClosure
+    issue_closure_ready = $issueClosureReady
     final_acceptance_gate_path = $finalAcceptanceGatePath
     final_acceptance_gate_exists = [bool]($finalAcceptanceGatePath -and (Test-Path $finalAcceptanceGatePath))
     final_acceptance_gate = $finalAcceptanceGate
@@ -285,12 +395,18 @@ if ($Json) {
     if ($finalAcceptanceGatePath) {
         Write-Host "FINAL_ACCEPTANCE_GATE_JSON=$finalAcceptanceGatePath"
     }
+    if ($issueClosurePath) {
+        Write-Host "ISSUE_CLOSURE_JSON=$issueClosurePath"
+    }
     if ($windowsPackagePreflightPath) {
         Write-Host "WINDOWS_PACKAGE_PREFLIGHT_JSON=$windowsPackagePreflightPath"
     }
     Write-Host "FINAL_DELIVERY_READY=$finalDeliveryReady"
     if ($finalDeliveryBlockers.Count -gt 0) {
         Write-Host ("FINAL_DELIVERY_BLOCKERS=" + ($finalDeliveryBlockers -join ","))
+    }
+    if ($missingPackageReportFiles.Count -gt 0) {
+        Write-Host ("MISSING_PACKAGE_REPORT_FILES=" + ($missingPackageReportFiles -join ","))
     }
     Write-Host ("VERIFICATION_COMMANDS=" + ($FinalVerificationCommands -join " ; "))
 }

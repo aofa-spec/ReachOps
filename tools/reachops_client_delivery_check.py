@@ -17,6 +17,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from tools.reachops_client_acceptance_status import (
     DEFAULT_BASE_DIR,
+    account_operator_steps,
     derive_acceptance,
     latest_batch,
     latest_profile_preflight,
@@ -93,6 +94,22 @@ REQUIRED_PAGE_STATES = {
     "SUBMIT_BUTTON_MISSING",
     "UNKNOWN_PAGE_STATE",
 }
+ACCOUNT_REPAIR_AUTO_APPLY_ERRORS = {
+    "IXBROWSER_KERNEL_MISMATCH",
+    "LOGIN_REQUIRED",
+    "CAPTCHA_DETECTED",
+    "PROXY_FAILED",
+    "COMMENT_ACCESS_GATED",
+    "ACCOUNT_RESTRICTED",
+}
+ACCOUNT_POOL_CIRCUIT_BREAKER_PROFILE_FAILURES = 10
+
+
+def path_mtime(path: Path) -> float:
+    try:
+        return float(path.stat().st_mtime)
+    except OSError:
+        return 0.0
 
 
 def is_executable(path: Path) -> bool:
@@ -107,9 +124,702 @@ def delivery_status(contract_ok: bool, acceptance_ready: bool, readiness: str) -
         return "passed"
     if not contract_ok:
         return "failed"
+    if readiness == "pending_new_run":
+        return "pending_new_run"
     if readiness in {"partial", "blocked_by_accounts", "blocked_by_environment", "not_started"}:
         return readiness
     return "failed"
+
+
+def account_repair_apply_effective_status(repair_apply: dict) -> str:
+    raw_status = str((repair_apply if isinstance(repair_apply, dict) else {}).get("status") or "")
+    if not raw_status:
+        return ""
+    if repair_apply.get("stale"):
+        return "stale"
+    if repair_apply.get("same_group") is False:
+        return "group_mismatch"
+    if raw_status == "applied" and repair_apply.get("pending_recheck"):
+        return "pending_recheck"
+    return raw_status
+
+
+def account_repair_apply_effective_message(repair_apply: dict) -> str:
+    effective_status = account_repair_apply_effective_status(repair_apply)
+    if effective_status == "stale":
+        return "旧账号修复结果已失效；必须执行最新账号修复计划后再复测。"
+    if effective_status == "group_mismatch":
+        return "账号修复结果属于其他分组，不能用于当前执行分组；请执行当前分组的最新账号修复计划。"
+    if effective_status == "pending_recheck":
+        return "账号修复已执行；需要重新预检当前分组后才能验收。"
+    if effective_status == "no_applicable_profiles":
+        return "最新账号修复计划没有默认可自动隔离的账号；需要人工处理账号池。"
+    return ""
+
+
+def account_repair_progress_summary(
+    account_repair_apply: dict | None = None,
+    profile_readiness_handoff: dict | None = None,
+) -> dict:
+    runtime_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
+    profile_readiness = profile_readiness_handoff if isinstance(profile_readiness_handoff, dict) else {}
+    profile_apply = (
+        profile_readiness.get("profile_repair_apply")
+        if isinstance(profile_readiness.get("profile_repair_apply"), dict)
+        else {}
+    )
+    source_rows: list[dict] = []
+    seen_sources: set[str] = set()
+    for source_kind, payload in [
+        ("runtime_account_repair_apply", runtime_apply),
+        ("profile_readiness_probe_apply", profile_apply),
+    ]:
+        if not isinstance(payload, dict) or not payload:
+            continue
+        source_key = str(payload.get("path") or payload.get("source") or source_kind)
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        moved_count = int(payload.get("moved_count") or 0)
+        failed_count = int(payload.get("failed_count") or 0)
+        selected_count = int(payload.get("selected_count") or 0)
+        effective_status = account_repair_apply_effective_status(payload)
+        source_rows.append(
+            {
+                "source_kind": source_kind,
+                "source": str(payload.get("source") or ""),
+                "path": str(payload.get("path") or ""),
+                "status": str(payload.get("status") or ""),
+                "effective_status": effective_status,
+                "profile_group": str(payload.get("profile_group") or ""),
+                "selected_count": selected_count,
+                "moved_count": moved_count,
+                "failed_count": failed_count,
+                "pending_recheck": bool(payload.get("pending_recheck")),
+                "stale": bool(payload.get("stale")),
+                "same_group": payload.get("same_group"),
+                "same_batch": payload.get("same_batch"),
+            }
+        )
+    pending_rows = [row for row in source_rows if row.get("pending_recheck")]
+    applied_rows = [row for row in source_rows if row.get("status") == "applied" and not row.get("stale")]
+    return {
+        "schema_version": "reachops.account_repair_progress.v1",
+        "source_count": len(source_rows),
+        "sources": source_rows,
+        "applied_source_count": len(applied_rows),
+        "pending_recheck_source_count": len(pending_rows),
+        "total_selected_count": sum(int(row.get("selected_count") or 0) for row in applied_rows),
+        "total_moved_count": sum(int(row.get("moved_count") or 0) for row in applied_rows),
+        "total_failed_count": sum(int(row.get("failed_count") or 0) for row in applied_rows),
+        "pending_recheck_moved_count": sum(int(row.get("moved_count") or 0) for row in pending_rows),
+        "has_profile_readiness_apply": any(row.get("source_kind") == "profile_readiness_probe_apply" for row in source_rows),
+        "does_not_claim_real_account_pool_ready": True,
+        "apply_alone_is_not_acceptance": True,
+    }
+
+
+def account_pool_circuit_breaker_status(
+    profile_readiness_handoff: dict | None = None,
+    repair_progress: dict | None = None,
+) -> dict:
+    profile_readiness = profile_readiness_handoff if isinstance(profile_readiness_handoff, dict) else {}
+    progress = repair_progress if isinstance(repair_progress, dict) else {}
+    recent_failed = int(profile_readiness.get("recent_failed_profile_ids_count") or 0)
+    latest_checked = int(profile_readiness.get("checked") or 0)
+    latest_available = int(profile_readiness.get("available") or 0)
+    latest_failed = int(profile_readiness.get("failed_profile_count") or 0)
+    pending_moved = int(progress.get("pending_recheck_moved_count") or 0)
+    hard_failure_count = max(recent_failed, pending_moved, latest_failed)
+    source_exists = bool(profile_readiness.get("source_exists"))
+    triggered = bool(
+        source_exists
+        and latest_available <= 0
+        and latest_checked > 0
+        and hard_failure_count >= ACCOUNT_POOL_CIRCUIT_BREAKER_PROFILE_FAILURES
+    )
+    return {
+        "schema_version": "reachops.account_pool_circuit_breaker.v1",
+        "triggered": triggered,
+        "threshold": ACCOUNT_POOL_CIRCUIT_BREAKER_PROFILE_FAILURES,
+        "hard_failure_count": hard_failure_count,
+        "recent_failed_profile_ids_count": recent_failed,
+        "recent_failed_profile_ids_sample": [
+            str(item) for item in (profile_readiness.get("recent_failed_profile_ids_sample") or [])[:12]
+        ],
+        "latest_checked": latest_checked,
+        "latest_available": latest_available,
+        "latest_failed": latest_failed,
+        "pending_recheck_moved_count": pending_moved,
+        "does_not_claim_real_account_pool_ready": True,
+    }
+
+
+def build_real_pilot_evidence_boundary(
+    acceptance: dict,
+    operations: dict,
+    *,
+    status: str,
+    contract_ok: bool,
+    acceptance_ready: bool,
+    account_repair_summary: dict | None = None,
+    account_repair_apply: dict | None = None,
+    profile_readiness_handoff: dict | None = None,
+) -> dict:
+    counts = operations.get("counts") if isinstance(operations, dict) else {}
+    counts = counts if isinstance(counts, dict) else {}
+    repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
+    repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
+    repair_apply_effective_status = account_repair_apply_effective_status(repair_apply)
+    repair_progress = account_repair_progress_summary(repair_apply, profile_readiness_handoff)
+    circuit_breaker = account_pool_circuit_breaker_status(profile_readiness_handoff, repair_progress)
+    profile_available = int((acceptance.get("checks") or {}).get("profile_available_count") or 0)
+    candidates = int(counts.get("candidates") or 0)
+    actions = int(counts.get("actions") or 0)
+    touched = int(counts.get("touched") or 0)
+    real_pilot_ready = bool(
+        status == "passed"
+        and contract_ok
+        and acceptance_ready
+        and profile_available > 0
+        and candidates > 0
+    )
+    blockers: list[str] = []
+    if profile_available <= 0:
+        blockers.append("profile_available_zero")
+    if candidates <= 0:
+        blockers.append("candidate_count_zero")
+    if not acceptance_ready:
+        blockers.append("acceptance_not_ready")
+    if status != "passed":
+        blockers.append(f"client_delivery_status_{status}")
+    return {
+        "schema_version": "reachops.real_pilot_evidence_boundary.v1",
+        "real_pilot_ready": real_pilot_ready,
+        "status": "ready" if real_pilot_ready else "external_validation_pending",
+        "fixture_or_dry_run_claimed": False,
+        "no_submit_preserved": True,
+        "requires_real_account_pool": profile_available <= 0,
+        "requires_real_collection_evidence": candidates <= 0,
+        "requires_human_labeled_quality_evidence": True,
+        "profile_available": profile_available,
+        "operation_counts": {
+            "candidates": candidates,
+            "actions": actions,
+            "touched": touched,
+        },
+        "account_pool_remediation": {
+            "repair_plan_available": repair_summary.get("status") == "ok",
+            "repair_plan_path": str(repair_summary.get("path") or ""),
+            "repair_plan_batch_id": str(repair_summary.get("batch_id") or ""),
+            "repair_plan_profile_group": str(repair_summary.get("profile_group") or ""),
+            "total_unique_profiles_by_error": int(repair_summary.get("total_unique_profiles_by_error") or 0),
+            "total_error_events_by_error": int(repair_summary.get("total_error_events_by_error") or 0),
+            "summary_only_error_count": int(repair_summary.get("summary_only_error_count") or 0),
+            "operator_steps": list(repair_summary.get("operator_steps") or [])[:5],
+            "latest_apply_status": str(repair_apply.get("status") or ""),
+            "latest_apply_effective_status": repair_apply_effective_status,
+            "latest_apply_effective_message": account_repair_apply_effective_message(repair_apply),
+            "latest_apply_stale": bool(repair_apply.get("stale")),
+            "latest_apply_stale_reason": str(repair_apply.get("stale_reason") or ""),
+            "latest_apply_pending_recheck": bool(repair_apply.get("pending_recheck")),
+            "repair_progress": repair_progress,
+            "account_pool_circuit_breaker": circuit_breaker,
+        },
+        "external_acceptance_pending": blockers,
+    }
+
+
+def build_account_blocker_resolution(
+    acceptance: dict,
+    *,
+    batch: dict | None = None,
+    account_repair_summary: dict | None = None,
+    account_repair_apply: dict | None = None,
+    profile_readiness_handoff: dict | None = None,
+    m3_stability_boundary: dict | None = None,
+) -> dict:
+    batch = batch if isinstance(batch, dict) else {}
+    repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
+    repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
+    readiness = str((acceptance if isinstance(acceptance, dict) else {}).get("readiness") or "")
+    checks = (acceptance.get("checks") if isinstance(acceptance, dict) else {}) or {}
+    profile_available = int(checks.get("profile_available_count") or 0)
+    effective_status = account_repair_apply_effective_status(repair_apply)
+    repair_progress = account_repair_progress_summary(repair_apply, profile_readiness_handoff)
+    circuit_breaker = account_pool_circuit_breaker_status(profile_readiness_handoff, repair_progress)
+    m3_boundary = m3_stability_boundary if isinstance(m3_stability_boundary, dict) else {}
+    m3_blocked_by_accounts = bool(
+        m3_boundary.get("applies_to_current_acceptance") and m3_boundary.get("blocked_by_accounts")
+    )
+    repair_plan_available = repair_summary.get("status") == "ok"
+    repair_plan_profiles = int(repair_summary.get("total_unique_profiles_by_error") or 0)
+    error_groups = [row for row in (repair_summary.get("error_groups") or []) if isinstance(row, dict)]
+    auto_apply_profile_count = sum(
+        int(row.get("profile_ids_total") or 0)
+        for row in error_groups
+        if str(row.get("error") or "").strip() in ACCOUNT_REPAIR_AUTO_APPLY_ERRORS
+    )
+    non_auto_error_codes = sorted(
+        {
+            str(row.get("error") or "").strip()
+            for row in error_groups
+            if str(row.get("error") or "").strip()
+            and int(row.get("profile_ids_total") or 0) > 0
+            and str(row.get("error") or "").strip() not in ACCOUNT_REPAIR_AUTO_APPLY_ERRORS
+        }
+    )
+    blocker_codes: list[str] = []
+    status = "not_blocked"
+    priority_action = ""
+    ready_for_retest = False
+    requires_latest_repair_apply = False
+    requires_manual_account_work = False
+    if readiness == "blocked_by_accounts":
+        if circuit_breaker.get("triggered"):
+            status = "manual_account_work_required"
+            priority_action = "manually_repair_or_replace_accounts"
+            requires_manual_account_work = True
+            blocker_codes.append("account_pool_circuit_breaker_no_ready_profiles")
+            if effective_status == "pending_recheck":
+                blocker_codes.append("account_repair_applied_pending_recheck")
+        elif effective_status == "pending_recheck":
+            status = "pending_recheck"
+            priority_action = "rerun_client_preflight"
+            ready_for_retest = True
+            blocker_codes.append("account_repair_applied_pending_recheck")
+        elif effective_status == "stale":
+            status = "stale_repair_apply"
+            if auto_apply_profile_count > 0:
+                priority_action = "apply_latest_account_repair_plan"
+                requires_latest_repair_apply = True
+            elif repair_plan_available and repair_plan_profiles > 0:
+                priority_action = "manually_repair_or_replace_accounts"
+                requires_manual_account_work = True
+            else:
+                priority_action = "apply_latest_account_repair_plan"
+                requires_latest_repair_apply = True
+            blocker_codes.append("account_repair_apply_stale")
+            if repair_plan_available and repair_plan_profiles > 0 and auto_apply_profile_count <= 0:
+                blocker_codes.append("account_repair_plan_has_no_auto_applicable_profiles")
+        elif effective_status == "group_mismatch":
+            status = "repair_apply_group_mismatch"
+            if auto_apply_profile_count > 0:
+                priority_action = "apply_current_group_account_repair_plan"
+                requires_latest_repair_apply = True
+            else:
+                priority_action = "manually_repair_or_replace_accounts"
+                requires_manual_account_work = True
+            blocker_codes.append("account_repair_apply_group_mismatch")
+            if repair_plan_available and repair_plan_profiles > 0 and auto_apply_profile_count <= 0:
+                blocker_codes.append("account_repair_plan_has_no_auto_applicable_profiles")
+        elif effective_status == "no_applicable_profiles":
+            status = "manual_account_work_required"
+            priority_action = "manually_repair_or_replace_accounts"
+            requires_manual_account_work = True
+            blocker_codes.append("account_repair_no_applicable_profiles")
+        elif repair_plan_available and auto_apply_profile_count > 0:
+            status = "repair_plan_ready"
+            priority_action = "apply_latest_account_repair_plan"
+            requires_latest_repair_apply = True
+            blocker_codes.append("account_repair_plan_ready")
+        elif repair_plan_available and repair_plan_profiles > 0:
+            status = "manual_account_work_required"
+            priority_action = "manually_repair_or_replace_accounts"
+            requires_manual_account_work = True
+            blocker_codes.append("account_repair_plan_has_no_auto_applicable_profiles")
+        else:
+            status = "account_pool_empty"
+            priority_action = "create_or_repair_real_account_pool"
+            requires_manual_account_work = True
+            blocker_codes.append("profile_available_zero")
+        if m3_blocked_by_accounts:
+            if "m3_insufficient_active_profiles" not in blocker_codes:
+                blocker_codes.append("m3_insufficient_active_profiles")
+            status = "m3_insufficient_active_profiles" if status == "not_blocked" else status
+            priority_action = priority_action or "manually_repair_or_replace_accounts"
+            ready_for_retest = False
+            requires_manual_account_work = True
+    return {
+        "schema_version": "reachops.account_blocker_resolution.v1",
+        "status": status,
+        "readiness": readiness,
+        "profile_group": str(batch.get("profile_group") or repair_summary.get("profile_group") or ""),
+        "batch_id": str(batch.get("id") or repair_summary.get("batch_id") or ""),
+        "profile_available": profile_available,
+        "repair_plan_available": repair_plan_available,
+        "repair_plan_path": str(repair_summary.get("path") or ""),
+        "repair_plan_profile_count": repair_plan_profiles,
+        "repair_plan_auto_apply_profile_count": auto_apply_profile_count,
+        "non_auto_error_codes": non_auto_error_codes,
+        "latest_apply_effective_status": effective_status,
+        "latest_apply_effective_message": account_repair_apply_effective_message(repair_apply),
+        "repair_progress": repair_progress,
+        "account_pool_circuit_breaker": circuit_breaker,
+        "m3_stability_boundary": m3_boundary,
+        "ready_for_retest": ready_for_retest,
+        "requires_latest_repair_apply": requires_latest_repair_apply,
+        "requires_manual_account_work": requires_manual_account_work,
+        "priority_action": priority_action,
+        "blocker_codes": blocker_codes,
+        "does_not_claim_real_account_pool_ready": bool(readiness == "blocked_by_accounts" and profile_available <= 0),
+    }
+
+
+def build_account_retest_checklist(resolution: dict, repair_summary: dict | None = None) -> list[dict]:
+    resolution = resolution if isinstance(resolution, dict) else {}
+    repair_summary = repair_summary if isinstance(repair_summary, dict) else {}
+    if str(resolution.get("readiness") or "") != "blocked_by_accounts":
+        return []
+    group = str(resolution.get("profile_group") or repair_summary.get("profile_group") or "当前分组")
+    checklist: list[dict] = []
+    if bool(resolution.get("requires_manual_account_work")):
+        checklist.append(
+            {
+                "id": "manual_repair_or_replace_accounts",
+                "kind": "manual_account_work",
+                "required": True,
+                "title": "人工修复或替换执行分组账号",
+                "profile_group": group,
+                "command": "",
+                "expected": "至少保留 1 个已登录、内核匹配、代理可用、可手动打开 TikTok 的账号在执行分组内。",
+                "blocks_retest_until_done": True,
+                "no_browser_started_by_reachops": True,
+                "no_submit": True,
+            }
+        )
+    if bool(resolution.get("requires_latest_repair_apply")):
+        checklist.append(
+            {
+                "id": "apply_latest_account_repair_plan",
+                "kind": "local_repair_apply",
+                "required": True,
+                "title": "应用最新账号修复计划",
+                "profile_group": group,
+                "command": "python tools/reachops_apply_account_repair_plan.py --apply --json",
+                "expected": "latest_account_repair_apply.status=applied 且 pending_recheck=true；apply 本身不等于验收通过。",
+                "blocks_retest_until_done": True,
+                "no_browser_started_by_reachops": True,
+                "no_submit": True,
+            }
+        )
+    checklist.extend(
+        [
+            {
+                "id": "client_delivery_retest",
+                "kind": "local_gate",
+                "required": True,
+                "title": "复跑客户端账号门禁",
+                "profile_group": group,
+                "command": "python tools/reachops_client_delivery_check.py --json",
+                "expected": "status=passed, readiness=pass, profile_available>=1, failed_checks=[]。",
+                "blocks_retest_until_done": False,
+                "no_browser_started_by_reachops": True,
+                "no_submit": True,
+            },
+            {
+                "id": "mac_loop_mvp_retest",
+                "kind": "local_mvp_gate",
+                "required": True,
+                "title": "复跑本地 MVP 循环验收",
+                "profile_group": group,
+                "command": "python tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json",
+                "expected": "status=passed 且 mac_loop_ready=true；如仍阻断，继续使用新的账号支持交接包。",
+                "blocks_retest_until_done": False,
+                "no_browser_started_by_reachops": False,
+                "no_submit": True,
+            },
+            {
+                "id": "goal_delivery_retest",
+                "kind": "goal_gate",
+                "required": True,
+                "title": "复跑目标总门禁",
+                "profile_group": group,
+                "command": "python tools/reachops_goal_delivery_runner.py --json",
+                "expected": "local_mvp_ready=true；final_delivery_ready 仍需 Windows 实机验收和授权真实执行证据。",
+                "blocks_retest_until_done": False,
+                "no_browser_started_by_reachops": True,
+                "no_submit": True,
+            },
+        ]
+    )
+    return checklist
+
+
+def build_m3_retest_command(m3_boundary: dict, group: str) -> str:
+    target = str(m3_boundary.get("target") or "").strip()
+    profile_group = str(m3_boundary.get("profile_group") or group or "United States").strip()
+    iterations = 1
+    minimum_profile_count = max(3, int(m3_boundary.get("minimum_profile_count") or 3))
+    command = [
+        "PYTHONDONTWRITEBYTECODE=1",
+        "PYTHONPATH=.",
+        "/Users/aofa/.local/bin/python3.11",
+        "tools/reachops_m3_stability_probe.py",
+    ]
+    if target:
+        command.extend(["--target", json.dumps(target, ensure_ascii=False)])
+    else:
+        command.extend(["--target", "<authorized-or-no-submit-tiktok-target>"])
+    command.extend(
+        [
+            "--profile-group",
+            json.dumps(profile_group, ensure_ascii=False),
+            "--iterations",
+            str(iterations),
+            "--minimum-profile-count",
+            str(minimum_profile_count),
+            "--cooldown-seconds",
+            str(max(30, int(m3_boundary.get("cooldown_seconds") or 30))),
+            "--json",
+        ]
+    )
+    return " ".join(command)
+
+
+def build_account_support_handoff(
+    acceptance: dict,
+    *,
+    batch: dict | None = None,
+    remediation: dict | None = None,
+    account_repair_summary: dict | None = None,
+    profile_readiness_handoff: dict | None = None,
+    account_repair_apply: dict | None = None,
+    account_blocker_resolution: dict | None = None,
+    m3_stability_boundary: dict | None = None,
+) -> dict:
+    batch = batch if isinstance(batch, dict) else {}
+    remediation = remediation if isinstance(remediation, dict) else {}
+    repair_summary = account_repair_summary if isinstance(account_repair_summary, dict) else {}
+    profile_readiness = profile_readiness_handoff if isinstance(profile_readiness_handoff, dict) else {}
+    repair_apply = account_repair_apply if isinstance(account_repair_apply, dict) else {}
+    resolution = account_blocker_resolution if isinstance(account_blocker_resolution, dict) else {}
+    m3_boundary = (
+        m3_stability_boundary
+        if isinstance(m3_stability_boundary, dict)
+        else resolution.get("m3_stability_boundary")
+        if isinstance(resolution.get("m3_stability_boundary"), dict)
+        else {}
+    )
+    acceptance = acceptance if isinstance(acceptance, dict) else {}
+    readiness = str(acceptance.get("readiness") or "")
+    support_required = readiness == "blocked_by_accounts"
+    error_groups = []
+    for row in repair_summary.get("error_groups") or []:
+        if not isinstance(row, dict):
+            continue
+        error_groups.append(
+            {
+                "error": str(row.get("error") or ""),
+                "count": int(row.get("count") or 0),
+                "profile_ids_sample": [str(item) for item in (row.get("profile_ids_sample") or []) if str(item).strip()][:8],
+                "profile_ids_total": int(row.get("profile_ids_total") or 0),
+                "summary_only_count": int(row.get("summary_only_count") or 0),
+                "recommended_action": str(row.get("recommended_action") or ""),
+                "sample_message": str(row.get("sample_message") or ""),
+            }
+        )
+    support_status = str(resolution.get("status") or ("blocked_by_accounts" if support_required else "not_required"))
+    priority_action = str(resolution.get("priority_action") or "")
+    blocker_codes = [str(item) for item in (resolution.get("blocker_codes") or []) if str(item).strip()]
+    if support_required and profile_readiness.get("source_exists"):
+        blocker_code = "profile_readiness_probe_manual_repair_required"
+        if blocker_code not in blocker_codes and int(profile_readiness.get("available") or 0) <= 0:
+            blocker_codes.append(blocker_code)
+    m3_blocked_by_accounts = bool(
+        support_required
+        and m3_boundary.get("applies_to_current_acceptance")
+        and m3_boundary.get("blocked_by_accounts")
+    )
+    if m3_blocked_by_accounts and "m3_insufficient_active_profiles" not in blocker_codes:
+        blocker_codes.append("m3_insufficient_active_profiles")
+    if support_required and not priority_action:
+        priority_action = "create_or_repair_real_account_pool"
+    retest_checklist = build_account_retest_checklist(resolution, repair_summary)
+    profile_retest_command = str(profile_readiness.get("retest_command") or "").strip()
+    if support_required and profile_retest_command:
+        circuit = resolution.get("account_pool_circuit_breaker") if isinstance(resolution, dict) else {}
+        circuit_triggered = bool((circuit if isinstance(circuit, dict) else {}).get("triggered"))
+        profile_retest_item = {
+            "id": "profile_readiness_probe_retest",
+            "kind": "profile_readiness_probe",
+            "required": True,
+            "title": "复跑 P0-5 Profile readiness probe",
+            "profile_group": str(profile_readiness.get("profile_group") or ""),
+            "command": profile_retest_command,
+            "expected": "至少 1 个 READY profile；如仍 blocked_by_accounts，继续使用 profile_repair_checklist 修复或替换账号。",
+            "blocks_retest_until_done": not circuit_triggered,
+            "no_browser_started_by_reachops": False,
+            "no_submit": True,
+        }
+        if circuit_triggered:
+            retest_checklist.append(profile_retest_item)
+        else:
+            retest_checklist.insert(0, profile_retest_item)
+    m3_retest_command = ""
+    if m3_blocked_by_accounts:
+        group_for_m3 = str(batch.get("profile_group") or repair_summary.get("profile_group") or resolution.get("profile_group") or "")
+        m3_retest_command = build_m3_retest_command(m3_boundary, group_for_m3)
+        retest_checklist.append(
+            {
+                "id": "m3_stability_retest",
+                "kind": "m3_real_no_submit_probe",
+                "required": True,
+                "title": "复跑 M3 多账号 no-submit 稳定性探针",
+                "profile_group": str(m3_boundary.get("profile_group") or group_for_m3),
+                "command": m3_retest_command,
+                "expected": "terminal_state=COMPLETED、iterations_completed>=1、minimum_profile_count>=3、unauthorized_submit_count=0；重复目标不得高频消耗账号。",
+                "blocks_retest_until_done": True,
+                "no_browser_started_by_reachops": False,
+                "no_submit": True,
+            }
+        )
+    operator_steps = account_operator_steps(error_groups) if support_required and error_groups else [
+        str(item) for item in (repair_summary.get("operator_steps") or [])
+    ][:8]
+    if support_required and profile_readiness.get("source_exists") and profile_readiness.get("next_action"):
+        operator_steps = [str(profile_readiness.get("next_action"))] + operator_steps
+    profile_error_groups = []
+    for row in profile_readiness.get("error_groups") or []:
+        if isinstance(row, dict):
+            profile_error_groups.append(
+                {
+                    "error_code": str(row.get("error_code") or ""),
+                    "count": int(row.get("count") or 0),
+                    "profile_ids_sample": [str(item) for item in (row.get("profile_ids_sample") or [])[:8]],
+                    "profile_ids_total": int(row.get("profile_ids_total") or 0),
+                    "recommended_action": str(row.get("recommended_action") or ""),
+                    "evidence_paths_sample": [str(item) for item in (row.get("evidence_paths_sample") or [])[:4]],
+                }
+            )
+    retest_commands = [
+        "python tools/reachops_client_delivery_check.py --json",
+        "python tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json",
+        "python tools/reachops_goal_delivery_runner.py --json",
+    ]
+    if profile_retest_command:
+        retest_commands.insert(0, profile_retest_command)
+    if m3_retest_command:
+        retest_commands.append(m3_retest_command)
+    return {
+        "schema_version": "reachops.account_support_handoff.v1",
+        "status": support_status,
+        "support_required": support_required,
+        "support_case": "account_pool_blocked" if support_required else "not_required",
+        "profile_group": str(batch.get("profile_group") or repair_summary.get("profile_group") or resolution.get("profile_group") or ""),
+        "batch_id": str(batch.get("id") or repair_summary.get("batch_id") or resolution.get("batch_id") or ""),
+        "readiness": readiness,
+        "priority_action": priority_action,
+        "ready_for_retest": bool(resolution.get("ready_for_retest")),
+        "requires_latest_repair_apply": bool(resolution.get("requires_latest_repair_apply")),
+        "requires_manual_account_work": bool(resolution.get("requires_manual_account_work")),
+        "blocker_codes": blocker_codes,
+        "does_not_claim_real_account_pool_ready": bool(resolution.get("does_not_claim_real_account_pool_ready") or support_required),
+        "repair_plan": {
+            "available": repair_summary.get("status") == "ok",
+            "json_path": str(
+                remediation.get("latest_account_plan_json_path")
+                or remediation.get("account_plan_json_path")
+                or repair_summary.get("path")
+                or ""
+            ),
+            "markdown_path": str(
+                remediation.get("latest_account_plan_markdown_path")
+                or remediation.get("account_plan_markdown_path")
+                or ""
+            ),
+            "profile_count": int(repair_summary.get("total_unique_profiles_by_error") or 0),
+            "event_count": int(repair_summary.get("total_error_events_by_error") or 0),
+            "summary_only_error_count": int(repair_summary.get("summary_only_error_count") or 0),
+            "auto_apply_profile_count": int(resolution.get("repair_plan_auto_apply_profile_count") or 0),
+            "non_auto_error_codes": list(resolution.get("non_auto_error_codes") or []),
+        },
+        "profile_readiness_probe": {
+            "available": bool(profile_readiness.get("source_exists")),
+            "schema_version": str(profile_readiness.get("schema_version") or ""),
+            "status": str(profile_readiness.get("status") or ""),
+            "terminal_state": str(profile_readiness.get("terminal_state") or ""),
+            "path": str(profile_readiness.get("path") or ""),
+            "repair_json_path": str(profile_readiness.get("repair_json_path") or ""),
+            "repair_markdown_path": str(profile_readiness.get("repair_markdown_path") or ""),
+            "profile_group": str(profile_readiness.get("profile_group") or ""),
+            "run_id": str(profile_readiness.get("run_id") or ""),
+            "checked": int(profile_readiness.get("checked") or 0),
+            "ready_profile_count": int(profile_readiness.get("ready_profile_count") or 0),
+            "failed_profile_count": int(profile_readiness.get("failed_profile_count") or 0),
+            "error_groups": profile_error_groups,
+            "profile_repair_apply": (
+                profile_readiness.get("profile_repair_apply")
+                if isinstance(profile_readiness.get("profile_repair_apply"), dict)
+                else {}
+            ),
+            "retest_command": profile_retest_command,
+            "no_submit": bool(profile_readiness.get("no_submit", True)),
+            "no_browser_collection": bool(profile_readiness.get("no_browser_collection", True)),
+            "no_action_execution": bool(profile_readiness.get("no_action_execution", True)),
+            "does_not_modify_ixbrowser_groups": bool(profile_readiness.get("does_not_modify_ixbrowser_groups", True)),
+            "does_not_claim_real_account_pool_ready": bool(
+                profile_readiness.get("does_not_claim_real_account_pool_ready", True)
+            ),
+        },
+        "latest_apply": {
+            "status": str(repair_apply.get("status") or ""),
+            "effective_status": str(resolution.get("latest_apply_effective_status") or account_repair_apply_effective_status(repair_apply)),
+            "effective_message": str(
+                resolution.get("latest_apply_effective_message") or account_repair_apply_effective_message(repair_apply)
+            ),
+            "stale": bool(repair_apply.get("stale")),
+            "stale_reason": str(repair_apply.get("stale_reason") or ""),
+            "pending_recheck": bool(repair_apply.get("pending_recheck")),
+            "moved_count": int(repair_apply.get("moved_count") or 0),
+            "failed_count": int(repair_apply.get("failed_count") or 0),
+            "repair_progress": account_repair_progress_summary(repair_apply, profile_readiness),
+            "account_pool_circuit_breaker": dict(resolution.get("account_pool_circuit_breaker") or {}),
+        },
+        "m3_stability_probe": {
+            "available": bool(m3_boundary.get("source_exists")),
+            "schema_version": str(m3_boundary.get("schema_version") or ""),
+            "path": str(m3_boundary.get("path") or ""),
+            "profile_group": str(m3_boundary.get("profile_group") or ""),
+            "terminal_state": str(m3_boundary.get("terminal_state") or ""),
+            "terminal_reason": str(m3_boundary.get("terminal_reason") or ""),
+            "iterations_requested": int(m3_boundary.get("iterations_requested") or 0),
+            "iterations_completed": int(m3_boundary.get("iterations_completed") or 0),
+            "passed_count": int(m3_boundary.get("passed_count") or 0),
+            "minimum_profile_count": int(m3_boundary.get("minimum_profile_count") or 0),
+            "active_profile_count": int(m3_boundary.get("active_profile_count") or 0),
+            "active_profile_ids": [str(item) for item in (m3_boundary.get("active_profile_ids") or []) if str(item)][:12],
+            "excluded_profile_ids": [str(item) for item in (m3_boundary.get("excluded_profile_ids") or []) if str(item)][:20],
+            "excluded_profile_count": int(m3_boundary.get("excluded_profile_count") or 0),
+            "unauthorized_submit_count": int(m3_boundary.get("unauthorized_submit_count") or 0),
+            "blocked_by_accounts": bool(m3_boundary.get("blocked_by_accounts")),
+            "applies_to_current_acceptance": bool(m3_boundary.get("applies_to_current_acceptance")),
+            "retest_command": m3_retest_command,
+            "no_submit": True,
+            "does_not_claim_m3_passed": bool(m3_boundary.get("does_not_claim_m3_passed", True)),
+        },
+        "impacted_accounts": {
+            "error_group_count": len(error_groups),
+            "error_groups": error_groups,
+        },
+        "operator_steps": operator_steps[:8],
+        "retest_commands": retest_commands,
+        "retest_checklist": retest_checklist,
+        "acceptance_required": [
+            "client_delivery.status=passed",
+            "client_delivery.readiness=pass",
+            "client_delivery.profile_available>=1",
+            "client_delivery.failed_checks=[]",
+            "goal_delivery.local_mvp_ready=true",
+        ],
+        "safety_contract": {
+            "manual_apply_required": True,
+            "no_browser_started": True,
+            "no_submit": True,
+            "no_ai_token_used": True,
+            "apply_alone_is_not_acceptance": True,
+        },
+    }
 
 
 def build_autonomous_product_contract_check() -> dict:
@@ -381,8 +1091,11 @@ def latest_account_repair_apply_status(base_dir: Path, log_lines: list[str], pro
     payload_group = str(payload.get("profile_group") or "").strip().lower()
     payload["same_group"] = bool(not wanted_group or not payload_group or wanted_group == payload_group)
     payload_batch_id = str(payload.get("batch_id") or "").strip()
+    current_batch_id = str(batch_id or "").strip()
     stale_reason = ""
-    if batch_id and not payload_batch_id and payload.get("source") == "latest_account_repair_apply.json":
+    if current_batch_id and payload_batch_id and payload_batch_id != current_batch_id:
+        stale_reason = "account_repair_apply_batch_mismatch"
+    elif current_batch_id and not payload_batch_id and payload.get("source") == "latest_account_repair_apply.json":
         plan_path = base_dir / "reports" / "acceptance_remediation" / "latest_account_repair_plan.json"
         try:
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -391,12 +1104,12 @@ def latest_account_repair_apply_status(base_dir: Path, log_lines: list[str], pro
         except Exception:
             plan_batch_id = ""
             plan_mtime = 0
-        if plan_batch_id == str(batch_id or "") and plan_mtime > float(payload.get("mtime") or 0):
+        if plan_batch_id == current_batch_id and plan_mtime > float(payload.get("mtime") or 0):
             stale_reason = "newer_account_repair_plan_for_current_batch"
     payload["same_batch"] = bool(
-        not batch_id
+        not current_batch_id
         or (not payload_batch_id and not stale_reason)
-        or payload_batch_id == str(batch_id or "")
+        or payload_batch_id == current_batch_id
     )
     if stale_reason:
         payload["stale"] = True
@@ -408,6 +1121,10 @@ def latest_account_repair_apply_status(base_dir: Path, log_lines: list[str], pro
         and int(payload.get("moved_count") or 0) > 0
         and int(payload.get("failed_count") or 0) == 0
     )
+    payload["effective_status"] = account_repair_apply_effective_status(payload)
+    effective_message = account_repair_apply_effective_message(payload)
+    if effective_message:
+        payload["effective_message"] = effective_message
     return payload
 
 
@@ -466,6 +1183,288 @@ def summarize_optional_account_repair_plan(path_value: str | Path) -> dict:
     return summarize_account_repair_plan(path)
 
 
+def latest_profile_readiness_probe_handoff(root: Path = ROOT_DIR) -> dict:
+    probe_roots = [
+        root / "reports" / "reachops" / "profile_readiness",
+        root / "reports" / "reachops" / "profile_readiness_probe",
+    ]
+    candidates = sorted(
+        [
+            path
+            for probe_root in probe_roots
+            for path in probe_root.glob("*/reports/profile_readiness_probe.json")
+        ],
+        key=path_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        return {
+            "schema_version": "reachops.profile_readiness_handoff.v1",
+            "source_exists": False,
+            "status": "not_available",
+            "reason": "profile_readiness_probe_not_generated",
+            "does_not_claim_real_account_pool_ready": True,
+        }
+    report_path = candidates[0]
+    source_root = report_path.parents[2].name if len(report_path.parents) > 2 else ""
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "schema_version": "reachops.profile_readiness_handoff.v1",
+            "source_exists": False,
+            "status": "read_failed",
+            "path": str(report_path),
+            "reason": f"{type(exc).__name__}: {exc}",
+            "does_not_claim_real_account_pool_ready": True,
+        }
+    if not isinstance(payload, dict):
+        payload = {}
+    outputs = payload.get("outputs") if isinstance(payload.get("outputs"), dict) else {}
+    repair_path = Path(str(outputs.get("repair_json") or report_path.with_name("profile_repair_checklist.json")))
+    repair = payload.get("repair_checklist") if isinstance(payload.get("repair_checklist"), dict) else {}
+    if repair_path.is_file():
+        try:
+            loaded_repair = json.loads(repair_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_repair, dict):
+                repair = loaded_repair
+        except Exception:
+            pass
+    apply_path = report_path.with_name("latest_account_repair_apply.json")
+    repair_apply: dict = {}
+    if apply_path.is_file():
+        try:
+            loaded_apply = json.loads(apply_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_apply, dict):
+                repair_apply = loaded_apply
+        except Exception as exc:
+            repair_apply = {"status": "read_failed", "error": f"{type(exc).__name__}: {exc}"}
+        repair_apply["source"] = "profile_readiness_probe/latest_account_repair_apply.json"
+        repair_apply["path"] = str(apply_path)
+        repair_apply["pending_recheck"] = bool(
+            str(repair_apply.get("status") or "") == "applied"
+            and int(repair_apply.get("moved_count") or 0) > 0
+            and int(repair_apply.get("failed_count") or 0) == 0
+        )
+        repair_apply["effective_status"] = account_repair_apply_effective_status(repair_apply)
+        effective_message = account_repair_apply_effective_message(repair_apply)
+        if effective_message:
+            repair_apply["effective_message"] = effective_message
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    error_groups = []
+    for row in repair.get("error_groups") or []:
+        if not isinstance(row, dict):
+            continue
+        profile_ids = [str(item) for item in (row.get("profile_ids") or []) if str(item).strip()]
+        evidence_paths = [str(item) for item in (row.get("evidence_paths") or []) if str(item).strip()]
+        error_groups.append(
+            {
+                "error_code": str(row.get("error_code") or ""),
+                "count": int(row.get("count") or 0),
+                "profile_ids_sample": profile_ids[:8],
+                "profile_ids_total": len(profile_ids),
+                "recommended_action": str(row.get("recommended_action") or ""),
+                "evidence_paths_sample": evidence_paths[:4],
+            }
+        )
+    ready_ids = [str(item) for item in (repair.get("ready_profile_ids") or []) if str(item).strip()]
+    failed_ids = [str(item) for item in (repair.get("failed_profile_ids") or []) if str(item).strip()]
+    apply_moved_count = int(repair_apply.get("moved_count") or 0) if repair_apply else 0
+    does_not_modify_groups = bool(repair.get("does_not_modify_ixbrowser_groups", True)) and apply_moved_count <= 0
+    return {
+        "schema_version": "reachops.profile_readiness_handoff.v1",
+        "source_exists": True,
+        "status": str(payload.get("status") or repair.get("status") or ""),
+        "terminal_state": str(payload.get("terminal_state") or ""),
+        "path": str(report_path),
+        "source_kind": source_root,
+        "source_mtime": path_mtime(report_path),
+        "candidate_count": len(candidates),
+        "repair_json_path": str(repair_path),
+        "repair_markdown_path": str(outputs.get("repair_markdown") or report_path.with_name("profile_repair_checklist.md")),
+        "profile_group": str(payload.get("profile_group") or repair.get("profile_group") or ""),
+        "run_id": str(payload.get("run_id") or ""),
+        "checked": int(summary.get("checked") or 0),
+        "available": int(summary.get("available") or 0),
+        "unavailable": int(summary.get("unavailable") or 0),
+        "ready_profile_count": len(ready_ids),
+        "failed_profile_count": len(failed_ids),
+        "recent_failed_profile_ids_count": int(payload.get("recent_failed_profile_ids_count") or 0),
+        "recent_failed_profile_ids_sample": [
+            str(item) for item in (payload.get("recent_failed_profile_ids_sample") or [])[:12]
+        ],
+        "bounded_exit": bool(payload.get("bounded_exit", False)),
+        "bounded_exit_status": str(payload.get("bounded_exit_status") or ""),
+        "timeout_triggered": bool(payload.get("timeout_triggered", False)),
+        "error_groups": error_groups,
+        "profile_repair_apply": repair_apply,
+        "retest_command": str(repair.get("retest_command") or ""),
+        "next_action": str(repair.get("next_action") or payload.get("next_action") or ""),
+        "no_submit": bool(payload.get("no_submit", True) and repair.get("no_submit", True)),
+        "no_browser_collection": bool(payload.get("no_browser_collection", True)),
+        "no_action_execution": bool(payload.get("no_action_execution", True)),
+        "does_not_modify_ixbrowser_groups": does_not_modify_groups,
+        "does_not_claim_real_account_pool_ready": int(summary.get("available") or 0) <= 0,
+    }
+
+
+def _real_flow_profile_preflight_passed(payload: dict) -> bool | None:
+    acceptance = payload.get("acceptance") if isinstance(payload.get("acceptance"), dict) else {}
+    for row in acceptance.get("targets") or []:
+        if isinstance(row, dict) and row.get("name") == "profile_preflight_available":
+            return bool(row.get("passed"))
+    return None
+
+
+def latest_real_flow_profile_boundary(
+    root: Path = ROOT_DIR,
+    profile_readiness_handoff: dict | None = None,
+) -> dict:
+    handoff = profile_readiness_handoff if isinstance(profile_readiness_handoff, dict) else {}
+    source_mtime = float(handoff.get("source_mtime") or 0)
+    report_paths = sorted(
+        (root / "reports" / "reachops" / "mac_real_flow").glob("*/reachops_mac_real_flow_report.json"),
+        key=path_mtime,
+        reverse=True,
+    )
+    newer_rows: list[dict] = []
+    for report_path in report_paths:
+        report_mtime = path_mtime(report_path)
+        if source_mtime and report_mtime <= source_mtime:
+            continue
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        acceptance = payload.get("acceptance") if isinstance(payload.get("acceptance"), dict) else {}
+        preflight_passed = _real_flow_profile_preflight_passed(payload)
+        newer_rows.append(
+            {
+                "path": str(report_path),
+                "mtime": report_mtime,
+                "run_id": str(payload.get("run_id") or report_path.parent.name),
+                "status": str(acceptance.get("status") or payload.get("status") or ""),
+                "profile_preflight_available": preflight_passed,
+                "no_submit": bool(acceptance.get("no_submit", payload.get("no_submit", True))),
+            }
+        )
+    blocked_rows = [row for row in newer_rows if row.get("profile_preflight_available") is False]
+    passed_rows = [row for row in newer_rows if row.get("profile_preflight_available") is True]
+    latest_row = newer_rows[0] if newer_rows else {}
+    stale = bool(source_mtime and latest_row.get("profile_preflight_available") is False)
+    return {
+        "schema_version": "reachops.real_flow_profile_boundary.v1",
+        "source_profile_readiness_path": str(handoff.get("path") or ""),
+        "source_profile_readiness_mtime": source_mtime,
+        "newer_real_flow_report_count": len(newer_rows),
+        "newer_profile_preflight_blocked_count": len(blocked_rows),
+        "newer_profile_preflight_passed_count": len(passed_rows),
+        "latest_newer_real_flow": latest_row,
+        "blocked_samples": blocked_rows[:5],
+        "profile_readiness_stale_for_real_flow": stale,
+        "does_not_claim_real_account_pool_ready": stale,
+    }
+
+
+M3_ACCOUNT_POOL_BLOCKING_REASONS = {
+    "insufficient_active_profiles_for_m3",
+    "insufficient_profile_ids_for_m3",
+}
+
+
+def latest_m3_stability_boundary(root: Path = ROOT_DIR, profile_group: str = "") -> dict:
+    requested_group = str(profile_group or "").strip()
+    summary_paths = sorted(
+        (root / "reports" / "reachops" / "mac_real_flow").glob("m3_probe_*/m3_probe_summary.json"),
+        key=path_mtime,
+        reverse=True,
+    )
+    latest_summary: dict = {}
+    latest_path = ""
+    latest_mtime = 0.0
+    skipped_group_mismatch = 0
+    for summary_path in summary_paths:
+        try:
+            payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        summary_group = str(payload.get("profile_group") or "").strip()
+        if requested_group and summary_group and summary_group != requested_group:
+            skipped_group_mismatch += 1
+            continue
+        latest_summary = payload
+        latest_path = str(summary_path)
+        latest_mtime = path_mtime(summary_path)
+        break
+
+    terminal_state = str(latest_summary.get("terminal_state") or "")
+    terminal_reason = str(latest_summary.get("terminal_reason") or "")
+    active_profile_ids = [str(item) for item in (latest_summary.get("active_profile_ids") or []) if str(item)]
+    excluded_profile_ids = [str(item) for item in (latest_summary.get("excluded_profile_ids") or []) if str(item)]
+    minimum_profile_count = int(latest_summary.get("minimum_profile_count") or 3)
+    iterations_requested = int(latest_summary.get("iterations_requested") or 0)
+    iterations_completed = int(latest_summary.get("iterations_completed") or 0)
+    passed_count = int(latest_summary.get("passed_count") or 0)
+    unauthorized_submit_count = int(latest_summary.get("unauthorized_submit_count") or 0)
+    account_resource_policy = (
+        latest_summary.get("account_resource_policy")
+        if isinstance(latest_summary.get("account_resource_policy"), dict)
+        else {}
+    )
+    professional_m3_profile = bool(
+        account_resource_policy.get("professional_acceptance_profile") == "m3_low_loss_real_no_submit"
+        and account_resource_policy.get("high_frequency_pressure_is_not_required_for_m3") is True
+    )
+    blocked_by_accounts = bool(
+        latest_summary
+        and terminal_state == "BLOCKED"
+        and terminal_reason in M3_ACCOUNT_POOL_BLOCKING_REASONS
+    )
+    completed_required_iterations = bool(
+        latest_summary
+        and professional_m3_profile
+        and terminal_state == "COMPLETED"
+        and iterations_requested > 0
+        and iterations_completed >= iterations_requested
+        and passed_count >= iterations_requested
+        and unauthorized_submit_count == 0
+    )
+    return {
+        "schema_version": "reachops.m3_stability_boundary.v1",
+        "source_exists": bool(latest_summary),
+        "path": latest_path,
+        "source_mtime": latest_mtime,
+        "target": str(latest_summary.get("target") or ""),
+        "profile_group": str(latest_summary.get("profile_group") or ""),
+        "terminal_state": terminal_state,
+        "terminal_reason": terminal_reason,
+        "iterations_requested": iterations_requested,
+        "iterations_completed": iterations_completed,
+        "cooldown_seconds": int(latest_summary.get("cooldown_seconds") or 0),
+        "passed_count": passed_count,
+        "failed_count": int(latest_summary.get("failed_count") or 0),
+        "minimum_profile_count": minimum_profile_count,
+        "active_profile_count": len(active_profile_ids),
+        "active_profile_ids": active_profile_ids,
+        "excluded_profile_ids": excluded_profile_ids,
+        "excluded_profile_count": len(excluded_profile_ids),
+        "unauthorized_submit_count": unauthorized_submit_count,
+        "professional_acceptance_profile": str(account_resource_policy.get("professional_acceptance_profile") or ""),
+        "high_frequency_pressure_is_not_required_for_m3": bool(
+            account_resource_policy.get("high_frequency_pressure_is_not_required_for_m3")
+        ),
+        "legacy_m3_summary": bool(latest_summary and not professional_m3_profile),
+        "blocked_by_accounts": blocked_by_accounts,
+        "completed_required_iterations": completed_required_iterations,
+        "skipped_group_mismatch": skipped_group_mismatch,
+        "does_not_claim_m3_passed": not completed_required_iterations,
+    }
+
+
 def build_delivery_check(
     base_dir: Path = DEFAULT_BASE_DIR,
     ixbrowser_metadata: dict | None = None,
@@ -514,15 +1513,139 @@ def build_delivery_check(
     account_repair_summary = summarize_optional_account_repair_plan(
         remediation.get("latest_account_plan_json_path") or remediation.get("account_plan_json_path") or ""
     )
+    profile_readiness_handoff = latest_profile_readiness_probe_handoff(ROOT_DIR)
+    real_flow_profile_boundary = latest_real_flow_profile_boundary(ROOT_DIR, profile_readiness_handoff)
+    current_profile_group = str(batch.get("profile_group") or "").strip()
+    m3_stability_boundary = latest_m3_stability_boundary(ROOT_DIR, current_profile_group)
+    readiness_profile_group = str(profile_readiness_handoff.get("profile_group") or "").strip()
+    real_flow_boundary_applies = bool(
+        acceptance.get("readiness") == "pass"
+        and current_profile_group
+        and readiness_profile_group
+        and current_profile_group == readiness_profile_group
+    )
+    real_flow_profile_boundary["applies_to_current_acceptance"] = real_flow_boundary_applies
+    real_flow_profile_boundary["runtime_log_mtime"] = path_mtime(log_path)
+    real_flow_profile_boundary["post_readiness_real_flow_required"] = bool(
+        real_flow_boundary_applies
+        and float(profile_readiness_handoff.get("source_mtime") or 0) > path_mtime(log_path)
+        and int(real_flow_profile_boundary.get("newer_real_flow_report_count") or 0) <= 0
+    )
+    if real_flow_boundary_applies and real_flow_profile_boundary.get("profile_readiness_stale_for_real_flow"):
+        stale_message = (
+            "Profile readiness 证据早于后续真实 no-submit 执行报告，且后续报告出现账号预检不可用；"
+            "不能复用旧账号池可用性作为当前客户端交付通过依据。"
+        )
+        blockers = [item for item in (acceptance.get("blockers") or []) if stale_message not in str(item)]
+        blockers.insert(0, stale_message)
+        acceptance["blockers"] = blockers
+        next_action = "重新执行当前分组的有界 profile readiness probe，并用最新可用账号完成 real_no_submit 复测。"
+        actions = [item for item in (acceptance.get("next_actions") or []) if next_action not in str(item)]
+        actions.insert(0, next_action)
+        acceptance["next_actions"] = actions
+        acceptance["readiness"] = "blocked_by_accounts"
+        checks_payload = acceptance.get("checks") if isinstance(acceptance.get("checks"), dict) else {}
+        checks_payload["profile_readiness_fresh_for_real_flow"] = False
+        acceptance["checks"] = checks_payload
+    elif real_flow_profile_boundary.get("post_readiness_real_flow_required"):
+        pending_message = (
+            "Profile readiness 证据晚于当前客户端采集批次；必须使用最新 READY profile 重新完成 real_no_submit，"
+            "不能把旧采集批次作为账号复测后的交付通过依据。"
+        )
+        blockers = [item for item in (acceptance.get("blockers") or []) if pending_message not in str(item)]
+        blockers.insert(0, pending_message)
+        acceptance["blockers"] = blockers
+        next_action = "使用最新 READY profile 重新执行一次有界 real_no_submit 采集复测。"
+        actions = [item for item in (acceptance.get("next_actions") or []) if next_action not in str(item)]
+        actions.insert(0, next_action)
+        acceptance["next_actions"] = actions
+        acceptance["readiness"] = "pending_new_run"
+        checks_payload = acceptance.get("checks") if isinstance(acceptance.get("checks"), dict) else {}
+        checks_payload["real_no_submit_after_profile_readiness"] = False
+        acceptance["checks"] = checks_payload
+    m3_boundary_applies = bool(
+        acceptance.get("readiness") == "pass"
+        and current_profile_group
+        and str(m3_stability_boundary.get("profile_group") or "").strip() == current_profile_group
+    )
+    m3_stability_boundary["applies_to_current_acceptance"] = m3_boundary_applies
+    if m3_boundary_applies and m3_stability_boundary.get("blocked_by_accounts"):
+        active_count = int(m3_stability_boundary.get("active_profile_count") or 0)
+        minimum_count = int(m3_stability_boundary.get("minimum_profile_count") or 3)
+        m3_message = (
+            f"最新 M3 多账号稳定性证据显示当前分组只有 {active_count} 个活跃可用账号，"
+            f"低于 {minimum_count} 个账号门槛；不能把单次 real_no_submit 成功升级为客户端最终交付通过。"
+        )
+        blockers = [item for item in (acceptance.get("blockers") or []) if m3_message not in str(item)]
+        blockers.insert(0, m3_message)
+        acceptance["blockers"] = blockers
+        next_action = (
+            f"补充或修复 {current_profile_group or '当前分组'} 至少 {minimum_count} 个可持续登录账号，"
+            "再复跑一次低损耗 M3 真实 no-submit 验收；不要对同一目标做 20 轮高频压测。"
+        )
+        actions = [item for item in (acceptance.get("next_actions") or []) if next_action not in str(item)]
+        actions.insert(0, next_action)
+        acceptance["next_actions"] = actions
+        acceptance["readiness"] = "blocked_by_accounts"
+        checks_payload = acceptance.get("checks") if isinstance(acceptance.get("checks"), dict) else {}
+        checks_payload["m3_stability_account_pool_ready"] = False
+        acceptance["checks"] = checks_payload
     account_repair_apply = latest_account_repair_apply_status(
         base_dir,
         log_lines,
         str(batch.get("profile_group") or ""),
         str(batch.get("id") or ""),
     )
-    if account_repair_apply.get("pending_recheck") and acceptance.get("readiness") == "blocked_by_accounts":
+    account_repair_circuit_breaker = account_pool_circuit_breaker_status(
+        profile_readiness_handoff,
+        account_repair_progress_summary(account_repair_apply, profile_readiness_handoff),
+    )
+    if account_repair_circuit_breaker.get("triggered") and acceptance.get("readiness") == "blocked_by_accounts":
         group = str(batch.get("profile_group") or account_repair_apply.get("profile_group") or "当前分组")
-        moved = int(account_repair_apply.get("moved_count") or 0)
+        hard_failures = int(account_repair_circuit_breaker.get("hard_failure_count") or 0)
+        threshold = int(
+            account_repair_circuit_breaker.get("threshold") or ACCOUNT_POOL_CIRCUIT_BREAKER_PROFILE_FAILURES
+        )
+        acceptance["blockers"] = [
+            f"账号池熔断：最近真实预检已有 {hard_failures} 个硬失败账号且 0 个 READY，已达到 {threshold} 个连续硬失败阈值；不能继续要求运营反复复测。"
+        ] + list(acceptance.get("blockers") or [])
+        acceptance["next_actions"] = [
+            f"先人工修复或补充 {group} 分组：至少保留 1 个已登录、内核匹配、代理可用、可手动打开 TikTok 的账号。",
+            "账号池修复完成后再复跑有界 readiness probe；在此之前系统必须保持 blocked_by_accounts。",
+        ] + list(acceptance.get("next_actions") or [])
+    elif (
+        str(account_repair_apply.get("status") or "") == "no_applicable_profiles"
+        and acceptance.get("readiness") == "blocked_by_accounts"
+    ):
+        acceptance["blockers"] = [
+            "最新账号修复计划没有默认可自动隔离的账号，不能把账号修复视为完成。"
+        ] + list(acceptance.get("blockers") or [])
+        acceptance["next_actions"] = [
+            "手动打开受影响账号，确认登录状态、内核版本、代理和 TikTok 页面加载；不可用账号再移入封禁账号分组。",
+            "至少保留 1 个已登录、内核匹配、可手动打开 TikTok 的账号在执行分组内，再复跑真实执行复测。",
+        ] + list(acceptance.get("next_actions") or [])
+    elif account_repair_apply.get("stale") and acceptance.get("readiness") == "blocked_by_accounts":
+        group = str(batch.get("profile_group") or account_repair_apply.get("profile_group") or "当前分组")
+        acceptance["blockers"] = [
+            f"旧账号修复结果已失效：{group} 分组已经产生新的账号阻断批次，不能继续用旧修复结果复测。"
+        ] + list(acceptance.get("blockers") or [])
+        acceptance["next_actions"] = [
+            "先执行最新账号修复计划，确认至少 1 个已登录、内核匹配、可手动打开 TikTok 的账号保留在执行分组内。",
+            f"修复后再复测 {group} 分组；系统会重新读取分组、重新选择剩余账号并重新预检。",
+        ] + list(acceptance.get("next_actions") or [])
+    elif account_repair_apply_effective_status(account_repair_apply) == "group_mismatch" and acceptance.get("readiness") == "blocked_by_accounts":
+        current_group = str(batch.get("profile_group") or "当前分组")
+        apply_group = str(account_repair_apply.get("profile_group") or "其他分组")
+        acceptance["blockers"] = [
+            f"账号修复结果属于 {apply_group} 分组，不能用于当前 {current_group} 分组验收。"
+        ] + list(acceptance.get("blockers") or [])
+        acceptance["next_actions"] = [
+            f"执行 {current_group} 分组的最新账号修复计划，再重新预检当前分组。",
+        ] + list(acceptance.get("next_actions") or [])
+    elif account_repair_apply.get("pending_recheck") and acceptance.get("readiness") == "blocked_by_accounts":
+        group = str(batch.get("profile_group") or account_repair_apply.get("profile_group") or "当前分组")
+        repair_progress = account_repair_progress_summary(account_repair_apply, profile_readiness_handoff)
+        moved = int(repair_progress.get("pending_recheck_moved_count") or account_repair_apply.get("moved_count") or 0)
         acceptance["blockers"] = [
             f"账号修复已执行：已隔离 {moved} 个硬失败账号，当前状态为等待重新预检，不应继续读取旧失败批次作为最终结论。"
         ] + list(acceptance.get("blockers") or [])
@@ -663,11 +1786,66 @@ def build_delivery_check(
             "path": str(manifest_path),
         }
     )
+    manifest_repair_summary = (
+        manifest.get("account_repair_summary") if isinstance(manifest.get("account_repair_summary"), dict) else {}
+    )
+    manifest_error_groups = manifest_repair_summary.get("error_groups") or []
+    def manifest_int(value: object) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    manifest_unique_profiles = manifest_int(manifest_repair_summary.get("total_unique_profiles_by_error"))
+    manifest_error_events = manifest_int(manifest_repair_summary.get("total_error_events_by_error"))
+    manifest_summary_only = manifest_int(manifest_repair_summary.get("summary_only_error_count"))
+    checks.append(
+        {
+            "name": "manifest:account_repair_summary",
+            "ok": (not profile_details)
+            or (
+                isinstance(manifest_error_groups, list)
+                and len(manifest_error_groups) > 0
+                and manifest_unique_profiles >= 0
+                and manifest_error_events >= len(profile_details)
+                and manifest_summary_only >= 0
+            ),
+            "required": bool(profile_details),
+            "path": str(manifest_path),
+            "total_unique_profiles_by_error": manifest_unique_profiles,
+            "total_error_events_by_error": manifest_error_events,
+            "summary_only_error_count": manifest_summary_only,
+            "error_group_count": len(manifest_error_groups) if isinstance(manifest_error_groups, list) else 0,
+        }
+    )
     checks.append(
         {
             "name": "acceptance:current_state_known",
-            "ok": acceptance.get("readiness") in {"pass", "partial", "blocked_by_accounts", "blocked_by_environment", "not_started"},
+            "ok": acceptance.get("readiness") in {"pass", "partial", "blocked_by_accounts", "blocked_by_environment", "not_started", "pending_new_run"},
             "readiness": acceptance.get("readiness"),
+        }
+    )
+    checks.append(
+        {
+            "name": "profile_readiness:current_real_flow_boundary",
+            "ok": not bool(
+                (
+                    real_flow_profile_boundary.get("applies_to_current_acceptance")
+                    and real_flow_profile_boundary.get("profile_readiness_stale_for_real_flow")
+                )
+                or real_flow_profile_boundary.get("post_readiness_real_flow_required")
+            ),
+            **real_flow_profile_boundary,
+        }
+    )
+    checks.append(
+        {
+            "name": "m3_stability:latest_account_pool",
+            "ok": not bool(
+                m3_stability_boundary.get("applies_to_current_acceptance")
+                and m3_stability_boundary.get("blocked_by_accounts")
+            ),
+            **m3_stability_boundary,
         }
     )
     if ixbrowser_metadata:
@@ -696,17 +1874,51 @@ def build_delivery_check(
         }
     )
 
-    contract_checks = [item for item in checks if item.get("name") != "acceptance:ready"]
+    acceptance_gate_check_names = {
+        "acceptance:ready",
+        "profile_readiness:current_real_flow_boundary",
+        "m3_stability:latest_account_pool",
+    }
+    contract_checks = [item for item in checks if item.get("name") not in acceptance_gate_check_names]
     contract_ok = all(item.get("ok") for item in contract_checks)
     acceptance_ready = acceptance.get("readiness") == "pass"
     failed_checks = [str(item.get("name") or "") for item in checks if not item.get("ok")]
     ok = contract_ok and acceptance_ready
     status = delivery_status(contract_ok, acceptance_ready, str(acceptance.get("readiness") or ""))
+    real_pilot_evidence = build_real_pilot_evidence_boundary(
+        acceptance,
+        operations,
+        status=status,
+        contract_ok=contract_ok,
+        acceptance_ready=acceptance_ready,
+        account_repair_summary=account_repair_summary,
+        account_repair_apply=account_repair_apply,
+        profile_readiness_handoff=profile_readiness_handoff,
+    )
+    account_blocker_resolution = build_account_blocker_resolution(
+        acceptance,
+        batch=batch,
+        account_repair_summary=account_repair_summary,
+        account_repair_apply=account_repair_apply,
+        profile_readiness_handoff=profile_readiness_handoff,
+        m3_stability_boundary=m3_stability_boundary,
+    )
+    account_support_handoff = build_account_support_handoff(
+        acceptance,
+        batch=batch,
+        remediation=remediation,
+        account_repair_summary=account_repair_summary,
+        profile_readiness_handoff=profile_readiness_handoff,
+        account_repair_apply=account_repair_apply,
+        account_blocker_resolution=account_blocker_resolution,
+        m3_stability_boundary=m3_stability_boundary,
+    )
 
     return {
         "root_dir": str(ROOT_DIR),
         "base_dir": str(base_dir),
         "delivery_check_path": str(base_dir / "reports" / "acceptance_remediation" / "latest_delivery_check.json"),
+        "support_account_handoff_path": str(base_dir / "reports" / "support" / "account_support_handoff.json"),
         "status": status,
         "readiness": acceptance.get("readiness"),
         "batch_id": batch.get("id", ""),
@@ -718,6 +1930,12 @@ def build_delivery_check(
         "next_actions": acceptance.get("next_actions") or [],
         "no_action_reason": acceptance.get("no_action_reason") or {},
         "operation_counts": (operations.get("counts") if isinstance(operations, dict) else {}) or {},
+        "real_pilot_evidence": real_pilot_evidence,
+        "account_blocker_resolution": account_blocker_resolution,
+        "account_support_handoff": account_support_handoff,
+        "profile_readiness_handoff": profile_readiness_handoff,
+        "real_flow_profile_boundary": real_flow_profile_boundary,
+        "m3_stability_boundary": m3_stability_boundary,
         "remediation_report": remediation,
         "account_repair_summary": account_repair_summary,
         "account_repair_apply": account_repair_apply,
@@ -728,11 +1946,96 @@ def build_delivery_check(
     }
 
 
+def build_account_support_handoff_diagnostic(payload: dict) -> dict:
+    handoff = payload.get("account_support_handoff") if isinstance(payload.get("account_support_handoff"), dict) else {}
+    blocker_resolution = (
+        payload.get("account_blocker_resolution")
+        if isinstance(payload.get("account_blocker_resolution"), dict)
+        else {}
+    )
+    safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    profile_readiness = (
+        handoff.get("profile_readiness_probe")
+        if isinstance(handoff.get("profile_readiness_probe"), dict)
+        else payload.get("profile_readiness_handoff")
+        if isinstance(payload.get("profile_readiness_handoff"), dict)
+        else {}
+    )
+    latest_apply = handoff.get("latest_apply") if isinstance(handoff.get("latest_apply"), dict) else {}
+    circuit_breaker = (
+        blocker_resolution.get("account_pool_circuit_breaker")
+        if isinstance(blocker_resolution.get("account_pool_circuit_breaker"), dict)
+        else latest_apply.get("account_pool_circuit_breaker")
+        if isinstance(latest_apply.get("account_pool_circuit_breaker"), dict)
+        else {}
+    )
+    return {
+        "schema_version": "reachops.account_support_handoff_diagnostic.v1",
+        "generated_from": "reachops_client_delivery_check",
+        "delivery_check_path": str(payload.get("delivery_check_path") or ""),
+        "status": str(payload.get("status") or ""),
+        "readiness": str(payload.get("readiness") or ""),
+        "final_delivery_ready": bool(payload.get("final_delivery_ready")),
+        "failed_checks": [str(item) for item in (payload.get("failed_checks") or [])],
+        "support_required": bool(handoff.get("support_required")),
+        "support_case": str(handoff.get("support_case") or "not_required"),
+        "profile_group": str(handoff.get("profile_group") or ""),
+        "batch_id": str(handoff.get("batch_id") or payload.get("batch_id") or ""),
+        "priority_action": str(handoff.get("priority_action") or ""),
+        "ready_for_retest": bool(handoff.get("ready_for_retest")),
+        "requires_latest_repair_apply": bool(handoff.get("requires_latest_repair_apply")),
+        "requires_manual_account_work": bool(handoff.get("requires_manual_account_work")),
+        "blocker_codes": [str(item) for item in (handoff.get("blocker_codes") or blocker_resolution.get("blocker_codes") or []) if str(item).strip()],
+        "account_pool_circuit_breaker": circuit_breaker,
+        "does_not_claim_real_account_pool_ready": bool(handoff.get("does_not_claim_real_account_pool_ready", True)),
+        "account_blocker_resolution": blocker_resolution,
+        "account_support_handoff": handoff,
+        "profile_readiness_probe": profile_readiness,
+        "retest_commands": [str(item) for item in (handoff.get("retest_commands") or [])],
+        "retest_checklist": [
+            item for item in (handoff.get("retest_checklist") or []) if isinstance(item, dict)
+        ],
+        "acceptance_required": [str(item) for item in (handoff.get("acceptance_required") or [])],
+        "safety_contract": safety_contract,
+        "no_browser_started": bool(safety_contract.get("no_browser_started", True)),
+        "no_submit": bool(safety_contract.get("no_submit", True)),
+        "support_bundle_redacted_by_default": True,
+    }
+
+
+def default_support_account_handoff_path(payload: dict, delivery_check_path: Path | None = None) -> Path:
+    base_dir = str(payload.get("base_dir") or "").strip()
+    if base_dir:
+        return Path(base_dir) / "reports" / "support" / "account_support_handoff.json"
+    if delivery_check_path and delivery_check_path.parent.name == "acceptance_remediation":
+        reports_dir = delivery_check_path.parent.parent
+        if reports_dir.name == "reports":
+            return reports_dir / "support" / "account_support_handoff.json"
+    if delivery_check_path:
+        return delivery_check_path.with_name("account_support_handoff.json")
+    return Path("reports") / "support" / "account_support_handoff.json"
+
+
+def write_account_support_handoff_diagnostic(payload: dict, output_path: str | Path | None = None) -> Path:
+    out_path = Path(output_path or payload.get("support_account_handoff_path") or "")
+    if not str(out_path):
+        delivery_check_path = Path(str(payload.get("delivery_check_path") or "")) if payload.get("delivery_check_path") else None
+        out_path = default_support_account_handoff_path(payload, delivery_check_path)
+    payload["support_account_handoff_path"] = str(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    diagnostic = build_account_support_handoff_diagnostic(payload)
+    out_path.write_text(json.dumps(diagnostic, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_path
+
+
 def write_delivery_check(payload: dict, output_path: str | Path | None = None) -> Path:
     out_path = Path(output_path or payload.get("delivery_check_path") or "")
     if not str(out_path):
         out_path = Path(payload["base_dir"]) / "reports" / "acceptance_remediation" / "latest_delivery_check.json"
     payload["delivery_check_path"] = str(out_path)
+    payload["support_account_handoff_path"] = str(
+        payload.get("support_account_handoff_path") or default_support_account_handoff_path(payload, out_path)
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not payload.get("ixbrowser_metadata") and out_path.is_file():
         try:
@@ -743,6 +2046,7 @@ def write_delivery_check(payload: dict, output_path: str | Path | None = None) -
         if isinstance(previous_metadata, dict) and previous_metadata:
             payload["ixbrowser_metadata"] = previous_metadata
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_account_support_handoff_diagnostic(payload)
     return out_path
 
 
@@ -756,14 +2060,22 @@ def account_repair_summary_lines(payload: dict, limit: int = 4) -> list[str]:
     lines = [
         "account_repair_summary="
         f"group={summary.get('profile_group') or '-'} "
-        f"total={summary.get('total_unique_profiles_by_error') or 0}"
+        f"profiles={summary.get('total_unique_profiles_by_error') or 0} "
+        f"events={summary.get('total_error_events_by_error') or summary.get('total_unique_profiles_by_error') or 0} "
+        f"summary_only={summary.get('summary_only_error_count') or 0}"
     ]
     for row in groups[: max(1, int(limit or 1))]:
         samples = [str(item) for item in (row.get("profile_ids_sample") or []) if str(item).strip()]
         sample_text = f" sample={','.join(samples[:8])}" if samples else ""
+        profile_total = int(row.get("profile_ids_total") or len(samples))
+        summary_only_count = int(row.get("summary_only_count") or 0)
+        coverage_text = f" profile_ids={profile_total} summary_only={summary_only_count}"
         action = str(row.get("recommended_action") or "").strip()
         action_text = f" action={action}" if action else ""
-        lines.append(f"  {row.get('error') or '-'} count={row.get('count') or 0}{sample_text}{action_text}")
+        lines.append(
+            f"  {row.get('error') or '-'} count={row.get('count') or 0}"
+            f"{coverage_text}{sample_text}{action_text}"
+        )
     after_repair = [str(item).strip() for item in (summary.get("acceptance_after_repair") or []) if str(item).strip()]
     if after_repair:
         lines.append("after_repair_acceptance=" + " | ".join(after_repair[:4]))
@@ -791,13 +2103,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check ReachOps Mac client delivery acceptance evidence.")
     parser.add_argument("--base-dir", default=str(DEFAULT_BASE_DIR), help="Runtime directory that contains data/ and logs/.")
     parser.add_argument("--output", default="", help="Path for latest_delivery_check.json. Defaults under base-dir reports.")
+    parser.add_argument(
+        "--collect-live-metadata",
+        action="store_true",
+        help="Also run the read-only ixBrowser/Web UI group metadata probe. Omitted by PM gates to stay deterministic.",
+    )
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    payload = build_delivery_check(Path(args.base_dir), collect_metadata=True)
+    payload = build_delivery_check(Path(args.base_dir), collect_metadata=bool(args.collect_live_metadata))
     out_path = write_delivery_check(payload, args.output or None)
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))

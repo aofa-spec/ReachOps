@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
 from tools.reachops_client_delivery_check import build_delivery_check, write_delivery_check
 from tools.reachops_delivery_package_check import check_delivery_package
 from tools.reachops_goal_status_report import build_goal_status_report, run_default_audit
+from tools.reachops_issue_closure_audit import build_report as build_issue_closure_report
 from tools.reachops_operator_pressure import DEFAULT_TARGETS, run_pressure
 
 
@@ -29,6 +30,7 @@ REQUIRED_PACKAGE_REPORT_FILES = (
     "ui_startup",
     "activation_status",
     "live_acceptance_status",
+    "authorization_handoff",
     "live_validation",
     "repository_cleanliness",
     "windows_package_preflight",
@@ -37,6 +39,7 @@ REQUIRED_PACKAGE_REPORT_FILES = (
     "live_preflight",
     "goal_status",
     "live_submit",
+    "issue_closure",
     "final_acceptance_gate",
 )
 
@@ -65,6 +68,7 @@ def _input_path_failures(root: Path, args: argparse.Namespace) -> list[str]:
         "goal_status_json_outside_root": args.goal_status_json,
         "client_delivery_json_outside_root": args.client_delivery_json,
         "package_check_json_outside_root": args.package_check_json,
+        "issue_closure_json_outside_root": args.issue_closure_json,
         "acceptance_summary_outside_root": args.acceptance_summary,
         "manifest_outside_root": args.manifest,
     }
@@ -163,6 +167,277 @@ def _goal_ready(goal_status: dict[str, Any]) -> bool:
     return str(goal_status.get("status") or "") == PASSED and not goal_status.get("pending_external_validation")
 
 
+def _current_stage_gate_status(goal_status: dict[str, Any]) -> dict[str, Any]:
+    gate = goal_status.get("current_stage_gate") if isinstance(goal_status.get("current_stage_gate"), dict) else {}
+    local_checks = gate.get("local_checks") if isinstance(gate.get("local_checks"), dict) else {}
+    return {
+        "schema_version": str(gate.get("schema_version") or ""),
+        "status": str(gate.get("status") or ""),
+        "local_passed": bool(gate.get("local_passed")),
+        "local_checks": local_checks,
+        "external_validation_pending": gate.get("external_validation_pending") or [],
+        "does_not_claim_real_pilot_when_blocked": bool(gate.get("does_not_claim_real_pilot_when_blocked")),
+        "real_pilot_evidence": gate.get("real_pilot_evidence") if isinstance(gate.get("real_pilot_evidence"), dict) else {},
+    }
+
+
+def _current_stage_gate_ready_or_external_pending(goal_status: dict[str, Any]) -> bool:
+    gate = _current_stage_gate_status(goal_status)
+    required_local_checks = (
+        "delivery_audit_has_no_local_failures",
+        "client_delivery_reports_real_pilot_boundary",
+        "client_delivery_does_not_claim_blocked_real_pilot",
+    )
+    return (
+        gate["schema_version"] == "reachops.current_stage_gate.v1"
+        and gate["local_passed"]
+        and gate["status"] in {PASSED, READY_FOR_EXTERNAL_VALIDATION}
+        and all(bool(gate["local_checks"].get(name)) for name in required_local_checks)
+        and gate["does_not_claim_real_pilot_when_blocked"]
+    )
+
+
+def _issue_closure_ready(issue_closure: dict[str, Any] | None) -> bool:
+    if not isinstance(issue_closure, dict) or not issue_closure:
+        return True
+    summary = issue_closure.get("summary") if isinstance(issue_closure.get("summary"), dict) else {}
+    return (
+        bool(issue_closure.get("passed"))
+        and int(summary.get("issues_total") or 0) == 7
+        and int(summary.get("local_contracts_passed") or 0) == 7
+        and int(summary.get("acceptance_criteria_total") or 0) == 53
+        and int(summary.get("acceptance_criteria_unclassified") or 0) == 0
+        and int(summary.get("acceptance_criteria_external_pending") or 0) == 0
+        and int(summary.get("external_pending_count") or 0) == 0
+        and not issue_closure.get("external_acceptance_pending")
+        and (issue_closure.get("github_issues") or {}).get("closure_requires_external_validation") is False
+    )
+
+
+def _external_pending_summary(issue_closure: dict[str, Any] | None, limit: int = 20) -> dict[str, Any]:
+    pending = [
+        str(item)
+        for item in ((issue_closure or {}).get("external_acceptance_pending") or [])
+        if str(item or "").strip()
+    ]
+    shown = pending[:limit]
+    return {
+        "external_acceptance_pending": shown,
+        "external_acceptance_pending_total": len(pending),
+        "external_acceptance_pending_displayed": len(shown),
+        "external_acceptance_pending_remaining": max(0, len(pending) - len(shown)),
+    }
+
+
+def _issue_closure_blocker_summary(issue_closure: dict[str, Any] | None, limit: int = 20) -> dict[str, Any]:
+    if not isinstance(issue_closure, dict) or not issue_closure:
+        return {
+            "schema_version": "reachops.commercial_issue_closure_blocker_summary.v1",
+            "status": FAILED,
+            "closure_ready": False,
+            "issue_gaps": [],
+            "issue_gap_count": 0,
+            "next_required_command": "python tools\\reachops_issue_closure_audit.py --json",
+            "does_not_claim_all_issues_closed": True,
+        }
+    embedded = issue_closure.get("closure_blocker_summary")
+    if isinstance(embedded, dict) and embedded.get("schema_version") == "reachops.commercial_issue_closure_blocker_summary.v1":
+        return embedded
+    summary = issue_closure.get("summary") if isinstance(issue_closure.get("summary"), dict) else {}
+    issues = issue_closure.get("issues") if isinstance(issue_closure.get("issues"), list) else []
+    external_pending = [
+        str(item)
+        for item in (issue_closure.get("external_acceptance_pending") or [])
+        if str(item or "").strip()
+    ]
+    shown_pending = external_pending[:limit]
+    issue_gaps = []
+    for issue in issues:
+        if not isinstance(issue, dict) or not issue.get("external_pending"):
+            continue
+        criteria = issue.get("acceptance_criteria") if isinstance(issue.get("acceptance_criteria"), list) else []
+        issue_gaps.append(
+            {
+                "issue_number": int(issue.get("issue_number") or 0),
+                "title": str(issue.get("title") or ""),
+                "local_contract_passed": bool(issue.get("local_contract_passed")),
+                "local_status": str(issue.get("local_status") or ""),
+                "acceptance_criteria_total": int(issue.get("acceptance_criteria_total") or 0),
+                "acceptance_criteria_local_passed": int(issue.get("acceptance_criteria_local_passed") or 0),
+                "acceptance_criteria_external_pending": int(issue.get("acceptance_criteria_external_pending") or 0),
+                "acceptance_criteria_unclassified": int(issue.get("acceptance_criteria_unclassified") or 0),
+                "external_pending_count": len(issue.get("external_pending") or []),
+                "external_pending": [str(item) for item in (issue.get("external_pending") or [])[:limit]],
+                "external_criteria": [
+                    str(row.get("id"))
+                    for row in criteria
+                    if row.get("status") == "external_pending" and str(row.get("id") or "").strip()
+                ],
+                "next_actions": list(
+                    dict.fromkeys(
+                        str(row.get("next_action"))
+                        for row in criteria
+                        if row.get("status") == "external_pending" and str(row.get("next_action") or "").strip()
+                    )
+                ),
+                "does_not_claim_issue_closed": bool(issue.get("does_not_claim_issue_closed")),
+            }
+        )
+    return {
+        "schema_version": "reachops.commercial_issue_closure_blocker_summary.v1",
+        "status": str(issue_closure.get("status") or FAILED),
+        "closure_ready": _issue_closure_ready(issue_closure),
+        "issues_total": int(summary.get("issues_total") or 0),
+        "local_contracts_passed": int(summary.get("local_contracts_passed") or 0),
+        "acceptance_criteria_total": int(summary.get("acceptance_criteria_total") or 0),
+        "acceptance_criteria_local_passed": int(summary.get("acceptance_criteria_local_passed") or 0),
+        "acceptance_criteria_external_pending": int(summary.get("acceptance_criteria_external_pending") or 0),
+        "acceptance_criteria_unclassified": int(summary.get("acceptance_criteria_unclassified") or 0),
+        "external_pending_count": len(external_pending),
+        "external_acceptance_pending": shown_pending,
+        "external_acceptance_pending_total": len(external_pending),
+        "external_acceptance_pending_displayed": len(shown_pending),
+        "external_acceptance_pending_remaining": max(0, len(external_pending) - len(shown_pending)),
+        "issue_gap_count": len(issue_gaps),
+        "issue_gaps": issue_gaps,
+        "next_required_command": "python tools\\reachops_issue_closure_audit.py --json",
+        "required_final_state": {
+            "acceptance_criteria_external_pending": 0,
+            "external_pending_count": 0,
+            "closure_requires_external_validation": False,
+        },
+        "does_not_claim_all_issues_closed": bool(summary.get("does_not_claim_all_issues_closed", True)),
+    }
+
+
+def _windows_acceptance_handoff_summary(package_check: dict[str, Any]) -> dict[str, Any]:
+    handoff = (
+        package_check.get("windows_acceptance_handoff")
+        if isinstance(package_check.get("windows_acceptance_handoff"), dict)
+        else {}
+    )
+    if not handoff:
+        return {}
+    safety_contract = handoff.get("safety_contract") if isinstance(handoff.get("safety_contract"), dict) else {}
+    return {
+        "schema_version": str(handoff.get("schema_version") or ""),
+        "path": str(package_check.get("windows_acceptance_handoff_path") or ""),
+        "support_required": bool(handoff.get("support_required")),
+        "support_case": str(handoff.get("support_case") or ""),
+        "final_delivery_ready": bool(handoff.get("final_delivery_ready")),
+        "does_not_claim_final_delivery_ready": bool(handoff.get("does_not_claim_final_delivery_ready", True)),
+        "acceptance_summary_path": str(handoff.get("acceptance_summary_path") or ""),
+        "manifest_path": str(handoff.get("manifest_path") or ""),
+        "missing_artifacts": [
+            str(item) for item in (handoff.get("missing_artifacts") or []) if str(item or "").strip()
+        ],
+        "failure_codes": [
+            str(item) for item in (handoff.get("failure_codes") or []) if str(item or "").strip()
+        ],
+        "pending_external_validation": [
+            str(item)
+            for item in (handoff.get("pending_external_validation") or [])
+            if str(item or "").strip()
+        ],
+        "retest_commands": [
+            str(item) for item in (handoff.get("retest_commands") or []) if str(item or "").strip()
+        ],
+        "acceptance_required": [
+            str(item) for item in (handoff.get("acceptance_required") or []) if str(item or "").strip()
+        ],
+        "does_not_create_acceptance_summary": bool(safety_contract.get("does_not_create_acceptance_summary")),
+        "requires_windows_real_acceptance": bool(safety_contract.get("requires_windows_real_acceptance")),
+        "safety_contract": safety_contract,
+    }
+
+
+def _package_blocker_summary(package_check: dict[str, Any]) -> dict[str, Any]:
+    acceptance_verification = (
+        package_check.get("acceptance_verification")
+        if isinstance(package_check.get("acceptance_verification"), dict)
+        else {}
+    )
+    report_files = package_check.get("report_files") if isinstance(package_check.get("report_files"), dict) else {}
+    artifacts = package_check.get("artifacts") if isinstance(package_check.get("artifacts"), dict) else {}
+    missing_reports = [
+        name
+        for name, payload in sorted(report_files.items())
+        if isinstance(payload, dict) and not bool(payload.get("exists"))
+    ]
+    missing_artifact_paths = {
+        name: str(payload.get("path") or "")
+        for name, payload in sorted(artifacts.items())
+        if isinstance(payload, dict) and not bool(payload.get("exists"))
+    }
+    failures = [str(item) for item in (package_check.get("failures") or []) if str(item or "").strip()]
+    acceptance_failures = [
+        str(item)
+        for item in (acceptance_verification.get("failures") or [])
+        if str(item or "").strip()
+    ]
+    acceptance_pending = [
+        str(item)
+        for item in (acceptance_verification.get("pending") or [])
+        if str(item or "").strip()
+    ]
+    summary = {
+        "schema_version": "reachops.windows_final_artifacts_blocker_summary.v1",
+        "status": str(package_check.get("status") or FAILED),
+        "final_delivery_ready": bool(package_check.get("final_delivery_ready")),
+        "bootstrap_only": bool(package_check.get("bootstrap_only")),
+        "missing_artifacts": [
+            str(item) for item in (package_check.get("missing_artifacts") or []) if str(item or "").strip()
+        ],
+        "missing_artifact_paths": missing_artifact_paths,
+        "failures": failures,
+        "acceptance_verification_passed": bool(acceptance_verification.get("passed")),
+        "acceptance_verification_failures": acceptance_failures,
+        "acceptance_verification_pending": acceptance_pending,
+        "missing_report_files": missing_reports,
+        "next_required_command": "python tools\\reachops_delivery_package_check.py --json",
+        "windows_acceptance_command": "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_acceptance_windows.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
+        "does_not_claim_final_delivery_ready": not bool(package_check.get("final_delivery_ready")),
+    }
+    handoff_summary = _windows_acceptance_handoff_summary(package_check)
+    if handoff_summary:
+        summary["windows_acceptance_handoff"] = handoff_summary
+        summary["windows_acceptance_handoff_path"] = handoff_summary["path"]
+    return summary
+
+
+def _percent(part: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((part / total) * 100, 1)
+
+
+def _commercial_completion_summary(issue_closure: dict[str, Any] | None) -> dict[str, Any]:
+    summary = issue_closure.get("summary") if isinstance((issue_closure or {}).get("summary"), dict) else {}
+    issues_total = int(summary.get("issues_total") or 0)
+    local_contracts_passed = int(summary.get("local_contracts_passed") or 0)
+    criteria_total = int(summary.get("acceptance_criteria_total") or 0)
+    criteria_local_passed = int(summary.get("acceptance_criteria_local_passed") or 0)
+    criteria_external_pending = int(summary.get("acceptance_criteria_external_pending") or 0)
+    criteria_unclassified = int(summary.get("acceptance_criteria_unclassified") or 0)
+    external_pending_count = int(summary.get("external_pending_count") or 0)
+    return {
+        "basis": "local_contracts_and_issue_acceptance_criteria_not_final_delivery",
+        "issues_total": issues_total,
+        "local_contracts_passed": local_contracts_passed,
+        "local_contracts_remaining": max(0, issues_total - local_contracts_passed),
+        "local_contracts_passed_percent": _percent(local_contracts_passed, issues_total),
+        "acceptance_criteria_total": criteria_total,
+        "acceptance_criteria_local_passed": criteria_local_passed,
+        "acceptance_criteria_local_passed_percent": _percent(criteria_local_passed, criteria_total),
+        "acceptance_criteria_external_pending": criteria_external_pending,
+        "acceptance_criteria_external_pending_percent": _percent(criteria_external_pending, criteria_total),
+        "acceptance_criteria_unclassified": criteria_unclassified,
+        "acceptance_criteria_unclassified_percent": _percent(criteria_unclassified, criteria_total),
+        "external_pending_count": external_pending_count,
+        "commercial_issue_closure_ready": bool(issue_closure) and _issue_closure_ready(issue_closure),
+    }
+
+
 def _client_evidence_ready(client_delivery: dict[str, Any]) -> bool:
     if str(client_delivery.get("source") or "") == "acceptance_summary.client_delivery":
         return (
@@ -219,6 +494,7 @@ def _evidence_item(
     commands: list[str] | None = None,
     proof_fields: list[str] | None = None,
     blocker_codes: list[str] | None = None,
+    blocker_summary: dict[str, Any] | None = None,
     next_action: str = "",
 ) -> dict[str, Any]:
     return {
@@ -231,6 +507,7 @@ def _evidence_item(
         "commands": commands or [],
         "proof_fields": proof_fields or [],
         "blocker_codes": blocker_codes or [],
+        "blocker_summary": blocker_summary or {},
         "next_action": next_action,
     }
 
@@ -240,6 +517,7 @@ def build_final_delivery_evidence_plan(
     goal_status: dict[str, Any],
     client_delivery: dict[str, Any],
     package_check: dict[str, Any],
+    issue_closure: dict[str, Any] | None = None,
     delivery_audit: dict[str, Any] | None = None,
     operator_pressure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -253,7 +531,32 @@ def build_final_delivery_evidence_plan(
         if isinstance(package_check.get("acceptance_verification"), dict)
         else {}
     )
+    issue_pending_summary = _external_pending_summary(issue_closure)
+    issue_blocker_summary = _issue_closure_blocker_summary(issue_closure)
     items = [
+        _evidence_item(
+            scope="current_stage_gate",
+            title="当前恢复阶段本地门禁证据",
+            ready=_current_stage_gate_ready_or_external_pending(goal_status),
+            status=_current_stage_gate_status(goal_status)["status"] or FAILED,
+            required_evidence=[
+                "current_stage_gate.schema_version=reachops.current_stage_gate.v1",
+                "current_stage_gate.local_passed=true",
+                "本地 delivery audit 无代码级失败",
+                "client delivery 明确暴露真实 pilot 边界",
+                "账号或平台阻断时不声称真实 pilot 通过",
+            ],
+            commands=["python tools\\reachops_goal_status_report.py --json"],
+            proof_fields=[
+                "current_stage_gate.status in [passed, ready_for_external_validation]",
+                "current_stage_gate.local_passed=true",
+                "current_stage_gate.local_checks.delivery_audit_has_no_local_failures=true",
+                "current_stage_gate.local_checks.client_delivery_reports_real_pilot_boundary=true",
+                "current_stage_gate.local_checks.client_delivery_does_not_claim_blocked_real_pilot=true",
+            ],
+            blocker_codes=[str(item) for item in _current_stage_gate_status(goal_status)["external_validation_pending"]],
+            next_action="修复 current_stage_gate 本地失败项；外部阻断只能保留为 external_validation_pending，不能声明最终通过。",
+        ),
         _evidence_item(
             scope="external_authorized_execution",
             title="授权真实平台执行证据",
@@ -301,6 +604,7 @@ def build_final_delivery_evidence_plan(
                 "client_delivery.failed_checks=[]",
             ],
             blocker_codes=[str(item) for item in (client_delivery.get("failed_checks") or [])],
+            blocker_summary=client_delivery.get("account_blocker_resolution") or {},
             next_action="复跑 tools\\reachops_client_delivery_check.py --json，直到 status=passed、final_delivery_ready=true、failed_checks=[]。",
         ),
         _evidence_item(
@@ -331,7 +635,41 @@ def build_final_delivery_evidence_plan(
                 *[str(item) for item in (package_check.get("failures") or [])],
                 *[str(item) for item in (acceptance_verification.get("failures") or [])],
             ],
+            blocker_summary=_package_blocker_summary(package_check),
             next_action="在 Windows 实机生成 exe、installer、update manifest 和通过的 acceptance_summary.json，然后复跑 tools\\reachops_delivery_package_check.py --json。",
+        ),
+        _evidence_item(
+            scope="commercial_issue_closure",
+            title="Issues #1-#7 商业验收闭环证据",
+            ready=_issue_closure_ready(issue_closure),
+            status=str((issue_closure or {}).get("status") or FAILED),
+            required_evidence=[
+                "Issues #1-#7 全部有 acceptance criteria 级证据矩阵",
+                "acceptance_criteria_total=53",
+                "acceptance_criteria_unclassified=0",
+                "acceptance_criteria_external_pending=0",
+                "external_pending_count=0",
+                "GitHub Issues #1-#7 已按证据关闭或明确转入后续非阻断范围",
+            ],
+            commands=["python tools\\reachops_issue_closure_audit.py --json"],
+            proof_fields=[
+                "issue_closure.summary.issues_total=7",
+                "issue_closure.summary.acceptance_criteria_total=53",
+                "issue_closure.summary.acceptance_criteria_unclassified=0",
+                "issue_closure.summary.acceptance_criteria_external_pending=0",
+                "issue_closure.summary.external_pending_count=0",
+                "issue_closure.github_issues.closure_requires_external_validation=false",
+            ],
+            blocker_codes=[
+                *issue_pending_summary["external_acceptance_pending"],
+                *(
+                    ["acceptance_criteria_external_pending"]
+                    if int(((issue_closure or {}).get("summary") or {}).get("acceptance_criteria_external_pending") or 0)
+                    else []
+                ),
+            ],
+            blocker_summary=issue_blocker_summary,
+            next_action="完成 Issues #1-#7 中仍标记 external_pending 的验收标准，并复跑 tools\\reachops_issue_closure_audit.py --json。",
         ),
         _evidence_item(
             scope="delivery_audit",
@@ -504,10 +842,19 @@ def build_final_acceptance_gate(
     goal_status: dict[str, Any],
     client_delivery: dict[str, Any],
     package_check: dict[str, Any],
+    issue_closure: dict[str, Any] | None = None,
     delivery_audit: dict[str, Any] | None = None,
     operator_pressure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    issue_summary = (issue_closure or {}).get("summary") if isinstance((issue_closure or {}).get("summary"), dict) else {}
+    current_stage_gate = _current_stage_gate_status(goal_status)
     checks = [
+        _check(
+            "current_stage_gate:local_ready_or_external_pending",
+            _current_stage_gate_ready_or_external_pending(goal_status),
+            current_stage_gate["status"] or FAILED,
+            current_stage_gate,
+        ),
         _check(
             "goal_status:passed",
             _goal_ready(goal_status),
@@ -545,6 +892,8 @@ def build_final_acceptance_gate(
                 "not_final_delivery_reasons": package_check.get("not_final_delivery_reasons") or [],
                 "pending_external_validation": package_check.get("pending_external_validation") or [],
                 "root": package_check.get("root") or "",
+                "execution_environment": package_check.get("execution_environment") or {},
+                "environment_blocker": package_check.get("environment_blocker") or {},
                 "artifacts": package_check.get("artifacts") or {},
                 "report_files": package_check.get("report_files") or {},
                 "final_gate_report": package_check.get("final_gate_report") or {},
@@ -552,6 +901,19 @@ def build_final_acceptance_gate(
             },
         ),
     ]
+    if issue_closure is not None:
+        checks.append(
+            _check(
+                "commercial_issue_closure:closed",
+                _issue_closure_ready(issue_closure),
+                str(issue_closure.get("status") or FAILED),
+                {
+                    "github_issues": issue_closure.get("github_issues") or {},
+                    "summary": issue_summary,
+                    "external_acceptance_pending": issue_closure.get("external_acceptance_pending") or [],
+                },
+            )
+        )
     audit_ok = True
     if delivery_audit is not None:
         audit_summary = delivery_audit.get("summary") or {}
@@ -586,6 +948,18 @@ def build_final_acceptance_gate(
 
     final_delivery_blockers = []
     next_actions = []
+    if not _current_stage_gate_ready_or_external_pending(goal_status):
+        final_delivery_blockers.append(
+            {
+                "scope": "current_stage_gate",
+                "status": current_stage_gate["status"] or FAILED,
+                "local_passed": current_stage_gate["local_passed"],
+                "local_checks": current_stage_gate["local_checks"],
+                "external_validation_pending": current_stage_gate["external_validation_pending"],
+                "next_action": "修复 current_stage_gate 本地失败项，确保本阶段恢复基线明确通过或只剩外部真实环境验收。",
+            }
+        )
+        next_actions.append("修复 current_stage_gate 本地失败项，确保本阶段恢复基线明确通过或只剩外部真实环境验收。")
     if not _goal_ready(goal_status):
         pending = [str(item) for item in (goal_status.get("pending_external_validation") or []) if str(item or "").strip()]
         final_delivery_blockers.append(
@@ -611,6 +985,8 @@ def build_final_acceptance_gate(
                 "status": str(client_delivery.get("status") or FAILED),
                 "failed_checks": client_delivery.get("failed_checks") or [],
                 "blockers": client_delivery.get("blockers") or [],
+                "account_blocker_resolution": client_delivery.get("account_blocker_resolution") or {},
+                "account_support_handoff": client_delivery.get("account_support_handoff") or {},
                 "next_action": "复跑 tools\\reachops_client_delivery_check.py --json，直到 status=passed、final_delivery_ready=true、failed_checks=[]。",
             }
         )
@@ -618,12 +994,14 @@ def build_final_acceptance_gate(
     if not _package_ready(package_check):
         missing = [str(item) for item in (package_check.get("missing_artifacts") or []) if str(item or "").strip()]
         failures = [str(item) for item in (package_check.get("failures") or []) if str(item or "").strip()]
+        package_blocker_summary = _package_blocker_summary(package_check)
         final_delivery_blockers.append(
             {
                 "scope": "windows_final_artifacts",
                 "status": str(package_check.get("status") or FAILED),
                 "missing_artifacts": missing,
                 "failures": failures,
+                "blocker_summary": package_blocker_summary,
                 "required_artifacts": [
                     "dist\\ReachOps\\ReachOps.exe",
                     "dist\\installer\\ReachOps-Setup-0.4.0.exe",
@@ -634,6 +1012,27 @@ def build_final_acceptance_gate(
             }
         )
         next_actions.append("在 Windows 实机生成 exe、installer、update manifest 和通过的 acceptance_summary.json，然后复跑 tools\\reachops_delivery_package_check.py --json。")
+    if issue_closure is not None and not _issue_closure_ready(issue_closure):
+        issue_pending_summary = _external_pending_summary(issue_closure)
+        issue_blocker_summary = _issue_closure_blocker_summary(issue_closure)
+        final_delivery_blockers.append(
+            {
+                "scope": "commercial_issue_closure",
+                "status": str(issue_closure.get("status") or FAILED),
+                "summary": issue_summary,
+                **issue_pending_summary,
+                "blocker_summary": issue_blocker_summary,
+                "required_evidence": [
+                    "acceptance_criteria_total=53",
+                    "acceptance_criteria_unclassified=0",
+                    "acceptance_criteria_external_pending=0",
+                    "external_pending_count=0",
+                    "Issues #1-#7 已有关闭证据或非阻断移交证据",
+                ],
+                "next_action": "完成 Issues #1-#7 中仍标记 external_pending 的验收标准，并复跑 tools\\reachops_issue_closure_audit.py --json。",
+            }
+        )
+        next_actions.append("完成 Issues #1-#7 中仍标记 external_pending 的验收标准，并复跑 tools\\reachops_issue_closure_audit.py --json。")
     if not audit_ok:
         final_delivery_blockers.append(
             {
@@ -657,6 +1056,7 @@ def build_final_acceptance_gate(
         goal_status=goal_status,
         client_delivery=client_delivery,
         package_check=package_check,
+        issue_closure=issue_closure,
         delivery_audit=delivery_audit,
         operator_pressure=operator_pressure,
     )
@@ -664,6 +1064,7 @@ def build_final_acceptance_gate(
         "product": "ReachOps",
         "status": status,
         "final_delivery_ready": status == PASSED,
+        "commercial_completion": _commercial_completion_summary(issue_closure),
         "checks": checks,
         "failed_checks": [row["name"] for row in failed_checks],
         "final_delivery_blockers": final_delivery_blockers,
@@ -681,6 +1082,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--goal-status-json", default="", help="Existing reachops_goal_status_report JSON.")
     parser.add_argument("--client-delivery-json", default="", help="Existing reachops_client_delivery_check JSON.")
     parser.add_argument("--package-check-json", default="", help="Existing reachops_delivery_package_check JSON.")
+    parser.add_argument("--issue-closure-json", default="", help="Existing reachops_issue_closure_audit JSON.")
     parser.add_argument("--acceptance-summary", default="", help="Acceptance summary used when package check JSON is not supplied.")
     parser.add_argument("--manifest", default="", help="Update manifest used when package check JSON is not supplied.")
     parser.add_argument("--target", default="anti aging serum", help="Audit target used only when goal status JSON is not supplied.")
@@ -822,10 +1224,16 @@ def main(argv: list[str] | None = None) -> int:
             allow_external_pending=False,
         )
 
+    if args.issue_closure_json:
+        issue_closure = _load_json(args.issue_closure_json)
+    else:
+        issue_closure = build_issue_closure_report(root, run_pip=False)
+
     payload = build_final_acceptance_gate(
         goal_status=goal_status,
         client_delivery=client_delivery,
         package_check=package_check,
+        issue_closure=issue_closure,
         delivery_audit=delivery_audit,
         operator_pressure=operator_pressure,
     )

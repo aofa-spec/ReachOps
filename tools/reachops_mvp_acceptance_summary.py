@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,18 +16,43 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 OUT_PATH = ROOT_DIR / "reports/reachops/mac_gui/runtime/reports/acceptance_remediation/latest_mvp_acceptance_summary.json"
+SECTION_TIMEOUT_RETURN_CODE = 124
+
+
+def _timeout_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace").strip()
+    return str(value).strip()
 
 
 def run_json(command: list[str], timeout: int = 120) -> tuple[dict[str, Any], int, str]:
-    completed = subprocess.run(
-        command,
-        cwd=str(ROOT_DIR),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-        env={"PYTHONDONTWRITEBYTECODE": "1", **dict(__import__("os").environ)},
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT_DIR),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env={"PYTHONDONTWRITEBYTECODE": "1", **dict(os.environ)},
+        )
+    except subprocess.TimeoutExpired as exc:
+        return (
+            {
+                "status": "timeout",
+                "passed": False,
+                "timed_out": True,
+                "timeout_seconds": timeout,
+                "command": " ".join(command),
+                "stdout_tail": _timeout_text(exc.output)[-4000:],
+                "stderr_tail": _timeout_text(exc.stderr)[-4000:],
+                "next_action": "Run this MVP sub-check directly, fix the slow dependency, then rerun MVP acceptance.",
+            },
+            SECTION_TIMEOUT_RETURN_CODE,
+            f"timeout_after_{timeout}s",
+        )
     stdout = (completed.stdout or "").strip()
     if not stdout:
         return {}, completed.returncode, (completed.stderr or "").strip()
@@ -46,14 +73,37 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 def build_summary() -> dict[str, Any]:
-    audit, audit_rc, audit_err = run_json([sys.executable, "tools/reachops_delivery_audit.py", "--json"], timeout=180)
-    goal, goal_rc, goal_err = run_json([sys.executable, "tools/reachops_goal_status_report.py", "--json"], timeout=180)
-    client, client_rc, client_err = run_json([sys.executable, "tools/reachops_client_delivery_check.py", "--json"], timeout=120)
-    mac_loop, mac_loop_rc, mac_loop_err = run_json(
-        [sys.executable, "tools/reachops_mac_loop_acceptance.py", "--base-url", "http://127.0.0.1:8769", "--json"],
-        timeout=180,
-    )
-    cleanliness, clean_rc, clean_err = run_json([sys.executable, "tools/reachops_repository_cleanliness_check.py", "--clean", "--json"], timeout=120)
+    sub_checks = {
+        "audit": ([sys.executable, "tools/reachops_delivery_audit.py", "--json"], 180),
+        "goal": ([sys.executable, "tools/reachops_goal_status_report.py", "--json"], 180),
+        "client": ([sys.executable, "tools/reachops_client_delivery_check.py", "--json"], 120),
+        "mac_loop": (
+            [
+                sys.executable,
+                "tools/reachops_mac_loop_acceptance.py",
+                "--base-url",
+                "http://127.0.0.1:8769",
+                "--pm-fast",
+                "--json",
+            ],
+            20,
+        ),
+        "cleanliness": ([sys.executable, "tools/reachops_repository_cleanliness_check.py", "--clean", "--json"], 120),
+    }
+    results: dict[str, tuple[dict[str, Any], int, str]] = {}
+    with ThreadPoolExecutor(max_workers=len(sub_checks)) as executor:
+        futures = {
+            executor.submit(run_json, command, timeout=timeout): name
+            for name, (command, timeout) in sub_checks.items()
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+
+    audit, audit_rc, audit_err = results["audit"]
+    goal, goal_rc, goal_err = results["goal"]
+    client, client_rc, client_err = results["client"]
+    mac_loop, mac_loop_rc, mac_loop_err = results["mac_loop"]
+    cleanliness, clean_rc, clean_err = results["cleanliness"]
     runtime_smoke = read_json(ROOT_DIR / "reports/reachops/mac_gui/runtime/reports/acceptance_remediation/latest_web_panel_runtime_smoke.json")
 
     audit_summary = audit.get("summary") if isinstance(audit.get("summary"), dict) else {}
