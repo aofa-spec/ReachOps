@@ -263,6 +263,84 @@ class ReachOpsM3StabilityProbeTest(unittest.TestCase):
         self.assertEqual(command[timeout_index + 1], "120")
         self.assertEqual(summary["profile_ids"], [])
 
+    def test_m3_probe_stops_repeated_group_target_for_account_conservation(self):
+        with TemporaryDirectory() as tmpdir:
+            args = m3.parse_args(
+                [
+                    "--target",
+                    "https://chameleonpeptides.com/product/peptide-31/?attribute_pa_strength=50mg",
+                    "--profile-group",
+                    "获客分组测试",
+                    "--profile-limit",
+                    "3",
+                    "--profile-scan-limit",
+                    "11",
+                    "--iterations",
+                    "20",
+                    "--output-dir",
+                    str(Path(tmpdir) / "m3_probe"),
+                    "--cooldown-seconds",
+                    "0",
+                    "--quiet",
+                    "--json",
+                ]
+            )
+            runs = [
+                completed_process(completed_payload("run_1")),
+                completed_process(completed_payload("run_2")),
+                completed_process(completed_payload("run_3")),
+                completed_process(completed_payload("run_4")),
+            ]
+            with patch("tools.reachops_m3_stability_probe.subprocess.run", side_effect=runs) as run_mock:
+                code, summary = m3.run_probe(args)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(summary["terminal_state"], "BLOCKED")
+        self.assertEqual(summary["terminal_reason"], "account_resource_conservation_stop_duplicate_target")
+        self.assertEqual(summary["iterations_completed"], 3)
+        self.assertEqual(summary["passed_count"], 3)
+        self.assertEqual(summary["failed_count"], 0)
+        self.assertEqual(run_mock.call_count, 3)
+        self.assertFalse(summary["account_resource_policy"]["allow_repeated_target_pressure"])
+
+    def test_m3_probe_allows_explicit_repeated_target_pressure(self):
+        with TemporaryDirectory() as tmpdir:
+            args = m3.parse_args(
+                [
+                    "--target",
+                    "https://chameleonpeptides.com/product/peptide-31/?attribute_pa_strength=50mg",
+                    "--profile-group",
+                    "获客分组测试",
+                    "--profile-limit",
+                    "3",
+                    "--profile-scan-limit",
+                    "11",
+                    "--iterations",
+                    "4",
+                    "--allow-repeated-target-pressure",
+                    "--output-dir",
+                    str(Path(tmpdir) / "m3_probe"),
+                    "--cooldown-seconds",
+                    "0",
+                    "--quiet",
+                    "--json",
+                ]
+            )
+            runs = [
+                completed_process(completed_payload("run_1")),
+                completed_process(completed_payload("run_2")),
+                completed_process(completed_payload("run_3")),
+                completed_process(completed_payload("run_4")),
+            ]
+            with patch("tools.reachops_m3_stability_probe.subprocess.run", side_effect=runs) as run_mock:
+                code, summary = m3.run_probe(args)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(summary["terminal_state"], "COMPLETED")
+        self.assertEqual(summary["iterations_completed"], 4)
+        self.assertEqual(run_mock.call_count, 4)
+        self.assertTrue(summary["account_resource_policy"]["allow_repeated_target_pressure"])
+
     def test_m3_probe_scales_preflight_timeout_for_certified_profile_pool(self):
         args = m3.parse_args(
             [

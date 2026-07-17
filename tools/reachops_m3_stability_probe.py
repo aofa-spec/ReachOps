@@ -13,6 +13,9 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROFILE_PREFLIGHT_TIMEOUT_SECONDS = 60
 DEFAULT_PROFILE_PREFLIGHT_WORKERS = 2
+DEFAULT_REPEATED_TARGET_REAL_ITERATIONS = 3
+RESOURCE_CONSERVATION_CODES = {"duplicate_suppressed", "no_candidates"}
+RESOURCE_CONSERVATION_DIAGNOSES = {"duplicate_suppressed", "content_found_no_comments"}
 
 
 def utc_stamp() -> str:
@@ -149,6 +152,34 @@ def iteration_passed(row: dict[str, Any], minimum_profile_count: int = 1) -> boo
     )
 
 
+def resource_conservation_terminal(row: dict[str, Any]) -> bool:
+    no_action = row.get("no_action_reason") if isinstance(row.get("no_action_reason"), dict) else {}
+    code = str(no_action.get("code") or "").strip()
+    diagnosis = str(row.get("diagnosis_status") or "").strip()
+    funnel = row.get("funnel") if isinstance(row.get("funnel"), dict) else {}
+    no_new_leads = int(funnel.get("customer_leads") or 0) <= 0 and int(funnel.get("outreach_actions") or 0) <= 0
+    return bool(
+        row.get("no_submit") is True
+        and row.get("acceptance_status") == "passed"
+        and no_new_leads
+        and (code in RESOURCE_CONSERVATION_CODES or diagnosis in RESOURCE_CONSERVATION_DIAGNOSES)
+    )
+
+
+def should_stop_for_account_conservation(args: argparse.Namespace, rows: list[dict[str, Any]]) -> bool:
+    if bool(getattr(args, "allow_repeated_target_pressure", False)):
+        return False
+    if split_profile_ids(str(getattr(args, "profile_ids", "") or "")):
+        return False
+    if int(getattr(args, "iterations", 0) or 0) <= DEFAULT_REPEATED_TARGET_REAL_ITERATIONS:
+        return False
+    floor = max(1, int(getattr(args, "resource_conservation_after", 0) or DEFAULT_REPEATED_TARGET_REAL_ITERATIONS))
+    if len(rows) < floor:
+        return False
+    recent = rows[-floor:]
+    return all(resource_conservation_terminal(row) for row in recent)
+
+
 def build_summary(
     args: argparse.Namespace,
     *,
@@ -174,6 +205,14 @@ def build_summary(
         "profile_ids": split_profile_ids(str(args.profile_ids or "")),
         "adaptive_profile_pool": bool(getattr(args, "adaptive_profile_pool", False)),
         "minimum_profile_count": minimum_profile_count,
+        "account_resource_policy": {
+            "allow_repeated_target_pressure": bool(getattr(args, "allow_repeated_target_pressure", False)),
+            "resource_conservation_after": max(
+                1,
+                int(getattr(args, "resource_conservation_after", 0) or DEFAULT_REPEATED_TARGET_REAL_ITERATIONS),
+            ),
+            "conserves_group_pool_by_default": True,
+        },
         "profile_preflight_timeout_seconds": max(
             5,
             int(getattr(args, "profile_preflight_timeout", 0) or DEFAULT_PROFILE_PREFLIGHT_TIMEOUT_SECONDS),
@@ -296,6 +335,9 @@ def run_probe(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         passed = iteration_passed(row, args.minimum_profile_count)
         if not passed and not bool(args.continue_on_failure):
             break
+        if should_stop_for_account_conservation(args, rows):
+            args.terminal_reason_override = "account_resource_conservation_stop_duplicate_target"
+            break
         if index < int(args.iterations or 1):
             cooldown_seconds = max(0, int(getattr(args, "cooldown_seconds", 0) or 0))
             if cooldown_seconds:
@@ -329,6 +371,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--continue-on-failure", action="store_true")
     parser.add_argument("--allow-fewer-profiles", action="store_true")
+    parser.add_argument(
+        "--allow-repeated-target-pressure",
+        action="store_true",
+        help="Support-only: allow repeated real browser runs against the same terminal target despite account resource cost.",
+    )
+    parser.add_argument("--resource-conservation-after", type=int, default=DEFAULT_REPEATED_TARGET_REAL_ITERATIONS)
     parser.add_argument("--disable-adaptive-profile-pool", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--json", action="store_true")
