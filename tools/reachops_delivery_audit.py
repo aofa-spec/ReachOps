@@ -137,20 +137,28 @@ def run_live_authorized_fixture(target: str) -> dict:
         str(comment_action.get("id") or "comment-1"),
         str(comment_action.get("suggested_text") or ""),
     )
-    result = workflow.run_action_router(
-        [{"profile_id": "audit-live-1", "group_name": "AUDIT"}],
-        config=ActionRouterConfig(
-            max_workers=1,
-            per_profile_action_limit=10,
-            action_types=["comment_reply"],
-            dry_run=False,
-            allow_live_submit=True,
-            live_preflight_only=False,
-            per_profile_video_hour_limit=99,
-        ),
-        fixture_outcomes=[{"action_type": "comment_reply", "status": "success", "evidence_path": comment_evidence}],
-        export_report=False,
-    )
+    previous_override = os.environ.get("REACHOPS_ALLOW_TEST_FIXTURE_LIVE")
+    os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = "1"
+    try:
+        result = workflow.run_action_router(
+            [{"profile_id": "audit-live-1", "group_name": "AUDIT"}],
+            config=ActionRouterConfig(
+                max_workers=1,
+                per_profile_action_limit=10,
+                action_types=["comment_reply"],
+                dry_run=False,
+                allow_live_submit=True,
+                live_preflight_only=False,
+                per_profile_video_hour_limit=99,
+            ),
+            fixture_outcomes=[{"action_type": "comment_reply", "status": "success", "evidence_path": comment_evidence}],
+            export_report=False,
+        )
+    finally:
+        if previous_override is None:
+            os.environ.pop("REACHOPS_ALLOW_TEST_FIXTURE_LIVE", None)
+        else:
+            os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = previous_override
     return {
         "campaign_id": campaign_id,
         "batch_id": str(batch.get("id") or ""),
@@ -174,21 +182,29 @@ def run_runtime_evidence_guard_fixture(target: str) -> dict:
             fh,
         )
     missing_evidence_path = str(Path(base_dir) / "missing-evidence.png")
-    result = workflow.run_action_router(
-        [{"profile_id": "audit-live-1", "group_name": "AUDIT"}],
-        config=ActionRouterConfig(
-            max_workers=1,
-            per_profile_action_limit=10,
-            action_types=["comment_reply"],
-            dry_run=False,
-            allow_live_submit=True,
-            live_preflight_only=False,
-            require_execution_evidence=True,
-            per_profile_video_hour_limit=99,
-        ),
-        fixture_outcomes=[{"action_type": "comment_reply", "status": "success", "evidence_path": missing_evidence_path}],
-        export_report=False,
-    )
+    previous_override = os.environ.get("REACHOPS_ALLOW_TEST_FIXTURE_LIVE")
+    os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = "1"
+    try:
+        result = workflow.run_action_router(
+            [{"profile_id": "audit-live-1", "group_name": "AUDIT"}],
+            config=ActionRouterConfig(
+                max_workers=1,
+                per_profile_action_limit=10,
+                action_types=["comment_reply"],
+                dry_run=False,
+                allow_live_submit=True,
+                live_preflight_only=False,
+                require_execution_evidence=True,
+                per_profile_video_hour_limit=99,
+            ),
+            fixture_outcomes=[{"action_type": "comment_reply", "status": "success", "evidence_path": missing_evidence_path}],
+            export_report=False,
+        )
+    finally:
+        if previous_override is None:
+            os.environ.pop("REACHOPS_ALLOW_TEST_FIXTURE_LIVE", None)
+        else:
+            os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = previous_override
     return {
         "campaign_id": campaign_id,
         "batch_id": str(batch.get("id") or ""),

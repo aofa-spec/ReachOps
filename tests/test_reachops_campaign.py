@@ -761,6 +761,16 @@ def final_acceptance_gate_payload():
 
 
 class ReachOpsCampaignTests(unittest.TestCase):
+    def setUp(self):
+        self._previous_live_fixture_override = os.environ.get("REACHOPS_ALLOW_TEST_FIXTURE_LIVE")
+        os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = "1"
+
+    def tearDown(self):
+        if self._previous_live_fixture_override is None:
+            os.environ.pop("REACHOPS_ALLOW_TEST_FIXTURE_LIVE", None)
+        else:
+            os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = self._previous_live_fixture_override
+
     def test_reachops_version_info_is_standalone_product_metadata(self):
         info = version_info()
 
@@ -4639,15 +4649,27 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     fh,
                 )
 
+            class DynamicEvidenceExecutor:
+                def execute(self, action, profile, rendered_text: str, dry_run: bool = True):
+                    action_type = str(action.get("action_type") or "")
+                    path = Path(tmp) / f"{action_type}-evidence.png"
+                    path.write_bytes(b"png")
+                    sidecar = {
+                        "screenshot_sha256": hashlib.sha256(b"png").hexdigest(),
+                        "action_type": action_type,
+                        "profile_id": str(profile.get("profile_id") or ""),
+                        "action_id": str(action.get("id") or ""),
+                        "current_url": str(action.get("target_url") or ""),
+                    }
+                    if action_type == "comment_reply":
+                        sidecar["submitted_text"] = rendered_text
+                        sidecar["comment_visible_confirmed"] = True
+                    Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
+                    return {"status": "success", "evidence_path": str(path)}
+
             result = run_reachops_live_submit_acceptance(
                 Args(),
-                platform_executor=FixtureActionExecutor(
-                    [
-                        {"action_type": "comment_reply", "status": "success", "evidence_path": "evidence://submit/comment"},
-                        {"action_type": "follow_review", "status": "success", "evidence_path": "evidence://submit/follow"},
-                        {"action_type": "dm_review", "status": "success", "evidence_path": "evidence://submit/dm"},
-                    ]
-                ),
+                platform_executor=DynamicEvidenceExecutor(),
             )
 
             self.assertTrue(result["passed"])
@@ -4700,15 +4722,27 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 page_timeout = 1
                 element_timeout = 1
 
+            class DynamicEvidenceExecutor:
+                def execute(self, action, profile, rendered_text: str, dry_run: bool = True):
+                    action_type = str(action.get("action_type") or "")
+                    path = Path(tmp) / f"{action_type}-external-activation-evidence.png"
+                    path.write_bytes(b"png")
+                    sidecar = {
+                        "screenshot_sha256": hashlib.sha256(b"png").hexdigest(),
+                        "action_type": action_type,
+                        "profile_id": str(profile.get("profile_id") or ""),
+                        "action_id": str(action.get("id") or ""),
+                        "current_url": str(action.get("target_url") or ""),
+                    }
+                    if action_type == "comment_reply":
+                        sidecar["submitted_text"] = rendered_text
+                        sidecar["comment_visible_confirmed"] = True
+                    Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
+                    return {"status": "success", "evidence_path": str(path)}
+
             result = run_reachops_live_submit_acceptance(
                 Args(),
-                platform_executor=FixtureActionExecutor(
-                    [
-                        {"action_type": "comment_reply", "status": "success", "evidence_path": "evidence://submit/comment"},
-                        {"action_type": "follow_review", "status": "success", "evidence_path": "evidence://submit/follow"},
-                        {"action_type": "dm_review", "status": "success", "evidence_path": "evidence://submit/dm"},
-                    ]
-                ),
+                platform_executor=DynamicEvidenceExecutor(),
             )
 
             self.assertTrue(result["passed"])
@@ -8033,7 +8067,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             old_actions = service.storage.list_action_queue(limit=20, batch_id=old_batch["id"])
             new_actions = service.storage.list_action_queue(limit=20, batch_id=new_batch["id"])
             self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "pending_review" for row in old_actions))
-            self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "success" for row in new_actions))
+            self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "pending_review" for row in new_actions))
+            truth = service.storage.outreach_execution_truth_counts(new_batch["id"])
+            self.assertEqual(truth["simulated_success"], 1)
+            self.assertEqual(truth["live_verified"], 0)
 
     def test_action_router_can_target_explicit_campaign_batch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -8065,8 +8102,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(result["selected_actions"], 1)
             old_actions = service.storage.list_action_queue(limit=20, batch_id=old_batch["id"])
             new_actions = service.storage.list_action_queue(limit=20, batch_id=new_batch["id"])
-            self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "success" for row in old_actions))
+            self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "pending_review" for row in old_actions))
             self.assertTrue(any(row["action_type"] == "comment_reply" and row["status"] == "pending_review" for row in new_actions))
+            truth = service.storage.outreach_execution_truth_counts(old_batch["id"])
+            self.assertEqual(truth["simulated_success"], 1)
+            self.assertEqual(truth["live_verified"], 0)
 
     def test_action_router_can_switch_account_when_worker_count_is_one(self):
         class ProfileAwareExecutor:
@@ -8173,8 +8213,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 export_report=False,
             )
             old_funnel = workflow.build_campaign_funnel(campaign_id=old_plan["campaign"]["id"], batch_id=old_batch["id"])
-            self.assertEqual(old_funnel["execution_success"], 1)
-            self.assertEqual(old_funnel["preflight_ok"], 1)
+            self.assertEqual(old_funnel["execution_success"], 0)
+            self.assertEqual(old_funnel["preflight_ok"], 0)
+            truth = service.storage.outreach_execution_truth_counts(old_batch["id"])
+            self.assertEqual(truth["simulated_success"], 1)
+            self.assertEqual(truth["live_verified"], 0)
 
             new_plan = service.create_campaign_plan("https://www.tiktok.com/@new_creator", max_sources=1)
             service.run_collection(
@@ -8282,7 +8325,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             actions = service.storage.list_action_queue(limit=20, batch_id=batch["id"])
             fallback = next(row for row in actions if row["action_type"] == "comment_reply")
             self.assertEqual(fallback["batch_id"], batch["id"])
-            self.assertEqual(fallback["status"], "success")
+            self.assertEqual(fallback["status"], "pending_review")
+            dm_action = next(row for row in actions if row["action_type"] == "dm_review")
+            self.assertTrue(fallback["suggested_text"])
+            self.assertNotEqual(fallback["suggested_text"], dm_action["suggested_text"])
+            truth = service.storage.outreach_execution_truth_counts(batch["id"])
+            self.assertGreaterEqual(truth["simulated_success"], 1)
+            self.assertEqual(truth["live_verified"], 0)
 
     def test_live_submit_requires_authorization_status(self):
         with tempfile.TemporaryDirectory() as tmp:

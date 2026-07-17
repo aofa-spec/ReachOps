@@ -120,6 +120,7 @@ class GrowthWorkflowService:
         batch_metrics = self.storage.collection_batch_entity_metrics(batch_id) if batch_id else {}
         progress = self.storage.collection_batch_progress(batch_id) if batch_id else {}
         execution_status_counts = self.storage.outreach_execution_status_counts(batch_id) if batch_id else {}
+        execution_truth_counts = self.storage.outreach_execution_truth_counts(batch_id) if batch_id else {}
         batch = progress.get("batch") or latest_batch or {}
         status_counts = progress.get("status_counts") or {}
         error_counts = progress.get("error_counts") or {}
@@ -147,8 +148,8 @@ class GrowthWorkflowService:
                 high_intent=int(batch_metrics.get("high_value_candidates", 0) or 0),
                 customer_leads=int(batch_metrics.get("operation_leads", 0) or 0),
                 outreach_actions=int(batch_metrics.get("action_queue", 0) or 0),
-                preflight_ok=int(execution_status_counts.get("success", 0) or 0),
-                execution_success=int(execution_status_counts.get("success", 0) or 0),
+                preflight_ok=int(execution_truth_counts.get("preflight_passed", 0) or 0),
+                execution_success=int(execution_truth_counts.get("live_verified", 0) or 0),
                 failed=int(batch.get("failed_sources", 0) or 0)
                 + int(batch_metrics.get("errors", 0) or 0)
                 + int(execution_status_counts.get("failed", 0) or 0)
@@ -252,6 +253,7 @@ class GrowthWorkflowService:
         execution_summary = {
             "total": len(outreach_executions),
             "success": int(execution_status_counts.get("success", 0) or 0),
+            "submitted_unverified": int(execution_status_counts.get("submitted_unverified", 0) or 0),
             "failed": int(execution_status_counts.get("failed", 0) or 0),
             "skipped": int(execution_status_counts.get("skipped", 0) or 0),
             "account_switched": int(execution_status_counts.get("account_switched", 0) or 0),
@@ -484,7 +486,7 @@ class GrowthWorkflowService:
             return "failed"
         if value in {"pending_review", "approved"}:
             return "pending"
-        if value in {"pending", "running", "success", "failed", "skipped", "account_switched"}:
+        if value in {"pending", "running", "success", "submitted_unverified", "failed", "skipped", "account_switched"}:
             return value
         return "pending"
 
@@ -776,7 +778,7 @@ class GrowthWorkflowService:
     ) -> list[dict]:
         keyword = str(keyword or "").strip().lower()
         filtered = []
-        public_statuses = {"pending", "running", "success", "failed", "skipped", "account_switched"}
+        public_statuses = {"pending", "running", "success", "submitted_unverified", "failed", "skipped", "account_switched"}
         for row in rows or []:
             if status != "all":
                 if status in public_statuses:

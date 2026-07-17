@@ -392,6 +392,10 @@ class GrowthStorage:
                     action_type TEXT NOT NULL,
                     target_username TEXT NOT NULL,
                     status TEXT DEFAULT 'pending',
+                    execution_mode TEXT DEFAULT 'simulated',
+                    submission_state TEXT DEFAULT 'not_attempted',
+                    verification_state TEXT DEFAULT 'not_required',
+                    evidence_verified INTEGER DEFAULT 0,
                     profile_id TEXT DEFAULT '',
                     evidence_path TEXT DEFAULT '',
                     error_code TEXT DEFAULT '',
@@ -501,7 +505,18 @@ class GrowthStorage:
                     "updated_at": "TEXT DEFAULT ''",
                 },
             )
-            self._ensure_columns(conn, "outreach_executions", {"batch_id": "TEXT DEFAULT ''", "risk_gate_json": "TEXT DEFAULT ''"})
+            self._ensure_columns(
+                conn,
+                "outreach_executions",
+                {
+                    "batch_id": "TEXT DEFAULT ''",
+                    "risk_gate_json": "TEXT DEFAULT ''",
+                    "execution_mode": "TEXT DEFAULT 'simulated'",
+                    "submission_state": "TEXT DEFAULT 'not_attempted'",
+                    "verification_state": "TEXT DEFAULT 'not_required'",
+                    "evidence_verified": "INTEGER DEFAULT 0",
+                },
+            )
             self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''"})
             self._seed_default_action_templates(conn)
 
@@ -1306,6 +1321,10 @@ class GrowthStorage:
         error_code: str = "",
         error_message: str = "",
         risk_gate: Optional[Dict[str, Any]] = None,
+        execution_mode: str = "simulated",
+        submission_state: str = "not_attempted",
+        verification_state: str = "not_required",
+        evidence_verified: bool = False,
     ) -> str:
         now = utc_now_iso()
         item_id = new_id("oe")
@@ -1315,9 +1334,10 @@ class GrowthStorage:
             conn.execute(
                 """
                 INSERT INTO outreach_executions
-                (id, action_id, action_type, target_username, status, profile_id, evidence_path,
-                 error_code, error_message, risk_gate_json, batch_id, started_at, completed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, action_id, action_type, target_username, status, execution_mode, submission_state,
+                 verification_state, evidence_verified, profile_id, evidence_path, error_code, error_message,
+                 risk_gate_json, batch_id, started_at, completed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -1325,6 +1345,10 @@ class GrowthStorage:
                     action_type,
                     target_username,
                     status,
+                    str(execution_mode or "simulated"),
+                    str(submission_state or "not_attempted"),
+                    str(verification_state or "not_required"),
+                    1 if evidence_verified else 0,
                     profile_id,
                     evidence_path,
                     error_code,
@@ -2238,6 +2262,34 @@ class GrowthStorage:
                     """
                 ).fetchall()
         return {str(row["status"] or ""): int(row["count"] or 0) for row in rows}
+
+    def outreach_execution_truth_counts(self, batch_id: str = "") -> Dict[str, int]:
+        batch_id = str(batch_id or "").strip()
+        where = "WHERE batch_id=?" if batch_id else ""
+        args = (batch_id,) if batch_id else ()
+        with self.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT
+                    SUM(CASE WHEN execution_mode='simulated' AND status='success' THEN 1 ELSE 0 END) AS simulated_success,
+                    SUM(CASE WHEN execution_mode='dry_run' AND status='success' THEN 1 ELSE 0 END) AS dry_run_success,
+                    SUM(CASE WHEN execution_mode='preflight' AND status='success' THEN 1 ELSE 0 END) AS preflight_passed,
+                    SUM(CASE WHEN execution_mode='live' AND submission_state IN ('submitted', 'submitted_unverified', 'verified_success') THEN 1 ELSE 0 END) AS live_submitted,
+                    SUM(CASE WHEN execution_mode='live' AND submission_state='submitted_unverified' THEN 1 ELSE 0 END) AS submitted_unverified,
+                    SUM(CASE WHEN execution_mode='live'
+                              AND submission_state='verified_success'
+                              AND verification_state='verified'
+                              AND evidence_verified=1
+                              AND status='success'
+                             THEN 1 ELSE 0 END) AS live_verified,
+                    SUM(CASE WHEN execution_mode='live' AND status='failed' THEN 1 ELSE 0 END) AS live_failed
+                FROM outreach_executions
+                {where}
+                """,
+                args,
+            ).fetchone()
+        keys = ["simulated_success", "dry_run_success", "preflight_passed", "live_submitted", "submitted_unverified", "live_verified", "live_failed"]
+        return {key: int((row[key] if row else 0) or 0) for key in keys}
 
     def list_collection_batches(self, limit: int = 100, campaign_id: str = "") -> List[Dict[str, Any]]:
         with self.connect() as conn:
