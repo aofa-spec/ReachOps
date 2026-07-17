@@ -542,16 +542,19 @@ class ActionRouter:
             platform_result = self.executor_registry.execute(action, profile, rendered.rendered_text, dry_run=config.dry_run)
         if str(platform_result.get("status") or "") == "success":
             evidence_path = str(platform_result.get("evidence_path") or "")
-            if (
-                not config.dry_run
-                and not config.live_preflight_only
-                and config.require_execution_evidence
-                and not self._valid_execution_evidence(
+            live_success = not config.dry_run and not config.live_preflight_only and self._active_execution_mode == "live"
+            evidence_verified = False
+            if live_success:
+                evidence_verified = self._valid_execution_evidence(
                     evidence_path,
                     action,
                     expected_text=rendered.rendered_text,
                     allow_uri=not config.require_local_evidence_file,
                 )
+            if (
+                live_success
+                and config.require_execution_evidence
+                and not evidence_verified
             ):
                 account_health = self.health_manager.record_failure(profile, "LIVE_SUBMIT_EVIDENCE_MISSING", "live submit succeeded without evidence")
                 failed_result = self._record(
@@ -575,7 +578,7 @@ class ActionRouter:
                 attempt,
                 risk_gate={**pre_gate, "allowed": True},
                 execution_mode=self._active_execution_mode,
-                evidence_verified=self._active_execution_mode == "live",
+                evidence_verified=evidence_verified,
             )
             if daily_limit > 0:
                 self.storage.increment_daily_quota(profile_id, action_type, daily_limit)
@@ -875,7 +878,7 @@ class ActionRouter:
         if not value:
             return False
         if "://" in value:
-            return bool(allow_uri)
+            return False
         if not os.path.isfile(value):
             return False
         try:
@@ -1032,21 +1035,32 @@ class ActionRouter:
             verification_state=verification_state,
             evidence_verified=evidence_verified,
         )
+        verified_live_success = bool(
+            public_status == "success"
+            and execution_mode == "live"
+            and submission_state == "verified_success"
+            and verification_state == "verified"
+            and evidence_verified
+        )
         recorded_action_status = public_status
-        if public_status == "success" and execution_mode != "live":
+        if public_status == "success" and execution_mode == "live" and not verified_live_success:
+            recorded_action_status = "submitted_unverified"
+        elif public_status == "success" and execution_mode != "live":
             recorded_action_status = "approved" if str(action.get("status") or "") in {"approved", "retryable", "account_switched"} else "pending_review"
         self.storage.record_action_execution_result(
             action_id,
             execution_id,
-            "completed" if public_status == "success" and execution_mode == "live" else recorded_action_status,
+            "completed" if verified_live_success else recorded_action_status,
             error_code=error_code,
             error_message=message,
             retryable=public_status == "failed" and error_code in SWITCH_PROFILE_CODES,
         )
         if public_status in {"skipped", "failed"}:
             self.storage.update_action_status(action_id, public_status, message or error_code)
-        elif public_status == "success" and execution_mode == "live":
+        elif verified_live_success:
             self.storage.update_action_status(action_id, "success", "verified live action success")
+        elif public_status == "success" and execution_mode == "live":
+            self.storage.update_action_status(action_id, "submitted_unverified", "live submission pending evidence verification")
         elif public_status == "success":
             self.storage.update_action_status(
                 action_id,
@@ -1063,13 +1077,7 @@ class ActionRouter:
             "submission_state": submission_state,
             "verification_state": verification_state,
             "evidence_verified": bool(evidence_verified),
-            "counts_as_live_success": bool(
-                public_status == "success"
-                and execution_mode == "live"
-                and submission_state == "verified_success"
-                and verification_state == "verified"
-                and evidence_verified
-            ),
+            "counts_as_live_success": verified_live_success,
         }
         self.storage.log_event(f"action_router_{public_status}", action_id, event_payload)
         result = {

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 from datetime import datetime
@@ -237,28 +238,38 @@ def run_acceptance(args, platform_executor=None) -> dict[str, Any]:
     expected_profile_ids = {str(row.get("profile_id") or "") for row in profiles if str(row.get("profile_id") or "")}
     executor = platform_executor or build_platform_executor(args)
     executor_mode = "fixture" if platform_executor is not None else "platform_selenium"
-    summary = workflow.run_action_router(
-        profiles,
-        config=ActionRouterConfig(
-            max_workers=max(1, int(args.workers)),
-            per_profile_action_limit=max(1, int(args.per_profile_limit)),
-            max_switch_attempts=max(1, int(args.switch_attempts)),
-            action_types=["comment_reply", "follow_review", "dm_review"],
-            auto_approve=True,
-            auto_confirm=True,
-            dry_run=False,
-            live_preflight_only=False,
-            allow_live_submit=True,
-            per_profile_hour_limit=max(1, int(args.per_profile_hour_limit)),
-            per_profile_video_hour_limit=max(1, int(args.per_profile_video_hour_limit)),
-            require_authorization=True,
-            require_execution_evidence=True,
-            require_local_evidence_file=platform_executor is None,
-        ),
-        platform_executor=executor,
-        limit=max(1, int(args.limit)),
-        export_report=True,
-    )
+    previous_override = os.environ.get("REACHOPS_ALLOW_TEST_FIXTURE_LIVE")
+    if platform_executor is not None:
+        os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = "1"
+    try:
+        summary = workflow.run_action_router(
+            profiles,
+            config=ActionRouterConfig(
+                max_workers=max(1, int(args.workers)),
+                per_profile_action_limit=max(1, int(args.per_profile_limit)),
+                max_switch_attempts=max(1, int(args.switch_attempts)),
+                action_types=["comment_reply", "follow_review", "dm_review"],
+                auto_approve=True,
+                auto_confirm=True,
+                dry_run=False,
+                live_preflight_only=False,
+                allow_live_submit=True,
+                per_profile_hour_limit=max(1, int(args.per_profile_hour_limit)),
+                per_profile_video_hour_limit=max(1, int(args.per_profile_video_hour_limit)),
+                require_authorization=True,
+                require_execution_evidence=True,
+                require_local_evidence_file=platform_executor is None,
+            ),
+            platform_executor=executor,
+            limit=max(1, int(args.limit)),
+            export_report=True,
+        )
+    finally:
+        if platform_executor is not None:
+            if previous_override is None:
+                os.environ.pop("REACHOPS_ALLOW_TEST_FIXTURE_LIVE", None)
+            else:
+                os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = previous_override
     results = list(summary.get("results") or [])
     success_types = {str(row.get("action_type") or "") for row in results if row.get("status") == "success"}
     successful_action_ids = {str(row.get("action_id") or "") for row in results if row.get("status") == "success"}

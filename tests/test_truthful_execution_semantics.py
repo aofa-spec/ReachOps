@@ -83,10 +83,11 @@ class TruthfulExecutionSemanticsTest(unittest.TestCase):
         self.profile_a = {"profile_id": "1001", "group_name": "United States"}
         self.profile_b = {"profile_id": "1002", "group_name": "United States"}
 
-    def add_action(self, action_id: str = "action-1") -> dict:
+    def add_action(self, action_id: str = "action-1", lead_id: str = "") -> dict:
+        lead_id = lead_id or f"lead-{action_id}"
         item = ActionQueueItem(
             id=action_id,
-            lead_id=f"lead-{action_id}",
+            lead_id=lead_id,
             action_type="comment_reply",
             target_username="buyer",
             target_url="https://www.tiktok.com/@creator/video/123",
@@ -96,6 +97,17 @@ class TruthfulExecutionSemanticsTest(unittest.TestCase):
         )
         self.storage.upsert_action_queue_item(item)
         return next(row for row in self.storage.list_action_queue(limit=50) if row["id"] == action_id)
+
+    def add_lead_action(self, action_id: str = "action-1") -> tuple[dict, str]:
+        lead_id, _created = self.storage.upsert_operation_lead(
+            "candidate-1",
+            "comment_intent",
+            "high",
+            90,
+            "truthfulness regression",
+            "https://www.tiktok.com/@creator/video/123",
+        )
+        return self.add_action(action_id=action_id, lead_id=lead_id), lead_id
 
     def router(self, executor) -> ActionRouter:
         return ActionRouter(
@@ -220,6 +232,64 @@ class TruthfulExecutionSemanticsTest(unittest.TestCase):
         self.assertEqual(truth["live_verified"], 1)
         saved_action = next(row for row in self.storage.list_action_queue(limit=50) if row["id"] == action["id"])
         self.assertIn(saved_action["status"], {"success", "completed"})
+
+    def test_optional_live_success_without_evidence_stays_submitted_unverified(self):
+        action, lead_id = self.add_lead_action()
+        executor = AlwaysSuccessExecutor("")
+        router = self.router(executor)
+        result = router.run(
+            [self.profile_a],
+            config=ActionRouterConfig(
+                max_workers=1,
+                dry_run=False,
+                allow_live_submit=True,
+                require_authorization=False,
+                require_execution_evidence=False,
+            ),
+            limit=1,
+        )
+        self.assertEqual(result["success"], 1)
+        execution = self.storage.list_outreach_executions(limit=1)[0]
+        self.assertEqual(execution["execution_mode"], "live")
+        self.assertEqual(execution["submission_state"], "submitted_unverified")
+        self.assertEqual(execution["verification_state"], "pending")
+        self.assertEqual(int(execution["evidence_verified"]), 0)
+        truth = self.storage.outreach_execution_truth_counts()
+        self.assertEqual(truth["live_submitted"], 1)
+        self.assertEqual(truth["live_verified"], 0)
+        saved_action = next(row for row in self.storage.list_action_queue(limit=50) if row["id"] == action["id"])
+        self.assertNotIn(saved_action["status"], {"success", "completed"})
+        self.assertEqual(saved_action["status"], "submitted_unverified")
+        saved_lead = next(row for row in self.storage.list_operation_leads(limit=50) if row["id"] == lead_id)
+        self.assertNotEqual(saved_lead["lifecycle_stage"], "contacted")
+
+    def test_generated_evidence_stub_cannot_verify_live_success(self):
+        action = self.add_action()
+        executor = AlwaysSuccessExecutor("")
+        router = self.router(executor)
+        result = router.run(
+            [self.profile_a],
+            config=ActionRouterConfig(
+                max_workers=1,
+                dry_run=False,
+                allow_live_submit=True,
+                require_authorization=False,
+                require_execution_evidence=False,
+                require_local_evidence_file=False,
+            ),
+            limit=1,
+        )
+        self.assertEqual(result["success"], 1)
+        execution = self.storage.list_outreach_executions(limit=1)[0]
+        self.assertTrue(str(execution["evidence_path"]).startswith("evidence://"))
+        self.assertEqual(execution["submission_state"], "submitted_unverified")
+        self.assertEqual(execution["verification_state"], "pending")
+        self.assertEqual(int(execution["evidence_verified"]), 0)
+        truth = self.storage.outreach_execution_truth_counts()
+        self.assertEqual(truth["live_submitted"], 1)
+        self.assertEqual(truth["live_verified"], 0)
+        saved_action = next(row for row in self.storage.list_action_queue(limit=50) if row["id"] == action["id"])
+        self.assertNotIn(saved_action["status"], {"success", "completed"})
 
 
 if __name__ == "__main__":
