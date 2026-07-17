@@ -1902,6 +1902,50 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         finally:
             reachops_web_ui.GROUP_CACHE = old_cache
 
+    def test_start_preview_blocks_repeated_account_recheck_until_confirmed(self):
+        old_cache = reachops_web_ui.GROUP_CACHE
+        try:
+            reachops_web_ui.GROUP_CACHE = {
+                "loaded_at": time.time(),
+                "groups": [{"name": "获客分组测试", "count": 11, "count_known": True}],
+                "error": "",
+                "stale_cache": False,
+                "background_refresh": False,
+            }
+
+            blocked = reachops_web_ui.build_start_preview(
+                {
+                    "target": "https://www.tiktok.com/@ayieinaussie/photo/7646939533241601301",
+                    "group": "获客分组测试",
+                    "mode": "preflight",
+                    "volume": "quick",
+                    "profiles": 3,
+                    "accountGateBlocked": True,
+                }
+            )
+            confirmed = reachops_web_ui.build_start_preview(
+                {
+                    "target": "https://www.tiktok.com/@ayieinaussie/photo/7646939533241601301",
+                    "group": "获客分组测试",
+                    "mode": "preflight",
+                    "volume": "quick",
+                    "profiles": 3,
+                    "accountGateBlocked": True,
+                    "accountRepairConfirmed": True,
+                }
+            )
+
+            self.assertFalse(blocked["start_allowed"])
+            self.assertEqual(blocked["gate_state"], "账号待修复")
+            self.assertIn("account_repair_required", blocked["blockers"])
+            self.assertFalse(blocked["execution_plan"]["runtime"]["force_account_recheck"])
+            self.assertTrue(blocked["no_browser_started"])
+            self.assertTrue(confirmed["start_allowed"])
+            self.assertEqual(confirmed["gate_state"], "自动重检账号")
+            self.assertTrue(confirmed["execution_plan"]["runtime"]["force_account_recheck"])
+        finally:
+            reachops_web_ui.GROUP_CACHE = old_cache
+
     def test_web_ui_only_trusts_local_api_hosts(self):
         self.assertTrue(is_local_api_host("127.0.0.1:8766"))
         self.assertTrue(is_local_api_host("localhost"))
@@ -2938,11 +2982,13 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             same_ok, same_payload = reachops_web_ui.validate_account_repair_for_start("United States", False)
             other_ok, other_payload = reachops_web_ui.validate_account_repair_for_start("Canada", False)
 
-        self.assertTrue(same_ok)
-        self.assertEqual(same_payload["status"], "blocked_by_accounts")
+        self.assertFalse(same_ok)
+        self.assertEqual(same_payload["status"], "rejected")
+        self.assertEqual(same_payload["readiness"], "blocked_by_accounts")
+        self.assertEqual(same_payload["error"], "account_repair_required")
         self.assertEqual(same_payload["profile_group"], "United States")
-        self.assertTrue(same_payload["force_account_recheck"])
-        self.assertTrue(same_payload["auto_account_recheck"])
+        self.assertFalse(same_payload["force_account_recheck"])
+        self.assertFalse(same_payload["auto_account_recheck"])
         self.assertTrue(same_payload["runtime_auto_grouping"])
         self.assertEqual(same_payload["previous_error"], "account_repair_required")
         self.assertEqual(same_payload["account_plan_markdown_path"], "/tmp/us_account_plan.md")
@@ -2996,8 +3042,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             ):
                 ok, payload = reachops_web_ui.validate_account_repair_for_start("United States", False)
 
-        self.assertTrue(ok)
-        self.assertTrue(payload["force_account_recheck"])
+        self.assertFalse(ok)
+        self.assertEqual(payload["error"], "account_repair_required")
+        self.assertFalse(payload["force_account_recheck"])
         self.assertTrue(payload["runtime_auto_grouping"])
         summary = payload["account_repair_summary"]
         self.assertEqual(summary["status"], "ok")
@@ -3037,10 +3084,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         ):
             ok, payload = reachops_web_ui.validate_account_repair_for_start("United States", False)
 
-        self.assertTrue(ok)
+        self.assertFalse(ok)
+        self.assertEqual(payload["error"], "account_repair_required")
         self.assertEqual(payload["previous_error"], "account_repair_required")
         self.assertIn("旧账号修复结果已失效", payload["message"])
-        self.assertTrue(payload["force_account_recheck"])
+        self.assertFalse(payload["force_account_recheck"])
         self.assertTrue(payload["runtime_auto_grouping"])
         self.assertTrue(payload["account_repair_apply"]["stale"])
         self.assertEqual(payload["account_repair_apply"]["stale_reason"], "newer_account_repair_plan_for_current_batch")

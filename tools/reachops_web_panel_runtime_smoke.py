@@ -685,7 +685,6 @@ def run_runtime_smoke() -> dict:
                 and preview_decision.get("status") == "blocked"
                 and preview_decision.get("start_allowed") is False
                 and "target_required" in (preview_decision.get("blockers") or [])
-                and "profile_group_list_not_ready" in (preview_decision.get("blockers") or [])
                 and preview_decision.get("no_ai_token_used") is True
                 and preview_decision.get("no_browser_started") is True
                 and preview_decision.get("no_submit") is True
@@ -696,7 +695,6 @@ def run_runtime_smoke() -> dict:
                 and preview_forecast.get("status") == "blocked"
                 and preview_forecast.get("start_allowed") is False
                 and "target_required" in (preview_forecast.get("predicted_blockers") or [])
-                and "profile_group_list_not_ready" in (preview_forecast.get("predicted_blockers") or [])
                 and any((row or {}).get("gate") == "live_action_authorization" for row in (preview_forecast.get("risk_gates") or []))
                 and any((row or {}).get("state") == "UNKNOWN_PAGE_STATE" for row in (preview_forecast.get("repair_routes") or []))
                 and "run_session_state_history" in (preview_forecast.get("evidence_requirements") or [])

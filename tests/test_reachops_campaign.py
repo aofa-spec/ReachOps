@@ -10873,8 +10873,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             service = GrowthIntelligenceService(base_dir=tmp)
             group_manager = FakeProfileGroupManager()
+            cleanup_calls = []
             with patch("ReachOps.workbench.profile_preflight.ThreadPoolExecutor", FakePool), patch(
                 "ReachOps.workbench.profile_preflight.as_completed", fake_as_completed
+            ), patch(
+                "ReachOps.workbench.profile_preflight.get_workbench_browser_adapter",
+                return_value=type(
+                    "CleanupAdapter",
+                    (),
+                    {"force_close_profile": lambda _self, profile_id, reason: cleanup_calls.append((profile_id, reason))},
+                )(),
             ):
                 checker = ProfilePreflightChecker(
                     service.storage,
@@ -10901,6 +10909,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(len(pools[0].submitted), 1)
             self.assertTrue(pools[0].future.cancelled)
             self.assertEqual(pools[0].shutdown_calls, [{"wait": False, "cancel_futures": True}])
+            self.assertEqual(cleanup_calls, [("12346", "profile_preflight_timeout")])
             self.assertEqual(summary["errors"]["PROFILE_PREFLIGHT_TIMEOUT"], 1)
             self.assertEqual(group_manager.moves, [])
             health = {row["profile_id"]: row for row in service.storage.list_profile_health(limit=10)}

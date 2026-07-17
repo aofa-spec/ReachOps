@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from ReachOps.intelligence.storage import GrowthStorage
+from ReachOps.adapters.browser_manager import get_workbench_browser_adapter
 from ReachOps.adapters.ix_profile_group_manager import IxProfileGroupManager
 
 from .account_health_manager import AccountHealthManager
@@ -86,6 +87,7 @@ class ProfilePreflightChecker:
         except FuturesTimeout:
             pass
         finally:
+            timed_out_profile_ids: list[str] = []
             for future, profile in futures.items():
                 if future in completed:
                     continue
@@ -94,6 +96,7 @@ class ProfilePreflightChecker:
                 with self._lock:
                     if profile_id:
                         self._timed_out_profile_ids.add(profile_id)
+                        timed_out_profile_ids.append(profile_id)
                 result = self._record(
                     profile,
                     False,
@@ -104,6 +107,7 @@ class ProfilePreflightChecker:
                 )
                 with self._lock:
                     results.append(result)
+            self._force_close_timed_out_profiles(timed_out_profile_ids)
             pool.shutdown(wait=False, cancel_futures=True)
         summary = self._summary(rows, results)
         self.storage.log_event("profile_preflight_completed", "", summary)
@@ -172,6 +176,34 @@ class ProfilePreflightChecker:
     def retained_sessions(self) -> dict[str, Any]:
         with self._lock:
             return dict(self._retained_sessions)
+
+    def _force_close_timed_out_profiles(self, profile_ids: list[str]):
+        unique_ids = [profile_id for profile_id in dict.fromkeys(str(item or "").strip() for item in profile_ids) if profile_id]
+        if not unique_ids:
+            return
+        adapter = get_workbench_browser_adapter()
+        closed: list[str] = []
+        failed: list[dict[str, str]] = []
+        for profile_id in unique_ids:
+            try:
+                force_close = getattr(adapter, "force_close_profile", None)
+                if callable(force_close):
+                    force_close(profile_id, "profile_preflight_timeout")
+                else:
+                    adapter.release_profile(profile_id, "profile_preflight_timeout")
+                closed.append(profile_id)
+            except Exception as exc:
+                failed.append({"profile_id": profile_id, "error": str(exc)})
+        self.storage.log_event(
+            "profile_preflight_timeout_cleanup",
+            "",
+            {
+                "profile_ids": unique_ids,
+                "closed_profile_ids": closed,
+                "failed": failed,
+                "close_action": "force_close_profile_after_preflight_timeout",
+            },
+        )
 
     def _retain_successful_session(self, profile_id: str, release_handle: Any, driver: Any):
         if not profile_id:

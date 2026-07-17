@@ -222,21 +222,42 @@ def build_report(root: str | Path = ROOT_DIR) -> dict[str, Any]:
             ],
         ),
         _continuation_case(
-            "account_gate_runtime_auto_recheck",
+            "account_gate_repair_required_blocks_repeated_recheck",
             source_ok=_contains_all(
                 web_ui,
                 [
-                    "web_ui_account_gate_auto_recheck",
-                    "runtime_preflight_auto_grouping",
-                    "runtime_auto_grouping",
+                    "web_ui_account_gate_rejected",
+                    "account_repair_required_before_recheck",
+                    "auto_account_recheck",
                     "force_account_recheck",
+                    "no_browser_started",
+                    "no_submit",
+                ],
+            ),
+            test_ok="test_account_repair_gate_blocks_only_matching_group" in http_tests
+            and "test_start_preview_blocks_repeated_account_recheck_until_confirmed" in http_tests
+            and "account_repair_required" in http_tests,
+            next_action="Block repeated real account recheck after a zero-available account gate until the operator confirms repair or applies the repair plan.",
+            previous_error_code="account_repair_required",
+            force_account_recheck=False,
+            runtime_auto_grouping=True,
+            evidence=["tools/reachops_web_ui.py", "tests/test_reachops_client_acceptance_status.py"],
+        ),
+        _continuation_case(
+            "account_gate_confirmed_runtime_recheck",
+            source_ok=_contains_all(
+                web_ui,
+                [
+                    "web_ui_account_recheck_confirmed",
+                    "operator_confirmed_account_repair",
                     "REACHOPS_FORCE_ACCOUNT_RECHECK",
+                    "REACHOPS_QUARANTINE_FAILED_PROFILES",
                 ],
             ),
             test_ok="test_start_handler_allows_account_gate_runtime_recheck" in http_tests
             and "REACHOPS_FORCE_ACCOUNT_RECHECK" in http_tests
             and "runtime_auto_grouping" in http_tests,
-            next_action="Start bounded runtime preflight so logged-in accounts continue and blocked accounts are skipped or quarantined.",
+            next_action="After explicit repair confirmation, start bounded runtime preflight so logged-in accounts continue and blocked accounts are skipped or quarantined.",
             previous_error_code="account_repair_required",
             force_account_recheck=True,
             runtime_auto_grouping=True,

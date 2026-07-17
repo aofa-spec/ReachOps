@@ -1813,7 +1813,7 @@ def build_start_preview(payload: dict | None) -> dict:
     account_gate_blocked = truthy(payload.get("account_gate_blocked", payload.get("accountGateBlocked")))
     group_list_ready = start_preview_group_list_ready(payload, profile_group)
     group_count_notice = selected_group_count_runtime_notice(GROUP_CACHE if GROUP_CACHE.get("groups") else {}, profile_group) if group_list_ready else {}
-    force_account_recheck = account_gate_blocked
+    force_account_recheck = account_gate_blocked and account_repair_confirmed
     submit_policy = "真实评论提交" if mode == "live_comment" and live_confirmed else "预检，不提交"
     gate_state = "分组未刷新"
     if group_list_ready:
@@ -1821,7 +1821,7 @@ def build_start_preview(payload: dict | None) -> dict:
     if mode == "live_comment" and not live_confirmed:
         gate_state = "需确认真实评论"
     if account_gate_blocked and group_list_ready:
-        gate_state = "自动重检账号"
+        gate_state = "账号待修复" if not account_repair_confirmed else "自动重检账号"
     blockers: list[str] = []
     next_actions: list[str] = []
     if not target.strip():
@@ -1835,7 +1835,10 @@ def build_start_preview(payload: dict | None) -> dict:
     if mode == "live_comment" and not live_confirmed:
         blockers.append("live_comment_confirmation_required")
         next_actions.append("真实评论前必须勾选授权确认。")
-    if account_gate_blocked and group_list_ready:
+    if account_gate_blocked and group_list_ready and not account_repair_confirmed:
+        blockers.append("account_repair_required")
+        next_actions.append("当前分组最近一次账号预检已阻断；先修复账号或应用账号修复计划，再勾选允许重新预检。")
+    elif account_gate_blocked and group_list_ready:
         next_actions.append("启动后会重新读取配置列表，自动跳过或移组未登录账号，并继续尝试后续账号。")
     start_allowed = not blockers
     if start_allowed:
@@ -6682,29 +6685,31 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
         account_repair_summary = summarize_account_repair_plan(plan_paths[3] or plan_paths[1])
         stale_repair = account_repair_apply.get("stale") is True
         append_web_log(
-            f"WARN   web_ui_account_gate_auto_recheck group={profile_group} "
-            "policy=runtime_preflight_auto_grouping"
+            f"WARN   web_ui_account_gate_rejected group={profile_group} "
+            "policy=account_repair_required_before_recheck"
         )
         payload = {
-            "status": status,
+            "status": "rejected",
+            "readiness": status,
+            "error": "account_repair_required",
             "profile_group": profile_group,
             "profile_available": profile_available,
             "same_group": same_group,
-            "force_account_recheck": True,
-            "auto_account_recheck": True,
+            "force_account_recheck": False,
+            "auto_account_recheck": False,
             "runtime_auto_grouping": True,
             "previous_error": "account_repair_required",
             "message": (
-                "旧账号修复结果已失效；本次不阻断启动，将由运行时重新筛选账号并自动移组。"
+                "旧账号修复结果已失效；为避免重复打开账号，已在启动前阻断。请先修复或应用账号修复计划，再勾选允许重新预检。"
                 if stale_repair
-                else "当前分组最近一次预检没有可用账号；本次不阻断启动，将由运行时重新筛选账号并自动移组。"
+                else "当前分组最近一次预检没有可用账号；为避免重复打开账号，已在启动前阻断。请先修复或应用账号修复计划，再勾选允许重新预检。"
             ),
             "blockers": blockers,
             "next_actions": next_actions
             or [
-                "程序会在执行中打开候选配置并检测 TikTok 登录态。",
-                "未登录、验证码、代理失败或访问门禁账号会按运行时策略移入隔离分组。",
-                "如果没有任何可用账号，任务会有界终止为 blocked_by_accounts。",
+                "先修复当前分组中未登录、验证码、代理失败或访问门禁账号。",
+                "可应用账号修复计划，将硬阻断账号移入隔离分组。",
+                "确认账号池已修复后勾选允许重新预检，再启动真实 M3。",
             ],
             "account_repair_apply": account_repair_apply,
             "account_repair_plan_paths": visible_paths,
@@ -6716,7 +6721,7 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
             "no_browser_started": True,
             "no_submit": True,
         }
-        return True, payload
+        return False, payload
     if blocked and account_repair_confirmed:
         append_web_log(
             f"WARN   web_ui_account_recheck_confirmed group={profile_group} "
