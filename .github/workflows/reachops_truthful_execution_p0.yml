@@ -4,9 +4,14 @@ on:
   push:
     branches:
       - agent/reachops-truthful-execution-p0
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   apply-and-verify:
