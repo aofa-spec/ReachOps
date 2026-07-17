@@ -100,7 +100,7 @@ jobs:
           git diff --check
           test -n "$(git status --porcelain)"
 
-      - name: Remove one-shot migration infrastructure
+      - name: Remove one-shot migration infrastructure from worktree
         run: |
           git rm tools/apply_truthful_execution_p0.py
           git rm tools/apply_truthful_execution_p0_compat.py
@@ -119,7 +119,6 @@ jobs:
           git add tools/reachops_operator_pressure.py
           git add tests/test_reachops_campaign.py
           git add tests/test_truthful_execution_semantics.py
-          git add -u tools .github/workflows
           git diff --cached --check
           git commit -m "Enforce truthful execution semantics"
           git push origin HEAD:agent/reachops-truthful-execution-p0
