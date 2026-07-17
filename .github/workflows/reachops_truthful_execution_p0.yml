@@ -1,0 +1,74 @@
+name: ReachOps Truthful Execution P0
+
+on:
+  push:
+    branches:
+      - agent/reachops-truthful-execution-p0
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      REACHOPS_REPAIR_BACKOFF_MAX_SECONDS: "0"
+      REACHOPS_BROWSER_FALLBACK_LEGACY: "0"
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/reachops-truthful-execution-p0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Apply scoped migration
+        run: python tools/apply_truthful_execution_p0.py
+
+      - name: Compile changed Python
+        run: |
+          python -m py_compile \
+            ReachOps/workbench/action_router.py \
+            ReachOps/intelligence/storage.py \
+            ReachOps/workbench/workflow_service.py \
+            tests/test_truthful_execution_semantics.py
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run truthful execution regression tests
+        run: python -m unittest -v tests.test_truthful_execution_semantics
+
+      - name: Run existing ReachOps regression suite
+        run: timeout 20m python -m unittest -v tests.test_reachops_campaign
+
+      - name: Validate diff
+        run: |
+          git diff --check
+          test -n "$(git status --porcelain)"
+
+      - name: Remove one-shot migration helpers
+        run: |
+          git rm tools/apply_truthful_execution_p0.py
+          git rm .github/workflows/reachops_truthful_execution_p0.yml
+
+      - name: Commit verified implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ReachOps/workbench/action_router.py
+          git add ReachOps/intelligence/storage.py
+          git add ReachOps/workbench/workflow_service.py
+          git add tests/test_truthful_execution_semantics.py
+          git diff --cached --check
+          git commit -m "Enforce truthful execution semantics"
+          git push origin HEAD:agent/reachops-truthful-execution-p0
