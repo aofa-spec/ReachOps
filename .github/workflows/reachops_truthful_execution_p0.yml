@@ -51,7 +51,20 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Run truthful execution regression tests
-        run: python -m unittest -v tests.test_truthful_execution_semantics
+        shell: bash
+        run: |
+          set +e
+          python -m unittest -v tests.test_truthful_execution_semantics 2>&1 | tee truthful-execution-tests.log
+          status=${PIPESTATUS[0]}
+          exit "$status"
+
+      - name: Upload truthful execution failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: truthful-execution-test-failure
+          path: truthful-execution-tests.log
+          if-no-files-found: error
 
       - name: Run existing ReachOps regression suite
         run: timeout 20m python -m unittest -v tests.test_reachops_campaign
