@@ -127,7 +127,7 @@ class TruthfulExecutionSemanticsTest(unittest.TestCase):
             config=ActionRouterConfig(max_workers=1, dry_run=True, auto_approve=False),
             limit=1,
         )
-        self.assertEqual(summary["status_counts"].get("success"), 1)
+        self.assertEqual(summary["success"], 1)
         execution = self.storage.list_outreach_executions(limit=1)[0]
         self.assertEqual(execution["execution_mode"], "simulated")
         self.assertEqual(execution["submission_state"], "not_attempted")
@@ -179,8 +179,8 @@ class TruthfulExecutionSemanticsTest(unittest.TestCase):
             limit=1,
         )
         self.assertEqual(executor.calls, 1)
-        self.assertEqual(summary["status_counts"].get("failed"), 1)
-        self.assertEqual(summary["status_counts"].get("account_switched", 0), 0)
+        self.assertEqual(summary["failed"], 1)
+        self.assertEqual(summary["account_switched"], 0)
         events = self.storage.list_recent_events(event="action_router_run_circuit_breaker", limit=10)
         self.assertEqual(len(events), 1)
 
@@ -209,7 +209,7 @@ class TruthfulExecutionSemanticsTest(unittest.TestCase):
             ),
             limit=1,
         )
-        self.assertEqual(result["status_counts"].get("success"), 1)
+        self.assertEqual(result["success"], 1)
         execution = self.storage.list_outreach_executions(limit=1)[0]
         self.assertEqual(execution["execution_mode"], "live")
         self.assertEqual(execution["submission_state"], "verified_success")
