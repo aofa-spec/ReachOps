@@ -799,15 +799,15 @@ ReachOps v1 is customer-deliverable only when all are evidenced:
 
 Each milestone report must include:
 
-A. Verified facts  
-B. Files and schema changed  
-C. Migration and rollback  
-D. Tests and exact results  
-E. Evidence/artifact paths  
-F. Privacy and secret scan  
-G. External blockers  
-H. Execution-state changes  
-I. Branch, commit, and PR  
+A. Verified facts
+B. Files and schema changed
+C. Migration and rollback
+D. Tests and exact results
+E. Evidence/artifact paths
+F. Privacy and secret scan
+G. External blockers
+H. Execution-state changes
+I. Branch, commit, and PR
 J. Next autonomous action
 
 No report may say simply “completed” without supporting code, tests, records, or evidence.

@@ -130,13 +130,13 @@ Environment-blocked commands must be reported with command, exit code, and error
 
 Every completed task must report:
 
-A. Verified facts  
-B. Code and schema changes  
-C. Tests and exact results  
-D. Evidence and artifact paths  
-E. Safety/privacy checks  
-F. External-environment blockers  
-G. Execution-state update  
-H. Commit SHA / branch / PR  
-I. Rollback method  
+A. Verified facts
+B. Code and schema changes
+C. Tests and exact results
+D. Evidence and artifact paths
+E. Safety/privacy checks
+F. External-environment blockers
+G. Execution-state update
+H. Commit SHA / branch / PR
+I. Rollback method
 J. Next highest-priority action
