@@ -32,6 +32,11 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
+def legacy_run_id_for_batch(batch_id: str) -> str:
+    safe_batch = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in str(batch_id or "").strip())
+    return f"legacy_run_{safe_batch or 'unknown'}"
+
+
 class GrowthStorage:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -659,14 +664,27 @@ class GrowthStorage:
         for row in rows:
             batch_id = str(row["id"] or "")
             run_id = str(row["run_id"] or "") if "run_id" in row.keys() else ""
-            run_id = run_id or new_id("run")
+            is_legacy_backfill = not run_id
+            run_id = run_id or legacy_run_id_for_batch(batch_id)
             campaign_id = str(row["campaign_id"] or "")
             created_at = str(row["created_at"] or now)
             started_at = row["started_at"] or created_at
             updated_at = str(row["updated_at"] or created_at)
             completed_at = row["completed_at"]
             status = str(row["status"] or "running")
-            run_key = f"{campaign_id or 'uncampaign'}:{batch_id}"
+            run_key = f"{'legacy' if is_legacy_backfill else campaign_id or 'uncampaign'}:{batch_id}"
+            try:
+                config = json.loads(str(row["config_json"] or "{}"))
+            except Exception:
+                config = {}
+            if is_legacy_backfill:
+                config.update(
+                    {
+                        "legacy_backfill": True,
+                        "legacy_handling_strategy": "deterministic_legacy_run_id_for_existing_batch_only",
+                        "legacy_original_batch_id": batch_id,
+                    }
+                )
             conn.execute(
                 """
                 INSERT OR IGNORE INTO campaign_runs
@@ -681,7 +699,7 @@ class GrowthStorage:
                     run_key,
                     status,
                     str(row["profile_group"] or ""),
-                    str(row["config_json"] or "{}"),
+                    json.dumps(config, ensure_ascii=False),
                     started_at,
                     completed_at,
                     created_at,
@@ -1224,6 +1242,9 @@ class GrowthStorage:
                 "comment_observations": [dict(row) for row in conn.execute("SELECT * FROM comment_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "candidate_observations": [dict(row) for row in conn.execute("SELECT * FROM candidate_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "lead_decisions": [dict(row) for row in conn.execute("SELECT * FROM lead_decisions WHERE run_id=? ORDER BY decision_version ASC, created_at ASC", (run,)).fetchall()],
+                "outreach_executions": [dict(row) for row in conn.execute("SELECT * FROM outreach_executions WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
+                "growth_events": [dict(row) for row in conn.execute("SELECT * FROM growth_events WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
+                "growth_errors": [dict(row) for row in conn.execute("SELECT * FROM growth_errors WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
             }
 
     def upsert_campaign_strategy_overrides(self, campaign_id: str, overrides: Dict[str, Any], updated_by: str = "") -> Dict[str, Any]:

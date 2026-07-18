@@ -1,3 +1,5 @@
+import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,38 +34,39 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(reopened.count_table("campaign_runs"), 2)
         self.assertEqual(reopened.run_id_for_batch(first.id), first.run_id)
 
-    def test_observations_decisions_actions_and_evidence_are_run_scoped(self):
+    def test_campaign_isolation_for_runs_and_observations(self):
+        first_campaign = self.storage.create_campaign("keyword", "serum")
+        second_campaign = self.storage.create_campaign("keyword", "supplement")
+        first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=first_campaign.id)
+        second = self.storage.create_collection_batch(1, profile_group="US", campaign_id=second_campaign.id)
+
+        first_source = self.storage.record_source_observation(
+            first.run_id,
+            source_id="shared-source",
+            source_type="keyword",
+            source_value="shared",
+            observation_key="planned",
+            payload={"campaign": "first"},
+        )
+        second_source = self.storage.record_source_observation(
+            second.run_id,
+            source_id="shared-source",
+            source_type="keyword",
+            source_value="shared",
+            observation_key="planned",
+            payload={"campaign": "second"},
+        )
+
+        self.assertNotEqual(first_source, second_source)
+        self.assertEqual(len(self.storage.list_campaign_runs(campaign_id=first_campaign.id)), 1)
+        self.assertEqual(len(self.storage.list_campaign_runs(campaign_id=second_campaign.id)), 1)
+        self.assertEqual(self.storage.list_observations_for_run(first.run_id)["source_observations"][0]["campaign_id"], first_campaign.id)
+        self.assertEqual(self.storage.list_observations_for_run(second.run_id)["source_observations"][0]["campaign_id"], second_campaign.id)
+
+    def test_run_isolation_for_observations_decisions_actions_and_evidence(self):
         campaign = self.storage.create_campaign("keyword", "serum")
         first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
         second = self.storage.create_collection_batch(1, profile_group="CA", campaign_id=campaign.id)
-
-        source_first = self.storage.record_source_observation(
-            first.run_id,
-            source_id="source-1",
-            source_type="keyword",
-            source_value="serum",
-            observation_key="planned",
-            payload={"priority": 1},
-        )
-        duplicate_first = self.storage.record_source_observation(
-            first.run_id,
-            source_id="source-1",
-            source_type="keyword",
-            source_value="serum",
-            observation_key="planned",
-            payload={"priority": 99},
-        )
-        source_second = self.storage.record_source_observation(
-            second.run_id,
-            source_id="source-1",
-            source_type="keyword",
-            source_value="serum",
-            observation_key="planned",
-            payload={"priority": 2},
-        )
-
-        self.assertEqual(source_first, duplicate_first)
-        self.assertNotEqual(source_first, source_second)
 
         self.storage.set_active_collection_batch(first.id)
         candidate, created = self.storage.upsert_candidate(
@@ -93,6 +96,20 @@ class CampaignRunObservationTests(unittest.TestCase):
         )
         self.assertFalse(created_again)
         self.assertEqual(candidate.id, same_candidate.id)
+
+        content_first = self.storage.record_content_observation(
+            first.run_id,
+            content_id="content-1",
+            observation_key="content_seen",
+            payload={"video_url": "https://example.test/video/1"},
+        )
+        content_second = self.storage.record_content_observation(
+            second.run_id,
+            content_id="content-1",
+            observation_key="content_seen",
+            payload={"video_url": "https://example.test/video/1"},
+        )
+        self.assertNotEqual(content_first, content_second)
 
         comment_first = self.storage.record_comment_observation(
             first.run_id,
@@ -149,6 +166,7 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertNotEqual(first_decision, second_decision)
 
         self.storage.set_active_collection_batch(first.id)
+        self.storage.log_error("PRECHECK_NOTE", "redacted fixture error", source_id="source-1")
         lead_id, _ = self.storage.upsert_operation_lead(candidate.id, "high_intent", "high", 80, "first run")
         action_id, _ = self.storage.upsert_action_queue_item(
             ActionQueueItem(
@@ -166,6 +184,7 @@ class CampaignRunObservationTests(unittest.TestCase):
             status="success",
             execution_mode="preflight",
             submission_state="not_attempted",
+            evidence_path="/tmp/reachops/redacted/evidence.png",
         )
 
         action = next(row for row in self.storage.list_action_queue(limit=10) if row["id"] == action_id)
@@ -178,15 +197,147 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(self.storage.list_outreach_executions(limit=10, run_id=second.run_id)), 0)
         self.assertEqual(self.storage.outreach_execution_status_counts(run_id=first.run_id), {"success": 1})
         self.assertEqual(self.storage.outreach_execution_status_counts(run_id=second.run_id), {})
+        self.assertEqual(self.storage.outreach_execution_truth_counts(run_id=first.run_id)["preflight_passed"], 1)
+        self.assertEqual(self.storage.outreach_execution_truth_counts(run_id=second.run_id)["preflight_passed"], 0)
 
         first_trace = self.storage.list_observations_for_run(first.run_id)
         second_trace = self.storage.list_observations_for_run(second.run_id)
-        self.assertEqual(len(first_trace["source_observations"]), 1)
-        self.assertEqual(len(second_trace["source_observations"]), 1)
+        self.assertEqual(len(first_trace["content_observations"]), 1)
+        self.assertEqual(len(second_trace["content_observations"]), 1)
+        self.assertEqual(len(first_trace["comment_observations"]), 1)
+        self.assertEqual(len(second_trace["comment_observations"]), 1)
+        self.assertEqual(len(first_trace["candidate_observations"]), 1)
+        self.assertEqual(len(second_trace["candidate_observations"]), 1)
         self.assertEqual(len(first_trace["lead_decisions"]), 1)
         self.assertEqual(len(second_trace["lead_decisions"]), 1)
+        self.assertEqual(len(first_trace["outreach_executions"]), 1)
+        self.assertEqual(len(second_trace["outreach_executions"]), 0)
+        self.assertEqual(len(first_trace["growth_errors"]), 1)
+        self.assertEqual(len(second_trace["growth_errors"]), 0)
         self.assertEqual(first_trace["lead_decisions"][0]["batch_id"], first.id)
         self.assertEqual(second_trace["lead_decisions"][0]["batch_id"], second.id)
+        self.assertEqual(first_trace["outreach_executions"][0]["evidence_path"], "/tmp/reachops/redacted/evidence.png")
+
+    def test_observation_idempotency_and_lead_decision_versioning(self):
+        campaign = self.storage.create_campaign("keyword", "serum")
+        run = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+
+        source_first = self.storage.record_source_observation(
+            run.run_id,
+            source_id="source-1",
+            source_type="keyword",
+            source_value="serum",
+            observation_key="planned",
+            payload={"priority": 1},
+        )
+        source_duplicate = self.storage.record_source_observation(
+            run.run_id,
+            source_id="source-1",
+            source_type="keyword",
+            source_value="serum",
+            observation_key="planned",
+            payload={"priority": 99},
+        )
+        content_first = self.storage.record_content_observation(run.run_id, "content-1", "content_seen")
+        content_duplicate = self.storage.record_content_observation(run.run_id, "content-1", "content_seen")
+        comment_first = self.storage.record_comment_observation(run.run_id, "content-1", "candidate-1", "user", "comment", "comment_seen")
+        comment_duplicate = self.storage.record_comment_observation(run.run_id, "content-1", "candidate-1", "user", "comment", "comment_seen")
+        candidate_first = self.storage.record_candidate_observation(run.run_id, "candidate-1", "user", 80, ["buy"], "scored")
+        candidate_duplicate = self.storage.record_candidate_observation(run.run_id, "candidate-1", "user", 90, ["urgent"], "scored")
+
+        first_decision = self.storage.record_lead_decision(run.run_id, "candidate-1", "high_intent", score=80, reason="first")
+        second_decision = self.storage.record_lead_decision(run.run_id, "candidate-1", "high_intent", score=90, reason="second")
+
+        self.assertEqual(source_first, source_duplicate)
+        self.assertEqual(content_first, content_duplicate)
+        self.assertEqual(comment_first, comment_duplicate)
+        self.assertEqual(candidate_first, candidate_duplicate)
+        self.assertNotEqual(first_decision, second_decision)
+
+        trace = self.storage.list_observations_for_run(run.run_id)
+        self.assertEqual(len(trace["source_observations"]), 1)
+        self.assertEqual(len(trace["content_observations"]), 1)
+        self.assertEqual(len(trace["comment_observations"]), 1)
+        self.assertEqual(len(trace["candidate_observations"]), 1)
+        self.assertEqual([row["decision_version"] for row in trace["lead_decisions"]], [1, 2])
+
+    def test_migration_compatibility_uses_legacy_run_ids_without_rewriting_old_entities(self):
+        old_db = Path(self.tmpdir.name) / "legacy.sqlite3"
+        with sqlite3.connect(old_db) as conn:
+            conn.execute(
+                """
+                CREATE TABLE collection_batches (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT DEFAULT '',
+                    status TEXT DEFAULT 'running',
+                    total_sources INTEGER DEFAULT 0,
+                    processed_sources INTEGER DEFAULT 0,
+                    failed_sources INTEGER DEFAULT 0,
+                    profile_group TEXT DEFAULT '',
+                    config_json TEXT DEFAULT '{}',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE candidate_users (
+                    id TEXT PRIMARY KEY,
+                    content_id TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    profile_url TEXT NOT NULL,
+                    comment_text TEXT DEFAULT '',
+                    comment_likes INTEGER DEFAULT 0,
+                    reply_count INTEGER DEFAULT 0,
+                    qualify_score INTEGER DEFAULT 0,
+                    intent_tags TEXT DEFAULT '[]',
+                    batch_id TEXT DEFAULT '',
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(content_id, username, comment_text)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO collection_batches
+                (id, campaign_id, status, total_sources, processed_sources, failed_sources, profile_group,
+                 config_json, started_at, completed_at, created_at, updated_at)
+                VALUES ('gb_legacy1', 'acq_legacy', 'completed', 1, 1, 0, 'US', '{}',
+                        '2026-07-01T00:00:00Z', '2026-07-01T00:01:00Z',
+                        '2026-07-01T00:00:00Z', '2026-07-01T00:01:00Z')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO candidate_users
+                (id, content_id, username, profile_url, comment_text, batch_id, status, created_at)
+                VALUES ('candidate_legacy1', 'content_legacy1', 'legacy_user',
+                        'https://example.test/@legacy_user', 'legacy comment',
+                        'gb_legacy1', 'new', '2026-07-01T00:00:30Z')
+                """
+            )
+
+        migrated = GrowthStorage(str(old_db))
+        run_id = migrated.run_id_for_batch("gb_legacy1")
+        self.assertEqual(run_id, "legacy_run_gb_legacy1")
+
+        campaign_run = migrated.get_campaign_run(run_id=run_id)
+        config = json.loads(campaign_run["config_json"])
+        self.assertTrue(config["legacy_backfill"])
+        self.assertEqual(config["legacy_handling_strategy"], "deterministic_legacy_run_id_for_existing_batch_only")
+        self.assertEqual(config["legacy_original_batch_id"], "gb_legacy1")
+
+        candidate = migrated.list_candidates()[0]
+        self.assertEqual(candidate.batch_id, "gb_legacy1")
+        self.assertEqual(candidate.run_id, "")
+
+        reopened = GrowthStorage(str(old_db))
+        self.assertEqual(reopened.run_id_for_batch("gb_legacy1"), "legacy_run_gb_legacy1")
+        self.assertEqual(reopened.count_table("campaign_runs"), 1)
 
 
 if __name__ == "__main__":
