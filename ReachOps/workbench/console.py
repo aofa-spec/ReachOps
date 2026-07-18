@@ -8,6 +8,8 @@ import webbrowser
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
+from ReachOps.credential_secrets import AI_API_KEY_CREDENTIAL, build_default_secret_store
+
 from .view_models import GrowthOpsSnapshot, status_label
 
 
@@ -451,9 +453,7 @@ class GrowthOpsConsole(ttk.Frame):
         self.comment_reply_ai_endpoint_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_ENDPOINT", ""))
         self.comment_reply_ai_model_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_MODEL", "reachops-default"))
         self.comment_reply_ai_key_var = tk.StringVar(value="")
-        self.comment_reply_ai_status_var = tk.StringVar(
-            value="AI Key 已配置" if os.environ.get("REACHOPS_AI_API_KEY") else "AI Key 未配置"
-        )
+        self.comment_reply_ai_status_var = tk.StringVar(value=self._comment_reply_ai_key_status_label())
         self.recommended_source_value_var = tk.StringVar(value="")
         self.template_action_type_var = tk.StringVar(value=display_action_type("comment_reply"))
         self.template_name_var = tk.StringVar(value="")
@@ -1164,12 +1164,21 @@ class GrowthOpsConsole(ttk.Frame):
             os.environ["REACHOPS_AI_MODEL"] = model
         else:
             os.environ.pop("REACHOPS_AI_MODEL", None)
+        key_write_attempted = False
         if key:
-            os.environ["REACHOPS_AI_API_KEY"] = key
+            store = build_default_secret_store()
+            store_result = store.set_secret(AI_API_KEY_CREDENTIAL, key)
+            key_write_attempted = True
+            if store_result.ok:
+                os.environ.pop("REACHOPS_AI_API_KEY", None)
+            elif store.is_available():
+                os.environ.pop("REACHOPS_AI_API_KEY", None)
+            else:
+                os.environ["REACHOPS_AI_API_KEY"] = key
 
-        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or key)
+        key_configured = self._comment_reply_ai_key_configured(pending_key=key if not key_write_attempted else "")
         if endpoint:
-            status = f"外部AI已配置：model={model or '未指定'}，key={'已配置' if key_configured else '未配置'}"
+            status = f"外部AI已配置：model={model or '未指定'}，key={self._comment_reply_ai_key_status_label()}"
         else:
             status = "外部AI未启用：未填写Endpoint"
         self.comment_reply_ai_status_var.set(status)
@@ -1182,7 +1191,7 @@ class GrowthOpsConsole(ttk.Frame):
     def comment_reply_ai_settings(self) -> dict:
         endpoint = self.comment_reply_ai_endpoint_var.get().strip()
         model = self.comment_reply_ai_model_var.get().strip()
-        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or self.comment_reply_ai_key_var.get().strip())
+        key_configured = self._comment_reply_ai_key_configured(pending_key=self.comment_reply_ai_key_var.get().strip())
         return {
             "strategy": self.comment_reply_strategy_var.get(),
             "endpoint_configured": bool(endpoint),
@@ -1192,6 +1201,33 @@ class GrowthOpsConsole(ttk.Frame):
             "execution_policy": "ai_suggestion_only_live_submit_requires_confirmation",
             "no_auto_ai_submit": True,
         }
+
+    def _comment_reply_ai_key_configured(self, pending_key: str = "") -> bool:
+        if str(pending_key or "").strip() or os.environ.get("REACHOPS_AI_API_KEY"):
+            return True
+        store = build_default_secret_store()
+        if not store.is_available():
+            return False
+        try:
+            return bool(store.get_secret(AI_API_KEY_CREDENTIAL))
+        except Exception:
+            return False
+
+    def _comment_reply_ai_key_status_label(self, pending_key: str = "") -> str:
+        if str(pending_key or "").strip():
+            store = build_default_secret_store()
+            if store.is_available():
+                return "Credential Manager 已配置"
+            return "开发环境变量已配置"
+        if os.environ.get("REACHOPS_AI_API_KEY"):
+            return "开发环境变量已配置"
+        store = build_default_secret_store()
+        if not store.is_available():
+            return "AI Key 未配置"
+        try:
+            return "Credential Manager 已配置" if store.get_secret(AI_API_KEY_CREDENTIAL) else "AI Key 未配置"
+        except Exception:
+            return "AI Key 未配置"
 
     def set_profile_group_options(self, display_values: list[str], selected: str = ""):
         values = [safe_tk_option(item) for item in (display_values or [])]
