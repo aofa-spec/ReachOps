@@ -12,6 +12,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from ReachOps.runtime_paths import RuntimePaths
+from ReachOps.license_state import evaluate_license_state
 from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.device_identity import DeviceIdentity
 
@@ -102,8 +103,12 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
 
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
     bound_device_id = str(payload.get("device_id") or "").strip()
+    license_state = evaluate_license_state(payload)
+    result["license_state"] = license_state.as_dict()
     add("activation_not_template", not bool(payload.get("template_only")), template_only=bool(payload.get("template_only")))
     add("activation_active", bool(payload.get("active")), active=bool(payload.get("active")))
+    add("license_app_access_allowed", license_state.app_access_allowed, license_state=license_state.as_dict())
+    add("license_live_submit_allowed", license_state.live_submit_allowed, license_state=license_state.as_dict())
     add("device_binding_matches", not bound_device_id or bound_device_id == current_device_id, bound_device_id=bound_device_id, current_device_id=current_device_id)
     add("live_submit_capability_enabled", bool(capabilities.get("live_submit")), capabilities=capabilities)
     for capability in ["comment_reply", "follow_review", "dm_review"]:

@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from ReachOps.license_state import evaluate_license_state
+
 from .device_identity import DeviceIdentity
 
 
@@ -72,9 +74,15 @@ class LiveSubmitAuthorizationGate:
                 "activation is bound to another device",
                 {**evidence, "bound_device_id": bound_device_id},
             )
-        expires_at = str(status.get("expires_at") or "").strip()
-        if expires_at and self._is_expired(expires_at):
-            return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_EXPIRED", "activation has expired", {**evidence, "expires_at": expires_at})
+        license_state = evaluate_license_state(status)
+        evidence = {**evidence, "license_state": license_state.as_dict()}
+        if not license_state.live_submit_allowed:
+            if license_state.reason_code == "LIVE_SUBMIT_LICENSE_GRACE_PERIOD":
+                return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_GRACE_PERIOD", license_state.reason, evidence)
+            if license_state.reason_code == "LIVE_SUBMIT_LICENSE_EXPIRED":
+                return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_EXPIRED", license_state.reason, evidence)
+            return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", license_state.reason or "license is not active", evidence)
+        expires_at = license_state.expires_at
         capabilities = status.get("capabilities") if isinstance(status.get("capabilities"), dict) else {}
         if not bool(capabilities.get(feature)):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", f"feature not enabled: {feature}", evidence)

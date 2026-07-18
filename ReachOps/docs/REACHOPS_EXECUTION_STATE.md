@@ -15,7 +15,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
 | P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
-| P2 | Windows local security, licensing, backup, device seats | `IN_REVIEW` | Branch `codex/p2-windows-credential-manager` adds a first secret-boundary slice: AI API key resolution now prefers Windows Credential Manager, non-Windows runtimes are explicitly non-persistent/session-only, and tests cover Windows target naming, read/write/delete flow, environment fallback, redaction status, and default AI provider integration | Review Windows Credential Manager slice; continue minimal license client, 7-day grace, encrypted backup/restore, and device-seat tests |
+| P2 | Windows local security, licensing, backup, device seats | `IN_REVIEW` | Draft PR #23, branch `codex/p2-windows-credential-manager`; secret-boundary slice makes AI API key resolution prefer Windows Credential Manager, keeps non-Windows runtimes explicitly non-persistent/session-only, and adds a 7-day license grace state machine where app access can remain allowed while live-submit remains blocked; focused tests cover Windows target naming, read/write/delete flow, environment fallback, redaction status, default AI provider integration, license grace/expiry, activation reporting, and live-submit blocking during grace | Review PR #23; continue minimal license client, encrypted backup/restore, and device-seat tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
@@ -23,10 +23,9 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 ## Next autonomous action
 
 1. Keep PR #12 Draft for P1 review; do not expand it with P2.
-2. Review the independent P2 Windows Credential Manager slice on branch `codex/p2-windows-credential-manager`.
+2. Review the independent P2 Windows Credential Manager and license grace slice on branch `codex/p2-windows-credential-manager`.
 3. After the first P2 slice merges, continue P2:
    - minimal license client
-   - 7-day grace state machine
    - encrypted `.reachops-backup` format and restore tests
    - device-seat evidence and local-only secret exclusion checks
 
@@ -68,7 +67,9 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 - Date: `2026-07-19`
 - Branch: `codex/p2-windows-credential-manager`
-- Scope: First P2 secret-boundary slice only; no Windows build, installer, live TikTok action, customer data, credentials, cookies, or real target evidence.
+- PR: Draft PR #23
+- Commit: current P2 review commits on this branch; final SHA is reported in the completion report.
+- Scope: First P2 local security slice only; no Windows build, installer, live TikTok action, customer data, credentials, cookies, or real target evidence.
 - Code evidence:
   - Added `ReachOps.credentials.ReachOpsCredentialStore`.
   - Windows clients persist named secrets through Windows Credential Manager generic credentials with `ReachOps:<secret_name>` target names.
@@ -76,21 +77,28 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - AI API key resolution prefers Windows Credential Manager on Windows and falls back to `REACHOPS_AI_API_KEY` as non-persistent session input.
   - The Tk console writes a provided AI key through the credential store; on successful Windows storage it clears the process environment key path and keeps logs redacted to configured/source/persistence booleans.
   - The default acquisition intelligence provider now obtains the HTTP AI key through the credential resolver instead of reading only `REACHOPS_AI_API_KEY`.
+  - Added `ReachOps.license_state.evaluate_license_state(...)` with active, grace, expired, inactive, template, and missing states.
+  - License grace is 7 days after `expires_at`: local app access can remain allowed during grace, but `live_submit_allowed=false`.
+  - `LiveSubmitAuthorizationGate` now includes `license_state` evidence and rejects grace-period live submit with `LIVE_SUBMIT_LICENSE_GRACE_PERIOD` instead of treating grace as live authorization.
+  - `/api/activation`/activation status reporting now exposes license app-access and live-submit checks plus operator actions for grace/renewal.
 - Tests and checks:
   - `/usr/bin/python3 -m py_compile ReachOps/credentials.py ReachOps/intelligence/ai_strategy.py ReachOps/workbench/console.py tests/test_credentials.py`: passed, exit `0`.
+  - `/usr/bin/python3 -m py_compile ReachOps/license_state.py ReachOps/workbench/authorization_gate.py ReachOps/intelligence/schemas.py tools/reachops_activation_status_check.py tools/reachops_live_acceptance_status.py tests/test_license_state.py`: passed, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_credentials`: passed, 5 tests, exit `0`.
+  - `/usr/bin/python3 -m unittest -v tests.test_license_state`: passed, 5 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_http_ai_provider_accepts_chat_style_json_response tests.test_reachops_campaign.ReachOpsCampaignTests.test_http_ai_provider_falls_back_to_rules_when_request_fails`: passed, 2 tests, exit `0`.
-  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-p2-credentials-truth.log`.
-  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-p2-credentials-campaign.log`.
-  - `origin/main` baseline: `/tmp/reachops-main-baseline-p2-credentials-campaign.log` failed with the same 14 failures and 1 error.
-  - Baseline comparison artifact: `/tmp/reachops-p2-credentials-baseline-comparison.json`; `new_failures=[]`, `new_errors=[]`.
-  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-p2-credentials-operator-pressure.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-p2-credentials-delivery-audit.json`.
-  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p2-credentials-goal-delivery-runner.json`.
-  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-p2-credentials-goal-status-report.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p2-credentials-package-check.json`.
-  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p2-credentials-final-gate.json`.
-  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`; output `/tmp/reachops-p2-credentials-cleanliness.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_check_reports_device_and_capabilities tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_check_blocks_device_mismatch tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_template_is_not_authorization tests.test_reachops_campaign.ReachOpsCampaignTests.test_live_submit_rejects_expired_activation_status`: passed, 4 tests, exit `0`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-p2-license-grace-truth.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-p2-license-grace-campaign.log`.
+  - `origin/main` baseline: `/tmp/reachops-main-baseline-p2-license-grace-campaign.log` failed with the same 14 failures and 1 error.
+  - Baseline comparison artifact: `/tmp/reachops-p2-license-grace-baseline-comparison.json`; `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-p2-license-grace-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-p2-license-grace-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p2-license-grace-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-p2-license-grace-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p2-license-grace-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p2-license-grace-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`; output `/tmp/reachops-p2-license-grace-cleanliness.json`.
   - `git diff --check`: passed, exit `0`.
 - Safety:
   - No real secret value was added to tests, logs, reports, or git-tracked files.
