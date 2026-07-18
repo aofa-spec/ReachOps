@@ -10,6 +10,8 @@ from typing import Mapping
 
 AI_API_KEY_SECRET = "ai_api_key"
 AI_API_KEY_ENV = "REACHOPS_AI_API_KEY"
+LICENSE_KEY_SECRET = "license_key"
+LICENSE_KEY_ENV = "REACHOPS_LICENSE_KEY"
 
 
 @dataclass(frozen=True)
@@ -220,14 +222,30 @@ def resolve_ai_api_key(
     env: Mapping[str, str] | None = None,
     credential_store: ReachOpsCredentialStore | None = None,
 ) -> SecretLookup:
+    return resolve_named_secret(AI_API_KEY_SECRET, AI_API_KEY_ENV, env=env, credential_store=credential_store)
+
+
+def resolve_license_key(
+    env: Mapping[str, str] | None = None,
+    credential_store: ReachOpsCredentialStore | None = None,
+) -> SecretLookup:
+    return resolve_named_secret(LICENSE_KEY_SECRET, LICENSE_KEY_ENV, env=env, credential_store=credential_store)
+
+
+def resolve_named_secret(
+    secret_name: str,
+    env_name: str,
+    env: Mapping[str, str] | None = None,
+    credential_store: ReachOpsCredentialStore | None = None,
+) -> SecretLookup:
     env = env or os.environ
     store = credential_store or ReachOpsCredentialStore()
     stored = None
     if store.supported():
-        stored = store.read_secret(AI_API_KEY_SECRET)
+        stored = store.read_secret(secret_name)
         if stored.configured:
             return stored
-    env_value = str(env.get(AI_API_KEY_ENV) or "").strip()
+    env_value = str(env.get(env_name) or "").strip()
     if env_value:
         return SecretLookup(env_value, "environment_session", True, False)
     if store.supported():

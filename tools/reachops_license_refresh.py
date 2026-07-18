@@ -23,15 +23,20 @@ def _redact_license_key(payload: dict) -> dict:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Refresh ReachOps local activation status from a configured license endpoint.")
+    raw_args = list(argv if argv is not None else sys.argv[1:])
+    if "--license-key" in raw_args or any(arg.startswith("--license-key=") for arg in raw_args):
+        parser.exit(
+            2,
+            "error: command-line license key is not supported; use Windows Credential Manager or REACHOPS_LICENSE_KEY session env.\n",
+        )
     parser.add_argument("--endpoint", default="", help="License service endpoint. Defaults to REACHOPS_LICENSE_ENDPOINT.")
-    parser.add_argument("--license-key", default="", help="License key. Defaults to REACHOPS_LICENSE_KEY.")
     parser.add_argument("--runtime-dir", default="", help="Override ReachOps runtime directory for activation status output.")
     parser.add_argument("--device-id", default="", help="Override current device id for tests or operator-issued binding.")
     parser.add_argument("--app-version", default="", help="ReachOps app version reported to the license service.")
     parser.add_argument("--preview", action="store_true", help="Build and print the redacted request payload without network or file writes.")
     parser.add_argument("--timeout-seconds", type=int, default=15)
     parser.add_argument("--json", action="store_true")
-    return parser.parse_args(argv)
+    return parser.parse_args(raw_args)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,7 +44,6 @@ def main(argv: list[str] | None = None) -> int:
     runtime_paths = RuntimePaths.build(base_dir=args.runtime_dir) if args.runtime_dir else RuntimePaths.build()
     client = ReachOpsLicenseClient(
         endpoint=args.endpoint,
-        license_key=args.license_key,
         runtime_paths=runtime_paths,
         device_id=args.device_id,
         app_version=args.app_version,
@@ -51,6 +55,10 @@ def main(argv: list[str] | None = None) -> int:
             "activation_status_path": runtime_paths.activation_status_path,
             "endpoint_configured": bool(client.endpoint),
             "request_payload": _redact_license_key(client.build_request_payload()),
+            "license_key_source": client.license_key_source,
+            "license_key_persistent": client.license_key_persistent,
+            "license_key_error": client.license_key_error,
+            "secret_value_redacted": True,
             "no_browser_started": True,
             "no_submit": True,
             "customer_data_uploaded": False,
@@ -67,6 +75,10 @@ def main(argv: list[str] | None = None) -> int:
             "activation_status_path": runtime_paths.activation_status_path,
             "endpoint_configured": bool(client.endpoint),
             "error": str(exc),
+            "license_key_source": client.license_key_source,
+            "license_key_persistent": client.license_key_persistent,
+            "license_key_error": client.license_key_error,
+            "secret_value_redacted": True,
             "no_browser_started": True,
             "no_submit": True,
             "customer_data_uploaded": False,

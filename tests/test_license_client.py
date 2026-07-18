@@ -1,10 +1,13 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from ReachOps.credentials import LICENSE_KEY_SECRET, ReachOpsCredentialStore
 from ReachOps.license_client import ReachOpsLicenseClient
 from ReachOps.runtime_paths import RuntimePaths
 
@@ -21,6 +24,24 @@ class FakeResponse:
 
     def read(self):
         return json.dumps(self.payload).encode("utf-8")
+
+
+class FakeWindowsCredentialStore(ReachOpsCredentialStore):
+    def __init__(self):
+        super().__init__()
+        self.values = {}
+
+    def supported(self) -> bool:
+        return True
+
+    def _read_windows_secret(self, target_name: str) -> str:
+        return self.values.get(target_name, "")
+
+    def _write_windows_secret(self, target_name: str, secret_value: str) -> None:
+        self.values[target_name] = secret_value
+
+    def _delete_windows_secret(self, target_name: str) -> bool:
+        return self.values.pop(target_name, None) is not None
 
 
 class LicenseClientTests(unittest.TestCase):
@@ -96,6 +117,31 @@ class LicenseClientTests(unittest.TestCase):
             self.assertFalse(written["customer_data_uploaded"])
             self.assertTrue(written["last_verified_at"])
 
+    def test_license_key_resolves_from_windows_credential_manager_before_env(self):
+        requests = []
+        store = FakeWindowsCredentialStore()
+        store.write_secret(LICENSE_KEY_SECRET, "stored-license")
+
+        def opener(request, *, timeout):
+            requests.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse({"activation_status": {"active": True, "expires_at": "2999-01-01T00:00:00Z"}})
+
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"REACHOPS_LICENSE_KEY": "env-license"}, clear=False):
+            client = ReachOpsLicenseClient(
+                endpoint="https://license.example.test/activate",
+                runtime_paths=RuntimePaths.build(base_dir=tmp),
+                device_id="device-a",
+                opener=opener,
+                credential_store=store,
+            )
+            result = client.refresh()
+
+        self.assertTrue(result.refreshed)
+        self.assertEqual(requests[0]["license_key"], "stored-license")
+        self.assertEqual(result.as_dict()["request_payload"]["license_key"], "***redacted***")
+        self.assertEqual(result.as_dict()["license_key_source"], "windows_credential_manager")
+        self.assertTrue(result.as_dict()["license_key_persistent"])
+
     def test_missing_endpoint_does_not_write_activation_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = RuntimePaths.build(base_dir=tmp)
@@ -120,8 +166,6 @@ class LicenseClientTests(unittest.TestCase):
                     "tools/reachops_license_refresh.py",
                     "--endpoint",
                     "https://license.example.test/activate",
-                    "--license-key",
-                    "secret-license",
                     "--runtime-dir",
                     tmp,
                     "--device-id",
@@ -130,6 +174,7 @@ class LicenseClientTests(unittest.TestCase):
                     "--json",
                 ],
                 cwd=str(Path(__file__).resolve().parents[1]),
+                env={**os.environ, "REACHOPS_LICENSE_KEY": "secret-license"},
                 text=True,
                 capture_output=True,
                 check=False,
@@ -139,8 +184,34 @@ class LicenseClientTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0)
             self.assertEqual(payload["status"], "preview")
             self.assertEqual(payload["request_payload"]["license_key"], "***redacted***")
+            self.assertEqual(payload["license_key_source"], "environment_session")
+            self.assertFalse(payload["license_key_persistent"])
+            self.assertTrue(payload["secret_value_redacted"])
             self.assertFalse(payload["customer_data_uploaded"])
             self.assertFalse(Path(RuntimePaths.build(base_dir=tmp).activation_status_path).exists())
+
+    def test_cli_rejects_command_line_license_key_to_avoid_process_leakage(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "tools/reachops_license_refresh.py",
+                "--endpoint",
+                "https://license.example.test/activate",
+                "--license-key",
+                "secret-license",
+                "--preview",
+                "--json",
+            ],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("command-line license key is not supported", completed.stderr)
+        self.assertNotIn("secret-license", completed.stdout)
+        self.assertNotIn("secret-license", completed.stderr)
 
 
 if __name__ == "__main__":

@@ -12,11 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from ReachOps.credentials import ReachOpsCredentialStore, resolve_license_key
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.device_identity import DeviceIdentity
 
 
-LICENSE_KEY_ENV = "REACHOPS_LICENSE_KEY"
 LICENSE_ENDPOINT_ENV = "REACHOPS_LICENSE_ENDPOINT"
 DEFAULT_TIMEOUT_SECONDS = 15
 
@@ -39,6 +39,9 @@ class LicenseRefreshResult:
     request_payload: dict[str, Any] = field(default_factory=dict)
     activation_status: dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    license_key_source: str = ""
+    license_key_persistent: bool = False
+    license_key_error: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +52,10 @@ class LicenseRefreshResult:
             "request_payload": _redact_request_payload(self.request_payload),
             "activation_status": dict(self.activation_status),
             "error": self.error,
+            "license_key_source": self.license_key_source,
+            "license_key_persistent": self.license_key_persistent,
+            "license_key_error": self.license_key_error,
+            "secret_value_redacted": True,
             "no_browser_started": True,
             "no_submit": True,
             "customer_data_uploaded": False,
@@ -73,9 +80,20 @@ class ReachOpsLicenseClient:
         device_id: str = "",
         app_version: str = "",
         opener: Callable[..., Any] | None = None,
+        credential_store: ReachOpsCredentialStore | None = None,
     ):
         self.endpoint = str(endpoint or os.environ.get(LICENSE_ENDPOINT_ENV) or "").strip()
-        self.license_key = str(license_key or os.environ.get(LICENSE_KEY_ENV) or "").strip()
+        self.credential_store = credential_store or ReachOpsCredentialStore()
+        self.license_key_lookup = resolve_license_key(credential_store=self.credential_store)
+        self.license_key = str(license_key or self.license_key_lookup.value).strip()
+        if license_key:
+            self.license_key_source = "explicit_constructor"
+            self.license_key_persistent = False
+            self.license_key_error = ""
+        else:
+            self.license_key_source = self.license_key_lookup.source
+            self.license_key_persistent = self.license_key_lookup.persistent
+            self.license_key_error = self.license_key_lookup.error
         self.runtime_paths = runtime_paths or RuntimePaths.build()
         self.device_id = str(device_id or DeviceIdentity.current_device_id()).strip()
         self.app_version = str(app_version or os.environ.get("REACHOPS_APP_VERSION") or "").strip()
@@ -100,17 +118,41 @@ class ReachOpsLicenseClient:
     def refresh(self, *, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> LicenseRefreshResult:
         status_path = str(self.runtime_paths.activation_status_path)
         if not self.endpoint:
-            return LicenseRefreshResult("endpoint_missing", False, status_path, False, error="license endpoint is not configured")
+            return self._result("endpoint_missing", False, status_path, False, error="license endpoint is not configured")
         if not self.license_key:
-            return LicenseRefreshResult("license_key_missing", False, status_path, True, error="license key is not configured")
+            return self._result("license_key_missing", False, status_path, True, error="license key is not configured")
         payload = self.build_request_payload()
         response = self._post_json(payload, timeout_seconds=max(1, int(timeout_seconds)))
         activation_status = self._extract_activation_status(response)
         if not activation_status:
-            return LicenseRefreshResult("invalid_response", False, status_path, True, request_payload=payload, error="license response missing activation_status")
+            return self._result("invalid_response", False, status_path, True, request_payload=payload, error="license response missing activation_status")
         activation_status = self._normalize_activation_status(activation_status)
         self._write_activation_status(activation_status)
-        return LicenseRefreshResult("refreshed", True, status_path, True, request_payload=payload, activation_status=activation_status)
+        return self._result("refreshed", True, status_path, True, request_payload=payload, activation_status=activation_status)
+
+    def _result(
+        self,
+        status: str,
+        refreshed: bool,
+        activation_status_path: str,
+        endpoint_configured: bool,
+        *,
+        request_payload: dict[str, Any] | None = None,
+        activation_status: dict[str, Any] | None = None,
+        error: str = "",
+    ) -> LicenseRefreshResult:
+        return LicenseRefreshResult(
+            status=status,
+            refreshed=refreshed,
+            activation_status_path=activation_status_path,
+            endpoint_configured=endpoint_configured,
+            request_payload=request_payload or {},
+            activation_status=activation_status or {},
+            error=error,
+            license_key_source=self.license_key_source,
+            license_key_persistent=self.license_key_persistent,
+            license_key_error=self.license_key_error,
+        )
 
     def _post_json(self, payload: dict[str, Any], *, timeout_seconds: int) -> dict[str, Any]:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
