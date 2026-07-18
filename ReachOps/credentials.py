@@ -18,6 +18,7 @@ class SecretLookup:
     source: str
     configured: bool
     persistent: bool
+    error: str = ""
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class ReachOpsCredentialStore:
 
     CRED_TYPE_GENERIC = 1
     CRED_PERSIST_LOCAL_MACHINE = 2
+    MAX_CREDENTIAL_BLOB_BYTES = 2560
 
     def __init__(self, service_prefix: str = "ReachOps"):
         self.service_prefix = "".join(ch for ch in str(service_prefix or "ReachOps").strip() if ch.isalnum() or ch in {"_", "-", ":"}) or "ReachOps"
@@ -57,7 +59,10 @@ class ReachOpsCredentialStore:
     def read_secret(self, secret_name: str) -> SecretLookup:
         if not self.supported():
             return SecretLookup("", "unsupported_platform", False, False)
-        value = self._read_windows_secret(self.target_name(secret_name))
+        try:
+            value = self._read_windows_secret(self.target_name(secret_name))
+        except Exception as exc:
+            return SecretLookup("", "windows_credential_manager", False, True, error=exc.__class__.__name__)
         return SecretLookup(value, "windows_credential_manager", bool(value), True)
 
     def write_secret(self, secret_name: str, secret_value: str) -> SecretWriteResult:
@@ -72,7 +77,17 @@ class ReachOpsCredentialStore:
             )
         target = self.target_name(secret_name)
         if not value:
-            deleted = self._delete_windows_secret(target)
+            try:
+                deleted = self._delete_windows_secret(target)
+            except Exception as exc:
+                return SecretWriteResult(
+                    stored=False,
+                    deleted=False,
+                    status="delete_failed",
+                    source="windows_credential_manager",
+                    persistent=True,
+                    error=exc.__class__.__name__,
+                )
             return SecretWriteResult(
                 stored=False,
                 deleted=deleted,
@@ -80,7 +95,26 @@ class ReachOpsCredentialStore:
                 source="windows_credential_manager",
                 persistent=True,
             )
-        self._write_windows_secret(target, value)
+        if len(value.encode("utf-16-le")) > self.MAX_CREDENTIAL_BLOB_BYTES:
+            return SecretWriteResult(
+                stored=False,
+                deleted=False,
+                status="secret_too_large",
+                source="windows_credential_manager",
+                persistent=True,
+                error="credential_blob_limit_exceeded",
+            )
+        try:
+            self._write_windows_secret(target, value)
+        except Exception as exc:
+            return SecretWriteResult(
+                stored=False,
+                deleted=False,
+                status="store_failed",
+                source="windows_credential_manager",
+                persistent=True,
+                error=exc.__class__.__name__,
+            )
         return SecretWriteResult(
             stored=True,
             deleted=False,
@@ -188,6 +222,7 @@ def resolve_ai_api_key(
 ) -> SecretLookup:
     env = env or os.environ
     store = credential_store or ReachOpsCredentialStore()
+    stored = None
     if store.supported():
         stored = store.read_secret(AI_API_KEY_SECRET)
         if stored.configured:
@@ -196,7 +231,7 @@ def resolve_ai_api_key(
     if env_value:
         return SecretLookup(env_value, "environment_session", True, False)
     if store.supported():
-        return SecretLookup("", "windows_credential_manager", False, True)
+        return SecretLookup("", "windows_credential_manager", False, True, error=stored.error if stored else "")
     return SecretLookup("", "unsupported_platform", False, False)
 
 
@@ -209,6 +244,7 @@ def ai_api_key_status(
         "configured": lookup.configured,
         "source": lookup.source,
         "persistent": lookup.persistent,
+        "error": lookup.error,
         "windows_credential_manager_required": True,
         "secret_value_redacted": True,
     }

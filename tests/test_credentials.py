@@ -31,6 +31,20 @@ class FakeWindowsCredentialStore(ReachOpsCredentialStore):
         return self.values.pop(target_name, None) is not None
 
 
+class FailingWindowsCredentialStore(ReachOpsCredentialStore):
+    def supported(self) -> bool:
+        return True
+
+    def _read_windows_secret(self, target_name: str) -> str:
+        raise RuntimeError("native read failed with super-secret")
+
+    def _write_windows_secret(self, target_name: str, secret_value: str) -> None:
+        raise RuntimeError(f"native write failed with {secret_value}")
+
+    def _delete_windows_secret(self, target_name: str) -> bool:
+        raise RuntimeError("native delete failed")
+
+
 class ReachOpsCredentialTests(unittest.TestCase):
     def test_non_windows_store_does_not_persist_secret(self):
         store = ReachOpsCredentialStore()
@@ -93,6 +107,38 @@ class ReachOpsCredentialTests(unittest.TestCase):
         self.assertIsInstance(provider, HTTPAcquisitionIntelligenceProvider)
         self.assertEqual(provider.api_key, "resolved-secret")
         self.assertEqual(provider._headers()["Authorization"], "Bearer resolved-secret")
+
+    def test_windows_credential_manager_failures_are_structured_and_redacted(self):
+        store = FailingWindowsCredentialStore()
+
+        read = store.read_secret(AI_API_KEY_SECRET)
+        written = store.write_secret(AI_API_KEY_SECRET, "super-secret")
+        deleted = store.write_secret(AI_API_KEY_SECRET, "")
+        status = ai_api_key_status(env={}, credential_store=store)
+        encoded = repr((read, written, deleted, status))
+
+        self.assertEqual(read.source, "windows_credential_manager")
+        self.assertEqual(read.error, "RuntimeError")
+        self.assertEqual(written.status, "store_failed")
+        self.assertEqual(written.error, "RuntimeError")
+        self.assertEqual(deleted.status, "delete_failed")
+        self.assertEqual(deleted.error, "RuntimeError")
+        self.assertFalse(status["configured"])
+        self.assertEqual(status["error"], "RuntimeError")
+        self.assertNotIn("super-secret", encoded)
+
+    def test_windows_credential_manager_rejects_oversized_secret_before_native_write(self):
+        store = FakeWindowsCredentialStore()
+        oversized = "x" * ((store.MAX_CREDENTIAL_BLOB_BYTES // 2) + 1)
+
+        result = store.write_secret(AI_API_KEY_SECRET, oversized)
+        lookup = store.read_secret(AI_API_KEY_SECRET)
+
+        self.assertFalse(result.stored)
+        self.assertEqual(result.status, "secret_too_large")
+        self.assertEqual(result.error, "credential_blob_limit_exceeded")
+        self.assertFalse(lookup.configured)
+        self.assertNotIn(oversized, repr(result))
 
 
 if __name__ == "__main__":
