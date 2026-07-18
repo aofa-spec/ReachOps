@@ -303,6 +303,80 @@ class CampaignRunObservationTests(unittest.TestCase):
             )
             conn.execute(
                 """
+                CREATE TABLE operation_leads (
+                    id TEXT PRIMARY KEY,
+                    candidate_user_id TEXT NOT NULL,
+                    lead_type TEXT NOT NULL,
+                    priority TEXT DEFAULT 'normal',
+                    score INTEGER DEFAULT 0,
+                    reason TEXT DEFAULT '',
+                    lifecycle_stage TEXT DEFAULT 'new',
+                    source_path TEXT DEFAULT '',
+                    status TEXT DEFAULT 'new',
+                    batch_id TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(candidate_user_id, lead_type)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE action_queue (
+                    id TEXT PRIMARY KEY,
+                    lead_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    target_username TEXT NOT NULL,
+                    target_url TEXT DEFAULT '',
+                    suggested_text TEXT DEFAULT '',
+                    reason TEXT DEFAULT '',
+                    status TEXT DEFAULT 'pending_review',
+                    risk_level TEXT DEFAULT 'medium',
+                    batch_id TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(lead_id, action_type)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE outreach_executions (
+                    id TEXT PRIMARY KEY,
+                    action_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    target_username TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    execution_mode TEXT DEFAULT 'simulated',
+                    submission_state TEXT DEFAULT 'not_attempted',
+                    verification_state TEXT DEFAULT 'not_required',
+                    evidence_verified INTEGER DEFAULT 0,
+                    profile_id TEXT DEFAULT '',
+                    evidence_path TEXT DEFAULT '',
+                    error_code TEXT DEFAULT '',
+                    error_message TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE growth_errors (
+                    id TEXT PRIMARY KEY,
+                    error_code TEXT NOT NULL,
+                    message TEXT DEFAULT '',
+                    source_id TEXT DEFAULT '',
+                    creator_id TEXT DEFAULT '',
+                    profile_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
                 INSERT INTO collection_batches
                 (id, campaign_id, status, total_sources, processed_sources, failed_sources, profile_group,
                  config_json, started_at, completed_at, created_at, updated_at)
@@ -320,6 +394,48 @@ class CampaignRunObservationTests(unittest.TestCase):
                         'gb_legacy1', 'new', '2026-07-01T00:00:30Z')
                 """
             )
+            conn.execute(
+                """
+                INSERT INTO operation_leads
+                (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                 source_path, status, batch_id, created_at, updated_at)
+                VALUES ('lead_legacy1', 'candidate_legacy1', 'high_intent', 'high', 77,
+                        'legacy lead', 'new', 'https://example.test/video/legacy',
+                        'new', 'gb_legacy1', '2026-07-01T00:00:40Z', '2026-07-01T00:00:40Z')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO action_queue
+                (id, lead_id, action_type, target_username, target_url, suggested_text,
+                 reason, status, risk_level, batch_id, created_at)
+                VALUES ('action_legacy1', 'lead_legacy1', 'comment_reply', 'legacy_user',
+                        'https://example.test/video/legacy', 'legacy text',
+                        'legacy action', 'pending_review', 'medium',
+                        'gb_legacy1', '2026-07-01T00:00:45Z')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO outreach_executions
+                (id, action_id, action_type, target_username, status, execution_mode,
+                 submission_state, verification_state, evidence_verified, profile_id,
+                 evidence_path, error_code, error_message, batch_id, started_at, completed_at, created_at)
+                VALUES ('exec_legacy1', 'action_legacy1', 'comment_reply', 'legacy_user',
+                        'success', 'preflight', 'not_attempted', 'not_required', 0,
+                        'profile_legacy1', '/tmp/reachops/legacy/evidence.png', '', '',
+                        'gb_legacy1', '2026-07-01T00:00:50Z', '2026-07-01T00:00:55Z',
+                        '2026-07-01T00:00:50Z')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO growth_errors
+                (id, error_code, message, source_id, creator_id, profile_id, batch_id, created_at)
+                VALUES ('err_legacy1', 'LEGACY_NOTE', 'legacy error', 'source_legacy1',
+                        '', 'profile_legacy1', 'gb_legacy1', '2026-07-01T00:00:58Z')
+                """
+            )
 
         migrated = GrowthStorage(str(old_db))
         run_id = migrated.run_id_for_batch("gb_legacy1")
@@ -334,6 +450,24 @@ class CampaignRunObservationTests(unittest.TestCase):
         candidate = migrated.list_candidates()[0]
         self.assertEqual(candidate.batch_id, "gb_legacy1")
         self.assertEqual(candidate.run_id, "")
+        with sqlite3.connect(old_db) as conn:
+            conn.row_factory = sqlite3.Row
+            legacy_rows = {
+                "operation_leads": conn.execute("SELECT batch_id, run_id FROM operation_leads WHERE id='lead_legacy1'").fetchone(),
+                "action_queue": conn.execute("SELECT batch_id, run_id FROM action_queue WHERE id='action_legacy1'").fetchone(),
+                "outreach_executions": conn.execute("SELECT batch_id, run_id, evidence_path FROM outreach_executions WHERE id='exec_legacy1'").fetchone(),
+                "growth_errors": conn.execute("SELECT batch_id, run_id FROM growth_errors WHERE id='err_legacy1'").fetchone(),
+            }
+        for row in legacy_rows.values():
+            self.assertEqual(row["batch_id"], "gb_legacy1")
+            self.assertEqual(row["run_id"], "")
+        self.assertEqual(legacy_rows["outreach_executions"]["evidence_path"], "/tmp/reachops/legacy/evidence.png")
+        legacy_trace = migrated.list_observations_for_run(run_id)
+        self.assertEqual(legacy_trace["lead_decisions"], [])
+        self.assertEqual(legacy_trace["outreach_executions"], [])
+        self.assertEqual(legacy_trace["growth_errors"], [])
+        self.assertEqual(migrated.list_action_queue(run_id=run_id), [])
+        self.assertEqual(migrated.list_outreach_executions(run_id=run_id), [])
 
         reopened = GrowthStorage(str(old_db))
         self.assertEqual(reopened.run_id_for_batch("gb_legacy1"), "legacy_run_gb_legacy1")

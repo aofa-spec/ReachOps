@@ -66,10 +66,10 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 ## Latest P1 verification snapshot
 
-- Date: `2026-07-18 UTC`
+- Date: `2026-07-19`
 - Branch: `codex/p1-immutable-campaign-run-observations`
 - PR: Draft PR #12
-- Commit: `2596c9e`
+- Commit: current review hardening commit on this branch; final SHA is reported in the completion report.
 - Scope: First P1 storage-contract slice only; no PR #9 changes and no real TikTok action.
 - Code evidence:
   - Added `campaign_runs` as the immutable run ledger, one run per collection batch, with idempotent backfill for existing batches.
@@ -77,22 +77,24 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - Added `run_id` compatibility columns to collection tasks, discovered creators/content, shop content, candidates, leads, actions, outreach executions, events, and errors.
   - Added storage APIs to record run-scoped observations and append lead decisions without mutating prior decisions.
   - Added optional `run_id` filters for candidates, leads, actions, outreach executions, and execution counts.
-  - Legacy migration now uses deterministic `legacy_run_<batch_id>` identifiers plus `legacy_backfill` metadata instead of random `run_*` IDs, and does not rewrite old candidate/entity rows to claim a real run.
+  - Legacy migration now uses deterministic `legacy_run_<batch_id>` identifiers plus `legacy_backfill` metadata instead of random `run_*` IDs, and does not rewrite old candidate, lead, action, outreach execution, evidence-path, or error rows to claim a real run.
   - `list_observations_for_run(...)` now returns observation rows plus run-scoped outreach executions, events, and errors so evidence paths and error context are traceable by run.
   - LeadDecision remains scoped to immutable versioned decisions in this PR; broader scoring/lead lifecycle wiring is intentionally deferred to the follow-up P1 wiring PR.
 - Tests and checks:
-  - `set -o pipefail; /usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/schemas.py tests/test_campaign_run_observations.py 2>&1 | tee /tmp/reachops-p1-review-pycompile.log`: passed, exit `0`.
-  - `set -o pipefail; /usr/bin/python3 -m unittest -v tests.test_campaign_run_observations 2>&1 | tee /tmp/reachops-p1-review-run-observations.log`: passed, 5 tests, exit `0`.
-  - `set -o pipefail; /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics 2>&1 | tee /tmp/reachops-p1-review-truth.log`: passed, 7 tests, exit `0`.
+  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/schemas.py tests/test_campaign_run_observations.py`: passed, exit `0`; log `/tmp/reachops-p1-review-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_campaign_run_observations`: passed, 5 tests, exit `0`; log `/tmp/reachops-p1-review-target.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-p1-review-truth.log`.
   - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign 2>&1 | tee /tmp/reachops-p1-review-campaign.log`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-p1-review-campaign.log`.
-  - `main` worktree `/tmp/reachops-main-baseline-pr12` at `887f706`: `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign 2>&1 | tee /tmp/reachops-main-baseline-pr12-campaign.log` failed with the same 14 failures and 1 error.
-  - Baseline comparison artifact `/tmp/reachops-p1-review-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`, `resolved_failures=[]`, `resolved_errors=[]`.
-  - `set -o pipefail; /usr/bin/python3 tools/reachops_operator_pressure.py --json 2>&1 | tee /tmp/reachops-p1-review-operator-pressure.json`: passed, `status=ok`, exit `0`.
-  - `set -o pipefail; /usr/bin/python3 tools/reachops_delivery_audit.py --json 2>&1 | tee /tmp/reachops-p1-review-delivery-audit.json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`.
-  - `set -o pipefail; /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json 2>&1 | tee /tmp/reachops-p1-review-goal-delivery-runner.json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; blockers include local MVP evidence, Windows final artifacts, and authorized external execution.
-  - `set -o pipefail; /usr/bin/python3 tools/reachops_goal_status_report.py --json 2>&1 | tee /tmp/reachops-p1-review-goal-status-report.json`: failed, exit `1`, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`.
-  - `set -o pipefail; /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json 2>&1 | tee /tmp/reachops-p1-review-cleanliness.json`: passed, exit `0`, `forbidden_count=0`.
-  - `git diff --check 2>&1 | tee /tmp/reachops-p1-review-diff-check.log`: passed, exit `0`.
+  - `main` baseline at `887f706`: `/tmp/reachops-main-baseline-dom-campaign.log` failed with the same 14 failures and 1 error.
+  - Baseline comparison artifact `/tmp/reachops-p1-review-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-p1-review-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-p1-review-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; blockers include local MVP evidence, Windows final artifacts, and authorized external execution; output `/tmp/reachops-p1-review-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`; output `/tmp/reachops-p1-review-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p1-review-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p1-review-final-acceptance-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`, `forbidden_count=0`; output `/tmp/reachops-p1-review-cleanliness.json`.
+  - `git diff --check`: passed, exit `0`; log `/tmp/reachops-p1-review-diff-check.log`.
 - Safety:
   - No real TikTok action was executed.
   - No customer data, credentials, cookies, real targets, or raw evidence were added.
