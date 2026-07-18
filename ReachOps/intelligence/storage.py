@@ -512,7 +512,7 @@ class GrowthStorage:
                     payload_json TEXT DEFAULT '{}',
                     observed_at TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    UNIQUE(run_id, content_id, username, observation_key)
+                    UNIQUE(run_id, content_id, username, comment_text, observation_key)
                 );
                 CREATE TABLE IF NOT EXISTS candidate_observations (
                     id TEXT PRIMARY KEY,
@@ -1131,9 +1131,15 @@ class GrowthStorage:
             row = conn.execute(
                 """
                 SELECT id FROM comment_observations
-                WHERE run_id=? AND content_id=? AND username=? AND observation_key=?
+                WHERE run_id=? AND content_id=? AND username=? AND comment_text=? AND observation_key=?
                 """,
-                (run["id"], str(content_id or ""), str(username or ""), str(observation_key or "comment_observed")),
+                (
+                    run["id"],
+                    str(content_id or ""),
+                    str(username or ""),
+                    str(comment_text or ""),
+                    str(observation_key or "comment_observed"),
+                ),
             ).fetchone()
             return row["id"] if row else item_id
 

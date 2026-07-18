@@ -242,6 +242,14 @@ class CampaignRunObservationTests(unittest.TestCase):
         content_duplicate = self.storage.record_content_observation(run.run_id, "content-1", "content_seen")
         comment_first = self.storage.record_comment_observation(run.run_id, "content-1", "candidate-1", "user", "comment", "comment_seen")
         comment_duplicate = self.storage.record_comment_observation(run.run_id, "content-1", "candidate-1", "user", "comment", "comment_seen")
+        comment_same_user_second_text = self.storage.record_comment_observation(
+            run.run_id,
+            "content-1",
+            "candidate-2",
+            "user",
+            "different comment",
+            "comment_seen",
+        )
         candidate_first = self.storage.record_candidate_observation(run.run_id, "candidate-1", "user", 80, ["buy"], "scored")
         candidate_duplicate = self.storage.record_candidate_observation(run.run_id, "candidate-1", "user", 90, ["urgent"], "scored")
 
@@ -251,13 +259,14 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(source_first, source_duplicate)
         self.assertEqual(content_first, content_duplicate)
         self.assertEqual(comment_first, comment_duplicate)
+        self.assertNotEqual(comment_first, comment_same_user_second_text)
         self.assertEqual(candidate_first, candidate_duplicate)
         self.assertNotEqual(first_decision, second_decision)
 
         trace = self.storage.list_observations_for_run(run.run_id)
         self.assertEqual(len(trace["source_observations"]), 1)
         self.assertEqual(len(trace["content_observations"]), 1)
-        self.assertEqual(len(trace["comment_observations"]), 1)
+        self.assertEqual(len(trace["comment_observations"]), 2)
         self.assertEqual(len(trace["candidate_observations"]), 1)
         self.assertEqual([row["decision_version"] for row in trace["lead_decisions"]], [1, 2])
 
