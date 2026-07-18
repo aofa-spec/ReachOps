@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-17`
+- Last manually reconciled: `2026-07-19`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -15,7 +15,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
 | P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
-| P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
+| P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Draft PRs #13 and #14 cover Credential Manager and local license grace. Branch `codex/p2-encrypted-backup-restore` adds local encrypted backup/restore foundation. | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
@@ -75,11 +75,44 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - P1 observation model and migration.
 - LeadDecision versioning and unified scoring contract.
 - Follow/DM evidence validators in no-submit fixtures.
-- Windows Credential Manager abstraction and unit tests.
-- Encrypted backup format and restore tests.
-- License state machine and 7-day grace logic.
+- Windows Credential Manager abstraction and unit tests: Draft PR #13.
+- Encrypted backup format and restore tests: branch `codex/p2-encrypted-backup-restore`.
+- License state machine and 7-day grace logic: Draft PR #14.
 - Localization resource extraction for `zh-CN` and `en-US`.
 - Public reply-monitor parser using redacted/replay fixtures.
+
+## Latest P2 backup/restore verification snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p2-encrypted-backup-restore`
+- Scope: P2 local encrypted backup/restore foundation only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
+- Code evidence:
+  - Added `.reachops-backup` local archive primitives in `ReachOps/workbench/local_backup.py`.
+  - Backup preview selects SQLite data, non-secret configuration, templates, and full-mode evidence files.
+  - Backup exclusion policy rejects cookies/sessions, ixBrowser state, credential/password/secret/proxy material, local acceptance inputs, activation status, and SQLite sidecars.
+  - Archive payload includes versioned manifest, file SHA-256 hashes, customer-password KDF metadata, HMAC authentication, gzip compression, restore preview, unsafe path rejection, and atomic destination replacement.
+  - Added `tools/reachops_local_backup.py` for preview/create/inspect/restore; the backup password is read from `REACHOPS_BACKUP_PASSPHRASE` or interactive prompt, not command-line arguments.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/workbench/local_backup.py tools/reachops_local_backup.py tests/test_local_backup.py`: passed; log `/tmp/reachops-p2-backup-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_local_backup`: passed, 7 tests; log `/tmp/reachops-p2-backup-tests.log`.
+  - CLI smoke create + restore preview with `REACHOPS_BACKUP_PASSPHRASE`: passed; outputs `/tmp/reachops-p2-backup-cli-create.json` and `/tmp/reachops-p2-backup-cli-restore-preview.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p2-backup-truth.log`.
+  - Campaign regression comparison:
+    - branch `codex/p2-encrypted-backup-restore`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-p2-backup-campaign.log`.
+    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-p2-backup-campaign.log`.
+    - comparison `/tmp/reachops-p2-backup-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p2-backup-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-p2-backup-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-p2-backup-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`; output `/tmp/reachops-p2-backup-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p2-backup-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p2-backup-final-acceptance-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p2-backup-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p2-backup-diff-check.log`.
+- Remaining blockers:
+  - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
+  - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
+  - Existing delivery audit and campaign baseline failures remain separate from this P2 backup/restore slice.
 
 ## State-update rules
 
