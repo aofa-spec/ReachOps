@@ -8,6 +8,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
+from ..credentials import AI_API_KEY_SECRET, ReachOpsCredentialStore, ai_api_key_status
 from .view_models import GrowthOpsSnapshot, status_label
 
 
@@ -451,8 +452,10 @@ class GrowthOpsConsole(ttk.Frame):
         self.comment_reply_ai_endpoint_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_ENDPOINT", ""))
         self.comment_reply_ai_model_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_MODEL", "reachops-default"))
         self.comment_reply_ai_key_var = tk.StringVar(value="")
+        self.credential_store = ReachOpsCredentialStore()
+        ai_key_status = ai_api_key_status(credential_store=self.credential_store)
         self.comment_reply_ai_status_var = tk.StringVar(
-            value="AI Key 已配置" if os.environ.get("REACHOPS_AI_API_KEY") else "AI Key 未配置"
+            value=f"AI Key {'已配置' if ai_key_status['configured'] else '未配置'} ({ai_key_status['source']})"
         )
         self.recommended_source_value_var = tk.StringVar(value="")
         self.template_action_type_var = tk.StringVar(value=display_action_type("comment_reply"))
@@ -1155,6 +1158,7 @@ class GrowthOpsConsole(ttk.Frame):
         endpoint = self.comment_reply_ai_endpoint_var.get().strip()
         model = self.comment_reply_ai_model_var.get().strip()
         key = self.comment_reply_ai_key_var.get().strip()
+        credential_result = None
 
         if endpoint:
             os.environ["REACHOPS_AI_ENDPOINT"] = endpoint
@@ -1165,29 +1169,42 @@ class GrowthOpsConsole(ttk.Frame):
         else:
             os.environ.pop("REACHOPS_AI_MODEL", None)
         if key:
-            os.environ["REACHOPS_AI_API_KEY"] = key
+            credential_result = self.credential_store.write_secret(AI_API_KEY_SECRET, key)
+            if credential_result.stored:
+                os.environ.pop("REACHOPS_AI_API_KEY", None)
+                self.comment_reply_ai_key_var.set("")
+            else:
+                os.environ["REACHOPS_AI_API_KEY"] = key
 
-        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or key)
+        key_status = ai_api_key_status(credential_store=self.credential_store)
+        key_configured = bool(key_status["configured"] or key)
         if endpoint:
-            status = f"外部AI已配置：model={model or '未指定'}，key={'已配置' if key_configured else '未配置'}"
+            status = f"外部AI已配置：model={model or '未指定'}，key={'已配置' if key_configured else '未配置'} ({key_status['source']})"
         else:
             status = "外部AI未启用：未填写Endpoint"
         self.comment_reply_ai_status_var.set(status)
+        credential_source = key_status["source"]
+        credential_persistent = bool(key_status["persistent"])
         self.append_runtime_log(
             f"CONFIG comment_reply_ai strategy={self.comment_reply_strategy_var.get()} "
             f"endpoint_configured={str(bool(endpoint)).lower()} model={model or 'none'} "
-            f"key_configured={str(key_configured).lower()} ai_suggestion_only=true"
+            f"key_configured={str(key_configured).lower()} credential_source={credential_source} "
+            f"credential_persistent={str(credential_persistent).lower()} ai_suggestion_only=true"
         )
 
     def comment_reply_ai_settings(self) -> dict:
         endpoint = self.comment_reply_ai_endpoint_var.get().strip()
         model = self.comment_reply_ai_model_var.get().strip()
-        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or self.comment_reply_ai_key_var.get().strip())
+        key_status = ai_api_key_status(credential_store=self.credential_store)
+        key_configured = bool(key_status["configured"] or self.comment_reply_ai_key_var.get().strip())
         return {
             "strategy": self.comment_reply_strategy_var.get(),
             "endpoint_configured": bool(endpoint),
             "model": model,
             "api_key_configured": key_configured,
+            "api_key_source": key_status["source"],
+            "api_key_persistent": bool(key_status["persistent"]),
+            "windows_credential_manager_required": True,
             "fixed_comment_text_configured": bool(self.quick_comment_text_var.get().strip()),
             "execution_policy": "ai_suggestion_only_live_submit_requires_confirmation",
             "no_auto_ai_submit": True,
