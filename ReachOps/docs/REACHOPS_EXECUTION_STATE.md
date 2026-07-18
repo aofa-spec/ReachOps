@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-17`
+- Last manually reconciled: `2026-07-19`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -17,7 +17,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
 | P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
-| P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
+| P4 | Bilingual UI, installer, update, Windows acceptance | `IN_PROGRESS` | Branch `codex/p4-operator-controls-ui-mapping` makes customer-visible operator controls map to execution evidence. Windows installer/update/live acceptance remain incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
 
 ## Next autonomous action
@@ -80,6 +80,36 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - License state machine and 7-day grace logic.
 - Localization resource extraction for `zh-CN` and `en-US`.
 - Public reply-monitor parser using redacted/replay fixtures.
+
+## Latest P4 operator-control UI verification snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-operator-controls-ui-mapping`
+- Scope: P4 local operator UI control visibility only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
+- Code evidence:
+  - `ReachOps/workbench/console.py` now exposes customer-visible labels and controls for `每个目标最多视频`, `每条视频最多评论`, `参与账号数`, `任务间隔秒`, and `排除词`.
+  - These controls already feed execution through `scan_max_videos_var`, `scan_max_comments_var`, `scan_profile_limit_var`, `scan_interval_var`, and `scan_exclude_keywords_var`; this slice closes the UI visibility/evidence mapping gap.
+  - Added `tests/test_operator_controls_mapping.py` to lock the delivery-audit operator-control contract.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/workbench/console.py tests/test_operator_controls_mapping.py`: passed; log `/tmp/reachops-p4-controls-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_operator_controls_mapping`: passed, 1 test; log `/tmp/reachops-p4-controls-tests.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-controls-truth.log`.
+  - Campaign regression comparison:
+    - branch `codex/p4-operator-controls-ui-mapping`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-p4-controls-campaign.log`.
+    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-p4-controls-campaign.log`.
+    - comparison `/tmp/reachops-p4-controls-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p4-controls-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed but improved from `passed=46`, `failed=5` to `passed=47`, `failed=4`; output `/tmp/reachops-p4-controls-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-p4-controls-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, local final failures reduced to 2; output `/tmp/reachops-p4-controls-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-controls-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p4-controls-final-acceptance-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p4-controls-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-controls-diff-check.log`.
+- Remaining blockers:
+  - Delivery audit still has 4 failed local checks: campaign funnel isolation, web API acquisition chain, web runtime API smoke, and web button JS/API feedback.
+  - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
+  - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
 
 ## State-update rules
 
