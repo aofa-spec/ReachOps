@@ -8,6 +8,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Protocol
 
+from ReachOps.credential_secrets import AI_API_KEY_CREDENTIAL, build_default_secret_store
+
 from .schemas import AcquisitionCampaign
 from .source_planner import split_operator_keywords
 
@@ -31,14 +33,22 @@ class AcquisitionIntelligenceProvider(Protocol):
         ...
 
 
-def build_default_acquisition_intelligence_provider(env: dict[str, str] | None = None) -> AcquisitionIntelligenceProvider:
+def build_default_acquisition_intelligence_provider(env: dict[str, str] | None = None, secret_store=None) -> AcquisitionIntelligenceProvider:
     env = env or os.environ
     endpoint = str(env.get("REACHOPS_AI_ENDPOINT") or "").strip()
     if not endpoint:
         return RuleBasedAcquisitionIntelligenceProvider()
+    api_key = str(env.get("REACHOPS_AI_API_KEY") or "").strip()
+    if not api_key:
+        store = secret_store or build_default_secret_store()
+        if getattr(store, "is_available", lambda: False)():
+            try:
+                api_key = str(store.get_secret(AI_API_KEY_CREDENTIAL) or "").strip()
+            except Exception:
+                api_key = ""
     return HTTPAcquisitionIntelligenceProvider(
         endpoint=endpoint,
-        api_key=str(env.get("REACHOPS_AI_API_KEY") or "").strip(),
+        api_key=api_key,
         model=str(env.get("REACHOPS_AI_MODEL") or "").strip() or "reachops-default",
         timeout_seconds=float(env.get("REACHOPS_AI_TIMEOUT_SECONDS") or 20),
         provider_name=str(env.get("REACHOPS_AI_PROVIDER_NAME") or "").strip() or "http_ai_provider",
@@ -50,7 +60,8 @@ class HTTPAcquisitionIntelligenceProvider:
 
     The provider accepts generic JSON responses and OpenAI-compatible chat
     responses. It never stores credentials; callers pass endpoint/key through
-    runtime environment or explicit constructor args.
+    Windows Credential Manager, runtime environment, or explicit constructor
+    args.
     """
 
     def __init__(
