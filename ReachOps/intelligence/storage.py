@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import uuid
+import hashlib
 from contextlib import contextmanager
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -26,6 +27,9 @@ from .schemas import (
     ScheduledScan,
     utc_now_iso,
 )
+
+LEAD_DECISION_SCHEMA_VERSION = "reachops.lead_decision.v1"
+LEAD_DECISION_RULE_VERSION = "reachops.rule_based_lead_decision.v1"
 
 
 def new_id(prefix: str) -> str:
@@ -195,6 +199,28 @@ class GrowthStorage:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(candidate_user_id, lead_type)
+                );
+                CREATE TABLE IF NOT EXISTS lead_decisions (
+                    id TEXT PRIMARY KEY,
+                    lead_id TEXT NOT NULL,
+                    candidate_user_id TEXT NOT NULL,
+                    content_id TEXT DEFAULT '',
+                    decision_version INTEGER NOT NULL,
+                    decision_type TEXT NOT NULL,
+                    lead_type TEXT NOT NULL,
+                    priority TEXT DEFAULT 'normal',
+                    score INTEGER DEFAULT 0,
+                    confidence INTEGER DEFAULT 0,
+                    reason TEXT DEFAULT '',
+                    evidence TEXT DEFAULT '',
+                    decision_source TEXT DEFAULT 'rule_based',
+                    decision_schema_version TEXT DEFAULT 'reachops.lead_decision.v1',
+                    rule_version TEXT DEFAULT 'reachops.rule_based_lead_decision.v1',
+                    decision_fingerprint TEXT NOT NULL,
+                    decision_json TEXT DEFAULT '{}',
+                    batch_id TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(lead_id, decision_fingerprint)
                 );
                 CREATE TABLE IF NOT EXISTS action_queue (
                     id TEXT PRIMARY KEY,
@@ -505,6 +531,22 @@ class GrowthStorage:
                     "updated_at": "TEXT DEFAULT ''",
                 },
             )
+            self._ensure_columns(
+                conn,
+                "lead_decisions",
+                {
+                    "content_id": "TEXT DEFAULT ''",
+                    "confidence": "INTEGER DEFAULT 0",
+                    "evidence": "TEXT DEFAULT ''",
+                    "decision_source": "TEXT DEFAULT 'rule_based'",
+                    "decision_schema_version": "TEXT DEFAULT 'reachops.lead_decision.v1'",
+                    "rule_version": "TEXT DEFAULT 'reachops.rule_based_lead_decision.v1'",
+                    "decision_json": "TEXT DEFAULT '{}'",
+                    "batch_id": "TEXT DEFAULT ''",
+                },
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_lead_decisions_lead_id ON lead_decisions(lead_id, decision_version)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_lead_decisions_batch_id ON lead_decisions(batch_id)")
             self._ensure_columns(
                 conn,
                 "outreach_executions",
@@ -1148,6 +1190,7 @@ class GrowthStorage:
         score: int,
         reason: str,
         source_path: str = "",
+        decision_context: Optional[Dict[str, Any]] = None,
     ):
         now = utc_now_iso()
         with self.connect() as conn:
@@ -1164,6 +1207,18 @@ class GrowthStorage:
                     WHERE id=?
                     """,
                     (priority, int(score), reason, source_path or "", now, row["id"]),
+                )
+                self._record_lead_decision(
+                    conn,
+                    row["id"],
+                    candidate_id,
+                    lead_type,
+                    priority,
+                    score,
+                    reason,
+                    "updated",
+                    decision_context,
+                    now,
                 )
                 return row["id"], False
             item_id = new_id("ol")
@@ -1189,7 +1244,167 @@ class GrowthStorage:
                     now,
                 ),
             )
+            self._record_lead_decision(
+                conn,
+                item_id,
+                candidate_id,
+                lead_type,
+                priority,
+                score,
+                reason,
+                "created",
+                decision_context,
+                now,
+            )
             return item_id, True
+
+    def _record_lead_decision(
+        self,
+        conn,
+        lead_id: str,
+        candidate_id: str,
+        lead_type: str,
+        priority: str,
+        score: int,
+        reason: str,
+        decision_type: str,
+        decision_context: Optional[Dict[str, Any]],
+        created_at: str,
+    ) -> tuple[str, bool]:
+        context = dict(decision_context or {})
+        candidate = conn.execute(
+            "SELECT content_id, batch_id, qualify_score, intent_tags, comment_text FROM candidate_users WHERE id=?",
+            (str(candidate_id or ""),),
+        ).fetchone()
+        content_id = str((candidate["content_id"] if candidate else "") or context.get("content_id") or "")
+        batch_id = str(context.get("batch_id") or self._active_batch_id() or (candidate["batch_id"] if candidate else "") or "")
+        confidence = int(context.get("confidence") or 0)
+        rule_version = str(context.get("rule_version") or LEAD_DECISION_RULE_VERSION)
+        decision_source = str(context.get("decision_source") or "rule_based")
+        evidence = str(context.get("evidence") or reason or "")
+        decision_payload = {
+            "schema_version": LEAD_DECISION_SCHEMA_VERSION,
+            "lead_id": str(lead_id or ""),
+            "candidate_user_id": str(candidate_id or ""),
+            "content_id": content_id,
+            "lead_type": str(lead_type or ""),
+            "priority": str(priority or "normal"),
+            "score": int(score or 0),
+            "confidence": confidence,
+            "reason": str(reason or ""),
+            "evidence": evidence,
+            "decision_source": decision_source,
+            "rule_version": rule_version,
+            "batch_id": batch_id,
+            "candidate_snapshot": {
+                "qualify_score": int(candidate["qualify_score"] or 0) if candidate else None,
+                "intent_tags": candidate["intent_tags"] if candidate else "",
+                "comment_text_present": bool(candidate["comment_text"]) if candidate else False,
+            },
+            "local_data_only": True,
+        }
+        fingerprint_material = {
+            key: decision_payload[key]
+            for key in [
+                "lead_id",
+                "candidate_user_id",
+                "content_id",
+                "lead_type",
+                "priority",
+                "score",
+                "confidence",
+                "reason",
+                "evidence",
+                "decision_source",
+                "rule_version",
+                "batch_id",
+            ]
+        }
+        fingerprint = hashlib.sha256(json.dumps(fingerprint_material, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        existing = conn.execute(
+            "SELECT id FROM lead_decisions WHERE lead_id=? AND decision_fingerprint=?",
+            (str(lead_id or ""), fingerprint),
+        ).fetchone()
+        if existing:
+            return existing["id"], False
+        version_row = conn.execute(
+            "SELECT COALESCE(MAX(decision_version), 0) AS latest_version FROM lead_decisions WHERE lead_id=?",
+            (str(lead_id or ""),),
+        ).fetchone()
+        decision_version = int(version_row["latest_version"] or 0) + 1
+        decision_payload["decision_version"] = decision_version
+        item_id = new_id("ld")
+        conn.execute(
+            """
+            INSERT INTO lead_decisions
+            (id, lead_id, candidate_user_id, content_id, decision_version, decision_type, lead_type, priority,
+             score, confidence, reason, evidence, decision_source, decision_schema_version, rule_version,
+             decision_fingerprint, decision_json, batch_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item_id,
+                str(lead_id or ""),
+                str(candidate_id or ""),
+                content_id,
+                decision_version,
+                str(decision_type or "updated"),
+                str(lead_type or ""),
+                str(priority or "normal"),
+                int(score or 0),
+                confidence,
+                str(reason or ""),
+                evidence,
+                decision_source,
+                LEAD_DECISION_SCHEMA_VERSION,
+                rule_version,
+                fingerprint,
+                json.dumps(decision_payload, ensure_ascii=False, sort_keys=True),
+                batch_id,
+                created_at,
+            ),
+        )
+        return item_id, True
+
+    def list_lead_decisions(
+        self,
+        lead_id: str = "",
+        candidate_id: str = "",
+        batch_id: str = "",
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if lead_id:
+            filters.append("lead_id=?")
+            args.append(str(lead_id))
+        if candidate_id:
+            filters.append("candidate_user_id=?")
+            args.append(str(candidate_id))
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(str(batch_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM lead_decisions
+                {where}
+                ORDER BY created_at ASC, decision_version ASC, rowid ASC
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 200)]),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["decision"] = json.loads(item.get("decision_json") or "{}")
+            except Exception:
+                item["decision"] = {}
+            result.append(item)
+        return result
 
     def upsert_action_queue_item(self, item: ActionQueueItem) -> tuple[str, bool]:
         with self.connect() as conn:
@@ -1265,11 +1480,17 @@ class GrowthStorage:
                        SUM(CASE WHEN aq.status='pending_review' THEN 1 ELSE 0 END) AS pending_action_count,
                        SUM(CASE WHEN aq.status='approved' THEN 1 ELSE 0 END) AS approved_action_count,
                        SUM(CASE WHEN aq.status='completed' THEN 1 ELSE 0 END) AS completed_action_count,
-                       SUM(CASE WHEN aq.status IN ('failed', 'retryable') THEN 1 ELSE 0 END) AS retryable_action_count
+                       SUM(CASE WHEN aq.status IN ('failed', 'retryable') THEN 1 ELSE 0 END) AS retryable_action_count,
+                       COALESCE(ldv.latest_decision_version, 0) AS latest_decision_version
                 FROM operation_leads ol
                 LEFT JOIN candidate_users cu ON cu.id = ol.candidate_user_id
                 LEFT JOIN discovered_contents dc ON dc.id = cu.content_id
                 LEFT JOIN action_queue aq ON aq.lead_id = ol.id
+                LEFT JOIN (
+                    SELECT lead_id, MAX(decision_version) AS latest_decision_version
+                    FROM lead_decisions
+                    GROUP BY lead_id
+                ) ldv ON ldv.lead_id = ol.id
                 {where}
                 GROUP BY ol.id
                 ORDER BY ol.score DESC, ol.updated_at DESC, ol.created_at DESC
@@ -2649,6 +2870,7 @@ class GrowthStorage:
             "material_signals",
             "audience_intents",
             "operation_leads",
+            "lead_decisions",
             "action_queue",
             "outreach_executions",
             "collection_batches",

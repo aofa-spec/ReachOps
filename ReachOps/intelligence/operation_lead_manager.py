@@ -73,6 +73,13 @@ class OperationLeadManager:
                 max(score, confidence),
                 reason,
                 source_path=source_path,
+                decision_context={
+                    "confidence": confidence,
+                    "evidence": evidence,
+                    "decision_source": "operation_lead_manager",
+                    "rule_version": "reachops.operation_lead_rules.v1",
+                    "batch_id": str(getattr(config, "active_batch_id", "") or "").strip(),
+                },
             )
             if lead_created:
                 stats["leads"] += 1
