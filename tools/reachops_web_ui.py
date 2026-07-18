@@ -2467,7 +2467,7 @@ def html_page() -> bytes:
     .taskForm {{ display:grid; gap:12px; min-width:0; }}
     .taskForm label {{ min-width:0; }}
     .taskParams {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(176px,1fr)); gap:10px; align-items:end; min-width:0; }}
-    .taskActions {{ display:grid; grid-template-columns:minmax(180px,1fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
+    .taskActions {{ display:grid; grid-template-columns:minmax(140px,.9fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
     .secondaryActions {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding-top:2px; }}
     .secondaryActions button {{ height:32px; padding:0 10px; font-size:12px; color:var(--muted); background:#20262b; }}
     label {{ display:grid; gap:6px; color:var(--muted); font-size:12px; }}
@@ -2667,7 +2667,7 @@ def html_page() -> bytes:
 	      .work {{ padding:12px; }}
 	      .clientRuntimeStrip {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
 	      .taskParams {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }}
-	      .taskActions {{ grid-template-columns:1fr 1fr; max-width:none; }}
+	      .taskActions {{ grid-template-columns:repeat(auto-fit,minmax(92px,1fr)); max-width:none; }}
 	      .taskActions #start {{ grid-column:1 / -1; }}
 	      .taskActions button {{ width:100%; }}
 	      .two {{ grid-template-columns:1fr; }}
@@ -2797,7 +2797,7 @@ def html_page() -> bytes:
             </div>
           </div>
 	          <div class="taskActions">
-	            <button class="primary" id="start" disabled>开始获客</button>
+            <button id="start" disabled class="primary">开始获客</button>
 	            <button class="warn" id="pause">暂停</button>
 	            <button class="okBtn" id="resume">继续</button>
 	            <button id="stop">停止</button>
@@ -3071,7 +3071,7 @@ def html_page() -> bytes:
           ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；点击后会重新读取分组并自动预检筛选有效账号。`
           : '开始获客';
       if ($('start')) {{
-        $('start').disabled = !groupListReady;
+        $('start').disabled = !groupListReady || blockedByAccountGate;
         $('start').title = startBlockedReason;
       }}
       if ($('accountGateState')) {{
@@ -4013,8 +4013,22 @@ def html_page() -> bytes:
 	    function renderGroupDetails(groups, selectedName='') {{
 	      const box = $('groupDetails');
 	      if (!box) return;
-	      box.classList.remove('hasContent');
-	      box.innerHTML = '';
+	      if (!groups || !groups.length) {{
+	        box.classList.remove('hasContent');
+	        box.innerHTML = '';
+	        return;
+	      }}
+	      const selected = normGroupName(selectedName);
+	      box.classList.add('hasContent');
+	      box.innerHTML = groups.map(group => {{
+	        const active = normGroupName(group.name) === selected ? ' active' : '';
+	        const name = String(group.name || '-');
+	        const groupId = group.group_id || group.id || '-';
+	        const countKnown = group.count_known === true;
+	        const countLabel = String(group.count_label || (countKnown ? `${{Number(group.count || 0)}}账号` : '数量未返回'));
+	        const countSource = group.count_source || group.count_status || 'unknown';
+	        return `<div class="groupItem${{active}}"><div><div class="groupName">${{esc(name)}}</div><div class="groupMeta">ID：${{esc(groupId)}} / 来源：${{esc(countSource)}}</div></div><div class="groupQty${{countKnown ? '' : ' unknown'}}">${{esc(countLabel)}}</div></div>`;
+	      }}).join('');
 	    }}
     function leadIntentChips(row) {{
       const labels = [];
@@ -4746,17 +4760,26 @@ def html_page() -> bytes:
 	        return;
       }}
       if (accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed()) {{
+        const blockedGroupLabel = String(accountGateBlockedGroup || $('group').value || '当前分组').trim();
+        const staleRepair = accountRepairApplyState && accountRepairApplyState.stale === true;
         showApiNotice(
-          '重新预检账号',
+          '账号修复后再启动',
           {{
-            status:'ready_for_account_recheck',
-            message:'当前分组上次账号预检未通过；本次会重新读取 ixBrowser 分组并自动筛选有效登录账号。',
+            status:'blocked_by_accounts',
+            error: staleRepair ? 'stale_account_repair_result' : 'account_gate_blocked',
+            message: staleRepair
+              ? '旧账号修复结果已失效；当前分组已产生新的账号阻断批次。'
+              : `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；修复或隔离坏账号后再重新预检。`,
             account_repair_apply: accountRepairApplyState || {{}},
-            next_actions:['系统会跳过未登录、内核不匹配、代理异常账号。','如果仍无可用账号，本轮会生成新的阻断证据。']
+            next_actions: staleRepair
+              ? ['请按最新账号修复计划处理当前失败账号。','不要继续勾选旧的重新预检。','最新账号修复计划会显示在报告中心和账号修复清单。']
+              : [...accountRepairActionItems(accountRepairSummary), '点击“隔离坏账号”或手动修复登录/内核/代理问题后，再勾选“已修复账号，允许重新预检”。']
           }},
-          'warning',
-          12000
+          'blocked',
+          30000
         );
+        logClientEvent('start_blocked', {{reason: staleRepair ? 'stale_account_repair_result' : 'account_gate_blocked', target:$('target').value, group:$('group').value}});
+        return;
       }}
 	      if ($('liveConfirm').checked && $('mode').value !== 'live_comment') {{
 	        $('mode').value = 'live_comment';
