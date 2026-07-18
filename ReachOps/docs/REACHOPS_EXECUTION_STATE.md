@@ -86,31 +86,32 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Date: `2026-07-19`
 - Branch: `codex/p1-lead-decision-versioning`
 - Draft PR: #17 `ReachOps P1: versioned lead decision ledger`
-- Commit: `8e81baa` adds the append-only lead-decision ledger, versioning, idempotency, migration compatibility, and focused tests.
+- Commit: `8e81baa` adds the append-only lead-decision ledger, versioning, idempotency, migration compatibility, and focused tests; the follow-up commit on the same PR preserves candidate batch attribution when the active batch changes before lead evaluation.
 - Scope: P1 lead decision traceability/versioning only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
 - Code evidence:
   - Added local SQLite table `lead_decisions` as an append-only ledger for operation-lead decisions.
   - Each decision records schema version, rule version, lead ID, candidate ID, content ID, batch ID, score, confidence, reason, evidence, fingerprint, and decision JSON.
   - Repeated identical upserts are idempotent through `UNIQUE(lead_id, decision_fingerprint)`.
   - Changed scoring/reason/context appends a new `decision_version` without rewriting prior rows.
+  - New operation leads and lead-decision ledger rows resolve batch attribution as explicit decision context first, then candidate observation batch, then current active batch, preventing old observations from being silently attributed to a later run.
   - Legacy databases gain the table on init but do not fabricate historical decision rows for old `operation_leads`.
   - `list_operation_leads()` exposes `latest_decision_version` so lead rows can be traced back to the immutable ledger.
 - Tests and checks:
-  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/operation_lead_manager.py tests/test_lead_decisions.py`: passed; log `/tmp/reachops-p1-lead-decisions-pycompile.log`.
-  - `/usr/bin/python3 -m unittest -v tests.test_lead_decisions`: passed, 5 tests; log `/tmp/reachops-p1-lead-decisions-tests.log`.
-  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p1-lead-decisions-truth.log`.
+  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/operation_lead_manager.py tests/test_lead_decisions.py`: passed; log `/tmp/reachops-pr17-batch-trace-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_lead_decisions`: passed, 6 tests; log `/tmp/reachops-pr17-batch-trace-tests.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr17-batch-trace-truth.log`.
   - Campaign regression comparison:
-    - branch `codex/p1-lead-decision-versioning`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-p1-lead-decisions-campaign.log`.
-    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-p1-lead-decisions-campaign.log`.
-    - comparison `/tmp/reachops-p1-lead-decisions-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
-  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p1-lead-decisions-operator-pressure.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-p1-lead-decisions-delivery-audit.json`.
-  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-p1-lead-decisions-goal-delivery-runner.json`.
-  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`; output `/tmp/reachops-p1-lead-decisions-goal-status-report.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p1-lead-decisions-package-check.json`.
-  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p1-lead-decisions-final-acceptance-gate.json`.
-  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p1-lead-decisions-cleanliness.json`.
-  - `git diff --check`: passed; log `/tmp/reachops-p1-lead-decisions-diff-check.log`.
+    - branch `codex/p1-lead-decision-versioning`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-pr17-batch-trace-campaign.log`.
+    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-pr17-batch-trace-campaign.log`.
+    - comparison result: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr17-batch-trace-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-pr17-batch-trace-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr17-batch-trace-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-pr17-batch-trace-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr17-batch-trace-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr17-batch-trace-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr17-batch-trace-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-pr17-batch-trace-diff-check.log`.
 - Remaining blockers:
   - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
   - External authorized live TikTok validation remains pending and must not be fabricated on Mac.

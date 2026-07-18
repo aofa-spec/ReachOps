@@ -132,6 +132,25 @@ class LeadDecisionTests(unittest.TestCase):
         self.assertEqual(storage.list_lead_decisions(batch_id="batch-a")[0]["candidate_user_id"], "candidate-a")
         self.assertEqual(storage.list_lead_decisions(batch_id="batch-b")[0]["candidate_user_id"], "candidate-b")
 
+    def test_candidate_batch_remains_authoritative_when_active_batch_changes(self) -> None:
+        storage = self.temp_storage()
+        storage.set_active_collection_batch("batch-original")
+        candidate = add_candidate(storage, "candidate-original", "content-original")
+
+        storage.set_active_collection_batch("batch-later")
+        lead_id, created = storage.upsert_operation_lead(
+            candidate.id,
+            "engaged_commenter",
+            "normal",
+            50,
+            "evaluated after active batch moved",
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(storage.list_lead_decisions(lead_id=lead_id)[0]["batch_id"], "batch-original")
+        self.assertEqual(storage.list_operation_leads(batch_id="batch-original")[0]["id"], lead_id)
+        self.assertEqual(storage.list_operation_leads(batch_id="batch-later"), [])
+
     def test_legacy_database_migration_does_not_fabricate_historical_decisions(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "legacy.sqlite"

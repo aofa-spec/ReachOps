@@ -1193,7 +1193,18 @@ class GrowthStorage:
         decision_context: Optional[Dict[str, Any]] = None,
     ):
         now = utc_now_iso()
+        decision_context = dict(decision_context or {})
         with self.connect() as conn:
+            candidate_row = conn.execute(
+                "SELECT batch_id FROM candidate_users WHERE id=?",
+                (str(candidate_id or ""),),
+            ).fetchone()
+            resolved_batch_id = str(
+                decision_context.get("batch_id")
+                or (candidate_row["batch_id"] if candidate_row else "")
+                or self._active_batch_id()
+                or ""
+            )
             row = conn.execute(
                 "SELECT id FROM operation_leads WHERE candidate_user_id=? AND lead_type=?",
                 (candidate_id, lead_type),
@@ -1239,7 +1250,7 @@ class GrowthStorage:
                     "new",
                     source_path or "",
                     "new",
-                    self._active_batch_id(),
+                    resolved_batch_id,
                     now,
                     now,
                 ),
@@ -1277,7 +1288,7 @@ class GrowthStorage:
             (str(candidate_id or ""),),
         ).fetchone()
         content_id = str((candidate["content_id"] if candidate else "") or context.get("content_id") or "")
-        batch_id = str(context.get("batch_id") or self._active_batch_id() or (candidate["batch_id"] if candidate else "") or "")
+        batch_id = str(context.get("batch_id") or (candidate["batch_id"] if candidate else "") or self._active_batch_id() or "")
         confidence = int(context.get("confidence") or 0)
         rule_version = str(context.get("rule_version") or LEAD_DECISION_RULE_VERSION)
         decision_source = str(context.get("decision_source") or "rule_based")
