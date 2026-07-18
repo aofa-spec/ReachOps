@@ -490,6 +490,79 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(trace["candidate_observations"]), 1)
         self.assertEqual([row["decision_version"] for row in trace["lead_decisions"]], [1, 2])
 
+    def test_repeated_candidate_can_generate_independent_run_scoped_leads_actions_and_evidence(self):
+        campaign = self.storage.create_campaign("keyword", "serum")
+        first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+        second = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+
+        def record_run(batch, score):
+            self.storage.set_active_collection_batch(batch.id)
+            candidate, _created = self.storage.upsert_candidate(
+                CandidateUser(
+                    id=f"candidate-{batch.id}",
+                    content_id="content-shared",
+                    username="repeat_buyer",
+                    profile_url="https://example.test/@repeat_buyer",
+                    comment_text="where can I buy this",
+                    qualify_score=score,
+                    intent_tags=["buy"],
+                )
+            )
+            lead_id, lead_created = self.storage.upsert_operation_lead(
+                candidate.id,
+                "high_intent",
+                "high",
+                score,
+                f"run {batch.id} buying signal",
+            )
+            action_id, action_created = self.storage.upsert_action_queue_item(
+                ActionQueueItem(
+                    id=f"action-{batch.id}",
+                    lead_id=lead_id,
+                    action_type="comment_reply",
+                    target_username="repeat_buyer",
+                    target_url="https://example.test/video/shared",
+                )
+            )
+            execution_id = self.storage.create_outreach_execution(
+                action_id,
+                "comment_reply",
+                "repeat_buyer",
+                status="success",
+                profile_id=f"profile-{batch.id}",
+                execution_mode="preflight",
+                submission_state="not_attempted",
+                evidence_path=f"/tmp/reachops/redacted/{batch.run_id}.png",
+            )
+            return lead_id, lead_created, action_id, action_created, execution_id
+
+        first_lead, first_lead_created, first_action, first_action_created, first_execution = record_run(first, 81)
+        second_lead, second_lead_created, second_action, second_action_created, second_execution = record_run(second, 91)
+
+        self.assertTrue(first_lead_created)
+        self.assertTrue(second_lead_created)
+        self.assertTrue(first_action_created)
+        self.assertTrue(second_action_created)
+        self.assertNotEqual(first_lead, second_lead)
+        self.assertNotEqual(first_action, second_action)
+        self.assertNotEqual(first_execution, second_execution)
+
+        first_leads = self.storage.list_operation_leads(run_id=first.run_id)
+        second_leads = self.storage.list_operation_leads(run_id=second.run_id)
+        first_actions = self.storage.list_action_queue(run_id=first.run_id)
+        second_actions = self.storage.list_action_queue(run_id=second.run_id)
+        first_executions = self.storage.list_outreach_executions(run_id=first.run_id)
+        second_executions = self.storage.list_outreach_executions(run_id=second.run_id)
+
+        self.assertEqual([row["id"] for row in first_leads], [first_lead])
+        self.assertEqual([row["id"] for row in second_leads], [second_lead])
+        self.assertEqual([row["id"] for row in first_actions], [first_action])
+        self.assertEqual([row["id"] for row in second_actions], [second_action])
+        self.assertEqual([row["id"] for row in first_executions], [first_execution])
+        self.assertEqual([row["id"] for row in second_executions], [second_execution])
+        self.assertEqual(first_executions[0]["evidence_path"], f"/tmp/reachops/redacted/{first.run_id}.png")
+        self.assertEqual(second_executions[0]["evidence_path"], f"/tmp/reachops/redacted/{second.run_id}.png")
+
     def test_migration_compatibility_uses_legacy_run_ids_without_rewriting_old_entities(self):
         old_db = Path(self.tmpdir.name) / "legacy.sqlite3"
         with sqlite3.connect(old_db) as conn:
@@ -701,6 +774,37 @@ class CampaignRunObservationTests(unittest.TestCase):
         reopened = GrowthStorage(str(old_db))
         self.assertEqual(reopened.run_id_for_batch("gb_legacy1"), "legacy_run_gb_legacy1")
         self.assertEqual(reopened.count_table("campaign_runs"), 1)
+
+        new_batch = reopened.create_collection_batch(1, profile_group="US", campaign_id="acq_legacy")
+        reopened.set_active_collection_batch(new_batch.id)
+        new_lead_id, new_lead_created = reopened.upsert_operation_lead(
+            "candidate_legacy1",
+            "high_intent",
+            "high",
+            88,
+            "new run decision for legacy candidate",
+        )
+        new_action_id, new_action_created = reopened.upsert_action_queue_item(
+            ActionQueueItem(
+                id="action_new_run",
+                lead_id=new_lead_id,
+                action_type="comment_reply",
+                target_username="legacy_user",
+                target_url="https://example.test/video/new-run",
+            )
+        )
+        self.assertTrue(new_lead_created)
+        self.assertTrue(new_action_created)
+        self.assertNotEqual(new_lead_id, "lead_legacy1")
+        self.assertNotEqual(new_action_id, "action_legacy1")
+        self.assertEqual([row["id"] for row in reopened.list_operation_leads(run_id=new_batch.run_id)], [new_lead_id])
+        self.assertEqual([row["id"] for row in reopened.list_action_queue(run_id=new_batch.run_id)], [new_action_id])
+        with sqlite3.connect(old_db) as conn:
+            conn.row_factory = sqlite3.Row
+            legacy_lead = conn.execute("SELECT run_id FROM operation_leads WHERE id='lead_legacy1'").fetchone()
+            legacy_action = conn.execute("SELECT run_id FROM action_queue WHERE id='action_legacy1'").fetchone()
+        self.assertEqual(legacy_lead["run_id"], "")
+        self.assertEqual(legacy_action["run_id"], "")
 
 
 if __name__ == "__main__":

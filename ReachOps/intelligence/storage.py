@@ -215,7 +215,7 @@ class GrowthStorage:
                     batch_id TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    UNIQUE(candidate_user_id, lead_type)
+                    UNIQUE(run_id, candidate_user_id, lead_type)
                 );
                 CREATE TABLE IF NOT EXISTS action_queue (
                     id TEXT PRIMARY KEY,
@@ -230,7 +230,7 @@ class GrowthStorage:
                     risk_level TEXT DEFAULT 'medium',
                     batch_id TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
-                    UNIQUE(lead_id, action_type)
+                    UNIQUE(run_id, lead_id, action_type)
                 );
                 CREATE TABLE IF NOT EXISTS collection_batches (
                     id TEXT PRIMARY KEY,
@@ -641,6 +641,7 @@ class GrowthStorage:
             )
             self._ensure_columns(conn, "growth_events", {"run_id": "TEXT DEFAULT ''"})
             self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
+            self._ensure_run_scoped_unique_constraints(conn)
             self._ensure_campaign_runs_for_existing_batches(conn)
             self._seed_default_action_templates(conn)
 
@@ -649,6 +650,111 @@ class GrowthStorage:
         for name, definition in columns.items():
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}")
+
+    def _has_unique_index(self, conn, table_name: str, columns: list[str]) -> bool:
+        expected = list(columns)
+        for index_row in conn.execute(f"PRAGMA index_list({table_name})").fetchall():
+            if not int(index_row["unique"] or 0):
+                continue
+            index_name = str(index_row["name"] or "")
+            indexed = [
+                str(info_row["name"] or "")
+                for info_row in conn.execute(f"PRAGMA index_info({index_name})").fetchall()
+            ]
+            if indexed == expected:
+                return True
+        return False
+
+    def _ensure_run_scoped_unique_constraints(self, conn):
+        if self._has_unique_index(conn, "operation_leads", ["candidate_user_id", "lead_type"]):
+            self._rebuild_operation_leads_run_scoped(conn)
+        if self._has_unique_index(conn, "action_queue", ["lead_id", "action_type"]):
+            self._rebuild_action_queue_run_scoped(conn)
+
+    def _rebuild_operation_leads_run_scoped(self, conn):
+        conn.execute("ALTER TABLE operation_leads RENAME TO operation_leads_legacy_unique")
+        conn.execute(
+            """
+            CREATE TABLE operation_leads (
+                id TEXT PRIMARY KEY,
+                candidate_user_id TEXT NOT NULL,
+                run_id TEXT DEFAULT '',
+                lead_type TEXT NOT NULL,
+                priority TEXT DEFAULT 'normal',
+                score INTEGER DEFAULT 0,
+                reason TEXT DEFAULT '',
+                lifecycle_stage TEXT DEFAULT 'new',
+                source_path TEXT DEFAULT '',
+                status TEXT DEFAULT 'new',
+                batch_id TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(run_id, candidate_user_id, lead_type)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO operation_leads
+            (id, candidate_user_id, run_id, lead_type, priority, score, reason, lifecycle_stage,
+             source_path, status, batch_id, created_at, updated_at)
+            SELECT id, candidate_user_id, COALESCE(run_id, ''), lead_type, priority, score, reason,
+                   lifecycle_stage, source_path, status, batch_id, created_at, updated_at
+            FROM operation_leads_legacy_unique
+            """
+        )
+        conn.execute("DROP TABLE operation_leads_legacy_unique")
+
+    def _rebuild_action_queue_run_scoped(self, conn):
+        conn.execute("ALTER TABLE action_queue RENAME TO action_queue_legacy_unique")
+        conn.execute(
+            """
+            CREATE TABLE action_queue (
+                id TEXT PRIMARY KEY,
+                lead_id TEXT NOT NULL,
+                run_id TEXT DEFAULT '',
+                action_type TEXT NOT NULL,
+                target_username TEXT NOT NULL,
+                target_url TEXT DEFAULT '',
+                suggested_text TEXT DEFAULT '',
+                reason TEXT DEFAULT '',
+                status TEXT DEFAULT 'pending_review',
+                risk_level TEXT DEFAULT 'medium',
+                batch_id TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                review_status TEXT DEFAULT 'pending',
+                reviewed_by TEXT DEFAULT '',
+                reviewed_at TEXT,
+                review_note TEXT DEFAULT '',
+                daily_quota_key TEXT DEFAULT '',
+                execution_confirmed INTEGER DEFAULT 0,
+                confirmed_by TEXT DEFAULT '',
+                confirmed_at TEXT,
+                retry_count INTEGER DEFAULT 0,
+                last_execution_id TEXT DEFAULT '',
+                last_error_code TEXT DEFAULT '',
+                last_error_message TEXT DEFAULT '',
+                last_executed_at TEXT,
+                UNIQUE(run_id, lead_id, action_type)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO action_queue
+            (id, lead_id, run_id, action_type, target_username, target_url, suggested_text, reason,
+             status, risk_level, batch_id, created_at, review_status, reviewed_by, reviewed_at,
+             review_note, daily_quota_key, execution_confirmed, confirmed_by, confirmed_at,
+             retry_count, last_execution_id, last_error_code, last_error_message, last_executed_at)
+            SELECT id, lead_id, COALESCE(run_id, ''), action_type, target_username, target_url,
+                   suggested_text, reason, status, risk_level, batch_id, created_at, review_status,
+                   reviewed_by, reviewed_at, review_note, daily_quota_key, execution_confirmed,
+                   confirmed_by, confirmed_at, retry_count, last_execution_id, last_error_code,
+                   last_error_message, last_executed_at
+            FROM action_queue_legacy_unique
+            """
+        )
+        conn.execute("DROP TABLE action_queue_legacy_unique")
 
     def _ensure_campaign_runs_for_existing_batches(self, conn):
         now = utc_now_iso()
@@ -1696,8 +1802,8 @@ class GrowthStorage:
         run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT id FROM operation_leads WHERE candidate_user_id=? AND lead_type=?",
-                (candidate_id, lead_type),
+                "SELECT id FROM operation_leads WHERE run_id=? AND candidate_user_id=? AND lead_type=?",
+                (run_id, candidate_id, lead_type),
             ).fetchone()
             if row:
                 conn.execute(
@@ -1795,8 +1901,8 @@ class GrowthStorage:
         run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT id FROM action_queue WHERE lead_id=? AND action_type=?",
-                (item.lead_id, item.action_type),
+                "SELECT id FROM action_queue WHERE run_id=? AND lead_id=? AND action_type=?",
+                (run_id, item.lead_id, item.action_type),
             ).fetchone()
             if row:
                 return row["id"], False

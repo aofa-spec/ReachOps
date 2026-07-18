@@ -80,24 +80,37 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - Legacy migration now uses deterministic `legacy_run_<batch_id>` identifiers plus `legacy_backfill` metadata instead of random `run_*` IDs, and does not rewrite old candidate, lead, action, outreach execution, evidence-path, or error rows to claim a real run.
   - `list_observations_for_run(...)` now returns observation rows plus run-scoped outreach executions, events, and errors so evidence paths and error context are traceable by run.
   - `export_campaign_artifacts(..., batch_id=..., run_id=...)` now resolves the selected run, scopes candidates/leads/actions/executions/status counts by `run_id`, writes `export_scope` into JSON, and includes `run_id` in customers/actions/executions CSV outputs.
+  - Operation lead and action queue uniqueness is now scoped by `run_id`, so the same repeated candidate/action can produce independent leads, actions, executions, and evidence in separate runs.
+  - Legacy databases with global lead/action uniqueness are rebuilt idempotently to the run-scoped unique contract while preserving existing legacy rows with blank `run_id`.
   - LeadDecision remains scoped to immutable versioned decisions in this PR; broader lead lifecycle semantics remain outside this storage-contract PR.
 - Tests and checks:
   - `/usr/bin/python3 -m py_compile ReachOps/workbench/workflow_service.py ReachOps/intelligence/storage.py ReachOps/intelligence/schemas.py tests/test_campaign_run_observations.py`: passed, exit `0`.
-  - `/usr/bin/python3 -m unittest -v tests.test_campaign_run_observations`: passed, 7 tests, exit `0`.
+  - `/usr/bin/python3 -m unittest -v tests.test_campaign_run_observations`: passed, 8 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_campaign_report_exports_current_customers_and_actions tests.test_reachops_campaign.ReachOpsCampaignTests.test_campaign_report_export_paths_do_not_overwrite_same_second_runs`: passed, 2 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-pr12-run-export-truth.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-pr12-run-scoped-unique-truth.log`.
   - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-pr12-run-export-campaign.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-pr12-run-scoped-unique-campaign.log`.
   - `main` baseline at `origin/main`: `/tmp/reachops-main-baseline-pr12-run-export-campaign.log` failed with the same 14 failures and 1 error.
   - Baseline comparison result: `new_failures=[]`, `new_errors=[]`.
+  - Baseline comparison artifact: `/tmp/reachops-pr12-run-scoped-unique-baseline-comparison.json`; `new_failures=[]`, `new_errors=[]`.
   - Baseline comparison artifact: `/tmp/reachops-pr12-run-export-baseline-comparison.json`.
   - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-pr12-run-export-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-pr12-run-scoped-unique-operator-pressure.json`.
   - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-pr12-run-export-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-pr12-run-scoped-unique-delivery-audit.json`.
   - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr12-run-export-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; blocking scopes include `local_mvp`, `windows_final_artifacts`, and `external_authorized_execution`; output `/tmp/reachops-pr12-run-scoped-unique-goal-delivery-runner.json`.
   - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-pr12-run-export-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-pr12-run-scoped-unique-goal-status-report.json`.
   - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr12-run-export-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr12-run-scoped-unique-package-check.json`.
   - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr12-run-export-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr12-run-scoped-unique-final-gate.json`.
   - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`, `forbidden_count=0`; output `/tmp/reachops-pr12-run-export-cleanliness.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`, `forbidden_count=0`; output `/tmp/reachops-pr12-run-scoped-unique-cleanliness.json`.
   - `git diff --check`: passed, exit `0`.
+  - `git diff --check`: passed, exit `0`; log `/tmp/reachops-pr12-run-scoped-unique-diff-check.log`.
 - Safety:
   - No real TikTok action was executed.
   - No customer data, credentials, cookies, real targets, or raw evidence were added.
