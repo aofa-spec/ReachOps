@@ -223,9 +223,19 @@ class GrowthWorkflowService:
         )
         return artifacts
 
-    def export_campaign_artifacts(self, campaign_id: str = "") -> dict:
+    def export_campaign_artifacts(self, campaign_id: str = "", batch_id: str = "", run_id: str = "") -> dict:
         report_dir = self.intelligence_service.report_dir
         os.makedirs(report_dir, exist_ok=True)
+        requested_batch_id = str(batch_id or "").strip()
+        requested_run_id = str(run_id or "").strip()
+        run_context = {}
+        if requested_run_id:
+            run_context = self.storage.get_campaign_run(run_id=requested_run_id)
+        elif requested_batch_id:
+            requested_run_id = self.storage.run_id_for_batch(requested_batch_id)
+            run_context = self.storage.get_campaign_run(run_id=requested_run_id) if requested_run_id else {}
+        if run_context:
+            campaign_id = str(campaign_id or run_context.get("campaign_id") or "")
         campaign = self.storage.latest_campaign() if not campaign_id else next(
             (row for row in self.storage.list_campaigns(limit=200) if row.get("id") == campaign_id),
             {},
@@ -233,18 +243,23 @@ class GrowthWorkflowService:
         campaign_id = str(campaign.get("id") or "")
         if not campaign_id:
             return {}
+        if not requested_batch_id:
+            requested_batch_id = str((run_context or {}).get("batch_id") or "")
+        if not requested_run_id and requested_batch_id:
+            requested_run_id = self.storage.run_id_for_batch(requested_batch_id)
         persona = self.storage.get_audience_persona(campaign_id)
         sources = self.storage.list_acquisition_sources(campaign_id=campaign_id, limit=500)
         strategy = self._build_export_strategy(campaign, persona, sources)
-        funnel = self.build_campaign_funnel(campaign_id=campaign_id)
-        batch_id = str(funnel.get("batch_id") or "")
+        funnel = self.build_campaign_funnel(campaign_id=campaign_id, batch_id=requested_batch_id)
+        batch_id = str(requested_batch_id or funnel.get("batch_id") or "")
+        run_id = str(requested_run_id or self.storage.run_id_for_batch(batch_id) or "")
         batch_filter = batch_id or "__no_batch__"
-        candidate_users = self.storage.list_candidates_with_content(batch_id=batch_filter)
-        operation_leads = self.storage.list_operation_leads(limit=1000, batch_id=batch_filter)
-        action_queue = self.storage.list_action_queue(limit=1000, batch_id=batch_filter)
-        outreach_executions = self.storage.list_outreach_executions(limit=1000, batch_id=batch_filter)
+        candidate_users = self.storage.list_candidates_with_content(batch_id=batch_filter, run_id=run_id)
+        operation_leads = self.storage.list_operation_leads(limit=1000, batch_id=batch_filter, run_id=run_id)
+        action_queue = self.storage.list_action_queue(limit=1000, batch_id=batch_filter, run_id=run_id)
+        outreach_executions = self.storage.list_outreach_executions(limit=1000, batch_id=batch_filter, run_id=run_id)
         outreach_executions = [self._enrich_exported_execution(row) for row in outreach_executions]
-        execution_status_counts = self.storage.outreach_execution_status_counts(batch_filter)
+        execution_status_counts = self.storage.outreach_execution_status_counts(batch_filter, run_id=run_id)
         execution_error_counts: dict[str, int] = {}
         for row in outreach_executions:
             code = str(row.get("error_code") or "").strip()
@@ -260,6 +275,12 @@ class GrowthWorkflowService:
             "status_counts": execution_status_counts,
             "error_counts": execution_error_counts,
         }
+        export_scope = {
+            "campaign_id": campaign_id,
+            "batch_id": batch_id,
+            "run_id": run_id,
+            "run_scoped": bool(run_id),
+        }
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
         campaign_slug = "".join(ch if ch.isalnum() else "_" for ch in campaign_id)[-12:] or "campaign"
         file_key = f"{campaign_slug}_{stamp}"
@@ -274,6 +295,7 @@ class GrowthWorkflowService:
                     "campaign": campaign,
                     "persona": persona,
                     "strategy": strategy,
+                    "export_scope": export_scope,
                     "sources": sources,
                     "funnel": funnel,
                     "candidate_users": candidate_users,
@@ -306,6 +328,7 @@ class GrowthWorkflowService:
                 "views",
                 "video_comments",
                 "batch_id",
+                "run_id",
                 "created_at",
             ]
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
@@ -324,6 +347,7 @@ class GrowthWorkflowService:
                 "suggested_text",
                 "target_url",
                 "batch_id",
+                "run_id",
                 "created_at",
             ]
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
@@ -344,6 +368,8 @@ class GrowthWorkflowService:
                 "risk_gate_reason_code",
                 "risk_gate_summary",
                 "risk_gate_next_step",
+                "batch_id",
+                "run_id",
                 "created_at",
             ]
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
@@ -362,6 +388,8 @@ class GrowthWorkflowService:
                 "candidate_count": len(candidate_users),
                 "action_count": len(action_queue),
                 "execution_count": len(outreach_executions),
+                "batch_id": batch_id,
+                "run_id": run_id,
             },
         )
         return {
@@ -371,6 +399,8 @@ class GrowthWorkflowService:
             "actions_csv_path": actions_csv_path,
             "executions_csv_path": executions_csv_path,
             "csv_path": customers_csv_path,
+            "batch_id": batch_id,
+            "run_id": run_id,
         }
 
     def _enrich_exported_execution(self, row: dict) -> dict:

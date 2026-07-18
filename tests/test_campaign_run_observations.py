@@ -1,3 +1,4 @@
+import csv
 import json
 import sqlite3
 import tempfile
@@ -6,6 +7,7 @@ from pathlib import Path
 
 from ReachOps.intelligence.schemas import ActionQueueItem, CandidateUser, DiscoveredContent
 from ReachOps.intelligence.storage import GrowthStorage
+from ReachOps.workbench.workflow_service import GrowthWorkflowService
 
 
 class CampaignRunObservationTests(unittest.TestCase):
@@ -335,6 +337,106 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(repeated_trace["comment_observations"]), 1)
         self.assertEqual(len(repeated_trace["candidate_observations"]), 1)
         self.assertEqual(len(repeated_trace["lead_decisions"]), 2)
+
+    def test_campaign_export_prefers_run_scoped_reads(self):
+        class ExportService:
+            def __init__(self, storage, report_dir):
+                self.storage = storage
+                self.report_dir = str(report_dir)
+
+            def build_campaign_strategy(self, campaign_id):
+                return {"campaign_id": campaign_id, "generator": "test"}
+
+        campaign = self.storage.create_campaign("keyword", "serum")
+        first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+        second = self.storage.create_collection_batch(1, profile_group="CA", campaign_id=campaign.id)
+
+        def populate_run(batch, suffix, score):
+            self.storage.set_active_collection_batch(batch.id)
+            content, _created = self.storage.upsert_content(
+                DiscoveredContent(
+                    id=f"content-{suffix}",
+                    creator_id=f"creator-{suffix}",
+                    video_id=f"video-{suffix}",
+                    video_url=f"https://example.test/video/{suffix}",
+                )
+            )
+            candidate, _created = self.storage.upsert_candidate(
+                CandidateUser(
+                    id=f"candidate-{suffix}",
+                    content_id=content.id,
+                    username=f"buyer_{suffix}",
+                    profile_url=f"https://example.test/@buyer_{suffix}",
+                    comment_text=f"where can I buy {suffix}",
+                    qualify_score=score,
+                    intent_tags=["buy"],
+                )
+            )
+            lead_id, _created = self.storage.upsert_operation_lead(
+                candidate.id,
+                "high_intent",
+                "high",
+                score,
+                f"{suffix} buying signal",
+                source_path=content.video_url,
+            )
+            action_id, _created = self.storage.upsert_action_queue_item(
+                ActionQueueItem(
+                    id=f"action-{suffix}",
+                    lead_id=lead_id,
+                    action_type="comment_reply",
+                    target_username=f"buyer_{suffix}",
+                    target_url=content.video_url,
+                )
+            )
+            execution_id = self.storage.create_outreach_execution(
+                action_id,
+                "comment_reply",
+                f"buyer_{suffix}",
+                status="success",
+                profile_id=f"profile-{suffix}",
+                execution_mode="preflight",
+                submission_state="not_attempted",
+            )
+            return {"content": content.id, "candidate": candidate.id, "lead": lead_id, "action": action_id, "execution": execution_id}
+
+        first_ids = populate_run(first, "first", 81)
+        second_ids = populate_run(second, "second", 91)
+
+        workflow = GrowthWorkflowService(ExportService(self.storage, Path(self.tmpdir.name) / "reports"))
+        first_artifacts = workflow.export_campaign_artifacts(campaign_id=campaign.id, batch_id=first.id)
+        second_artifacts = workflow.export_campaign_artifacts(campaign_id=campaign.id, run_id=second.run_id)
+
+        with open(first_artifacts["json_path"], "r", encoding="utf-8") as fh:
+            first_payload = json.load(fh)
+        with open(second_artifacts["json_path"], "r", encoding="utf-8") as fh:
+            second_payload = json.load(fh)
+
+        self.assertEqual(first_artifacts["run_id"], first.run_id)
+        self.assertEqual(second_artifacts["run_id"], second.run_id)
+        self.assertEqual(first_payload["export_scope"]["run_id"], first.run_id)
+        self.assertEqual(second_payload["export_scope"]["run_id"], second.run_id)
+        self.assertEqual([row["id"] for row in first_payload["candidate_users"]], [first_ids["candidate"]])
+        self.assertEqual([row["id"] for row in second_payload["candidate_users"]], [second_ids["candidate"]])
+        self.assertEqual([row["id"] for row in first_payload["action_queue"]], [first_ids["action"]])
+        self.assertEqual([row["id"] for row in second_payload["action_queue"]], [second_ids["action"]])
+        self.assertEqual([row["id"] for row in first_payload["outreach_executions"]], [first_ids["execution"]])
+        self.assertEqual([row["id"] for row in second_payload["outreach_executions"]], [second_ids["execution"]])
+        self.assertEqual(first_payload["execution_summary"]["total"], 1)
+        self.assertEqual(second_payload["execution_summary"]["total"], 1)
+
+        with open(first_artifacts["customers_csv_path"], "r", encoding="utf-8", newline="") as fh:
+            first_customers = list(csv.DictReader(fh))
+        with open(second_artifacts["actions_csv_path"], "r", encoding="utf-8", newline="") as fh:
+            second_actions = list(csv.DictReader(fh))
+        with open(second_artifacts["executions_csv_path"], "r", encoding="utf-8", newline="") as fh:
+            second_executions = list(csv.DictReader(fh))
+        self.assertEqual(first_customers[0]["run_id"], first.run_id)
+        self.assertEqual(first_customers[0]["username"], "buyer_first")
+        self.assertEqual(second_actions[0]["run_id"], second.run_id)
+        self.assertEqual(second_actions[0]["target_username"], "buyer_second")
+        self.assertEqual(second_executions[0]["run_id"], second.run_id)
+        self.assertEqual(second_executions[0]["id"], second_ids["execution"])
 
     def test_observation_idempotency_and_lead_decision_versioning(self):
         campaign = self.storage.create_campaign("keyword", "serum")
