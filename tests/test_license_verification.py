@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ReachOps.license_verification import evaluate_license_verification_state
+from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from tools.reachops_activation_status_check import check_activation_status
 from tools.reachops_live_acceptance_status import activation_actions, activation_failed_checks
 
@@ -72,6 +73,54 @@ class LicenseVerificationTests(unittest.TestCase):
             self.assertEqual(result["license_verification_state"]["status"], "verification_due")
             self.assertIn("license_verification_current", activation_failed_checks(result))
             self.assertTrue(any("24 小时" in action for action in activation_actions(result)))
+
+    def test_live_submit_gate_blocks_declared_due_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "reachops_activation_status.json"
+            status_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "last_verified_at": iso(datetime.now(timezone.utc) - timedelta(hours=25)),
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "comment_reply": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            decision = LiveSubmitAuthorizationGate(str(status_path)).authorize_live_submit(
+                {"action_type": "comment_reply"},
+                {"profile_id": "12345"},
+            )
+
+            self.assertFalse(decision.allowed)
+            self.assertEqual(decision.error_code, "LIVE_SUBMIT_LICENSE_VERIFICATION_REQUIRED")
+            self.assertEqual(decision.evidence["license_verification_state"]["status"], "verification_due")
+
+    def test_live_submit_gate_keeps_legacy_activation_without_verification_compatible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "reachops_activation_status.json"
+            status_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "comment_reply": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            decision = LiveSubmitAuthorizationGate(str(status_path)).authorize_live_submit(
+                {"action_type": "comment_reply"},
+                {"profile_id": "12345"},
+            )
+
+            self.assertTrue(decision.allowed)
+            self.assertEqual(decision.evidence["license_verification_state"]["status"], "verification_due")
 
 
 if __name__ == "__main__":

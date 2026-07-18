@@ -10,6 +10,7 @@ from typing import Any
 
 from ReachOps.device_seats import evaluate_device_seat_state
 from ReachOps.license_state import evaluate_license_state
+from ReachOps.license_verification import evaluate_license_verification_state
 
 from .device_identity import DeviceIdentity
 
@@ -84,6 +85,15 @@ class LiveSubmitAuthorizationGate:
             if license_state.reason_code == "LIVE_SUBMIT_LICENSE_EXPIRED":
                 return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_EXPIRED", license_state.reason, evidence)
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", license_state.reason or "license is not active", evidence)
+        verification_state = evaluate_license_verification_state(status)
+        evidence = {**evidence, "license_verification_state": verification_state.as_dict()}
+        if self._license_verification_declared(status) and verification_state.verification_required:
+            return AuthorizationDecision(
+                False,
+                "LIVE_SUBMIT_LICENSE_VERIFICATION_REQUIRED",
+                verification_state.reason or "license verification is due",
+                evidence,
+            )
         expires_at = license_state.expires_at
         capabilities = status.get("capabilities") if isinstance(status.get("capabilities"), dict) else {}
         if not bool(capabilities.get(feature)):
@@ -99,6 +109,19 @@ class LiveSubmitAuthorizationGate:
             return payload if isinstance(payload, dict) else {}
         except Exception:
             return {}
+
+    @staticmethod
+    def _license_verification_declared(status: dict[str, Any]) -> bool:
+        return any(
+            str(status.get(key) or "").strip()
+            for key in [
+                "last_verified_at",
+                "verified_at",
+                "last_license_check_at",
+                "next_verify_at",
+                "next_license_check_at",
+            ]
+        )
 
     @classmethod
     def is_packaged_runtime(cls) -> bool:
