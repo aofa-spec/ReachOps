@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-17`
+- Last manually reconciled: `2026-07-19`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -15,7 +15,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
 | P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
-| P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
+| P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Branch `codex/p2-device-seat-entitlements` adds local default one-device and extra-seat entitlement evaluation. Other P2 slices remain in separate Draft PRs and are not assumed merged on `main`. | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
@@ -77,9 +77,41 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Follow/DM evidence validators in no-submit fixtures.
 - Windows Credential Manager abstraction and unit tests.
 - Encrypted backup format and restore tests.
+- Device-seat entitlement evaluation: branch `codex/p2-device-seat-entitlements`.
 - License state machine and 7-day grace logic.
 - Localization resource extraction for `zh-CN` and `en-US`.
 - Public reply-monitor parser using redacted/replay fixtures.
+
+## Latest P2 device-seat verification snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p2-device-seat-entitlements`
+- Scope: P2 local device-seat entitlement evaluation only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
+- Code evidence:
+  - Added `ReachOps/workbench/device_seats.py` to evaluate default one-device activation files and explicit extra-seat device lists.
+  - `LiveSubmitAuthorizationGate` now uses the seat evaluator before allowing live outreach; a device outside assigned seats returns `LIVE_SUBMIT_DEVICE_MISMATCH`, and an over-assigned status returns `LIVE_SUBMIT_SEAT_LIMIT_EXCEEDED`.
+  - Activation checks now report `device_seat` evidence, including `seat_limit`, assigned devices, seat index, and `local_data_access_allowed=true` so license/seat failures do not imply customer data is locked away.
+  - Existing unbound activation bootstrap compatibility remains intact.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/workbench/device_seats.py ReachOps/workbench/authorization_gate.py tools/reachops_activation_status_check.py tests/test_device_seats.py`: passed; log `/tmp/reachops-p2-seats-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_device_seats`: passed, 8 tests; log `/tmp/reachops-p2-seats-tests.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p2-seats-truth.log`.
+  - Campaign regression comparison:
+    - branch `codex/p2-device-seat-entitlements`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-p2-seats-campaign.log`.
+    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-p2-seats-campaign.log`.
+    - comparison `/tmp/reachops-p2-seats-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p2-seats-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-p2-seats-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-p2-seats-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`; output `/tmp/reachops-p2-seats-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p2-seats-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p2-seats-final-acceptance-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p2-seats-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p2-seats-diff-check.log`.
+- Remaining blockers:
+  - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
+  - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
+  - Existing delivery audit and campaign baseline failures remain separate from this P2 device-seat slice.
 
 ## State-update rules
 

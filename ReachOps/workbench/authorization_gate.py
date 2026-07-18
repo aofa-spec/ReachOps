@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .device_identity import DeviceIdentity
+from .device_seats import evaluate_device_seat
 
 
 @dataclass
@@ -64,13 +65,15 @@ class LiveSubmitAuthorizationGate:
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status is a template", evidence)
         if not bool(status.get("active")):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation is inactive", evidence)
-        bound_device_id = str(status.get("device_id") or "").strip()
-        if bound_device_id and bound_device_id != evidence["current_device_id"]:
+        seat_decision = evaluate_device_seat(status, evidence["current_device_id"])
+        evidence["device_seat"] = seat_decision.evidence
+        evidence["device_seat_state"] = seat_decision.state
+        if not seat_decision.allowed:
             return AuthorizationDecision(
                 False,
-                "LIVE_SUBMIT_DEVICE_MISMATCH",
-                "activation is bound to another device",
-                {**evidence, "bound_device_id": bound_device_id},
+                seat_decision.error_code,
+                seat_decision.error_message,
+                evidence,
             )
         expires_at = str(status.get("expires_at") or "").strip()
         if expires_at and self._is_expired(expires_at):
