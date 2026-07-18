@@ -142,6 +142,27 @@ class LicenseClientTests(unittest.TestCase):
         self.assertEqual(result.as_dict()["license_key_source"], "windows_credential_manager")
         self.assertTrue(result.as_dict()["license_key_persistent"])
 
+    def test_refresh_request_failures_do_not_echo_license_key(self):
+        def opener(request, *, timeout):
+            raise RuntimeError("upstream echoed secret-license in diagnostics")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = ReachOpsLicenseClient(
+                endpoint="https://license.example.test/activate",
+                license_key="secret-license",
+                runtime_paths=RuntimePaths.build(base_dir=tmp),
+                device_id="device-a",
+                opener=opener,
+            )
+
+            result = client.refresh().as_dict()
+            encoded = json.dumps(result, ensure_ascii=False, sort_keys=True)
+
+            self.assertEqual(result["status"], "request_failed")
+            self.assertEqual(result["error"], "RuntimeError")
+            self.assertEqual(result["request_payload"]["license_key"], "***redacted***")
+            self.assertNotIn("secret-license", encoded)
+
     def test_missing_endpoint_does_not_write_activation_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = RuntimePaths.build(base_dir=tmp)

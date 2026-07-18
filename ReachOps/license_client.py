@@ -122,12 +122,18 @@ class ReachOpsLicenseClient:
         if not self.license_key:
             return self._result("license_key_missing", False, status_path, True, error="license key is not configured")
         payload = self.build_request_payload()
-        response = self._post_json(payload, timeout_seconds=max(1, int(timeout_seconds)))
+        try:
+            response = self._post_json(payload, timeout_seconds=max(1, int(timeout_seconds)))
+        except Exception as exc:
+            return self._result("request_failed", False, status_path, True, request_payload=payload, error=exc.__class__.__name__)
         activation_status = self._extract_activation_status(response)
         if not activation_status:
             return self._result("invalid_response", False, status_path, True, request_payload=payload, error="license response missing activation_status")
         activation_status = self._normalize_activation_status(activation_status)
-        self._write_activation_status(activation_status)
+        try:
+            self._write_activation_status(activation_status)
+        except Exception as exc:
+            return self._result("activation_status_write_failed", False, status_path, True, request_payload=payload, error=exc.__class__.__name__)
         return self._result("refreshed", True, status_path, True, request_payload=payload, activation_status=activation_status)
 
     def _result(
@@ -166,7 +172,7 @@ class ReachOpsLicenseClient:
             with self.opener(request, timeout=timeout_seconds) as response:
                 raw = response.read()
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"license refresh failed: {exc}") from exc
+            raise RuntimeError("license refresh failed") from exc
         parsed = json.loads(raw.decode("utf-8"))
         if not isinstance(parsed, dict):
             raise RuntimeError("license refresh response must be a JSON object")

@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
             "refreshed": False,
             "activation_status_path": runtime_paths.activation_status_path,
             "endpoint_configured": bool(client.endpoint),
-            "error": str(exc),
+            "error": exc.__class__.__name__,
             "license_key_source": client.license_key_source,
             "license_key_persistent": client.license_key_persistent,
             "license_key_error": client.license_key_error,
