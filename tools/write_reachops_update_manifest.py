@@ -28,6 +28,7 @@ def build_manifest(installer: Path, version: str, build: str, channel: str, down
     installer = installer.resolve()
     if not installer.exists():
         raise FileNotFoundError(str(installer))
+    portable_path = installer.name
     return {
         "product_id": PRODUCT_ID,
         "product_name": PRODUCT_NAME,
@@ -38,7 +39,7 @@ def build_manifest(installer: Path, version: str, build: str, channel: str, down
         "arch": "x64compatible",
         "installer": {
             "file_name": installer.name,
-            "path": str(installer),
+            "path": portable_path,
             "download_url": download_url,
             "size_bytes": installer.stat().st_size,
             "sha256": sha256_file(installer),

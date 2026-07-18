@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 import sys
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from ReachOps.version import VERSION
+from tools.write_reachops_update_manifest import build_manifest
 
 
 REQUIRED_FILES = {
@@ -99,6 +101,63 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
 
+def _build_manifest_contract() -> dict[str, Any]:
+    checks: dict[str, bool] = {}
+    failures: list[str] = []
+    manifest: dict[str, Any] = {}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            installer = Path(tmp) / f"ReachOps-Setup-{VERSION}.exe"
+            installer.write_bytes(b"reachops installer preflight")
+            manifest = build_manifest(installer, version=VERSION, build="preflight", channel="mvp")
+    except Exception as exc:
+        return {"ok": False, "failures": ["manifest_fixture_failed"], "error": str(exc), "checks": checks}
+
+    installer_meta = manifest.get("installer") if isinstance(manifest.get("installer"), dict) else {}
+    runtime_policy = manifest.get("runtime_policy") if isinstance(manifest.get("runtime_policy"), dict) else {}
+    installer_path = Path(str(installer_meta.get("path") or ""))
+    encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True).lower()
+    checks["product_version_current"] = str(manifest.get("version") or "") == VERSION
+    checks["platform_windows"] = str(manifest.get("platform") or "") == "windows"
+    checks["installer_sha256_present"] = len(str(installer_meta.get("sha256") or "")) == 64
+    checks["installer_size_present"] = int(installer_meta.get("size_bytes") or 0) > 0
+    checks["installer_path_portable"] = bool(installer_meta.get("path")) and not installer_path.is_absolute() and installer_path.name == str(installer_meta.get("file_name") or "")
+    checks["preserve_config"] = bool(runtime_policy.get("preserve_config"))
+    checks["preserve_data"] = bool(runtime_policy.get("preserve_data"))
+    checks["preserve_activation_status"] = bool(runtime_policy.get("preserve_activation_status"))
+    checks["no_customer_data_fields"] = not any(
+        token in encoded
+        for token in [
+            "comment_text",
+            "username",
+            "tiktok_status",
+            "cookie",
+            "sqlite",
+            "screenshot",
+            "profile_id",
+            "activation_secret",
+        ]
+    )
+    failures = [f"manifest_contract_{name}_failed" for name, ok in checks.items() if not ok]
+    return {
+        "ok": not failures,
+        "failures": failures,
+        "checks": checks,
+        "manifest": {
+            "product_id": manifest.get("product_id"),
+            "version": manifest.get("version"),
+            "platform": manifest.get("platform"),
+            "installer": {
+                "file_name": installer_meta.get("file_name"),
+                "path": installer_meta.get("path"),
+                "size_bytes": installer_meta.get("size_bytes"),
+                "sha256_present": bool(installer_meta.get("sha256")),
+            },
+            "runtime_policy": runtime_policy,
+        },
+    }
+
+
 def build_preflight(root: str | Path = ROOT_DIR) -> dict[str, Any]:
     root = Path(root).resolve()
     failures: list[str] = []
@@ -123,6 +182,9 @@ def build_preflight(root: str | Path = ROOT_DIR) -> dict[str, Any]:
         }
         failures.extend(f"{relative}:{needle}:missing" for needle in missing)
 
+    manifest_contract = _build_manifest_contract()
+    failures.extend(manifest_contract.get("failures") or [])
+
     artifacts = {name: _status(root / relative) for name, relative in FINAL_ARTIFACTS.items()}
     missing_artifacts = [name for name, detail in artifacts.items() if not detail["exists"]]
 
@@ -137,6 +199,7 @@ def build_preflight(root: str | Path = ROOT_DIR) -> dict[str, Any]:
         "failures": failures,
         "files": files,
         "contract_checks": contract_checks,
+        "manifest_contract": manifest_contract,
         "final_artifacts": artifacts,
         "missing_final_artifacts": missing_artifacts,
         "build_contract": {
