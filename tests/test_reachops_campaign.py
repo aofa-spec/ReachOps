@@ -23,7 +23,7 @@ from ReachOps.intelligence.comment_intent import CommentIntentResult, RuleBasedC
 from ReachOps.intelligence.growth_task_router import GrowthTaskRouter
 from ReachOps.intelligence.operation_lead_manager import OperationLeadManager
 from ReachOps.intelligence.outreach_copy import OutreachCopySuggestion
-from ReachOps.intelligence.schemas import ActionQueueItem, CampaignFunnel, CandidateUser, DiscoveredContent, DiscoveredCreator
+from ReachOps.intelligence.schemas import AcquisitionSource, ActionQueueItem, CampaignFunnel, CandidateUser, DiscoveredContent, DiscoveredCreator
 from ReachOps.intelligence.source_planner import CampaignAnalyzer
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.action_router import ActionRouterConfig
@@ -8248,6 +8248,27 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(new_funnel["execution_success"], 0)
             self.assertEqual(new_funnel["preflight_ok"], 0)
             self.assertEqual(new_funnel["account_switches"], 0)
+
+    def test_campaign_funnel_target_sources_prefers_current_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            campaign = service.storage.create_campaign("keyword", "serum")
+            for index in range(3):
+                service.storage.upsert_acquisition_source(
+                    AcquisitionSource(
+                        id=f"as_target_{index}",
+                        campaign_id=campaign.id,
+                        source_type="keyword",
+                        source_value=f"serum source {index}",
+                    )
+                )
+            service.storage.create_collection_batch(2, campaign_id=campaign.id, initial_status="completed")
+            latest_batch = service.storage.create_collection_batch(1, campaign_id=campaign.id, initial_status="completed")
+
+            funnel = GrowthWorkflowService(service).build_campaign_funnel(campaign_id=campaign.id)
+
+            self.assertEqual(funnel["batch_id"], latest_batch.id)
+            self.assertEqual(funnel["target_sources"], 1)
 
     def test_workbench_snapshot_can_stay_on_active_campaign(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -125,6 +125,9 @@ class GrowthWorkflowService:
         status_counts = progress.get("status_counts") or {}
         error_counts = progress.get("error_counts") or {}
         sources = self.storage.list_acquisition_sources(campaign_id=campaign_id, limit=200) if campaign_id else []
+        target_sources = int(batch.get("total_sources") or 0) if batch_id else len(sources)
+        if target_sources <= 0:
+            target_sources = len(sources) or int(batch.get("total_sources") or 0)
         profile_ok = 0
         try:
             profile_ok = len([row for row in self.storage.list_profile_health(limit=1000) if str(row.get("status") or "") == "healthy"])
@@ -137,7 +140,7 @@ class GrowthWorkflowService:
                 campaign_type=campaign.get("input_type", ""),
                 batch_id=batch_id,
                 batch_status=batch.get("status", ""),
-                target_sources=len(sources) or int(batch.get("total_sources") or 0),
+                target_sources=target_sources,
                 profile_ok=profile_ok,
                 page_opened=int(status_counts.get("running", 0) or 0)
                 + int(status_counts.get("completed", 0) or 0)
