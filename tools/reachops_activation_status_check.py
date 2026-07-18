@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.device_identity import DeviceIdentity
+from ReachOps.workbench.device_seats import evaluate_device_seat
 
 
 def load_status(path: Path) -> tuple[dict[str, Any], str]:
@@ -102,9 +103,17 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
 
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
     bound_device_id = str(payload.get("device_id") or "").strip()
+    seat_decision = evaluate_device_seat(payload, current_device_id)
     add("activation_not_template", not bool(payload.get("template_only")), template_only=bool(payload.get("template_only")))
     add("activation_active", bool(payload.get("active")), active=bool(payload.get("active")))
-    add("device_binding_matches", not bound_device_id or bound_device_id == current_device_id, bound_device_id=bound_device_id, current_device_id=current_device_id)
+    add(
+        "device_binding_matches",
+        not bound_device_id or bound_device_id == current_device_id or current_device_id in seat_decision.evidence.get("assigned_device_ids", []),
+        bound_device_id=bound_device_id,
+        current_device_id=current_device_id,
+        device_seat_state=seat_decision.state,
+    )
+    add("device_seat_entitled", seat_decision.allowed, **seat_decision.evidence, state=seat_decision.state)
     add("live_submit_capability_enabled", bool(capabilities.get("live_submit")), capabilities=capabilities)
     for capability in ["comment_reply", "follow_review", "dm_review"]:
         add(f"{capability}_capability_enabled", bool(capabilities.get(capability)), capabilities=capabilities)
@@ -131,6 +140,13 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
     result["license_tier"] = str(payload.get("license_tier") or "")
     result["expires_at"] = str(payload.get("expires_at") or "")
     result["capabilities"] = capabilities
+    result["device_seat"] = {
+        "allowed": seat_decision.allowed,
+        "state": seat_decision.state,
+        "error_code": seat_decision.error_code,
+        "error_message": seat_decision.error_message,
+        "evidence": seat_decision.evidence,
+    }
     return result
 
 
