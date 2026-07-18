@@ -15,7 +15,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `COMPLETE` | PR #10 squash-merged to `main` as `887f7068ad313c7d3cddf971362cdce42c555946`; live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-18 for P2 license slice | Preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
 | P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | Draft PR #12, branch `codex/p1-immutable-campaign-run-observations`; PR remains Draft/Open | Keep PR #12 Draft for review; continue collector/scoring/report wiring in follow-up PRs after review/merge |
-| P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Draft PR #13 covers Windows Credential Manager AI key foundation; branch `codex/p2-license-grace-state` adds local license state machine and 7-day grace semantics | Windows Credential Manager coverage for all customer secrets, minimal license client, 7-day grace, encrypted backup/restore, tests |
+| P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Draft PR #13 covers Windows Credential Manager AI key foundation; Draft PR #14, branch `codex/p2-license-grace-state`, adds local license state machine and 7-day grace semantics | Windows Credential Manager coverage for all customer secrets, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
@@ -68,6 +68,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 - Date: `2026-07-18 UTC`
 - Branch: `codex/p2-license-grace-state`
+- PR: Draft PR #14
 - Scope: Local license state machine and 7-day grace semantics only; no Windows packaging, no live TikTok action, no Credential Manager PR #13 changes.
 - Code evidence:
   - Added `ReachOps.workbench.license_state.LicenseStateEvaluator`.
