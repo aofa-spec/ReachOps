@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.device_identity import DeviceIdentity
+from ReachOps.workbench.license_state import LicenseStateEvaluator
 
 
 def load_status(path: Path) -> tuple[dict[str, Any], str]:
@@ -93,17 +94,23 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
 
     if not result["activation_status_exists"]:
         add("activation_status_file_exists", False, activation_status_path=str(status_path))
+        result["license_state"] = LicenseStateEvaluator().evaluate({}).to_dict()
         return result
 
     payload, error = load_status(status_path)
     add("activation_status_json_valid", not error, error=error)
     if error:
+        result["license_state"] = LicenseStateEvaluator().evaluate({}).to_dict()
         return result
 
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
     bound_device_id = str(payload.get("device_id") or "").strip()
+    license_state = LicenseStateEvaluator().evaluate(payload).to_dict()
+    result["license_state"] = license_state
     add("activation_not_template", not bool(payload.get("template_only")), template_only=bool(payload.get("template_only")))
     add("activation_active", bool(payload.get("active")), active=bool(payload.get("active")))
+    add("license_client_access_allowed", bool(license_state["client_access_allowed"]), license_state=license_state)
+    add("license_live_submit_allowed", bool(license_state["live_submit_allowed"]), license_state=license_state)
     add("device_binding_matches", not bound_device_id or bound_device_id == current_device_id, bound_device_id=bound_device_id, current_device_id=current_device_id)
     add("live_submit_capability_enabled", bool(capabilities.get("live_submit")), capabilities=capabilities)
     for capability in ["comment_reply", "follow_review", "dm_review"]:

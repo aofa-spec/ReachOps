@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-17`
+- Last manually reconciled: `2026-07-18`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -13,28 +13,22 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 | Priority | Milestone | Status | Verified evidence | Exit condition |
 |---|---|---|---|---|
-| P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
-| P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
-| P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
+| P0 | Truthful execution semantics | `COMPLETE` | PR #10 squash-merged to `main` as `887f7068ad313c7d3cddf971362cdce42c555946`; live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-18 for P2 license slice | Preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
+| P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | Draft PR #12, branch `codex/p1-immutable-campaign-run-observations`; PR remains Draft/Open | Keep PR #12 Draft for review; continue collector/scoring/report wiring in follow-up PRs after review/merge |
+| P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Draft PR #13 covers Windows Credential Manager AI key foundation; Draft PR #14, branch `codex/p2-license-grace-state`, adds local license state machine and 7-day grace semantics | Windows Credential Manager coverage for all customer secrets, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
 
 ## Next autonomous action
 
-1. Review PR #10 evidence-truthfulness correction and merge only after accepting the known non-P0 baseline failures separately.
-2. Do not expand PR #10 with P1.
-3. After P0 merges, start P1 on a separate branch/PR:
-   - add `campaign_runs`
-   - add `source_observations`
-   - add `content_observations`
-   - add `comment_observations`
-   - add `candidate_observations`
-   - add versioned `lead_decisions`
-   - keep existing global entities for compatibility
-   - scope scoring and lead creation to run/batch observations
-   - add idempotent migration and rollback evidence
-   - add cross-campaign isolation tests
+1. Keep Draft PR #12 under review; do not mix Windows/security work into that P1 PR.
+2. Keep Draft PR #13 under review for Credential Manager AI key foundation.
+3. Continue P2 in separate branches:
+   - extend Windows Credential Manager storage beyond AI provider key
+   - add minimal license client/server-sync contract around the local license state machine
+   - add encrypted backup/restore format and tests
+4. After PR #12 merges, continue P1 follow-up wiring for collector/scoring/report run-scoped reads.
 
 ## Known external blockers
 
@@ -70,12 +64,45 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No real TikTok action was executed.
   - Fixture live execution remains blocked by default and is only enabled in explicit test fixture paths through `REACHOPS_ALLOW_TEST_FIXTURE_LIVE=1`.
 
+## Latest P2 license snapshot
+
+- Date: `2026-07-18 UTC`
+- Branch: `codex/p2-license-grace-state`
+- PR: Draft PR #14
+- Scope: Local license state machine and 7-day grace semantics only; no Windows packaging, no live TikTok action, no Credential Manager PR #13 changes.
+- Code evidence:
+  - Added `ReachOps.workbench.license_state.LicenseStateEvaluator`.
+  - License states distinguish `missing`, `template`, `inactive`, `invalid_expiry`, `active`, `grace`, and `expired`.
+  - `client_access_allowed` and `live_submit_allowed` are separate outputs.
+  - Expired licenses inside the 7-day grace window allow local client access but keep live platform submit blocked.
+  - `LiveSubmitAuthorizationGate` now attaches `license_state` evidence and still returns `LIVE_SUBMIT_LICENSE_EXPIRED` for expired/grace live-submit attempts.
+  - `tools/reachops_activation_status_check.py` now reports `license_state`, `license_client_access_allowed`, and `license_live_submit_allowed`.
+- Tests and checks:
+  - `set -o pipefail; /usr/bin/python3 -m py_compile ReachOps/workbench/license_state.py ReachOps/workbench/authorization_gate.py tools/reachops_activation_status_check.py tests/test_license_state.py tests/test_reachops_campaign.py 2>&1 | tee /tmp/reachops-p2-license-pycompile.log`: passed, exit `0`.
+  - `set -o pipefail; /usr/bin/python3 -m unittest -v tests.test_license_state 2>&1 | tee /tmp/reachops-p2-license-tests.log`: passed, 4 tests, exit `0`.
+  - `set -o pipefail; /usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_check_reports_device_and_capabilities tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_check_blocks_device_mismatch tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_template_is_not_authorization tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_grace_allows_client_but_not_live_submit tests.test_reachops_campaign.ReachOpsCampaignTests.test_live_submit_rejects_expired_activation_status 2>&1 | tee /tmp/reachops-p2-license-focused-campaign.log`: passed, 5 tests, exit `0`.
+  - `set -o pipefail; /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics 2>&1 | tee /tmp/reachops-p2-license-truth.log`: passed, 7 tests, exit `0`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign 2>&1 | tee /tmp/reachops-p2-license-campaign.log`: failed with existing baseline shape, 231 tests, 14 failures and 1 error; the added grace test passed.
+  - Baseline comparison artifact `/tmp/reachops-p2-license-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`, `resolved_failures=[]`, `resolved_errors=[]`.
+  - `set -o pipefail; /usr/bin/python3 tools/reachops_operator_pressure.py --json 2>&1 | tee /tmp/reachops-p2-license-operator-pressure.json`: passed, `status=ok`, exit `0`.
+  - `set -o pipefail; /usr/bin/python3 tools/reachops_delivery_audit.py --json 2>&1 | tee /tmp/reachops-p2-license-delivery-audit.json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`.
+  - `set -o pipefail; /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json 2>&1 | tee /tmp/reachops-p2-license-goal-delivery-runner.json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`.
+  - `set -o pipefail; /usr/bin/python3 tools/reachops_goal_status_report.py --json 2>&1 | tee /tmp/reachops-p2-license-goal-status-report.json`: failed, exit `1`, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`.
+  - `set -o pipefail; /usr/bin/python3 tools/reachops_delivery_package_check.py --json 2>&1 | tee /tmp/reachops-p2-license-package-check.json`: failed, exit `1`; missing `exe`, `installer`, `manifest`, and `acceptance_summary`.
+  - `set -o pipefail; /usr/bin/python3 tools/reachops_final_acceptance_gate.py --json 2>&1 | tee /tmp/reachops-p2-license-final-acceptance-gate.json`: failed, exit `1`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`.
+  - `set -o pipefail; /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json 2>&1 | tee /tmp/reachops-p2-license-cleanliness.json`: passed, exit `0`, `forbidden_count=0`.
+  - `git diff --check`: passed, exit `0`.
+- Safety:
+  - No real TikTok action was executed.
+  - No customer data, credentials, cookies, real targets, or raw evidence were added.
+  - Grace mode does not authorize live platform submit.
+
 ## Non-blocking engineering work available
 
 - P1 observation model and migration.
 - LeadDecision versioning and unified scoring contract.
 - Follow/DM evidence validators in no-submit fixtures.
-- Windows Credential Manager abstraction and unit tests.
+- Extend Windows Credential Manager coverage beyond AI provider key.
 - Encrypted backup format and restore tests.
 - License state machine and 7-day grace logic.
 - Localization resource extraction for `zh-CN` and `en-US`.

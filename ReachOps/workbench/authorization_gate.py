@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .device_identity import DeviceIdentity
+from .license_state import LicenseStateEvaluator
 
 
 @dataclass
@@ -29,9 +30,15 @@ class LiveSubmitAuthorizationGate:
 
     STATUS_FILENAME = "reachops_activation_status.json"
 
-    def __init__(self, status_path: str, device_identity: type[DeviceIdentity] = DeviceIdentity):
+    def __init__(
+        self,
+        status_path: str,
+        device_identity: type[DeviceIdentity] = DeviceIdentity,
+        license_evaluator: LicenseStateEvaluator | None = None,
+    ):
         self.status_path = status_path
         self.device_identity = device_identity
+        self.license_evaluator = license_evaluator or LicenseStateEvaluator()
 
     @classmethod
     def from_storage(cls, storage) -> "LiveSubmitAuthorizationGate":
@@ -60,9 +67,11 @@ class LiveSubmitAuthorizationGate:
             return AuthorizationDecision(True, evidence={**evidence, "development_bypass": True})
         if not status:
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status not found", evidence)
-        if bool(status.get("template_only")):
+        license_state = self.license_evaluator.evaluate(status).to_dict()
+        evidence = {**evidence, "license_state": license_state}
+        if license_state["reason_code"] == "LICENSE_TEMPLATE_ONLY":
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status is a template", evidence)
-        if not bool(status.get("active")):
+        if license_state["reason_code"] == "LICENSE_INACTIVE":
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation is inactive", evidence)
         bound_device_id = str(status.get("device_id") or "").strip()
         if bound_device_id and bound_device_id != evidence["current_device_id"]:
@@ -73,8 +82,10 @@ class LiveSubmitAuthorizationGate:
                 {**evidence, "bound_device_id": bound_device_id},
             )
         expires_at = str(status.get("expires_at") or "").strip()
-        if expires_at and self._is_expired(expires_at):
-            return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_EXPIRED", "activation has expired", {**evidence, "expires_at": expires_at})
+        if not bool(license_state.get("live_submit_allowed")):
+            if license_state["reason_code"] in {"LICENSE_EXPIRED", "LICENSE_GRACE_PERIOD"}:
+                return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_EXPIRED", "activation has expired", {**evidence, "expires_at": expires_at})
+            return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", license_state["reason"], evidence)
         capabilities = status.get("capabilities") if isinstance(status.get("capabilities"), dict) else {}
         if not bool(capabilities.get(feature)):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", f"feature not enabled: {feature}", evidence)

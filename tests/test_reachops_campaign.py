@@ -10,6 +10,7 @@ import zipfile
 from collections import Counter
 from contextlib import redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -3586,6 +3587,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["current_device_id"])
             checks = {item["name"]: item for item in result["checks"]}
             self.assertTrue(checks["activation_active"]["passed"])
+            self.assertTrue(checks["license_client_access_allowed"]["passed"])
+            self.assertTrue(checks["license_live_submit_allowed"]["passed"])
+            self.assertEqual(result["license_state"]["status"], "active")
             self.assertTrue(checks["device_binding_matches"]["passed"])
             self.assertTrue(checks["authorization_allows_live_actions"]["passed"])
 
@@ -3635,9 +3639,40 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(result["ready"])
             checks = {item["name"]: item for item in result["checks"]}
             self.assertFalse(checks["activation_not_template"]["passed"])
+            self.assertFalse(checks["license_client_access_allowed"]["passed"])
+            self.assertFalse(checks["license_live_submit_allowed"]["passed"])
+            self.assertEqual(result["license_state"]["reason_code"], "LICENSE_TEMPLATE_ONLY")
             decisions = checks["authorization_allows_live_actions"]["evidence"]["decisions"]
             self.assertTrue(all(item["error_code"] == "LIVE_SUBMIT_NOT_AUTHORIZED" for item in decisions))
             self.assertTrue(all("template" in item["error_message"] for item in decisions))
+
+    def test_reachops_activation_status_grace_allows_client_but_not_live_submit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            activation_path = Path(tmp) / "reachops_activation_status.json"
+            expires_at = (datetime.now(timezone.utc) - timedelta(days=3)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            activation_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "expires_at": expires_at,
+                        "license_tier": "enterprise",
+                        "capabilities": {"client_access": True, "live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = check_reachops_activation_status(activation_path)
+
+            self.assertFalse(result["ready"])
+            self.assertEqual(result["license_state"]["status"], "grace")
+            self.assertTrue(result["license_state"]["client_access_allowed"])
+            self.assertFalse(result["license_state"]["live_submit_allowed"])
+            checks = {item["name"]: item for item in result["checks"]}
+            self.assertTrue(checks["license_client_access_allowed"]["passed"])
+            self.assertFalse(checks["license_live_submit_allowed"]["passed"])
+            decisions = checks["authorization_allows_live_actions"]["evidence"]["decisions"]
+            self.assertTrue(all(item["error_code"] == "LIVE_SUBMIT_LICENSE_EXPIRED" for item in decisions))
 
     def test_reachops_cross_platform_acceptance_input_init_writes_literal_windows_path(self):
         args = type(
