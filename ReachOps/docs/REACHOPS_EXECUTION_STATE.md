@@ -85,6 +85,8 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 - Date: `2026-07-19`
 - Branch: `codex/p1-lead-decision-versioning`
+- Draft PR: #17 `ReachOps P1: versioned lead decision ledger`
+- Commit: `8e81baa` adds the append-only lead-decision ledger, versioning, idempotency, migration compatibility, and focused tests.
 - Scope: P1 lead decision traceability/versioning only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
 - Code evidence:
   - Added local SQLite table `lead_decisions` as an append-only ledger for operation-lead decisions.
