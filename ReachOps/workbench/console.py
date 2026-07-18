@@ -891,18 +891,28 @@ class GrowthOpsConsole(ttk.Frame):
             width=8,
         ).grid(row=0, column=3, sticky="w")
         ttk.Button(rule_box, text="应用预设", command=self.apply_quick_send_preset).grid(row=0, column=4, columnspan=2, sticky="w")
-        ttk.Label(rule_box, text="参与账号").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="参与账号数").grid(row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Spinbox(rule_box, from_=1, to=50, width=5, textvariable=self.scan_profile_limit_var).grid(row=1, column=1, sticky="w", pady=(6, 0))
-        ttk.Label(rule_box, text="评论回复").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="每个目标最多视频").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Spinbox(rule_box, from_=1, to=100, width=5, textvariable=self.scan_max_videos_var).grid(row=1, column=3, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="每条视频最多评论").grid(row=1, column=4, sticky="w", pady=(6, 0))
+        ttk.Spinbox(rule_box, from_=1, to=500, width=5, textvariable=self.scan_max_comments_var).grid(row=1, column=5, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="任务间隔秒").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Spinbox(rule_box, from_=1, to=3600, width=5, textvariable=self.scan_interval_var).grid(row=2, column=1, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="评论回复").grid(row=2, column=2, sticky="w", pady=(6, 0))
         ttk.Combobox(
             rule_box,
             textvariable=self.comment_reply_strategy_var,
             values=("规则模板（默认）", "外部AI生成建议", "固定文案"),
             state="readonly",
             width=16,
-        ).grid(row=1, column=3, columnspan=3, sticky="ew", pady=(6, 0))
-        ttk.Label(rule_box, text="固定文案").grid(row=2, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(rule_box, textvariable=self.quick_comment_text_var).grid(row=2, column=1, columnspan=5, sticky="ew", pady=(6, 0))
+        ).grid(row=2, column=3, columnspan=3, sticky="ew", pady=(6, 0))
+        ttk.Label(rule_box, text="固定文案").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(rule_box, textvariable=self.quick_comment_text_var).grid(row=3, column=1, columnspan=5, sticky="ew", pady=(6, 0))
+        ttk.Label(rule_box, text="意向词").grid(row=4, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(rule_box, textvariable=self.scan_intent_keywords_var).grid(row=4, column=1, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(rule_box, text="排除词").grid(row=4, column=3, sticky="w", pady=(6, 0))
+        ttk.Entry(rule_box, textvariable=self.scan_exclude_keywords_var).grid(row=4, column=4, columnspan=2, sticky="ew", pady=(6, 0))
         ai_box = ttk.LabelFrame(left_stack, text="评论回复 AI 接入点", padding=6, style="Panel.TLabelframe")
         ai_box.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         for idx in range(6):
