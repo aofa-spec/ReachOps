@@ -97,6 +97,10 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `tools/write_reachops_update_manifest.py` now writes a portable installer path instead of a build-machine absolute path.
   - `ReachOps.updater.ReachOpsUpdateManager.installer_path_from_manifest(...)` resolves relative manifest installer paths against the supplied base directory.
   - `tools/reachops_windows_package_preflight.py` now includes a `manifest_contract` fixture check for current version, Windows platform, installer hash/size, portable path, runtime config/data/activation preservation, and absence of customer-data fields.
+  - Windows acceptance now runs `tools/reachops_license_refresh.py --preview --json` before activation status checks and records `acceptance_summary.license_refresh` as a no-browser/no-submit, customer-data-free, redacted request-boundary report.
+  - Windows acceptance exposes `LicenseEndpoint` for preview routing but does not accept a command-line `LicenseKey`, avoiding command-line secret leakage.
+  - `tools/verify_reachops_acceptance_summary.py` rejects unsafe license refresh evidence if the optional section starts a browser, attempts submit, uploads customer data, exposes an unredacted license key, or points its report outside the acceptance summary directory.
+  - `tools/reachops_delivery_package_check.py` indexes the optional `license_refresh` report when an acceptance summary provides a `json_path`, without making it a substitute for activation readiness, live-submit evidence, or final delivery.
 - Tests and checks:
   - `/usr/bin/python3 -m py_compile ReachOps/credentials.py ReachOps/intelligence/ai_strategy.py ReachOps/workbench/console.py tests/test_credentials.py`: passed, exit `0`.
   - `/usr/bin/python3 -m py_compile ReachOps/license_state.py ReachOps/workbench/authorization_gate.py ReachOps/intelligence/schemas.py tools/reachops_activation_status_check.py tools/reachops_live_acceptance_status.py tests/test_license_state.py`: passed, exit `0`.
@@ -105,6 +109,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `/usr/bin/python3 -m py_compile ReachOps/license_verification.py tools/reachops_activation_status_check.py tools/reachops_live_acceptance_status.py tests/test_license_verification.py`: passed, exit `0`.
   - `/usr/bin/python3 -m py_compile ReachOps/license_client.py ReachOps/workbench/authorization_gate.py ReachOps/intelligence/schemas.py tests/test_license_client.py tests/test_license_verification.py tools/reachops_license_refresh.py`: passed, exit `0`.
   - `/usr/bin/python3 -m py_compile ReachOps/updater.py tools/write_reachops_update_manifest.py tools/reachops_windows_package_preflight.py tests/test_reachops_campaign.py`: passed, exit `0`.
+  - `/usr/bin/python3 -m py_compile tools/verify_reachops_acceptance_summary.py tools/reachops_delivery_package_check.py tests/test_reachops_campaign.py`: passed, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_credentials`: passed, 5 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_license_state`: passed, 5 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_backup`: passed, 3 tests, exit `0`.
@@ -112,6 +117,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `/usr/bin/python3 -m unittest -v tests.test_license_verification`: passed, 5 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_license_client tests.test_license_verification`: passed, 11 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_update_manifest_contains_hash_and_preserve_policy tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_update_manager_validates_manifest_hash_and_install_args tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_windows_package_preflight_validates_build_inputs_without_claiming_final_delivery`: passed, 3 tests, exit `0`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_packaging_files_define_standalone_windows_artifacts tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_acceptance_summary_verifier_classifies_external_pending_and_failures tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_delivery_package_check_validates_artifacts_manifest_and_reports`: passed, 3 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_credentials tests.test_license_state`: passed, 10 tests, exit `0`; log `/tmp/reachops-p2-backup-security-tests.log`.
   - `/usr/bin/python3 -m unittest -v tests.test_license_state tests.test_credentials tests.test_backup`: passed, 13 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_license_client tests.test_device_seats tests.test_license_verification tests.test_license_state tests.test_credentials tests.test_backup`: passed, 30 tests, exit `0`; log `/tmp/reachops-p2-license-client-security-tests.log`.
@@ -119,17 +125,29 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_check_reports_device_and_capabilities tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_check_blocks_device_mismatch tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_activation_status_template_is_not_authorization tests.test_reachops_campaign.ReachOpsCampaignTests.test_live_submit_rejects_expired_activation_status`: passed, 4 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-p2-license-verify-truth.log`.
   - `/usr/bin/python3 tools/reachops_windows_package_preflight.py --json`: passed, exit `0`, `ready_for_windows_build=true`, `manifest_contract.ok=true`; output `/tmp/reachops-p2-package-preflight-contract.json`.
+  - `REACHOPS_LICENSE_KEY=<test-fixture> /usr/bin/python3 tools/reachops_license_refresh.py --preview --json --endpoint https://license.example.test/refresh`: passed as redaction fixture, exit `0`, wrote `/tmp/reachops-p2-license-refresh-preview.json`; verified `status=preview`, `refreshed=false`, `request_payload.license_key=***redacted***`, `no_browser_started=true`, `no_submit=true`, `customer_data_uploaded=false`.
+  - `/usr/bin/python3 tools/reachops_windows_package_preflight.py --json`: passed, exit `0`, `ready_for_windows_build=true`, `manifest_contract.ok=true`; output `/tmp/reachops-p2-license-refresh-windows-package-preflight.json`.
   - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-p2-package-manifest-campaign.log`.
   - `origin/main` baseline: `/tmp/reachops-main-baseline-p2-license-verify-campaign.log` failed with the same 14 failures and 1 error.
   - Baseline comparison artifact: `/tmp/reachops-p2-package-manifest-baseline-comparison.json`; `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-p2-license-refresh-acceptance-campaign.log`.
+  - Baseline comparison artifact: `/tmp/reachops-p2-license-refresh-acceptance-baseline-comparison.json`; `new_failures=[]`, `new_errors=[]`.
   - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-p2-package-manifest-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-p2-license-refresh-operator-pressure.json`.
   - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-p2-package-manifest-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-p2-license-refresh-delivery-audit.json`.
   - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p2-package-manifest-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; delivery boundary blocks include `local_mvp`, `windows_final_artifacts`, and `external_authorized_execution`; output `/tmp/reachops-p2-license-refresh-goal-delivery-runner.json`.
   - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-p2-package-manifest-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-p2-license-refresh-goal-status-report.json`.
   - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p2-package-manifest-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; failures include `exe_missing`, `installer_missing`, `manifest_missing`, `acceptance_summary_missing`, and `acceptance_summary_not_passed`; output `/tmp/reachops-p2-license-refresh-package-check.json`.
   - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p2-package-manifest-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p2-license-refresh-final-gate.json`.
   - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`; output `/tmp/reachops-p2-package-manifest-cleanliness.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`; output `/tmp/reachops-p2-license-refresh-cleanliness.json`.
   - `git diff --check`: passed, exit `0`.
+  - `git diff --check`: passed, exit `0`; log `/tmp/reachops-p2-license-refresh-diff-check.log`.
 - Safety:
   - No real secret value was added to tests, logs, reports, or git-tracked files.
   - No real TikTok action was executed.
