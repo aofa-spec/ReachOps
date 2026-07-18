@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ReachOps.intelligence.schemas import ActionQueueItem, CandidateUser
+from ReachOps.intelligence.schemas import ActionQueueItem, CandidateUser, DiscoveredContent
 from ReachOps.intelligence.storage import GrowthStorage
 
 
@@ -208,7 +208,7 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(second_trace["comment_observations"]), 1)
         self.assertEqual(len(first_trace["candidate_observations"]), 1)
         self.assertEqual(len(second_trace["candidate_observations"]), 1)
-        self.assertEqual(len(first_trace["lead_decisions"]), 1)
+        self.assertEqual(len(first_trace["lead_decisions"]), 2)
         self.assertEqual(len(second_trace["lead_decisions"]), 1)
         self.assertEqual(len(first_trace["outreach_executions"]), 1)
         self.assertEqual(len(second_trace["outreach_executions"]), 0)
@@ -217,6 +217,124 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(first_trace["lead_decisions"][0]["batch_id"], first.id)
         self.assertEqual(second_trace["lead_decisions"][0]["batch_id"], second.id)
         self.assertEqual(first_trace["outreach_executions"][0]["evidence_path"], "/tmp/reachops/redacted/evidence.png")
+
+    def test_workflow_storage_writes_run_observation_ledger_automatically(self):
+        campaign = self.storage.create_campaign("keyword", "serum")
+        run = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+        self.storage.set_active_collection_batch(run.id)
+
+        task = self.storage.create_collection_task(
+            run.id,
+            source_id="source-1",
+            source_type="keyword",
+            source_value="serum",
+            profile_id="profile-1",
+        )
+        content, content_created = self.storage.upsert_content(
+            DiscoveredContent(
+                id="content-1",
+                creator_id="creator-1",
+                video_id="video-1",
+                video_url="https://example.test/video/1",
+                caption="demo",
+                collector_level="fixture",
+            )
+        )
+        candidate, candidate_created = self.storage.upsert_candidate(
+            CandidateUser(
+                id="candidate-1",
+                content_id=content.id,
+                username="buyer",
+                profile_url="https://example.test/@buyer",
+                comment_text="where can I buy this",
+                qualify_score=81,
+                intent_tags=["buy"],
+                collector_level="fixture",
+            )
+        )
+        lead_id, lead_created = self.storage.upsert_operation_lead(
+            candidate.id,
+            "high_intent",
+            "high",
+            81,
+            "buying question",
+            source_path=content.video_url,
+        )
+        same_lead_id, same_lead_created = self.storage.upsert_operation_lead(
+            candidate.id,
+            "high_intent",
+            "high",
+            81,
+            "buying question",
+            source_path=content.video_url,
+        )
+        updated_lead_id, updated_lead_created = self.storage.upsert_operation_lead(
+            candidate.id,
+            "high_intent",
+            "high",
+            92,
+            "strong buying question",
+            source_path=content.video_url,
+        )
+
+        self.assertEqual(task.run_id, run.run_id)
+        self.assertTrue(content_created)
+        self.assertTrue(candidate_created)
+        self.assertTrue(lead_created)
+        self.assertEqual(lead_id, same_lead_id)
+        self.assertEqual(lead_id, updated_lead_id)
+        self.assertFalse(same_lead_created)
+        self.assertFalse(updated_lead_created)
+
+        trace = self.storage.list_observations_for_run(run.run_id)
+        self.assertEqual(len(trace["source_observations"]), 1)
+        self.assertEqual(trace["source_observations"][0]["source_id"], "source-1")
+        self.assertEqual(trace["source_observations"][0]["observation_key"], "collection_task_planned")
+        source_payload = json.loads(trace["source_observations"][0]["payload_json"])
+        self.assertEqual(source_payload["task_id"], task.id)
+        self.assertEqual(source_payload["profile_id"], "profile-1")
+        self.assertEqual(len(trace["content_observations"]), 1)
+        self.assertEqual(trace["content_observations"][0]["content_id"], "content-1")
+        self.assertEqual(len(trace["comment_observations"]), 1)
+        self.assertEqual(trace["comment_observations"][0]["comment_text"], "where can I buy this")
+        self.assertEqual(len(trace["candidate_observations"]), 1)
+        self.assertEqual(trace["candidate_observations"][0]["score"], 81)
+        self.assertEqual([row["decision_version"] for row in trace["lead_decisions"]], [1, 2])
+        self.assertEqual([row["score"] for row in trace["lead_decisions"]], [81, 92])
+
+        self.storage.create_collection_task(
+            run.id,
+            source_id="source-1",
+            source_type="keyword",
+            source_value="serum",
+            profile_id="profile-1",
+        )
+        self.storage.upsert_content(
+            DiscoveredContent(
+                id="content-2",
+                creator_id="creator-1",
+                video_id="video-1",
+                video_url="https://example.test/video/1",
+                caption="demo",
+            )
+        )
+        self.storage.upsert_candidate(
+            CandidateUser(
+                id="candidate-2",
+                content_id=content.id,
+                username="buyer",
+                profile_url="https://example.test/@buyer",
+                comment_text="where can I buy this",
+                qualify_score=81,
+                intent_tags=["buy"],
+            )
+        )
+        repeated_trace = self.storage.list_observations_for_run(run.run_id)
+        self.assertEqual(len(repeated_trace["source_observations"]), 1)
+        self.assertEqual(len(repeated_trace["content_observations"]), 1)
+        self.assertEqual(len(repeated_trace["comment_observations"]), 1)
+        self.assertEqual(len(repeated_trace["candidate_observations"]), 1)
+        self.assertEqual(len(repeated_trace["lead_decisions"]), 2)
 
     def test_observation_idempotency_and_lead_decision_versioning(self):
         campaign = self.storage.create_campaign("keyword", "serum")

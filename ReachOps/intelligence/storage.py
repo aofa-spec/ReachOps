@@ -1393,38 +1393,55 @@ class GrowthStorage:
                 (content.creator_id, content.video_id),
             ).fetchone()
             if row:
-                return self._row_to_content(row), False
-            conn.execute(
-                """
-                INSERT INTO discovered_contents
-                (id, creator_id, video_id, video_url, caption, views, likes, comments, shares,
-                 content_language, country, material_type, collector_level, source_path, raw_meta, batch_id, run_id,
-                 published_at, collected_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    content.id,
-                    content.creator_id,
-                    content.video_id,
-                    content.video_url,
-                    content.caption,
-                    content.views,
-                    content.likes,
-                    content.comments,
-                    content.shares,
-                    content.content_language,
-                    content.country,
-                    content.material_type,
-                    content.collector_level,
-                    content.source_path,
-                    json.dumps(content.raw_meta or {}, ensure_ascii=False),
-                    self._active_batch_id(),
-                    run_id,
-                    content.published_at,
-                    content.collected_at,
-                ),
+                saved = self._row_to_content(row)
+                created = False
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO discovered_contents
+                    (id, creator_id, video_id, video_url, caption, views, likes, comments, shares,
+                     content_language, country, material_type, collector_level, source_path, raw_meta, batch_id, run_id,
+                     published_at, collected_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        content.id,
+                        content.creator_id,
+                        content.video_id,
+                        content.video_url,
+                        content.caption,
+                        content.views,
+                        content.likes,
+                        content.comments,
+                        content.shares,
+                        content.content_language,
+                        content.country,
+                        content.material_type,
+                        content.collector_level,
+                        content.source_path,
+                        json.dumps(content.raw_meta or {}, ensure_ascii=False),
+                        self._active_batch_id(),
+                        run_id,
+                        content.published_at,
+                        content.collected_at,
+                    ),
+                )
+                saved = content
+                created = True
+        if run_id:
+            self.record_content_observation(
+                run_id,
+                saved.id,
+                "content_seen",
+                payload={
+                    "video_id": saved.video_id,
+                    "video_url": saved.video_url,
+                    "collector_level": saved.collector_level,
+                    "storage_created": created,
+                },
+                observed_at=saved.collected_at,
             )
-            return content, True
+        return saved, created
 
     def upsert_candidate(self, candidate: CandidateUser) -> tuple[CandidateUser, bool]:
         run_id = self._active_run_id()
@@ -1453,38 +1470,73 @@ class GrowthStorage:
                     ),
                 )
                 updated = conn.execute("SELECT * FROM candidate_users WHERE id=?", (row["id"],)).fetchone()
-                return self._row_to_candidate(updated), False
-            conn.execute(
-                """
-                INSERT INTO candidate_users
-                (id, content_id, username, profile_url, comment_text, comment_likes, reply_count,
-                 qualify_score, intent_tags, comment_language, author_profile_completed, collector_level,
-                 source_path, repeat_seen_count, raw_meta, batch_id, run_id, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    candidate.id,
-                    candidate.content_id,
-                    candidate.username,
-                    candidate.profile_url,
-                    candidate.comment_text,
-                    candidate.comment_likes,
-                    candidate.reply_count,
-                    candidate.qualify_score,
-                    json.dumps(candidate.intent_tags, ensure_ascii=False),
-                    candidate.comment_language,
-                    1 if candidate.author_profile_completed else 0,
-                    candidate.collector_level,
-                    candidate.source_path,
-                    int(candidate.repeat_seen_count or 1),
-                    json.dumps(candidate.raw_meta or {}, ensure_ascii=False),
-                    self._active_batch_id(),
-                    run_id,
-                    candidate.status,
-                    candidate.created_at,
-                ),
+                saved = self._row_to_candidate(updated)
+                created = False
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO candidate_users
+                    (id, content_id, username, profile_url, comment_text, comment_likes, reply_count,
+                     qualify_score, intent_tags, comment_language, author_profile_completed, collector_level,
+                     source_path, repeat_seen_count, raw_meta, batch_id, run_id, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candidate.id,
+                        candidate.content_id,
+                        candidate.username,
+                        candidate.profile_url,
+                        candidate.comment_text,
+                        candidate.comment_likes,
+                        candidate.reply_count,
+                        candidate.qualify_score,
+                        json.dumps(candidate.intent_tags, ensure_ascii=False),
+                        candidate.comment_language,
+                        1 if candidate.author_profile_completed else 0,
+                        candidate.collector_level,
+                        candidate.source_path,
+                        int(candidate.repeat_seen_count or 1),
+                        json.dumps(candidate.raw_meta or {}, ensure_ascii=False),
+                        self._active_batch_id(),
+                        run_id,
+                        candidate.status,
+                        candidate.created_at,
+                    ),
+                )
+                saved = candidate
+                created = True
+        if run_id:
+            comment_observation_id = self.record_comment_observation(
+                run_id,
+                candidate.content_id,
+                saved.id,
+                candidate.username,
+                candidate.comment_text,
+                "comment_seen",
+                payload={
+                    "profile_url": candidate.profile_url,
+                    "comment_likes": int(candidate.comment_likes or 0),
+                    "reply_count": int(candidate.reply_count or 0),
+                    "storage_created": created,
+                },
+                observed_at=candidate.created_at,
             )
-            return candidate, True
+            self.record_candidate_observation(
+                run_id,
+                saved.id,
+                candidate.username,
+                int(candidate.qualify_score or 0),
+                candidate.intent_tags or [],
+                "scored",
+                payload={
+                    "status": candidate.status,
+                    "collector_level": candidate.collector_level,
+                    "storage_created": created,
+                },
+                comment_observation_id=comment_observation_id,
+                observed_at=candidate.created_at,
+            )
+        return saved, created
 
     def update_candidate_score(self, candidate_id: str, score: int, tags: List[str], status: str):
         with self.connect() as conn:
@@ -1657,32 +1709,87 @@ class GrowthStorage:
                     """,
                     (priority, int(score), reason, source_path or "", now, row["id"]),
                 )
-                return row["id"], False
-            item_id = new_id("ol")
-            conn.execute(
-                """
-                INSERT INTO operation_leads
-                (id, candidate_user_id, run_id, lead_type, priority, score, reason, lifecycle_stage, source_path,
-                 status, batch_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item_id,
-                    candidate_id,
-                    run_id,
-                    lead_type,
-                    priority,
-                    int(score),
-                    reason,
-                    "new",
-                    source_path or "",
-                    "new",
-                    self._active_batch_id(),
-                    now,
-                    now,
-                ),
+                item_id = row["id"]
+                created = False
+            else:
+                item_id = new_id("ol")
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, run_id, lead_type, priority, score, reason, lifecycle_stage, source_path,
+                     status, batch_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item_id,
+                        candidate_id,
+                        run_id,
+                        lead_type,
+                        priority,
+                        int(score),
+                        reason,
+                        "new",
+                        source_path or "",
+                        "new",
+                        self._active_batch_id(),
+                        now,
+                        now,
+                    ),
+                )
+                created = True
+        if run_id:
+            self._record_lead_decision_if_changed(
+                run_id,
+                candidate_id,
+                lead_type,
+                int(score or 0),
+                reason,
+                item_id,
+                {
+                    "priority": priority,
+                    "source_path": source_path or "",
+                    "storage_created": created,
+                },
             )
-            return item_id, True
+        return item_id, created
+
+    def _record_lead_decision_if_changed(
+        self,
+        run_id: str,
+        candidate_id: str,
+        decision_type: str,
+        score: int,
+        reason: str,
+        lead_id: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        run = str(run_id or "").strip()
+        candidate = str(candidate_id or "").strip()
+        decision = str(decision_type or "lead_decision")
+        if not run or not candidate:
+            return ""
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT score, reason
+                FROM lead_decisions
+                WHERE run_id=? AND candidate_user_id=? AND decision_type=?
+                ORDER BY decision_version DESC, created_at DESC
+                LIMIT 1
+                """,
+                (run, candidate, decision),
+            ).fetchone()
+        if row and int(row["score"] or 0) == int(score or 0) and str(row["reason"] or "") == str(reason or ""):
+            return ""
+        return self.record_lead_decision(
+            run,
+            candidate,
+            decision,
+            score=int(score or 0),
+            reason=reason,
+            lead_id=lead_id,
+            payload=payload or {},
+        )
 
     def upsert_action_queue_item(self, item: ActionQueueItem) -> tuple[str, bool]:
         run_id = self._active_run_id()
@@ -2025,6 +2132,16 @@ class GrowthStorage:
                     item.created_at,
                     item.updated_at,
                 ),
+            )
+        if run_id:
+            self.record_source_observation(
+                run_id,
+                source_id=source_id,
+                source_type=source_type,
+                source_value=source_value,
+                observation_key="collection_task_planned",
+                payload={"task_id": item.id, "profile_id": profile_id or ""},
+                observed_at=now,
             )
         return item
 
