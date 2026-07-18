@@ -70,6 +70,36 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No real TikTok action was executed.
   - Fixture live execution remains blocked by default and is only enabled in explicit test fixture paths through `REACHOPS_ALLOW_TEST_FIXTURE_LIVE=1`.
 
+## Latest P4 Web DOM start-gate snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-dom-start-gate`
+- Scope: Web operator panel DOM/start gate only. This does not enter Windows, EXE, installer, or TikTok live-submit scope.
+- Code evidence:
+  - The initial Start button is disabled until ixBrowser group refresh returns a real, non-stale group list with resolved group counts.
+  - Account-preflight `blocked_by_accounts` now disables Start for the affected group and blocks programmatic `/api/start` until the operator repairs/isolates accounts and confirms re-preflight.
+  - Stale account-repair results block Start and tell the operator to use the latest repair plan.
+  - Refreshed ixBrowser groups render each group count and source in the first-screen group detail panel.
+  - The toolbar grid uses stable responsive tracks for desktop and narrow screens.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile tools/reachops_web_ui.py tools/reachops_web_panel_dom_smoke.py tests/test_reachops_client_acceptance_status.py`: passed; log `/tmp/reachops-p4-dom-pycompile.log`.
+  - `/usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-p4-dom-after.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_client_acceptance_status.ReachOpsWebUiContractTest.test_web_panel_dom_smoke_clicks_buttons_and_shows_api_feedback`: passed; log `/tmp/reachops-p4-dom-target-test.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-dom-truth.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p4-dom-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, summary `passed=47`, `pending_external_validation=3`, `failed=4`; output `/tmp/reachops-p4-dom-delivery-audit.json`. The DOM button-click feedback check is no longer failed. Remaining failed checks are `客户可见设置都有执行证据映射`, `漏斗只显示本轮 Campaign`, `网页端通过服务端本地 API 调用指纹浏览器执行获客`, and `运营 Web 面板运行时 API 冒烟可真实启动和控制执行链`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with the same baseline signature as `origin/main`, `230` tests, `14` failures and `1` error; branch log `/tmp/reachops-p4-dom-campaign.log`, main log `/tmp/reachops-main-baseline-dom-campaign.log`, comparison `/tmp/reachops-p4-dom-baseline-comparison.json`, `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected for final delivery, `final_delivery_ready=false`; output `/tmp/reachops-p4-dom-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed as expected for final delivery; output `/tmp/reachops-p4-dom-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-dom-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p4-dom-final-acceptance-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p4-dom-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-dom-diff-check.log`.
+- Safety:
+  - No real browser profile was opened by this slice.
+  - No TikTok live-submit was executed.
+  - No Windows/EXE/installer work was entered.
+
 ## Non-blocking engineering work available
 
 - P1 observation model and migration.
