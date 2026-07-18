@@ -85,6 +85,8 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 - Date: `2026-07-19`
 - Branch: `codex/p2-encrypted-backup-restore`
+- Draft PR: #15 `ReachOps P2: encrypted backup restore foundation`
+- Commit: `37a7200` initial implementation; follow-up state-only commit records PR metadata.
 - Scope: P2 local encrypted backup/restore foundation only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
 - Code evidence:
   - Added `.reachops-backup` local archive primitives in `ReachOps/workbench/local_backup.py`.
