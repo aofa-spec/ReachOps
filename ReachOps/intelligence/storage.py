@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -1645,10 +1646,40 @@ class GrowthStorage:
         return saved, created
 
     def update_candidate_score(self, candidate_id: str, score: int, tags: List[str], status: str):
+        run_id = self._active_run_id()
+        candidate_row = None
         with self.connect() as conn:
+            if run_id:
+                candidate_row = conn.execute(
+                    "SELECT id, username FROM candidate_users WHERE id=?",
+                    (candidate_id,),
+                ).fetchone()
             conn.execute(
                 "UPDATE candidate_users SET qualify_score=?, intent_tags=?, status=? WHERE id=?",
                 (score, json.dumps(tags, ensure_ascii=False), status, candidate_id),
+            )
+        if run_id and candidate_row:
+            normalized_tags = [str(tag or "") for tag in tags or []]
+            observation_payload = {"status": status, "source": "candidate_user_scorer"}
+            observation_fingerprint = hashlib.sha1(
+                json.dumps(
+                    {
+                        "score": int(score or 0),
+                        "tags": normalized_tags,
+                        "status": str(status or ""),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()[:12]
+            self.record_candidate_observation(
+                run_id,
+                str(candidate_row["id"] or candidate_id),
+                str(candidate_row["username"] or ""),
+                int(score or 0),
+                normalized_tags,
+                f"score_updated:{observation_fingerprint}",
+                payload=observation_payload,
             )
 
     def refresh_candidate_repeat_counts(self) -> Dict[str, int]:

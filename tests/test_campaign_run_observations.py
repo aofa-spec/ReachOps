@@ -4,7 +4,9 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+from ReachOps.intelligence.candidate_user_scorer import CandidateUserScorer
 from ReachOps.intelligence.schemas import ActionQueueItem, CandidateUser, DiscoveredContent
 from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
@@ -337,6 +339,71 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(repeated_trace["comment_observations"]), 1)
         self.assertEqual(len(repeated_trace["candidate_observations"]), 1)
         self.assertEqual(len(repeated_trace["lead_decisions"]), 2)
+
+    def test_scoring_workflow_records_run_scoped_candidate_observations(self):
+        campaign = self.storage.create_campaign("keyword", "serum")
+        first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+        second = self.storage.create_collection_batch(1, profile_group="CA", campaign_id=campaign.id)
+
+        def add_candidate(batch, suffix):
+            self.storage.set_active_collection_batch(batch.id)
+            content, _created = self.storage.upsert_content(
+                DiscoveredContent(
+                    id=f"content-{suffix}",
+                    creator_id=f"creator-{suffix}",
+                    video_id=f"video-{suffix}",
+                    video_url=f"https://example.test/video/{suffix}",
+                    caption="where to buy demo",
+                    views=20000,
+                    comments=200,
+                )
+            )
+            candidate, _created = self.storage.upsert_candidate(
+                CandidateUser(
+                    id=f"candidate-{suffix}",
+                    content_id=content.id,
+                    username=f"buyer_{suffix}",
+                    profile_url=f"https://example.test/@buyer_{suffix}",
+                    comment_text=f"where can I buy {suffix}",
+                    qualify_score=0,
+                    intent_tags=[],
+                )
+            )
+            return candidate
+
+        first_candidate = add_candidate(first, "first")
+        second_candidate = add_candidate(second, "second")
+        scorer = CandidateUserScorer(self.storage)
+
+        self.storage.set_active_collection_batch(first.id)
+        first_updated = scorer.score_all(SimpleNamespace(active_batch_id=first.id))
+        scorer.score_all(SimpleNamespace(active_batch_id=first.id))
+
+        first_trace = self.storage.list_observations_for_run(first.run_id)
+        second_trace_before = self.storage.list_observations_for_run(second.run_id)
+        first_score_updates = [
+            row for row in first_trace["candidate_observations"] if row["observation_key"].startswith("score_updated:")
+        ]
+        second_score_updates_before = [
+            row for row in second_trace_before["candidate_observations"] if row["observation_key"].startswith("score_updated:")
+        ]
+
+        self.assertEqual(first_updated, 1)
+        self.assertEqual([row["candidate_user_id"] for row in first_score_updates], [first_candidate.id])
+        self.assertEqual(second_score_updates_before, [])
+
+        self.storage.set_active_collection_batch(second.id)
+        second_updated = scorer.score_all(SimpleNamespace(active_batch_id=second.id))
+
+        second_trace = self.storage.list_observations_for_run(second.run_id)
+        second_score_updates = [
+            row for row in second_trace["candidate_observations"] if row["observation_key"].startswith("score_updated:")
+        ]
+
+        self.assertEqual(second_updated, 1)
+        self.assertEqual([row["candidate_user_id"] for row in second_score_updates], [second_candidate.id])
+        self.assertEqual(len(first_score_updates), 1)
+        self.assertEqual(len(second_score_updates), 1)
 
     def test_campaign_export_prefers_run_scoped_reads(self):
         class ExportService:
