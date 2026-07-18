@@ -86,6 +86,8 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 - Date: `2026-07-19`
 - Branch: `codex/p2-device-seat-entitlements`
+- Draft PR: #16 `ReachOps P2: device seat entitlement checks`
+- Commit: `7568803` adds the local device-seat entitlement evaluator, gate integration, activation status evidence, and focused tests.
 - Scope: P2 local device-seat entitlement evaluation only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
 - Code evidence:
   - Added `ReachOps/workbench/device_seats.py` to evaluate default one-device activation files and explicit extra-seat device lists.
