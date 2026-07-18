@@ -69,7 +69,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Date: `2026-07-18 UTC`
 - Branch: `codex/p1-immutable-campaign-run-observations`
 - PR: Draft PR #12
-- Commit: `d83b078`
+- Commit: `2596c9e`
 - Scope: First P1 storage-contract slice only; no PR #9 changes and no real TikTok action.
 - Code evidence:
   - Added `campaign_runs` as the immutable run ledger, one run per collection batch, with idempotent backfill for existing batches.
