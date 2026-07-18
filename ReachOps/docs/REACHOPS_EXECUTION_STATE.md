@@ -85,6 +85,8 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 - Date: `2026-07-19`
 - Branch: `codex/p4-operator-controls-ui-mapping`
+- Draft PR: #18 `ReachOps P4: expose operator execution controls`
+- Commit: `d4b646a` exposes customer-visible execution controls, adds the operator-control mapping test, and records validation evidence.
 - Scope: P4 local operator UI control visibility only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
 - Code evidence:
   - `ReachOps/workbench/console.py` now exposes customer-visible labels and controls for `每个目标最多视频`, `每条视频最多评论`, `参与账号数`, `任务间隔秒`, and `排除词`.
