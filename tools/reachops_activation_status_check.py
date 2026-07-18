@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.device_seats import evaluate_device_seat_state
 from ReachOps.license_state import evaluate_license_state
+from ReachOps.license_verification import evaluate_license_verification_state
 from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.device_identity import DeviceIdentity
 
@@ -104,13 +105,21 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
 
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
     license_state = evaluate_license_state(payload)
+    verification_state = evaluate_license_verification_state(payload)
     device_seat_state = evaluate_device_seat_state(payload, current_device_id)
     result["license_state"] = license_state.as_dict()
+    result["license_verification_state"] = verification_state.as_dict()
     result["device_seat_state"] = device_seat_state.as_dict()
     add("activation_not_template", not bool(payload.get("template_only")), template_only=bool(payload.get("template_only")))
     add("activation_active", bool(payload.get("active")), active=bool(payload.get("active")))
     add("license_app_access_allowed", license_state.app_access_allowed, license_state=license_state.as_dict())
     add("license_live_submit_allowed", license_state.live_submit_allowed, license_state=license_state.as_dict())
+    verification_declared = any(
+        str(payload.get(key) or "").strip()
+        for key in ["last_verified_at", "verified_at", "last_license_check_at", "next_verify_at", "next_license_check_at"]
+    )
+    if verification_declared:
+        add("license_verification_current", not verification_state.verification_required, license_verification_state=verification_state.as_dict())
     add("device_seat_allows_current_device", device_seat_state.device_allowed, device_seat_state=device_seat_state.as_dict())
     add("device_binding_matches", device_seat_state.device_allowed, device_seat_state=device_seat_state.as_dict())
     add("live_submit_capability_enabled", bool(capabilities.get("live_submit")), capabilities=capabilities)
