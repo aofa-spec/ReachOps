@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from ReachOps.device_seats import evaluate_device_seat_state
 from ReachOps.license_state import evaluate_license_state
 
 from .device_identity import DeviceIdentity
@@ -66,13 +67,14 @@ class LiveSubmitAuthorizationGate:
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status is a template", evidence)
         if not bool(status.get("active")):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation is inactive", evidence)
-        bound_device_id = str(status.get("device_id") or "").strip()
-        if bound_device_id and bound_device_id != evidence["current_device_id"]:
+        device_seat_state = evaluate_device_seat_state(status, evidence["current_device_id"])
+        evidence = {**evidence, "device_seat_state": device_seat_state.as_dict()}
+        if not device_seat_state.device_allowed:
             return AuthorizationDecision(
                 False,
                 "LIVE_SUBMIT_DEVICE_MISMATCH",
-                "activation is bound to another device",
-                {**evidence, "bound_device_id": bound_device_id},
+                device_seat_state.reason or "activation is not bound to this device",
+                evidence,
             )
         license_state = evaluate_license_state(status)
         evidence = {**evidence, "license_state": license_state.as_dict()}
