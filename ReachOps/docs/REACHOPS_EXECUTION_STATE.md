@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-17`
+- Last manually reconciled: `2026-07-19`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -17,7 +17,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
 | P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
-| P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
+| P4 | Bilingual UI, installer, update, Windows acceptance | `IN_PROGRESS` | Branch `codex/p4-runtime-smoke-python39` makes the Web runtime API smoke runnable on Python 3.9, isolates activation-gate checks from development bypass, and makes the default Mac launcher enter the unified local Web console. Windows installer/update/live acceptance remain incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
 
 ## Next autonomous action
@@ -69,6 +69,37 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Safety:
   - No real TikTok action was executed.
   - Fixture live execution remains blocked by default and is only enabled in explicit test fixture paths through `REACHOPS_ALLOW_TEST_FIXTURE_LIVE=1`.
+
+## Latest P4 runtime-smoke launcher snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-runtime-smoke-python39`
+- Scope: P4 local Web runtime smoke and launcher-entry convergence only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
+- Code evidence:
+  - `tools/reachops_web_panel_runtime_smoke.py` now works on Python 3.9 by avoiding unsupported `TemporaryDirectory(ignore_cleanup_errors=...)`.
+  - The same runtime smoke forces `REACHOPS_REQUIRE_ACTIVATION=1` only inside the smoke and restores the caller environment, so the unauthorized live-comment check cannot pass through development bypass.
+  - `ReachOps/launcher.py` now defaults `ReachOpsApp.py` to the unified Web console; Tk remains available only through `--legacy-tk` or `REACHOPS_LEGACY_TK=1` as a diagnostic path.
+  - `启动ReachOps本地客户端.command` now delegates to `启动ReachOps统一WebUI.command`; `启动ReachOps原生MacUI.command` explicitly marks Tk as the legacy diagnostic entry.
+  - `tests/test_launcher.py` locks the default Web-console launcher contract and the legacy diagnostic opt-in.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/launcher.py tools/reachops_web_panel_runtime_smoke.py tests/test_launcher.py`: passed; log `/tmp/reachops-p4-runtime-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_launcher`: passed, 7 tests; log `/tmp/reachops-p4-runtime-launcher-tests.log`.
+  - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed, `status=passed`; output `/tmp/reachops-p4-runtime-smoke-final-probe.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_client_acceptance_status.ReachOpsWebUiContractTest.test_web_panel_runtime_smoke_proves_real_api_execution_chain`: passed; log `/tmp/reachops-p4-runtime-smoke-contract-test.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-runtime-truth.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p4-runtime-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, but the previous `运营 Web 面板运行时 API 冒烟可真实启动和控制执行链` failure is no longer present; remaining failures are customer-visible controls, campaign-funnel isolation, web API acquisition-chain residual checks, and Web DOM button feedback; output `/tmp/reachops-p4-runtime-delivery-audit-probe.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with the same known baseline result as `origin/main`: 230 tests, 14 failures, 1 error; branch log `/tmp/reachops-p4-runtime-campaign.log`, comparison `/tmp/reachops-p4-runtime-baseline-comparison.json` has `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-p4-runtime-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`; output `/tmp/reachops-p4-runtime-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-runtime-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p4-runtime-final-acceptance-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p4-runtime-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-runtime-diff-check.log`.
+- Remaining blockers:
+  - Delivery audit still has local UI/runtime failures on this main-based branch: customer-visible operator controls, campaign-funnel isolation, web API acquisition-chain residual checks, and Web DOM button feedback. PR #18 and PR #19 address part of this surface separately.
+  - Windows final artifacts remain missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
+  - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
 
 ## Non-blocking engineering work available
 

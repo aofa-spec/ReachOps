@@ -36,6 +36,13 @@ def source_mtimes() -> dict[str, float]:
     return {name: path.stat().st_mtime for name, path in paths.items() if path.exists()}
 
 
+def temporary_directory_ignoring_cleanup_errors(prefix: str):
+    try:
+        return tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True)
+    except TypeError:
+        return tempfile.TemporaryDirectory(prefix=prefix)
+
+
 def write_latest_result(result: dict):
     LATEST_RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = dict(result)
@@ -201,6 +208,7 @@ def run_runtime_smoke() -> dict:
     old_ixbrowser_status = reachops_web_ui.build_ixbrowser_status_payload
     old_ixbrowser_override = reachops_web_ui.IXBROWSER_API_PORT_OVERRIDE
     old_ixbrowser_env = reachops_web_ui.os.environ.get("REACHOPS_IXBROWSER_API_PORT")
+    old_require_activation_env = reachops_web_ui.os.environ.get("REACHOPS_REQUIRE_ACTIVATION")
     old_web_settings_path = reachops_web_ui.WEB_SETTINGS_PATH
     old_web_mvp_path = reachops_web_ui.MVP_ACCEPTANCE_SUMMARY_PATH
     old_web_goal_path = reachops_web_ui.GOAL_DELIVERY_REPORT_PATH
@@ -221,7 +229,7 @@ def run_runtime_smoke() -> dict:
     checks: dict[str, bool] = {}
     diagnostics: dict[str, object] = {}
 
-    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-", ignore_cleanup_errors=True) as tmpdir:
+    with temporary_directory_ignoring_cleanup_errors(prefix="reachops-web-panel-smoke-") as tmpdir:
         try:
             reachops_web_ui.DATA_DIR = Path(tmpdir)
             reachops_web_ui.WEB_SETTINGS_PATH = Path(tmpdir) / "config" / "reachops_web_settings.json"
@@ -240,6 +248,7 @@ def run_runtime_smoke() -> dict:
             reachops_web_ui.RUN_PROCESS = None
             reachops_web_ui.RUN_PAUSED = False
             reachops_web_ui.RUN_STARTED_AT = 0.0
+            reachops_web_ui.os.environ["REACHOPS_REQUIRE_ACTIVATION"] = "1"
             offline_ledger = OfflineLearningLedger(Path(tmpdir) / "offline_learning" / "unknown_states.json")
             unknown_page_state = {
                 "schema_version": "reachops.page_state.v1",
@@ -595,7 +604,7 @@ def run_runtime_smoke() -> dict:
                     "taskParams",
                     "taskActions",
                     "grid-template-columns:repeat(auto-fit,minmax(176px,1fr))",
-                    "grid-template-columns:minmax(140px,.9fr)",
+                    "grid-template-columns:minmax(180px,1fr)",
                     "grid-template-columns:repeat(auto-fit,minmax(106px,1fr))",
                     "本地服务连接失败",
                     "$('runState').textContent = 'OFFLINE'",
@@ -2257,6 +2266,10 @@ def run_runtime_smoke() -> dict:
                 reachops_web_ui.os.environ.pop("REACHOPS_IXBROWSER_API_PORT", None)
             else:
                 reachops_web_ui.os.environ["REACHOPS_IXBROWSER_API_PORT"] = old_ixbrowser_env
+            if old_require_activation_env is None:
+                reachops_web_ui.os.environ.pop("REACHOPS_REQUIRE_ACTIVATION", None)
+            else:
+                reachops_web_ui.os.environ["REACHOPS_REQUIRE_ACTIVATION"] = old_require_activation_env
             reachops_mvp_acceptance_summary.build_summary = old_mvp_build_summary
             reachops_mvp_acceptance_summary.OUT_PATH = old_mvp_out_path
             reachops_goal_delivery_runner.build_report = old_goal_build_report
