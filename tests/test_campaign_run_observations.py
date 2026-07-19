@@ -704,6 +704,7 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertNotEqual(first_decision, second_decision)
 
         trace = self.storage.list_observations_for_run(run.run_id)
+        self.assertEqual([row["id"] for row in trace["campaign_runs"]], [run.run_id])
         self.assertEqual(len(trace["source_observations"]), 1)
         self.assertEqual(len(trace["content_observations"]), 1)
         self.assertEqual(len(trace["comment_observations"]), 2)
@@ -1082,6 +1083,13 @@ class CampaignRunObservationTests(unittest.TestCase):
             self.assertEqual(row["run_id"], "")
         self.assertEqual(legacy_rows["outreach_executions"]["evidence_path"], "/tmp/reachops/legacy/evidence.png")
         legacy_trace = migrated.list_observations_for_run(run_id)
+        self.assertEqual([row["id"] for row in legacy_trace["campaign_runs"]], [run_id])
+        legacy_trace_config = json.loads(legacy_trace["campaign_runs"][0]["config_json"])
+        self.assertTrue(legacy_trace_config["legacy_backfill"])
+        self.assertEqual(
+            legacy_trace_config["legacy_handling_strategy"],
+            "deterministic_legacy_run_id_for_existing_batch_only",
+        )
         self.assertEqual(legacy_trace["lead_decisions"], [])
         self.assertEqual(legacy_trace["outreach_executions"], [])
         self.assertEqual(legacy_trace["growth_errors"], [])

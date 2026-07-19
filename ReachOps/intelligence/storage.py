@@ -1350,6 +1350,7 @@ class GrowthStorage:
             return {}
         with self.connect() as conn:
             return {
+                "campaign_runs": [dict(row) for row in conn.execute("SELECT * FROM campaign_runs WHERE id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "source_observations": [dict(row) for row in conn.execute("SELECT * FROM source_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "content_observations": [dict(row) for row in conn.execute("SELECT * FROM content_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "comment_observations": [dict(row) for row in conn.execute("SELECT * FROM comment_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
