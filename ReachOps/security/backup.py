@@ -178,7 +178,10 @@ def discover_backup_files(
     exclusions: list[dict[str, Any]] = []
     db_path = Path(paths.db_path)
     if db_path.exists() and db_path.is_file():
-        files.append(BackupFile(db_path, "data/growth_intelligence/growth_intelligence.db", "sqlite_runtime"))
+        if db_path.is_symlink():
+            exclusions.append({"path": "data/growth_intelligence/growth_intelligence.db", "reason": "symlink_file_excluded"})
+        else:
+            files.append(BackupFile(db_path, "data/growth_intelligence/growth_intelligence.db", "sqlite_runtime"))
 
     config_dir = Path(paths.config_dir)
     if config_dir.exists():
@@ -187,6 +190,9 @@ def discover_backup_files(
                 continue
             rel = path.relative_to(config_dir).as_posix()
             archive_path = f"config/{rel}"
+            if path.is_symlink():
+                exclusions.append({"path": archive_path, "reason": "symlink_file_excluded"})
+                continue
             if _is_secret_relative_path(archive_path):
                 exclusions.append({"path": archive_path, "reason": "secret_or_activation_state_excluded"})
                 continue

@@ -961,6 +961,39 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
   - Final delivery remains blocked until ixBrowser Local API is available for fresh no-submit client acceptance, Windows artifacts are generated on Windows, Windows Credential Manager validation passes on Windows, and authorized live evidence passes strict final gates.
 
+## Latest P2 backup symlink boundary hardening
+
+- Date: `2026-07-20`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Harden `.reachops-backup` local customer-data boundary so backup discovery does not follow symlinked runtime files to content outside the independent local runtime, without entering Windows packaging, EXE generation, installer generation, ixBrowser execution, or TikTok live-submit.
+- Code evidence:
+  - `ReachOps/security/backup.py` now excludes symlinked SQLite runtime and non-secret config files with manifest reason `symlink_file_excluded`.
+  - This prevents a config path such as `config/display_settings.json` from exporting the target content of a symlink that points outside the ReachOps runtime.
+  - `tools/reachops_delivery_audit.py` now requires `symlink_file_excluded` and `.is_symlink()` in the encrypted backup/restore contract check.
+  - `tests/test_reachops_backup.py` proves that symlinked config and SQLite paths are not exported and that outside target content is absent from backup preview output.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/security/backup.py tools/reachops_delivery_audit.py tests/test_reachops_backup.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-p2-backup-symlink-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_backup`: passed, 10 tests; log `/tmp/reachops-p2-backup-symlink-backup-tests.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p2-backup-symlink-truth.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p2-backup-symlink-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p2-backup-symlink-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p2-backup-symlink-goal-status.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 234 tests; log `/tmp/reachops-p2-backup-symlink-campaign.log`.
+  - Main comparison: `origin/main` at `887f706` failed `tests.test_reachops_campaign`, 230 tests, 14 failures and 1 error; log `/tmp/reachops-main-backup-symlink-campaign.log`. Comparison artifact `/tmp/reachops-p2-backup-symlink-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_client_delivery_check.py --json`: failed as expected with `status=not_started`, `readiness=not_started`, `failed_checks=["acceptance:ready"]`, blocker `未看到 PLAN campaign，推广目标未进入任务规划。`; output `/tmp/reachops-p2-backup-symlink-client-delivery.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p2-backup-symlink-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p2-backup-symlink-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`; blocking scopes are `external_authorized_execution`, `client_delivery_gate`, and `windows_final_artifacts`; output `/tmp/reachops-p2-backup-symlink-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p2-backup-symlink-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p2-backup-symlink-diff-check.log`.
+- Safety:
+  - Tests used synthetic temp SQLite/config/symlink data only.
+  - No customer data, cookies, screenshots, raw DOM, credentials, local acceptance inputs, or SQLite customer runtime data was committed.
+  - No real TikTok action was executed.
+  - No ixBrowser profile was opened by this slice.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - Final delivery remains blocked until ixBrowser Local API is available for fresh no-submit client acceptance, Windows artifacts are generated on Windows, Windows Credential Manager validation passes on Windows, and authorized live evidence passes strict final gates.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.

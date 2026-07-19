@@ -63,6 +63,30 @@ class ReachOpsBackupTests(unittest.TestCase):
             self.assertTrue(preview["manifest"]["privacy"]["raw_screenshots_excluded"])
             self.assertFalse(preview["customer_data_uploaded"])
 
+    def test_lightweight_backup_excludes_symlinked_runtime_files(self) -> None:
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as output_dir, tempfile.TemporaryDirectory() as outside:
+            paths = self._runtime_with_data(source)
+            outside_secret = Path(outside) / "external.txt"
+            outside_secret.write_text("external customer secret", encoding="utf-8")
+            symlink_config = Path(paths.config_dir) / "display_settings.json"
+            symlink_config.symlink_to(outside_secret)
+            db_path = Path(paths.db_path)
+            db_path.unlink()
+            db_path.symlink_to(outside_secret)
+            backup_path = Path(output_dir) / "customer-data.reachops-backup"
+
+            write_encrypted_backup(source, backup_path, "customer-password")
+            preview = preview_backup(backup_path, "customer-password")
+
+            serialized = json.dumps(preview, ensure_ascii=False)
+            exported_paths = {row["path"] for row in preview["manifest"]["files"]}
+            exclusions = {(row["path"], row["reason"]) for row in preview["manifest"]["excluded"]}
+            self.assertNotIn("external customer secret", serialized)
+            self.assertNotIn("config/display_settings.json", exported_paths)
+            self.assertNotIn("data/growth_intelligence/growth_intelligence.db", exported_paths)
+            self.assertIn(("config/display_settings.json", "symlink_file_excluded"), exclusions)
+            self.assertIn(("data/growth_intelligence/growth_intelligence.db", "symlink_file_excluded"), exclusions)
+
     def test_restore_backup_recreates_sqlite_and_non_secret_config(self) -> None:
         with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as output_dir, tempfile.TemporaryDirectory() as target:
             self._runtime_with_data(source)
