@@ -363,6 +363,37 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - Live/final acceptance now requires real local activation evidence; development bypass cannot satisfy the acceptance readiness checks.
   - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, and external authorized live validation.
 
+## Latest P4 action-router live-submit authorization hardening
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Ensure the runtime action router itself cannot execute live submit with only a development activation bypass.
+- Code evidence:
+  - `ReachOps/workbench/action_router.py` now wraps live-submit authorization with an action-router strict check: when `dry_run=false`, `live_preflight_only=false`, and authorization is required, a missing local activation status file returns `LIVE_SUBMIT_NOT_AUTHORIZED`.
+  - Missing activation is recorded as a skipped/blocked live action before template rendering, platform execution, evidence validation, quota increments, or lead/contact state advancement.
+  - Dry-run and preflight paths remain unaffected; zero-limit dry-run comment routing still executes without quota writes.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/workbench/action_router.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-p4-live-submit-auth-required-pycompile.log`.
+  - Focused action-router live submit tests passed: missing activation blocks with `LIVE_SUBMIT_NOT_AUTHORIZED`; authorized-but-missing-evidence still fails with `LIVE_SUBMIT_EVIDENCE_MISSING`; expired activation and disabled capabilities remain blocked; zero-limit dry-run routing remains successful.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-live-submit-auth-required-truth.log`.
+  - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed; output `/tmp/reachops-p4-live-submit-auth-required-runtime-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-p4-live-submit-auth-required-dom-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p4-live-submit-auth-required-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, summary `customer_leads=27,submitted_unverified=0`; output `/tmp/reachops-p4-live-submit-auth-required-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p4-live-submit-auth-required-goal-status.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with improved known baseline shape, 230 tests, 5 failures, 0 errors; branch log `/tmp/reachops-p4-live-submit-auth-required-campaign.log`.
+  - Baseline comparison artifact `/tmp/reachops-p4-live-submit-auth-required-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`; resolved 9 failures and 1 error compared with `origin/main` campaign baseline at `887f706`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-live-submit-auth-required-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-live-submit-auth-required-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-live-submit-auth-required-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p4-live-submit-auth-required-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-live-submit-auth-required-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - A live action without real activation now stops at authorization and is counted as skipped/blocked, not failed execution or live success.
+  - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, and external authorized live validation.
+
 ## Non-blocking engineering work available
 
 - P1 observation model and migration.

@@ -15,7 +15,7 @@ from ReachOps.intelligence.storage import GrowthStorage, new_id
 
 from .account_health_manager import AccountHealthManager
 from .action_executors import ActionExecutorRegistry
-from .authorization_gate import LiveSubmitAuthorizationGate
+from .authorization_gate import AuthorizationDecision, LiveSubmitAuthorizationGate
 from .offline_learning_ledger import OfflineLearningLedger
 from .repair_policy_engine import RepairPolicyEngine
 from .risk_gate import RiskGate
@@ -427,7 +427,7 @@ class ActionRouter:
             )
             return result
         if not config.dry_run and not config.live_preflight_only and config.require_authorization:
-            decision = self.authorization_gate.authorize_live_submit(action, profile, feature=config.authorization_feature)
+            decision = self._authorize_live_submit(action, profile, config)
             auth_gate = self.risk_gate.evaluate(
                 action,
                 profile,
@@ -951,6 +951,25 @@ class ActionRouter:
             if not ok:
                 return True, code
         return False, ""
+
+    def _authorize_live_submit(self, action: dict, profile: dict, config: ActionRouterConfig) -> AuthorizationDecision:
+        status_path = str(getattr(self.authorization_gate, "status_path", "") or "").strip()
+        if not status_path or not os.path.isfile(status_path):
+            return AuthorizationDecision(
+                False,
+                "LIVE_SUBMIT_NOT_AUTHORIZED",
+                "activation status not found",
+                {
+                    "status_path": status_path,
+                    "feature": str(config.authorization_feature or "live_submit"),
+                    "action_type": str(action.get("action_type") or ""),
+                    "profile_id": str(profile.get("profile_id") or profile.get("id") or ""),
+                    "runtime_mode": LiveSubmitAuthorizationGate.runtime_mode(),
+                    "activation_required": True,
+                    "status_file_required": True,
+                },
+            )
+        return self.authorization_gate.authorize_live_submit(action, profile, feature=config.authorization_feature)
 
     def _increment_rate_limits(self, action: dict, profile: dict, config: ActionRouterConfig):
         profile_id = str(profile.get("profile_id") or profile.get("id") or "")
