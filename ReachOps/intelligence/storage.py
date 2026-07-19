@@ -189,7 +189,7 @@ class GrowthStorage:
                     signal_tags TEXT DEFAULT '[]',
                     evidence TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
-                    UNIQUE(content_id, signal_type)
+                    UNIQUE(run_id, content_id, signal_type)
                 );
                 CREATE TABLE IF NOT EXISTS audience_intents (
                     id TEXT PRIMARY KEY,
@@ -200,7 +200,7 @@ class GrowthStorage:
                     confidence INTEGER DEFAULT 0,
                     evidence TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
-                    UNIQUE(candidate_user_id, content_id, intent_type)
+                    UNIQUE(run_id, candidate_user_id, content_id, intent_type)
                 );
                 CREATE TABLE IF NOT EXISTS operation_leads (
                     id TEXT PRIMARY KEY,
@@ -671,6 +671,64 @@ class GrowthStorage:
             self._rebuild_operation_leads_run_scoped(conn)
         if self._has_unique_index(conn, "action_queue", ["lead_id", "action_type"]):
             self._rebuild_action_queue_run_scoped(conn)
+        if self._has_unique_index(conn, "material_signals", ["content_id", "signal_type"]):
+            self._rebuild_material_signals_run_scoped(conn)
+        if self._has_unique_index(conn, "audience_intents", ["candidate_user_id", "content_id", "intent_type"]):
+            self._rebuild_audience_intents_run_scoped(conn)
+
+    def _rebuild_material_signals_run_scoped(self, conn):
+        conn.execute("ALTER TABLE material_signals RENAME TO material_signals_legacy_unique")
+        conn.execute(
+            """
+            CREATE TABLE material_signals (
+                id TEXT PRIMARY KEY,
+                content_id TEXT NOT NULL,
+                run_id TEXT DEFAULT '',
+                signal_type TEXT NOT NULL,
+                signal_score INTEGER DEFAULT 0,
+                signal_tags TEXT DEFAULT '[]',
+                evidence TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                UNIQUE(run_id, content_id, signal_type)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO material_signals
+            (id, content_id, run_id, signal_type, signal_score, signal_tags, evidence, created_at)
+            SELECT id, content_id, COALESCE(run_id, ''), signal_type, signal_score, signal_tags, evidence, created_at
+            FROM material_signals_legacy_unique
+            """
+        )
+        conn.execute("DROP TABLE material_signals_legacy_unique")
+
+    def _rebuild_audience_intents_run_scoped(self, conn):
+        conn.execute("ALTER TABLE audience_intents RENAME TO audience_intents_legacy_unique")
+        conn.execute(
+            """
+            CREATE TABLE audience_intents (
+                id TEXT PRIMARY KEY,
+                candidate_user_id TEXT NOT NULL,
+                content_id TEXT NOT NULL,
+                run_id TEXT DEFAULT '',
+                intent_type TEXT NOT NULL,
+                confidence INTEGER DEFAULT 0,
+                evidence TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                UNIQUE(run_id, candidate_user_id, content_id, intent_type)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO audience_intents
+            (id, candidate_user_id, content_id, run_id, intent_type, confidence, evidence, created_at)
+            SELECT id, candidate_user_id, content_id, COALESCE(run_id, ''), intent_type, confidence, evidence, created_at
+            FROM audience_intents_legacy_unique
+            """
+        )
+        conn.execute("DROP TABLE audience_intents_legacy_unique")
 
     def _rebuild_operation_leads_run_scoped(self, conn):
         conn.execute("ALTER TABLE operation_leads RENAME TO operation_leads_legacy_unique")
@@ -1356,6 +1414,8 @@ class GrowthStorage:
                 "content_observations": [dict(row) for row in conn.execute("SELECT * FROM content_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "comment_observations": [dict(row) for row in conn.execute("SELECT * FROM comment_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "candidate_observations": [dict(row) for row in conn.execute("SELECT * FROM candidate_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
+                "material_signals": [dict(row) for row in conn.execute("SELECT * FROM material_signals WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
+                "audience_intents": [dict(row) for row in conn.execute("SELECT * FROM audience_intents WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "lead_decision_observations": [dict(row) for row in conn.execute("SELECT * FROM lead_decision_observations WHERE run_id=? ORDER BY decision_version ASC, created_at ASC", (run,)).fetchall()],
                 "action_queue": [dict(row) for row in conn.execute("SELECT * FROM action_queue WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "outreach_executions": [dict(row) for row in conn.execute("SELECT * FROM outreach_executions WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
@@ -1786,8 +1846,8 @@ class GrowthStorage:
         run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT id FROM material_signals WHERE content_id=? AND signal_type=?",
-                (content_id, signal_type),
+                "SELECT id FROM material_signals WHERE run_id=? AND content_id=? AND signal_type=?",
+                (run_id, content_id, signal_type),
             ).fetchone()
             if row:
                 conn.execute(
@@ -1807,8 +1867,8 @@ class GrowthStorage:
         run_id = self._active_run_id()
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT id FROM audience_intents WHERE candidate_user_id=? AND content_id=? AND intent_type=?",
-                (candidate_id, content_id, intent_type),
+                "SELECT id FROM audience_intents WHERE run_id=? AND candidate_user_id=? AND content_id=? AND intent_type=?",
+                (run_id, candidate_id, content_id, intent_type),
             ).fetchone()
             if row:
                 conn.execute(

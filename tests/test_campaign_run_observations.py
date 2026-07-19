@@ -337,6 +337,174 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(second_trace["lead_decision_observations"][0]["batch_id"], second.id)
         self.assertEqual(first_trace["outreach_executions"][0]["evidence_path"], "/tmp/reachops/redacted/evidence.png")
 
+    def test_run_scoped_material_signals_and_audience_intents_do_not_overwrite(self):
+        campaign = self.storage.create_campaign("keyword", "serum")
+        first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+        second = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+
+        self.storage.set_active_collection_batch(first.id)
+        first_signal_id, first_signal_created = self.storage.upsert_material_signal(
+            "shared-content",
+            "topic_heat",
+            61,
+            ["first-run"],
+            "first run evidence",
+        )
+        first_intent_id, first_intent_created = self.storage.upsert_audience_intent(
+            "shared-candidate",
+            "shared-content",
+            "purchase_intent",
+            71,
+            "first run intent evidence",
+        )
+
+        self.storage.set_active_collection_batch(second.id)
+        second_signal_id, second_signal_created = self.storage.upsert_material_signal(
+            "shared-content",
+            "topic_heat",
+            92,
+            ["second-run"],
+            "second run evidence",
+        )
+        second_intent_id, second_intent_created = self.storage.upsert_audience_intent(
+            "shared-candidate",
+            "shared-content",
+            "purchase_intent",
+            93,
+            "second run intent evidence",
+        )
+        second_signal_id_again, second_signal_created_again = self.storage.upsert_material_signal(
+            "shared-content",
+            "topic_heat",
+            94,
+            ["second-run", "updated"],
+            "second run updated evidence",
+        )
+        second_intent_id_again, second_intent_created_again = self.storage.upsert_audience_intent(
+            "shared-candidate",
+            "shared-content",
+            "purchase_intent",
+            95,
+            "second run updated intent evidence",
+        )
+
+        self.assertTrue(first_signal_created)
+        self.assertTrue(first_intent_created)
+        self.assertTrue(second_signal_created)
+        self.assertTrue(second_intent_created)
+        self.assertFalse(second_signal_created_again)
+        self.assertFalse(second_intent_created_again)
+        self.assertNotEqual(first_signal_id, second_signal_id)
+        self.assertNotEqual(first_intent_id, second_intent_id)
+        self.assertEqual(second_signal_id_again, second_signal_id)
+        self.assertEqual(second_intent_id_again, second_intent_id)
+
+        first_trace = self.storage.list_observations_for_run(first.run_id)
+        second_trace = self.storage.list_observations_for_run(second.run_id)
+        self.assertEqual(len(first_trace["material_signals"]), 1)
+        self.assertEqual(len(first_trace["audience_intents"]), 1)
+        self.assertEqual(len(second_trace["material_signals"]), 1)
+        self.assertEqual(len(second_trace["audience_intents"]), 1)
+        self.assertEqual(first_trace["material_signals"][0]["id"], first_signal_id)
+        self.assertEqual(first_trace["material_signals"][0]["signal_score"], 61)
+        self.assertEqual(first_trace["material_signals"][0]["evidence"], "first run evidence")
+        self.assertEqual(first_trace["audience_intents"][0]["id"], first_intent_id)
+        self.assertEqual(first_trace["audience_intents"][0]["confidence"], 71)
+        self.assertEqual(first_trace["audience_intents"][0]["evidence"], "first run intent evidence")
+        self.assertEqual(second_trace["material_signals"][0]["id"], second_signal_id)
+        self.assertEqual(second_trace["material_signals"][0]["signal_score"], 94)
+        self.assertEqual(second_trace["material_signals"][0]["evidence"], "second run updated evidence")
+        self.assertEqual(second_trace["audience_intents"][0]["id"], second_intent_id)
+        self.assertEqual(second_trace["audience_intents"][0]["confidence"], 95)
+        self.assertEqual(second_trace["audience_intents"][0]["evidence"], "second run updated intent evidence")
+
+    def test_legacy_material_signal_and_intent_unique_keys_migrate_to_run_scope(self):
+        legacy_db = Path(self.tmpdir.name) / "legacy-signals.sqlite3"
+        with sqlite3.connect(legacy_db) as conn:
+            conn.execute(
+                """
+                CREATE TABLE material_signals (
+                    id TEXT PRIMARY KEY,
+                    content_id TEXT NOT NULL,
+                    signal_type TEXT NOT NULL,
+                    signal_score INTEGER DEFAULT 0,
+                    signal_tags TEXT DEFAULT '[]',
+                    evidence TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(content_id, signal_type)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE audience_intents (
+                    id TEXT PRIMARY KEY,
+                    candidate_user_id TEXT NOT NULL,
+                    content_id TEXT NOT NULL,
+                    intent_type TEXT NOT NULL,
+                    confidence INTEGER DEFAULT 0,
+                    evidence TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(candidate_user_id, content_id, intent_type)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO material_signals
+                (id, content_id, signal_type, signal_score, signal_tags, evidence, created_at)
+                VALUES ('ms_legacy1', 'shared-content', 'topic_heat', 50, '["legacy"]',
+                        'legacy signal evidence', '2026-07-01T00:00:00Z')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO audience_intents
+                (id, candidate_user_id, content_id, intent_type, confidence, evidence, created_at)
+                VALUES ('ai_legacy1', 'shared-candidate', 'shared-content', 'purchase_intent', 55,
+                        'legacy intent evidence', '2026-07-01T00:00:01Z')
+                """
+            )
+
+        migrated = GrowthStorage(str(legacy_db))
+        with sqlite3.connect(legacy_db) as conn:
+            conn.row_factory = sqlite3.Row
+            legacy_signal = conn.execute("SELECT id, run_id FROM material_signals WHERE id='ms_legacy1'").fetchone()
+            legacy_intent = conn.execute("SELECT id, run_id FROM audience_intents WHERE id='ai_legacy1'").fetchone()
+        self.assertEqual(legacy_signal["run_id"], "")
+        self.assertEqual(legacy_intent["run_id"], "")
+
+        campaign = migrated.create_campaign("keyword", "serum")
+        run = migrated.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+        migrated.set_active_collection_batch(run.id)
+        signal_id, signal_created = migrated.upsert_material_signal(
+            "shared-content",
+            "topic_heat",
+            81,
+            ["new-run"],
+            "new run signal evidence",
+        )
+        intent_id, intent_created = migrated.upsert_audience_intent(
+            "shared-candidate",
+            "shared-content",
+            "purchase_intent",
+            82,
+            "new run intent evidence",
+        )
+
+        self.assertTrue(signal_created)
+        self.assertTrue(intent_created)
+        self.assertNotEqual(signal_id, "ms_legacy1")
+        self.assertNotEqual(intent_id, "ai_legacy1")
+        trace = migrated.list_observations_for_run(run.run_id)
+        self.assertEqual([row["id"] for row in trace["material_signals"]], [signal_id])
+        self.assertEqual([row["id"] for row in trace["audience_intents"]], [intent_id])
+        with sqlite3.connect(legacy_db) as conn:
+            signal_count = conn.execute("SELECT COUNT(*) FROM material_signals").fetchone()[0]
+            intent_count = conn.execute("SELECT COUNT(*) FROM audience_intents").fetchone()[0]
+        self.assertEqual(signal_count, 2)
+        self.assertEqual(intent_count, 2)
+
     def test_workflow_storage_writes_run_observation_ledger_automatically(self):
         campaign = self.storage.create_campaign("keyword", "serum")
         run = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
