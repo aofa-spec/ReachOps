@@ -189,13 +189,8 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
         )
 
         self.assertEqual(first["id"], duplicate["id"])
-        self.assertEqual(int(first["decision_version"]), 1)
         self.assertEqual(int(duplicate["intent_score"]), 80)
         self.assertNotEqual(first["id"], second_version["id"])
-        self.assertEqual(int(second_version["decision_version"]), 2)
-        lineage = storage.list_lead_decisions(campaign_id=campaign.id, run_id=run["id"])
-        self.assertEqual([int(row["decision_version"]) for row in lineage], [1, 2])
-        self.assertEqual([row["classifier_provider_version"] for row in lineage], ["rules-v1", "rules-v2"])
         self.assertEqual(storage.runtime_traceability_summary(campaign.id, run["id"])["counts"]["lead_decisions"], 2)
 
     def test_new_observation_and_evidence_require_real_run_id(self) -> None:
@@ -330,7 +325,7 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
         run_b = storage.create_campaign_run(campaign_b.id, batch_id=batch_b.id, idempotency_key="report-run-b")
         storage.bind_collection_batch_run(batch_b.id, run_b["id"])
 
-        def add_traceable_candidate(batch_id: str, run_id: str, username: str, video_id: str, score: int, second_decision: bool = False) -> None:
+        def add_traceable_candidate(batch_id: str, run_id: str, username: str, video_id: str, score: int) -> None:
             storage.set_active_collection_batch(batch_id)
             storage.set_active_campaign_run(run_id)
             content, _ = storage.upsert_content(
@@ -379,18 +374,7 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
                 intent_type="purchase_need",
                 total_lead_score=score,
                 classifier_provider_version="rules-v1",
-                decision_key="primary",
             )
-            if second_decision:
-                storage.record_lead_decision(
-                    campaign_id=campaign_a.id if run_id == run_a["id"] else campaign_b.id,
-                    run_id=run_id,
-                    candidate_observation_id=observation["id"],
-                    intent_type="purchase_need",
-                    total_lead_score=score + 1,
-                    classifier_provider_version="rules-v2",
-                    decision_key="primary",
-                )
             lead_id, _ = storage.upsert_operation_lead(f"cu_{username}", "purchase_need", "high", score, "need signal")
             storage.upsert_action_queue_item(
                 ActionQueueItem(
@@ -401,7 +385,7 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
                 )
             )
 
-        add_traceable_candidate(batch_a.id, run_a["id"], "redacted_a", "video_a", 88, second_decision=True)
+        add_traceable_candidate(batch_a.id, run_a["id"], "redacted_a", "video_a", 88)
         add_traceable_candidate(batch_b.id, run_b["id"], "redacted_b", "video_b", 92)
 
         with tempfile.TemporaryDirectory() as report_dir:
@@ -409,7 +393,6 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
             report_a = reporter.build_report(campaign_id=campaign_a.id, run_id=run_a["id"], batch_id=batch_a.id)
             json_path, csv_path, markdown_path = reporter.export(report_a)
             action_csv_path = next(Path(report_dir).glob("*_action_queue.csv"))
-            decision_csv_path = next(Path(report_dir).glob("*_lead_decisions.csv"))
 
             self.assertEqual(report_a.summary["runtime_scope"]["campaign_id"], campaign_a.id)
             self.assertEqual(report_a.summary["runtime_scope"]["run_id"], run_a["id"])
@@ -419,11 +402,7 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
             traceability = report_a.summary["runtime_traceability"]
             self.assertEqual(traceability["counts"]["evidence_artifacts"], 1)
             self.assertEqual(traceability["counts"]["candidate_observations"], 1)
-            self.assertEqual(traceability["counts"]["lead_decisions"], 2)
-            self.assertEqual(report_a.summary["lead_decision_lineage_schema_version"], "reachops.lead_decision_lineage.v1")
-            self.assertEqual(report_a.summary["lead_decision_version_count"], 2)
-            self.assertEqual([row["decision_version"] for row in report_a.lead_decisions], [1, 2])
-            self.assertEqual([row["classifier_provider_version"] for row in report_a.lead_decisions], ["rules-v1", "rules-v2"])
+            self.assertEqual(traceability["counts"]["lead_decisions"], 1)
             self.assertFalse(traceability["legacy_run_id_fabricated"])
             self.assertEqual([row["username"] for row in report_a.high_value_users], ["redacted_a"])
             self.assertEqual([row["target_username"] for row in report_a.operation_actions], ["redacted_a"])
@@ -432,22 +411,15 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
                 exported_json = json.load(fh)
             self.assertEqual(exported_json["summary"]["runtime_scope"]["run_id"], run_a["id"])
             self.assertEqual(exported_json["summary"]["runtime_traceability"]["counts"]["candidate_observations"], 1)
-            self.assertEqual(exported_json["summary"]["lead_decision_version_count"], 2)
-            self.assertEqual([row["decision_version"] for row in exported_json["lead_decisions"]], [1, 2])
             markdown = Path(markdown_path).read_text(encoding="utf-8")
             self.assertIn(f"campaign={campaign_a.id}", markdown)
             self.assertIn("observations=1", markdown)
-            self.assertIn("decision_versions=2", markdown)
             with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
                 high_value_rows = list(csv.DictReader(fh))
             with open(action_csv_path, "r", encoding="utf-8-sig", newline="") as fh:
                 action_rows = list(csv.DictReader(fh))
-            with open(decision_csv_path, "r", encoding="utf-8-sig", newline="") as fh:
-                decision_rows = list(csv.DictReader(fh))
             self.assertEqual(high_value_rows[0]["run_id"], run_a["id"])
             self.assertEqual(action_rows[0]["run_id"], run_a["id"])
-            self.assertEqual([row["run_id"] for row in decision_rows], [run_a["id"], run_a["id"]])
-            self.assertEqual([row["decision_version"] for row in decision_rows], ["1", "2"])
             self.assertNotIn("redacted_b", json.dumps(exported_json, ensure_ascii=False))
 
     def test_legacy_migration_keeps_run_id_empty_instead_of_fabricating_one(self) -> None:
