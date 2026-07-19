@@ -1,10 +1,12 @@
+import io
 import json
 import sqlite3
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
-from ReachOps.backup import create_reachops_backup, inspect_reachops_backup, restore_reachops_backup
+from ReachOps.backup import create_reachops_backup, inspect_reachops_backup, restore_reachops_backup, validate_backup_manifest
 from ReachOps.runtime_paths import RuntimePaths
 
 
@@ -78,6 +80,94 @@ class ReachOpsBackupTests(unittest.TestCase):
             paths = RuntimePaths.build(source).ensure_dirs()
             with self.assertRaises(ValueError):
                 create_reachops_backup(paths, Path(source) / "bad.reachops-backup", "short")
+
+    def test_manifest_validation_requires_encryption_contract_and_safe_paths(self):
+        manifest = {
+            "schema_version": "reachops.backup.v1",
+            "encryption": {
+                "kdf": "pbkdf2_hmac_sha256",
+                "iterations": 1,
+                "cipher": "plaintext",
+                "mac": "",
+            },
+            "exclusions": {
+                "windows_credential_manager_secrets": True,
+                "activation_status": True,
+                "tiktok_cookies_sessions": True,
+                "raw_screenshots_dom": True,
+                "proxy_credentials": True,
+            },
+            "files": [
+                {"path": "../escape.sqlite3", "sha256": "x", "size": 1},
+                {"path": "config/operator_preferences.json", "sha256": "x", "size": 1},
+                {"path": "config/operator_preferences.json", "sha256": "x", "size": 1},
+            ],
+        }
+
+        validation = validate_backup_manifest(manifest)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn("unsupported_encryption:iterations", validation["errors"])
+        self.assertIn("unsupported_encryption:cipher", validation["errors"])
+        self.assertIn("unsupported_encryption:mac", validation["errors"])
+        self.assertIn("unsafe_backup_path:../escape.sqlite3", validation["errors"])
+        self.assertIn("duplicate_backup_path:config/operator_preferences.json", validation["errors"])
+
+    def test_restore_preview_blocks_unsafe_manifest_paths_without_writing(self):
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as target:
+            source_paths = self._runtime_with_files(source)
+            backup_path = Path(source) / "reachops-test.reachops-backup"
+            create_reachops_backup(source_paths, backup_path, "correct horse battery staple")
+
+            plaintext = _decrypt_test_backup(backup_path, "correct horse battery staple")
+            rewritten = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(plaintext), "r") as original, zipfile.ZipFile(rewritten, "w", compression=zipfile.ZIP_DEFLATED) as patched:
+                manifest = json.loads(original.read("manifest.json").decode("utf-8"))
+                manifest["files"].append({"path": "../escape.sqlite3", "sha256": "0", "size": 0})
+                patched.writestr("manifest.json", json.dumps(manifest))
+                for name in original.namelist():
+                    if name != "manifest.json":
+                        patched.writestr(name, original.read(name))
+            tampered_path = Path(source) / "unsafe.reachops-backup"
+            _write_test_backup(tampered_path, "correct horse battery staple", rewritten.getvalue())
+
+            preview = restore_reachops_backup(tampered_path, "correct horse battery staple", RuntimePaths.build(target), preview=True)
+
+            self.assertEqual(preview["status"], "blocked")
+            self.assertIn("unsafe_backup_path:../escape.sqlite3", preview["validation"]["errors"])
+            self.assertFalse(Path(target, "data", "growth_intelligence", "growth_intelligence.db").exists())
+
+
+def _decrypt_test_backup(path: Path, password: str) -> bytes:
+    from ReachOps import backup as backup_module
+
+    data = path.read_bytes()
+    salt_start = len(backup_module.BACKUP_MAGIC)
+    salt = data[salt_start : salt_start + backup_module.SALT_BYTES]
+    nonce = data[salt_start + backup_module.SALT_BYTES : salt_start + backup_module.SALT_BYTES + backup_module.NONCE_BYTES]
+    ciphertext = data[salt_start + backup_module.SALT_BYTES + backup_module.NONCE_BYTES : -backup_module.TAG_BYTES]
+    return backup_module._xor_bytes(
+        ciphertext,
+        backup_module._keystream(backup_module._derive_key(password, salt, b"enc"), nonce, len(ciphertext)),
+    )
+
+
+def _write_test_backup(path: Path, password: str, plaintext: bytes) -> None:
+    import hashlib
+    import hmac
+    import os
+
+    from ReachOps import backup as backup_module
+
+    salt = os.urandom(backup_module.SALT_BYTES)
+    nonce = os.urandom(backup_module.NONCE_BYTES)
+    header = backup_module.BACKUP_MAGIC + salt + nonce
+    ciphertext = backup_module._xor_bytes(
+        plaintext,
+        backup_module._keystream(backup_module._derive_key(password, salt, b"enc"), nonce, len(plaintext)),
+    )
+    tag = hmac.new(backup_module._derive_key(password, salt, b"mac"), header + ciphertext, hashlib.sha256).digest()
+    path.write_bytes(header + ciphertext + tag)
 
 
 if __name__ == "__main__":

@@ -168,12 +168,30 @@ def validate_backup_manifest(manifest: dict) -> dict:
         return {"passed": False, "errors": ["manifest_not_object"], "forbidden_entries": []}
     if manifest.get("schema_version") != BACKUP_SCHEMA_VERSION:
         errors.append("unsupported_schema_version")
+    encryption = manifest.get("encryption") if isinstance(manifest.get("encryption"), dict) else {}
+    expected_encryption = {
+        "kdf": "pbkdf2_hmac_sha256",
+        "iterations": KDF_ITERATIONS,
+        "cipher": "hmac_sha256_stream_xor",
+        "mac": "hmac_sha256",
+    }
+    for key, expected in expected_encryption.items():
+        if encryption.get(key) != expected:
+            errors.append(f"unsupported_encryption:{key}")
     exclusions = manifest.get("exclusions") if isinstance(manifest.get("exclusions"), dict) else {}
     for key in ["windows_credential_manager_secrets", "activation_status", "tiktok_cookies_sessions", "raw_screenshots_dom", "proxy_credentials"]:
         if exclusions.get(key) is not True:
             errors.append(f"missing_exclusion:{key}")
+    seen_paths = set()
     for entry in manifest.get("files") or []:
         path = str((entry or {}).get("path") or "")
+        if _is_unsafe_archive_path(path):
+            errors.append(f"unsafe_backup_path:{path}")
+            continue
+        if path in seen_paths:
+            errors.append(f"duplicate_backup_path:{path}")
+            continue
+        seen_paths.add(path)
         if _is_forbidden_archive_path(path):
             forbidden_entries.append(path)
     if forbidden_entries:
@@ -260,11 +278,16 @@ def _xor_bytes(left: bytes, right: bytes) -> bytes:
 
 
 def _restore_target(paths: RuntimePaths, archive_path: str) -> Path:
-    clean = Path(archive_path)
-    if clean.is_absolute() or ".." in clean.parts:
+    if _is_unsafe_archive_path(archive_path):
         raise ValueError("unsafe restore path")
+    clean = Path(archive_path)
     root = Path(paths.base_dir)
     return root / clean
+
+
+def _is_unsafe_archive_path(path: str) -> bool:
+    clean = Path(str(path or ""))
+    return not str(path or "").strip() or clean.is_absolute() or ".." in clean.parts
 
 
 def _is_forbidden_archive_path(path: str) -> bool:
