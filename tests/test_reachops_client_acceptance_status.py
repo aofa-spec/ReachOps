@@ -77,8 +77,8 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
 
         self.assertIn("self.console = GrowthOpsConsole(", standalone)
         self.assertNotIn("console_cls = MacQuickConsole", standalone)
-        self.assertIn('OPERATOR_VIEW_NAMES = ["获客任务", "线索分析", "触达执行", "账号诊断", "报告中心"]', console)
-        for view_name in ["获客任务", "线索分析", "触达执行", "账号诊断", "报告中心"]:
+        self.assertIn('OPERATOR_VIEW_NAMES = ["获客任务", "信息沙漏", "线索分析", "触达执行", "账号诊断", "报告中心"]', console)
+        for view_name in ["获客任务", "信息沙漏", "线索分析", "触达执行", "账号诊断", "报告中心"]:
             self.assertIn(view_name, console)
         self.assertIn("page_header = tk.Frame(", console)
         self.assertIn("textvariable=self.page_title_var", console)
@@ -2408,10 +2408,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.append_web_log") as append_log:
-                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=OSError("python missing")):
-                        with self.assertRaises(urllib.error.HTTPError) as raised:
-                            opener.open(request, timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.append_web_log") as append_log:
+                        with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=OSError("python missing")):
+                            with self.assertRaises(urllib.error.HTTPError) as raised:
+                                opener.open(request, timeout=5)
                 log_calls = [str(call.args[0]) for call in append_log.call_args_list]
                 payload = json.loads(raised.exception.read().decode("utf-8"))
                 persisted = json.loads(reachops_web_ui.RESULT_PATH.read_text(encoding="utf-8"))
@@ -2478,10 +2479,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.append_web_log") as append_log:
-                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                        with self.assertRaises(urllib.error.HTTPError) as raised:
-                            opener.open(request, timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.append_web_log") as append_log:
+                        with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                            with self.assertRaises(urllib.error.HTTPError) as raised:
+                                opener.open(request, timeout=5)
                 payload = json.loads(raised.exception.read().decode("utf-8"))
                 log_calls = [str(call.args[0]) for call in append_log.call_args_list]
                 current_process = reachops_web_ui.RUN_PROCESS
@@ -2543,9 +2545,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
-                    with self.assertRaises(urllib.error.HTTPError) as raised:
-                        opener.open(request, timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
+                        with self.assertRaises(urllib.error.HTTPError) as raised:
+                            opener.open(request, timeout=5)
                 payload = json.loads(raised.exception.read().decode("utf-8"))
             finally:
                 if server is not None:
@@ -2599,9 +2602,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with opener.open(request, timeout=5) as response:
-                        started = json.loads(response.read().decode("utf-8"))
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with opener.open(request, timeout=5) as response:
+                            started = json.loads(response.read().decode("utf-8"))
 
                 duplicate_request = urllib.request.Request(
                     f"http://{host}:{port}/api/start",
@@ -2680,16 +2684,17 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     except Exception as exc:
                         errors.append(exc)
 
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    first = threading.Thread(target=post_start, args=("anti aging serum",))
-                    second = threading.Thread(target=post_start, args=("retinol serum",))
-                    first.start()
-                    self.assertTrue(popen_entered.wait(timeout=3))
-                    second.start()
-                    time.sleep(0.05)
-                    release_popen.set()
-                    first.join(timeout=5)
-                    second.join(timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        first = threading.Thread(target=post_start, args=("anti aging serum",))
+                        second = threading.Thread(target=post_start, args=("retinol serum",))
+                        first.start()
+                        self.assertTrue(popen_entered.wait(timeout=3))
+                        second.start()
+                        time.sleep(0.05)
+                        release_popen.set()
+                        first.join(timeout=5)
+                        second.join(timeout=5)
             finally:
                 release_popen.set()
                 if server is not None:
@@ -2769,23 +2774,24 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     except Exception as exc:
                         errors.append(exc)
 
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with patch("tools.reachops_web_ui.os.killpg", return_value=None):
-                        start_thread = threading.Thread(
-                            target=post_json,
-                            args=("start", "/api/start", {"target": "anti aging serum"}),
-                        )
-                        stop_thread = threading.Thread(
-                            target=post_json,
-                            args=("stop", "/api/control", {"action": "stop"}),
-                        )
-                        start_thread.start()
-                        self.assertTrue(popen_entered.wait(timeout=3))
-                        stop_thread.start()
-                        time.sleep(0.05)
-                        release_popen.set()
-                        start_thread.join(timeout=5)
-                        stop_thread.join(timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with patch("tools.reachops_web_ui.os.killpg", return_value=None):
+                            start_thread = threading.Thread(
+                                target=post_json,
+                                args=("start", "/api/start", {"target": "anti aging serum"}),
+                            )
+                            stop_thread = threading.Thread(
+                                target=post_json,
+                                args=("stop", "/api/control", {"action": "stop"}),
+                            )
+                            start_thread.start()
+                            self.assertTrue(popen_entered.wait(timeout=3))
+                            stop_thread.start()
+                            time.sleep(0.05)
+                            release_popen.set()
+                            start_thread.join(timeout=5)
+                            stop_thread.join(timeout=5)
                     process_after_stop = reachops_web_ui.RUN_PROCESS
             finally:
                 release_popen.set()
@@ -2844,9 +2850,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with opener.open(request, timeout=5) as response:
-                        payload = json.loads(response.read().decode("utf-8"))
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with opener.open(request, timeout=5) as response:
+                            payload = json.loads(response.read().decode("utf-8"))
             finally:
                 if server is not None:
                     server.shutdown()
@@ -2919,9 +2926,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with opener.open(request, timeout=5) as response:
-                        payload = json.loads(response.read().decode("utf-8"))
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with opener.open(request, timeout=5) as response:
+                            payload = json.loads(response.read().decode("utf-8"))
             finally:
                 if server is not None:
                     server.shutdown()
@@ -2979,9 +2987,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with opener.open(request, timeout=5) as response:
-                        payload = json.loads(response.read().decode("utf-8"))
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with opener.open(request, timeout=5) as response:
+                            payload = json.loads(response.read().decode("utf-8"))
             finally:
                 if server is not None:
                     server.shutdown()

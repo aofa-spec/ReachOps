@@ -1457,6 +1457,29 @@ def run_runtime_smoke() -> dict:
                 and logs.get("run_session_state") in {"PRECHECK", "PROFILE_OPENING", "COLLECTING", "SCORING", "ACTION_PLANNING", "REPAIRING"}
             )
             logs_bundle = logs.get("evidence_bundle") or {}
+            diagnostics["logs_evidence_bundle"] = {
+                "status": logs_bundle.get("status"),
+                "schema_version": logs_bundle.get("schema_version"),
+                "plan_id": logs_bundle.get("plan_id"),
+                "session_id": logs_bundle.get("session_id"),
+                "error": logs_bundle.get("error"),
+                "summary": logs_bundle.get("summary") or {},
+                "page_state_summary": logs_bundle.get("page_state_summary") or {},
+                "repair_summary": logs_bundle.get("repair_summary") or {},
+                "risk_summary": logs_bundle.get("risk_summary") or {},
+                "account_health_summary": logs_bundle.get("account_health_summary") or {},
+                "run_session_health": logs_bundle.get("run_session_health") or {},
+                "autonomous_execution_summary": logs_bundle.get("autonomous_execution_summary") or {},
+                "autonomous_preflight_reconciliation": logs_bundle.get("autonomous_preflight_reconciliation") or {},
+                "autonomy_readiness_summary": logs_bundle.get("autonomy_readiness_summary") or {},
+                "product_capability_summary": logs_bundle.get("product_capability_summary") or {},
+                "page_state_repair_coverage": logs_bundle.get("page_state_repair_coverage") or {},
+                "plan_runtime_contract": logs_bundle.get("plan_runtime_contract") or {},
+                "execution_runtime_contract": logs_bundle.get("execution_runtime_contract") or {},
+                "ai_usage_summary": logs_bundle.get("ai_usage_summary") or {},
+                "artifact_count": len(logs_bundle.get("artifacts") or []) if isinstance(logs_bundle.get("artifacts"), list) else -1,
+                "keys": sorted(logs_bundle.keys()) if isinstance(logs_bundle, dict) else [],
+            }
             checks["logs_expose_evidence_bundle_contract"] = (
                 status == 200
                 and logs_bundle.get("schema_version") == "reachops.evidence_bundle.v1"
@@ -1525,6 +1548,24 @@ def run_runtime_smoke() -> dict:
 
             status, evidence_bundle = _json_request(base + "/api/evidence-bundle")
             operator_risk_summary = evidence_bundle.get("operator_risk_gate_summary") or {}
+            diagnostics["evidence_bundle_endpoint"] = {
+                "status": evidence_bundle.get("status"),
+                "schema_version": evidence_bundle.get("schema_version"),
+                "plan_id": evidence_bundle.get("plan_id"),
+                "session_id": evidence_bundle.get("session_id"),
+                "error": evidence_bundle.get("error"),
+                "timeline_is_list": isinstance(evidence_bundle.get("timeline"), list),
+                "artifacts_is_list": isinstance(evidence_bundle.get("artifacts"), list),
+                "operator_summary": evidence_bundle.get("operator_summary") or {},
+                "repair_summary": evidence_bundle.get("repair_summary") or {},
+                "risk_summary": evidence_bundle.get("risk_summary") or {},
+                "account_health_summary": evidence_bundle.get("account_health_summary") or {},
+                "run_session_health": evidence_bundle.get("run_session_health") or {},
+                "run_recovery_summary": evidence_bundle.get("run_recovery_summary") or {},
+                "autonomous_execution_summary": evidence_bundle.get("autonomous_execution_summary") or {},
+                "operator_risk_gate_summary": operator_risk_summary,
+                "keys": sorted(evidence_bundle.keys()) if isinstance(evidence_bundle, dict) else [],
+            }
             checks["evidence_bundle_endpoint_returns_auditable_run_index"] = (
                 status == 200
                 and evidence_bundle.get("schema_version") == "reachops.evidence_bundle.v1"

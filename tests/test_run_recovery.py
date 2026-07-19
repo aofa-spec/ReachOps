@@ -173,8 +173,22 @@ class RunRecoveryTests(unittest.TestCase):
 
     def test_infer_run_state_identifies_execution_phase(self) -> None:
         self.assertEqual(
+            infer_run_state(
+                [
+                    "START  web_ui_start_request target_present=true group=Canada "
+                    "mode=preflight account_repair_confirmed=false"
+                ],
+                running=True,
+            ),
+            "PRECHECK",
+        )
+        self.assertEqual(
             infer_run_state(["ACTION action_queue_created"], running=True),
             "ACTION_PLANNING",
+        )
+        self.assertEqual(
+            infer_run_state(["WARN   web_ui_account_gate_blocked group=Canada"], running=True),
+            "REPAIRING",
         )
         self.assertEqual(
             infer_run_state(["DONE   action_preflight batch=123"], running=True),

@@ -573,7 +573,21 @@ def infer_run_state(lines: list[str], running: bool, run_result: dict[str, Any] 
         return "SCORING"
     if "comments_collected" in joined or "video_discovered" in joined or "COLLECT " in joined:
         return "COLLECTING"
-    if "profile_start_failed_retry" in joined or "repair" in joined.lower() or "账号修复" in joined:
+    joined_lower = joined.lower()
+    explicit_repair_seen = any(
+        marker in joined_lower
+        for marker in (
+            " repair_decision",
+            " repair_audit",
+            " repair_step",
+            " repair_policy",
+            " profile_start_failed_retry",
+            "web_ui_account_gate_blocked",
+            "web_ui_account_repair",
+            "账号修复",
+        )
+    )
+    if explicit_repair_seen:
         return "REPAIRING"
     if "profile_preflight" in joined:
         return "PROFILE_PREFLIGHT"

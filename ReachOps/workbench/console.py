@@ -559,6 +559,16 @@ class GrowthOpsConsole(ttk.Frame):
         ).grid(row=0, column=0, sticky="ew")
         tk.Label(
             page_header,
+            textvariable=self.page_subtitle_var,
+            bg=UI_COLORS["surface"],
+            fg=UI_COLORS["muted"],
+            font=ui_font(9),
+            anchor="w",
+            wraplength=760,
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", pady=(3, 0))
+        tk.Label(
+            page_header,
             textvariable=self.operator_status_var,
             bg=UI_COLORS["accent_soft"],
             fg=UI_COLORS["accent"],

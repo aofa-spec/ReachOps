@@ -787,6 +787,42 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No customer data, cookies, screenshots, raw DOM, credentials, local acceptance inputs, or SQLite customer runtime data was committed.
   - Final delivery remains blocked until fresh local client UI acceptance evidence, Windows final artifacts, Windows Credential Manager validation, and authorized live validation are produced and strict final gates pass.
 
+## Latest P4 account-gate and evidence-bundle convergence
+
+- Date: `2026-07-20`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Restore strict local-client start gates and runtime evidence-bundle smoke without entering Windows packaging, EXE generation, installer generation, ixBrowser execution, or TikTok live-submit.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now rejects same-group `blocked_by_accounts` starts unless the operator explicitly confirms account repair/recheck, preserving the contract that repeated starts must not consume profiles before repair handling.
+  - `tools/reachops_web_ui.py` now rejects stale cached ixBrowser group lists at `/api/start`; cached groups remain display-only and cannot be used as startup authority.
+  - `/api/logs` falls back to recent log lines when a stale run-log offset would otherwise hide terminal evidence such as `HEADLESS_TIMEOUT`.
+  - `ReachOps/run_session.py` no longer infers `REPAIRING` from the normal startup field `account_repair_confirmed=false`; repair inference now requires explicit repair/account-gate markers, keeping PRECHECK state transitions valid.
+  - The native Tk compatibility console renders `page_subtitle_var` again and keeps the current six-tab operator navigation, including `信息沙漏`.
+  - `tools/reachops_web_panel_runtime_smoke.py` now records evidence-bundle diagnostics for `/api/logs` and `/api/evidence-bundle` checks, making future bundle regressions auditable.
+  - Tests isolate launch-path fixtures from real ixBrowser state by mocking the profile-group gate where the test intent is startup error handling, timeout normalization, or start serialization.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/run_session.py ReachOps/workbench/console.py tools/reachops_web_ui.py tools/reachops_web_panel_runtime_smoke.py tools/reachops_client_acceptance_status.py tests/test_run_recovery.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - `/usr/bin/python3 -m unittest -v tests.test_run_recovery`: passed, 8 tests; log `/tmp/reachops-gate-fix-run-recovery.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 121 tests; log `/tmp/reachops-client-acceptance-full-final.log`.
+  - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed, `failed_checks=[]`; output `/tmp/reachops-gate-fix-runtime-smoke-final.json`.
+  - `/usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-account-gate-dom-smoke.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-account-gate-truth.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-account-gate-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-account-gate-delivery-audit.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 233 tests; log `/tmp/reachops-account-gate-campaign.log`.
+  - `/usr/bin/python3 tools/reachops_client_delivery_check.py --json`: failed as expected with `status=not_started`, `readiness=not_started`, `failed_checks=["acceptance:ready"]`; output `/tmp/reachops-account-gate-client-delivery.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-account-gate-goal-status.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-account-gate-package.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-account-gate-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; blocking scopes are `local_mvp`, `windows_final_artifacts`, and `external_authorized_execution`; output `/tmp/reachops-account-gate-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-account-gate-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-account-gate-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - No customer data, cookies, screenshots, raw DOM, credentials, local acceptance inputs, or SQLite customer runtime data was committed.
+  - Final delivery remains blocked until a fresh local UI no-submit acceptance run exists, Windows artifacts are generated on Windows, Windows Credential Manager validation is completed, and authorized live evidence passes strict final gates.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.
