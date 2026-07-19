@@ -245,11 +245,10 @@ def resolve_named_secret(
         stored = store.read_secret(secret_name)
         if stored.configured:
             return stored
+        return SecretLookup("", "windows_credential_manager", False, True, error=stored.error if stored else "")
     env_value = str(env.get(env_name) or "").strip()
     if env_value:
         return SecretLookup(env_value, "environment_session", True, False)
-    if store.supported():
-        return SecretLookup("", "windows_credential_manager", False, True, error=stored.error if stored else "")
     return SecretLookup("", "unsupported_platform", False, False)
 
 

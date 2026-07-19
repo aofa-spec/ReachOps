@@ -109,6 +109,33 @@ class ReachOpsCredentialTests(unittest.TestCase):
         self.assertEqual(lookup.source, "windows_credential_manager")
         self.assertTrue(lookup.persistent)
 
+    def test_windows_does_not_fallback_to_environment_when_store_is_empty(self):
+        store = FakeWindowsCredentialStore()
+
+        lookup = resolve_ai_api_key(env={"REACHOPS_AI_API_KEY": "env-secret"}, credential_store=store)
+        status = ai_api_key_status(env={"REACHOPS_AI_API_KEY": "env-secret"}, credential_store=store)
+
+        self.assertEqual(lookup.value, "")
+        self.assertEqual(lookup.source, "windows_credential_manager")
+        self.assertFalse(lookup.configured)
+        self.assertTrue(lookup.persistent)
+        self.assertFalse(status["configured"])
+        self.assertEqual(status["source"], "windows_credential_manager")
+
+    def test_windows_does_not_fallback_to_environment_when_store_read_fails(self):
+        store = FailingWindowsCredentialStore()
+
+        lookup = resolve_ai_api_key(env={"REACHOPS_AI_API_KEY": "env-secret"}, credential_store=store)
+        status = ai_api_key_status(env={"REACHOPS_AI_API_KEY": "env-secret"}, credential_store=store)
+
+        self.assertEqual(lookup.value, "")
+        self.assertEqual(lookup.source, "windows_credential_manager")
+        self.assertEqual(lookup.error, "RuntimeError")
+        self.assertFalse(status["configured"])
+        self.assertEqual(status["source"], "windows_credential_manager")
+        self.assertEqual(status["error"], "RuntimeError")
+        self.assertNotIn("env-secret", repr((lookup, status)))
+
     def test_default_http_ai_provider_uses_secret_resolver(self):
         env = {"REACHOPS_AI_ENDPOINT": "https://ai.local/analyze", "REACHOPS_AI_MODEL": "test-model"}
         with patch(
