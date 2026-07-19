@@ -44,6 +44,7 @@ from ReachOps.collectors.tiktok_comment_collector import TikTokCommentCollector
 from ReachOps.collectors.tiktok_search_collector import TikTokSearchCollector
 from ReachOps.collectors.tiktok_topic_content_collector import TikTokTopicContentCollector
 from tools.reachops_delivery_audit import run_audit as run_reachops_delivery_audit
+from tools.reachops_delivery_audit import run_operator_console_contract_fixture
 from tools.reachops_activation_status_check import check_activation_status as check_reachops_activation_status
 from tools.reachops_activation_status_template import build_template as build_reachops_activation_status_template
 from tools.init_reachops_acceptance_inputs import build_content as build_reachops_acceptance_inputs_content
@@ -7341,6 +7342,28 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(stage5["status"], "pending_external_validation")
         self.assertEqual(report["summary"]["final_failed"], 0)
         self.assertEqual(report["summary"]["final_pending_external_validation"], 3)
+
+    def test_operator_console_contract_maps_all_customer_visible_settings_to_evidence(self):
+        contract = run_operator_console_contract_fixture()
+
+        self.assertTrue(contract["operator_controls_all_real"])
+        for control_label in [
+            "推广目标",
+            "账号分组",
+            "每个目标最多视频",
+            "每条视频最多评论",
+            "参与账号数",
+            "任务间隔秒",
+            "意向词",
+            "排除词",
+            "触达并发",
+        ]:
+            with self.subTest(control_label=control_label):
+                control_evidence = contract["operator_control_evidence"][control_label]
+                self.assertTrue(control_evidence["ui"])
+                self.assertTrue(control_evidence["execution"])
+                self.assertTrue(control_evidence["evidence"])
+                self.assertTrue(control_evidence["passed"])
 
     def test_goal_status_report_passes_when_platform_submit_is_verified(self):
         png_sha = hashlib.sha256(b"png").hexdigest()

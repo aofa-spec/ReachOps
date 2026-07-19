@@ -79,6 +79,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - The native start-collection settings panel exposes customer-visible controls for `每个目标最多视频`, `每条视频最多评论`, `参与账号数`, `任务间隔秒`, `意向词`, and `排除词`.
   - These UI controls are backed by the same `scan_*` variables already consumed by the execution path and surfaced in acceptance evidence.
   - `tools/reachops_delivery_audit.py --json` now reports `客户可见设置都有执行证据映射` as `passed` with `operator_controls_all_real=true`.
+  - `tests/test_reachops_campaign.py` now directly locks every customer-visible operator setting in the audit contract: `推广目标`, `账号分组`, `每个目标最多视频`, `每条视频最多评论`, `参与账号数`, `任务间隔秒`, `意向词`, `排除词`, and `触达并发` must each have UI, execution, and evidence mappings.
 - Tests and checks:
   - `/usr/bin/python3 -m py_compile ReachOps/workbench/console.py tools/reachops_delivery_audit.py`: passed; log `/tmp/reachops-p4-settings-pycompile.log`.
   - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-settings-truth.log`.
@@ -91,6 +92,18 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p4-settings-final-gate.json`.
   - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p4-settings-cleanliness.json`.
   - `git diff --check`: passed; log `/tmp/reachops-p4-settings-diff-check.log`.
+  - Settings coverage rerun: `/usr/bin/python3 -m py_compile ReachOps/workbench/console.py tests/test_reachops_campaign.py tools/reachops_delivery_audit.py`: passed; log `/tmp/reachops-pr22-settings-coverage-pycompile.log`.
+  - Settings coverage rerun: `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_operator_console_contract_maps_all_customer_visible_settings_to_evidence`: passed; log `/tmp/reachops-pr22-settings-coverage-focused.log`.
+  - Settings coverage rerun: `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr22-settings-coverage-truth.log`.
+  - Settings coverage rerun: `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with the same known failure/error set as `origin/main`; branch ran 231 tests with 14 failures and 1 error, main ran 230 tests with 14 failures and 1 error; comparison artifact `/tmp/reachops-pr22-settings-coverage-baseline-comparison.json`, `new_failures=[]`, `new_errors=[]`.
+  - Settings coverage rerun: `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr22-settings-coverage-operator-pressure.json`.
+  - Settings coverage rerun: `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, but target check `客户可见设置都有执行证据映射` passed with `operator_controls_all_real=true`; summary `passed=47`, `pending_external_validation=3`, `failed=4`; output `/tmp/reachops-pr22-settings-coverage-delivery-audit.json`.
+  - Settings coverage rerun: `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr22-settings-coverage-goal-delivery-runner.json`.
+  - Settings coverage rerun: `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=28`, `final_pending_external_validation=3`, `final_failed=2`; output `/tmp/reachops-pr22-settings-coverage-goal-status-report.json`.
+  - Settings coverage rerun: `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr22-settings-coverage-package-check.json`.
+  - Settings coverage rerun: `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr22-settings-coverage-final-gate.json`.
+  - Settings coverage rerun: `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr22-settings-coverage-cleanliness.json`.
+  - Settings coverage rerun: `git diff --check`: passed; log `/tmp/reachops-pr22-settings-coverage-diff-check.log`.
 - Remaining blockers:
   - Final Windows artifacts and authorized live-submit evidence remain absent.
   - Delivery audit still has unrelated failures for campaign funnel isolation and Web/runtime start-gate coverage that belong to separate review slices.
