@@ -29,6 +29,13 @@ class GrowthReporter:
             self._with_public_action_status(row)
             for row in self.storage.list_action_queue(batch_id=scoped_batch_id, run_id=scoped_run_id)
         ]
+        lead_decisions = [
+            self._normalize_lead_decision(row)
+            for row in self.storage.list_lead_decisions(
+                campaign_id=str(runtime_scope.get("campaign_id") or ""),
+                run_id=scoped_run_id,
+            )
+        ]
         high_value = [row for row in rows if int(row.get("qualify_score") or 0) >= 70]
         medium_value = [row for row in rows if 40 <= int(row.get("qualify_score") or 0) < 70]
         low_value = [row for row in rows if int(row.get("qualify_score") or 0) < 40]
@@ -153,6 +160,8 @@ class GrowthReporter:
                 campaign_id=str(runtime_scope.get("campaign_id") or ""),
                 run_id=scoped_run_id,
             ),
+            "lead_decision_lineage_schema_version": "reachops.lead_decision_lineage.v1",
+            "lead_decision_version_count": len(lead_decisions),
         }
         if scoped_batch_id or scoped_run_id:
             summary.update(
@@ -206,6 +215,7 @@ class GrowthReporter:
             high_value_users=high_value_users,
             operation_actions=operation_actions,
             errors=self.storage.error_counts(),
+            lead_decisions=lead_decisions,
             recommendations=recommendations,
             content_insights=content_insights,
             comment_intents=comment_intents,
@@ -224,6 +234,7 @@ class GrowthReporter:
         json_path = os.path.join(self.report_dir, f"{stem}.json")
         csv_path = os.path.join(self.report_dir, f"{stem}_high_value_users.csv")
         action_csv_path = os.path.join(self.report_dir, f"{stem}_action_queue.csv")
+        decision_csv_path = os.path.join(self.report_dir, f"{stem}_lead_decisions.csv")
         markdown_path = os.path.join(self.report_dir, f"{stem}_daily_brief.md")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(report.__dict__, f, ensure_ascii=False, indent=2)
@@ -266,14 +277,57 @@ class GrowthReporter:
             writer.writeheader()
             for row in report.operation_actions:
                 writer.writerow({key: row.get(key, "") for key in fieldnames})
+        with open(decision_csv_path, "w", encoding="utf-8-sig", newline="") as f:
+            fieldnames = [
+                "campaign_id",
+                "run_id",
+                "candidate_observation_id",
+                "decision_key",
+                "decision_version",
+                "classifier_provider_version",
+                "intent_type",
+                "intent_score",
+                "product_fit_score",
+                "contactability_score",
+                "source_quality_score",
+                "total_lead_score",
+                "confidence",
+                "human_review_status",
+                "reason_codes",
+                "created_at",
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in report.lead_decisions:
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
         with open(markdown_path, "w", encoding="utf-8") as f:
             f.write(self.render_markdown(report))
         self.storage.log_event(
             "report_exported",
             report.id,
-            {"json_path": json_path, "csv_path": csv_path, "action_csv_path": action_csv_path, "markdown_path": markdown_path},
+            {
+                "json_path": json_path,
+                "csv_path": csv_path,
+                "action_csv_path": action_csv_path,
+                "decision_csv_path": decision_csv_path,
+                "markdown_path": markdown_path,
+            },
         )
         return json_path, csv_path, markdown_path
+
+    def _normalize_lead_decision(self, row: dict) -> dict:
+        item = dict(row or {})
+        reason_codes = self._parse_json_list(item.get("reason_codes_json"))
+        item["decision_version"] = int(item.get("decision_version") or 1)
+        item["intent_score"] = int(item.get("intent_score") or 0)
+        item["product_fit_score"] = int(item.get("product_fit_score") or 0)
+        item["contactability_score"] = int(item.get("contactability_score") or 0)
+        item["source_quality_score"] = int(item.get("source_quality_score") or 0)
+        item["total_lead_score"] = int(item.get("total_lead_score") or 0)
+        item["confidence"] = int(item.get("confidence") or 0)
+        item["reason_codes"] = ",".join([str(code) for code in reason_codes])
+        item["schema_version"] = "reachops.lead_decision.v1"
+        return item
 
     def _with_public_action_status(self, row: dict) -> dict:
         item = dict(row or {})
@@ -355,7 +409,7 @@ class GrowthReporter:
             f"- 高价值线索: {report.summary.get('high_value_candidate_count', 0)}",
             f"- 动作队列: {report.summary.get('action_queue_count', 0)}",
             f"- Runtime scope: {runtime_scope.get('scope_type', 'global')} campaign={runtime_scope.get('campaign_id', '')} run={runtime_scope.get('run_id', '')} batch={runtime_scope.get('batch_id', '')}",
-            f"- Traceability: runs={trace_counts.get('campaign_runs', 0)} observations={trace_counts.get('candidate_observations', 0)} evidence={trace_counts.get('evidence_artifacts', 0)} decisions={trace_counts.get('lead_decisions', 0)}",
+            f"- Traceability: runs={trace_counts.get('campaign_runs', 0)} observations={trace_counts.get('candidate_observations', 0)} evidence={trace_counts.get('evidence_artifacts', 0)} decisions={trace_counts.get('lead_decisions', 0)} decision_versions={report.summary.get('lead_decision_version_count', 0)}",
             "",
             "## 线索分层",
             "",

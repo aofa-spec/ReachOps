@@ -280,6 +280,7 @@ class GrowthStorage:
                     campaign_id TEXT NOT NULL,
                     run_id TEXT NOT NULL,
                     candidate_observation_id TEXT NOT NULL,
+                    decision_version INTEGER DEFAULT 1,
                     intent_type TEXT DEFAULT '',
                     intent_score INTEGER DEFAULT 0,
                     product_fit_score INTEGER DEFAULT 0,
@@ -595,6 +596,7 @@ class GrowthStorage:
                 },
             )
             self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "lead_decisions", {"decision_version": "INTEGER DEFAULT 1"})
             self._seed_default_action_templates(conn)
 
     def _ensure_columns(self, conn, table_name: str, columns: Dict[str, str]):
@@ -900,21 +902,31 @@ class GrowthStorage:
             ).fetchone()
             if row:
                 return dict(row)
+            version_row = conn.execute(
+                """
+                SELECT COALESCE(MAX(decision_version), 0) + 1 AS next_version
+                FROM lead_decisions
+                WHERE campaign_id=? AND run_id=? AND candidate_observation_id=? AND decision_key=?
+                """,
+                (campaign, run, observation, key),
+            ).fetchone()
+            decision_version = int((version_row["next_version"] if version_row else 1) or 1)
             decision_id = new_id("ld")
             conn.execute(
                 """
                 INSERT INTO lead_decisions
-                (id, campaign_id, run_id, candidate_observation_id, intent_type, intent_score,
+                (id, campaign_id, run_id, candidate_observation_id, decision_version, intent_type, intent_score,
                  product_fit_score, contactability_score, source_quality_score, total_lead_score,
                  confidence, reason_codes_json, feature_snapshot_json, classifier_provider_version,
                  human_review_status, decision_key, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     decision_id,
                     campaign,
                     run,
                     observation,
+                    decision_version,
                     str(intent_type or ""),
                     int(intent_score or 0),
                     int(product_fit_score or 0),
@@ -932,6 +944,39 @@ class GrowthStorage:
             )
             row = conn.execute("SELECT * FROM lead_decisions WHERE id=?", (decision_id,)).fetchone()
         return dict(row) if row else {}
+
+    def list_lead_decisions(
+        self,
+        campaign_id: str = "",
+        run_id: str = "",
+        candidate_observation_id: str = "",
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if candidate_observation_id:
+            filters.append("candidate_observation_id=?")
+            args.append(str(candidate_observation_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM lead_decisions
+                {where}
+                ORDER BY campaign_id, run_id, candidate_observation_id, decision_key,
+                         decision_version, created_at, rowid
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 500)]),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def runtime_traceability_summary(self, campaign_id: str = "", run_id: str = "") -> Dict[str, Any]:
         campaign = str(campaign_id or "").strip()
