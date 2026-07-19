@@ -560,7 +560,7 @@ def build_status(args: argparse.Namespace, snapshot: dict[str, Any] | None = Non
         placeholder_fields=placeholder_fields,
     ) or str(runtime_paths.activation_status_path)
     template_path = Path(args.activation_template_path or (Path(runtime_paths.config_dir) / "reachops_activation_status.template.json"))
-    activation = check_activation_status(activation_path)
+    activation = check_activation_status(activation_path, require_status_file=True)
     profile_ids = _local_value_unless_placeholder(
         args_value=args.profile_ids,
         local_values=local_values,

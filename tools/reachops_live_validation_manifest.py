@@ -242,7 +242,7 @@ def build_manifest(args, snapshot: dict[str, Any] | None = None) -> dict[str, An
     dm_profile_url = str(args.dm_profile_url or target_profile_url).strip()
     target_username = normalize_username(args.target_username) or normalize_username(username_from_profile_url(target_profile_url))
     activation_status_path = str(args.activation_status_path or RuntimePaths.build().activation_status_path)
-    activation_status = check_activation_status(activation_status_path)
+    activation_status = check_activation_status(activation_status_path, require_status_file=True)
     activation_ready = bool(activation_status.get("ready"))
 
     missing_inputs = []

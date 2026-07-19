@@ -330,6 +330,39 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
   - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, and external authorized live validation.
 
+## Latest P4 live activation readiness hardening
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Tighten live readiness, live validation manifest, and live acceptance status so missing or placeholder activation evidence cannot be treated as ready during final/live acceptance.
+- Code evidence:
+  - `tools/reachops_activation_status_check.py` now supports `require_status_file=True`; callers using this mode receive `activation_status_file_exists=false` and `ready=false` when the local activation status file is absent, even if the development runtime would otherwise allow an activation bypass.
+  - `tools/reachops_live_validation_manifest.py` and `tools/reachops_live_acceptance_status.py` now require a real activation status file for acceptance readiness.
+  - `tools/reachops_live_readiness.py` now emits the strict `activation_status_file_exists` check and does not run authorization probes when the activation file is missing.
+  - This preserves development compatibility for direct low-level activation checks while preventing live/final acceptance from counting missing activation as ready.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile tools/reachops_activation_status_check.py tools/reachops_live_validation_manifest.py tools/reachops_live_acceptance_status.py tools/reachops_live_readiness.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-p4-activation-required-pycompile.log`.
+  - Focused activation/readiness tests: passed, 6 tests covering missing activation, local input placeholders, template activation path handling, operator readiness report output, and live validation manifest blocking.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-activation-required-truth.log`.
+  - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed; output `/tmp/reachops-p4-activation-required-runtime-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-p4-activation-required-dom-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p4-activation-required-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, summary `customer_leads=27,submitted_unverified=0`; output `/tmp/reachops-p4-activation-required-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p4-activation-required-goal-status.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with improved known baseline shape, 230 tests, 6 failures, 0 errors; branch log `/tmp/reachops-p4-activation-required-campaign.log`.
+  - `origin/main` campaign baseline at `887f706`: failed with 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-activation-required-campaign.log`.
+  - Baseline comparison artifact `/tmp/reachops-p4-activation-required-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`; resolved 8 failures and 1 error, including the activation/readiness failures.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-activation-required-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-activation-required-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-activation-required-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p4-activation-required-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-activation-required-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - Live/final acceptance now requires real local activation evidence; development bypass cannot satisfy the acceptance readiness checks.
+  - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, and external authorized live validation.
+
 ## Non-blocking engineering work available
 
 - P1 observation model and migration.

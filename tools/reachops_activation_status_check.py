@@ -36,7 +36,7 @@ def action_probe(action_type: str) -> dict[str, Any]:
     }
 
 
-def check_activation_status(path: str | Path = "") -> dict[str, Any]:
+def check_activation_status(path: str | Path = "", *, require_status_file: bool = False) -> dict[str, Any]:
     status_path = Path(path).expanduser() if str(path or "").strip() else Path(RuntimePaths.build().activation_status_path)
     current_device_id = DeviceIdentity.current_device_id()
     result: dict[str, Any] = {
@@ -49,12 +49,17 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
         "current_device_id": current_device_id,
         "runtime_mode": LiveSubmitAuthorizationGate.runtime_mode(),
         "activation_required": LiveSubmitAuthorizationGate.activation_required(),
+        "status_file_required": bool(require_status_file),
         "development_bypass": not LiveSubmitAuthorizationGate.activation_required(),
         "checks": [],
     }
 
     def add(name: str, passed: bool, **evidence):
         result["checks"].append({"name": name, "passed": bool(passed), "evidence": evidence})
+
+    if require_status_file and not result["activation_status_exists"]:
+        add("activation_status_file_exists", False, activation_status_path=str(status_path), status_file_required=True)
+        return result
 
     if not LiveSubmitAuthorizationGate.activation_required() and not result["activation_status_exists"]:
         profile = {"profile_id": "activation-check", "group_name": "ACTIVATION_CHECK"}
