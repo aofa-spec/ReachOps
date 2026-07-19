@@ -329,6 +329,7 @@ class GrowthTaskRouter:
                             datasource.id,
                             {"profile_id": profile_id, "reason": empty_retry["error_code"]},
                         )
+                        self._record_profile_failure(profile_id)
                         self._discard_reusable_profile_session(profile_id, reason=empty_retry["error_code"])
                         self._log_profile_queue_event(
                             "profile_queue_source_failed",

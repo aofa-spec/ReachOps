@@ -1551,7 +1551,7 @@ class GrowthStorage:
             score = int(row["health_score"] or 100)
             score = max(75, min(100, score + 25)) if ok else max(0, score - (5 if transient_failure else 20))
             status = "healthy"
-            if (failures >= 3 or score < 40) and error_code in hard_error_codes:
+            if failures >= 3 or (score < 40 and error_code in hard_error_codes):
                 status = "cooldown"
             elif not ok or score < 70:
                 status = "degraded"

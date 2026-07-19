@@ -244,6 +244,32 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
   - Final delivery remains blocked until Windows artifacts and authorized live validation are produced and strict final gates pass.
 
+## Latest P4 runtime cooldown hardening snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Runtime profile cooldown and profile-health convergence without entering Windows packaging or TikTok live-submit.
+- Code evidence:
+  - Empty collection retries now increment runtime profile failure counts before discarding the reusable session, so a single profile that repeatedly returns `EMPTY_RESULT_RETRY` reaches the configured runtime cooldown threshold and stops consuming remaining sources in the same run.
+  - Profile-health recording now places profiles into cooldown after repeated failures even when the last error code is not in the hard-stop list; low health-score cooldown remains limited to hard-stop error codes.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/growth_task_router.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-p4-runtime-cooldown-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_real_mode_retries_next_profile_when_page_has_empty_result tests.test_reachops_campaign.ReachOpsCampaignTests.test_real_mode_reports_comment_user_empty_when_content_was_discovered tests.test_reachops_campaign.ReachOpsCampaignTests.test_empty_result_failures_put_single_profile_into_runtime_cooldown tests.test_reachops_campaign.ReachOpsCampaignTests.test_profile_health_recording_is_safe_for_parallel_account_updates`: passed; log `/tmp/reachops-p4-runtime-cooldown-focused.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-runtime-cooldown-truth.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p4-runtime-cooldown-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p4-runtime-cooldown-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p4-runtime-cooldown-goal-status.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with known improved baseline shape, 230 tests, 3 failures, 0 errors; branch log `/tmp/reachops-p4-runtime-cooldown-campaign.log`; main baseline at `887f706` failed with 230 tests, 14 failures, 1 error; main log `/tmp/reachops-main-runtime-cooldown-campaign.log`; comparison artifact `/tmp/reachops-p4-runtime-cooldown-baseline-comparison.json`, `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-runtime-cooldown-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-runtime-cooldown-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; current blockers include `external_authorized_execution`, `client_delivery_gate`, and `windows_final_artifacts`; output `/tmp/reachops-p4-runtime-cooldown-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p4-runtime-cooldown-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-runtime-cooldown-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - Final delivery remains blocked until Windows artifacts, current client-delivery evidence, and authorized live validation are produced and strict final gates pass.
+
 ## Latest P4 bilingual UI resource slice
 
 - Date: `2026-07-19`
