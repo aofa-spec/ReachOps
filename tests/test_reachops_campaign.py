@@ -987,9 +987,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(export_evidence["execution_summary_present"])
         self.assertTrue(export_evidence["execution_summary_total_matches"])
         self.assertTrue(export_evidence["execution_summary_has_switches"])
+        self.assertTrue(export_evidence["public_reply_events_present"])
+        self.assertTrue(export_evidence["public_reply_summary_present"])
+        self.assertTrue(export_evidence["public_reply_summary_total_matches"])
+        self.assertTrue(export_evidence["public_reply_summary_has_qualified"])
+        self.assertTrue(export_evidence["public_reply_json_traceability_present"])
         self.assertTrue(export_evidence["execution_columns_ok"])
+        self.assertTrue(export_evidence["public_reply_columns_ok"])
         self.assertGreater(export_evidence["customer_csv_rows"], 0)
         self.assertGreater(export_evidence["action_csv_rows"], 0)
+        self.assertGreater(export_evidence["public_reply_csv_rows"], 0)
         self.assertGreaterEqual(
             checks["真实执行成功必须有有效证据"]["evidence"]["result"]["errors"]["LIVE_SUBMIT_EVIDENCE_MISSING"],
             1,
@@ -8170,9 +8177,47 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 error_message="same rendered text already used",
                 risk_gate=duplicate_gate,
             )
+            verified_execution_id = service.storage.create_outreach_execution(
+                action["id"],
+                action["action_type"],
+                action["target_username"],
+                status="success",
+                profile_id="profile-export-reply",
+                evidence_path=str(Path(tmp) / "verified-export-reply.png"),
+                execution_mode="live",
+                submission_state="verified_success",
+                verification_state="verified",
+                evidence_verified=True,
+            )
+            service.storage.record_action_execution_result(action["id"], verified_execution_id, "completed")
+            PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": campaign_id,
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": verified_execution_id,
+                        "target_username": action["target_username"],
+                        "reply_author_username": action["target_username"],
+                        "reply_text": "Can you send me the link and price?",
+                        "reply_language": "en",
+                        "source_url": action["target_url"],
+                        "replied_at": "2026-07-20T10:10:00Z",
+                    }
+                ]
+            )
 
             artifacts = workflow.export_campaign_artifacts(campaign_id=campaign_id)
-            for key in ["json_path", "sources_csv_path", "customers_csv_path", "actions_csv_path", "executions_csv_path"]:
+            for key in [
+                "json_path",
+                "sources_csv_path",
+                "customers_csv_path",
+                "actions_csv_path",
+                "executions_csv_path",
+                "public_replies_csv_path",
+            ]:
                 self.assertTrue(os.path.exists(artifacts[key]), key)
 
             with open(artifacts["json_path"], "r", encoding="utf-8") as fh:
@@ -8186,6 +8231,18 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("execution_summary", payload)
             self.assertEqual(payload["execution_summary"]["total"], len(payload["outreach_executions"]))
             self.assertIn("error_counts", payload["execution_summary"])
+            self.assertIn("public_reply_events", payload)
+            self.assertIn("public_reply_summary", payload)
+            self.assertEqual(payload["public_reply_summary"]["total"], len(payload["public_reply_events"]))
+            self.assertEqual(payload["public_reply_summary"]["qualified"], 1)
+            self.assertEqual(payload["public_reply_events"][0]["campaign_id"], campaign_id)
+            self.assertEqual(payload["public_reply_events"][0]["run_id"], action["run_id"])
+            self.assertEqual(payload["public_reply_events"][0]["batch_id"], action["batch_id"])
+            self.assertEqual(payload["public_reply_events"][0]["lead_id"], action["lead_id"])
+            self.assertEqual(payload["public_reply_events"][0]["action_id"], action["id"])
+            self.assertEqual(payload["public_reply_events"][0]["execution_id"], verified_execution_id)
+            self.assertEqual(payload["public_reply_events"][0]["qualification_state"], "qualified")
+            self.assertEqual(payload["public_reply_events"][0]["verified_contact"], 1)
             self.assertTrue(any("DUPLICATE_ACTION_TEXT" in row.get("risk_gate_summary", "") for row in payload["outreach_executions"]))
             self.assertTrue(any(row.get("risk_gate_next_step") == "改写或轮换话术后重试" for row in payload["outreach_executions"]))
             self.assertEqual(payload["strategy"]["campaign_id"], campaign_id)
@@ -8211,6 +8268,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 self.assertIn("risk_gate_next_step", execution_reader.fieldnames or [])
                 execution_rows = list(execution_reader)
             self.assertTrue(any("DUPLICATE_ACTION_TEXT" in row["risk_gate_summary"] for row in execution_rows))
+
+            with open(artifacts["public_replies_csv_path"], "r", encoding="utf-8") as fh:
+                reply_reader = csv.DictReader(fh)
+                self.assertIn("campaign_id", reply_reader.fieldnames or [])
+                self.assertIn("run_id", reply_reader.fieldnames or [])
+                self.assertIn("action_id", reply_reader.fieldnames or [])
+                self.assertIn("execution_id", reply_reader.fieldnames or [])
+                self.assertIn("qualification_state", reply_reader.fieldnames or [])
+                reply_rows = list(reply_reader)
+            self.assertEqual(len(reply_rows), 1)
+            self.assertEqual(reply_rows[0]["qualification_state"], "qualified")
+            self.assertEqual(reply_rows[0]["run_id"], action["run_id"])
+            self.assertEqual(reply_rows[0]["execution_id"], verified_execution_id)
 
     def test_campaign_report_export_paths_do_not_overwrite_same_second_runs(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1909,12 +1909,28 @@ class GrowthStorage:
             row = conn.execute("SELECT * FROM public_reply_events WHERE id=?", (event,)).fetchone()
         return dict(row) if row else None
 
-    def list_public_reply_events(self, lead_id: str = "", limit: int = 200) -> List[Dict[str, Any]]:
+    def list_public_reply_events(
+        self,
+        lead_id: str = "",
+        limit: int = 200,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+    ) -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if lead_id:
             filters.append("lead_id=?")
             args.append(str(lead_id))
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(str(batch_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -3403,6 +3419,7 @@ class GrowthStorage:
             "evidence_artifacts",
             "candidate_observations",
             "lead_decisions",
+            "public_reply_events",
         }
         if table_name not in allowed:
             raise ValueError(f"unsupported table: {table_name}")

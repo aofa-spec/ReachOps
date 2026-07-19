@@ -244,12 +244,26 @@ class GrowthWorkflowService:
         action_queue = self.storage.list_action_queue(limit=1000, batch_id=batch_filter)
         outreach_executions = self.storage.list_outreach_executions(limit=1000, batch_id=batch_filter)
         outreach_executions = [self._enrich_exported_execution(row) for row in outreach_executions]
+        public_reply_events = self.storage.list_public_reply_events(
+            limit=1000,
+            campaign_id=campaign_id,
+            batch_id=batch_filter,
+        )
         execution_status_counts = self.storage.outreach_execution_status_counts(batch_filter)
         execution_error_counts: dict[str, int] = {}
         for row in outreach_executions:
             code = str(row.get("error_code") or "").strip()
             if code:
                 execution_error_counts[code] = execution_error_counts.get(code, 0) + 1
+        public_reply_summary = {
+            "total": len(public_reply_events),
+            "reply_received": len(
+                [row for row in public_reply_events if str(row.get("qualification_state") or "") == "reply_received"]
+            ),
+            "qualified": len([row for row in public_reply_events if str(row.get("qualification_state") or "") == "qualified"]),
+            "verified_contact": len([row for row in public_reply_events if int(row.get("verified_contact") or 0) == 1]),
+            "intent_confirmed": len([row for row in public_reply_events if int(row.get("intent_confirmed") or 0) == 1]),
+        }
         execution_summary = {
             "total": len(outreach_executions),
             "success": int(execution_status_counts.get("success", 0) or 0),
@@ -268,6 +282,7 @@ class GrowthWorkflowService:
         customers_csv_path = os.path.join(report_dir, f"reachops_customers_{file_key}.csv")
         actions_csv_path = os.path.join(report_dir, f"reachops_actions_{file_key}.csv")
         executions_csv_path = os.path.join(report_dir, f"reachops_executions_{file_key}.csv")
+        public_replies_csv_path = os.path.join(report_dir, f"reachops_public_replies_{file_key}.csv")
         with open(json_path, "w", encoding="utf-8") as fh:
             json.dump(
                 {
@@ -281,6 +296,8 @@ class GrowthWorkflowService:
                     "action_queue": action_queue,
                     "outreach_executions": outreach_executions,
                     "execution_summary": execution_summary,
+                    "public_reply_events": public_reply_events,
+                    "public_reply_summary": public_reply_summary,
                 },
                 fh,
                 ensure_ascii=False,
@@ -350,6 +367,33 @@ class GrowthWorkflowService:
             writer.writeheader()
             for row in outreach_executions:
                 writer.writerow({key: row.get(key, "") for key in fieldnames})
+        with open(public_replies_csv_path, "w", encoding="utf-8", newline="") as fh:
+            fieldnames = [
+                "id",
+                "campaign_id",
+                "run_id",
+                "batch_id",
+                "lead_id",
+                "action_id",
+                "execution_id",
+                "target_username",
+                "reply_author_username",
+                "reply_text",
+                "reply_language",
+                "source_url",
+                "replied_at",
+                "intent_confirmed",
+                "qualification_state",
+                "confidence",
+                "verified_contact",
+                "evidence_id",
+                "classifier_version",
+                "created_at",
+            ]
+            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in public_reply_events:
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
         self.storage.log_event(
             "campaign_artifacts_exported",
             campaign_id,
@@ -359,9 +403,11 @@ class GrowthWorkflowService:
                 "customers_csv_path": customers_csv_path,
                 "actions_csv_path": actions_csv_path,
                 "executions_csv_path": executions_csv_path,
+                "public_replies_csv_path": public_replies_csv_path,
                 "candidate_count": len(candidate_users),
                 "action_count": len(action_queue),
                 "execution_count": len(outreach_executions),
+                "public_reply_count": len(public_reply_events),
             },
         )
         return {
@@ -370,6 +416,7 @@ class GrowthWorkflowService:
             "customers_csv_path": customers_csv_path,
             "actions_csv_path": actions_csv_path,
             "executions_csv_path": executions_csv_path,
+            "public_replies_csv_path": public_replies_csv_path,
             "csv_path": customers_csv_path,
         }
 

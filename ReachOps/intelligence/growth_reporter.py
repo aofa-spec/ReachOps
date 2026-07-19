@@ -29,6 +29,12 @@ class GrowthReporter:
             self._with_public_action_status(row)
             for row in self.storage.list_action_queue(batch_id=scoped_batch_id, run_id=scoped_run_id)
         ]
+        scoped_public_replies = self.storage.list_public_reply_events(
+            limit=10000,
+            campaign_id=str(runtime_scope.get("campaign_id") or ""),
+            run_id=scoped_run_id,
+            batch_id=scoped_batch_id,
+        )
         high_value = [row for row in rows if int(row.get("qualify_score") or 0) >= 70]
         medium_value = [row for row in rows if 40 <= int(row.get("qualify_score") or 0) < 70]
         low_value = [row for row in rows if int(row.get("qualify_score") or 0) < 40]
@@ -144,6 +150,14 @@ class GrowthReporter:
             "operation_lead_count": self.storage.count_table("operation_leads"),
             "action_queue_count": self.storage.count_table("action_queue"),
             "outreach_execution_count": self.storage.count_table("outreach_executions"),
+            "public_reply_count": self.storage.count_table("public_reply_events"),
+            "qualified_reply_count": len(
+                [
+                    row
+                    for row in self.storage.list_public_reply_events(limit=10000)
+                    if str(row.get("qualification_state") or "") == "qualified"
+                ]
+            ),
             "collection_batch_count": self.storage.count_table("collection_batches"),
             "collection_task_count": self.storage.count_table("collection_tasks"),
             "profile_health_count": self.storage.count_table("profile_health"),
@@ -164,6 +178,10 @@ class GrowthReporter:
                     "operation_lead_count": len(self.storage.list_operation_leads(batch_id=scoped_batch_id, run_id=scoped_run_id)),
                     "action_queue_count": len(operation_actions),
                     "outreach_execution_count": len(self.storage.list_outreach_executions(batch_id=scoped_batch_id, run_id=scoped_run_id)),
+                    "public_reply_count": len(scoped_public_replies),
+                    "qualified_reply_count": len(
+                        [row for row in scoped_public_replies if str(row.get("qualification_state") or "") == "qualified"]
+                    ),
                 }
             )
         lead_tiers = {
@@ -354,6 +372,7 @@ class GrowthReporter:
             f"- CandidateUser: {report.summary.get('candidate_user_count', 0)}",
             f"- 高价值线索: {report.summary.get('high_value_candidate_count', 0)}",
             f"- 动作队列: {report.summary.get('action_queue_count', 0)}",
+            f"- 公共回复: received={report.summary.get('public_reply_count', 0)} qualified={report.summary.get('qualified_reply_count', 0)}",
             f"- Runtime scope: {runtime_scope.get('scope_type', 'global')} campaign={runtime_scope.get('campaign_id', '')} run={runtime_scope.get('run_id', '')} batch={runtime_scope.get('batch_id', '')}",
             f"- Traceability: runs={trace_counts.get('campaign_runs', 0)} observations={trace_counts.get('candidate_observations', 0)} evidence={trace_counts.get('evidence_artifacts', 0)} decisions={trace_counts.get('lead_decisions', 0)}",
             "",
