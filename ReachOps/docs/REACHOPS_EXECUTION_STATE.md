@@ -100,6 +100,33 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - Windows final artifacts remain missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
   - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
 
+## Latest P1 empty-batch target source isolation snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p1-campaign-funnel-isolation`
+- Scope: PR #19 follow-up for current-batch `target_sources` isolation only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
+- Code evidence:
+  - `ReachOps/workbench/workflow_service.py` now treats an explicitly selected batch with `total_sources=0` as an empty current run and does not fall back to same-campaign historical acquisition sources.
+  - `tests/test_reachops_campaign.py` extends `test_campaign_funnel_target_sources_prefers_current_batch` to cover a completed empty batch after historical campaign sources exist; the funnel remains scoped to that empty batch and reports `target_sources=0`.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/workbench/workflow_service.py tools/reachops_delivery_audit.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-pr19-empty-batch-target-sources-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_campaign_funnel_target_sources_prefers_current_batch tests.test_reachops_campaign.ReachOpsCampaignTests.test_campaign_funnel_counts_only_current_batch_execution_statuses`: passed, 2 tests; log `/tmp/reachops-pr19-empty-batch-target-sources-focused.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr19-empty-batch-target-sources-truth.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with the same known failure/error set as `origin/main`; branch ran 231 tests with 14 failures and 1 error, main ran 230 tests with 14 failures and 1 error; branch log `/tmp/reachops-pr19-empty-batch-target-sources-campaign.log`, main log `/tmp/reachops-main-baseline-pr19-target-sources-campaign.log`.
+  - Baseline comparison artifact `/tmp/reachops-pr19-empty-batch-target-sources-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr19-empty-batch-target-sources-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, but `漏斗只显示本轮 Campaign` passed and the fixture evidence keeps current-batch source counts isolated; output `/tmp/reachops-pr19-empty-batch-target-sources-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr19-empty-batch-target-sources-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=28`, `final_pending_external_validation=3`, `final_failed=2`; output `/tmp/reachops-pr19-empty-batch-target-sources-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr19-empty-batch-target-sources-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr19-empty-batch-target-sources-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr19-empty-batch-target-sources-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-pr19-empty-batch-target-sources-diff-check.log`.
+- Remaining blockers:
+  - Delivery audit still has non-P1 UI/runtime failures on this main-based branch.
+  - Windows final artifacts remain missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
+  - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
+
 ## Non-blocking engineering work available
 
 - P1 observation model and migration.

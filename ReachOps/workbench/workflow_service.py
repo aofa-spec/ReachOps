@@ -125,8 +125,8 @@ class GrowthWorkflowService:
         status_counts = progress.get("status_counts") or {}
         error_counts = progress.get("error_counts") or {}
         sources = self.storage.list_acquisition_sources(campaign_id=campaign_id, limit=200) if campaign_id else []
-        target_sources = int(batch.get("total_sources") or 0) if batch_id else len(sources)
-        if target_sources <= 0:
+        target_sources = max(0, int(batch.get("total_sources") or 0)) if batch_id else len(sources)
+        if not batch_id and target_sources <= 0:
             target_sources = len(sources) or int(batch.get("total_sources") or 0)
         profile_ok = 0
         try:

@@ -8269,6 +8269,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
             self.assertEqual(funnel["batch_id"], latest_batch.id)
             self.assertEqual(funnel["target_sources"], 1)
+            empty_batch = service.storage.create_collection_batch(0, campaign_id=campaign.id, initial_status="completed")
+            empty_funnel = GrowthWorkflowService(service).build_campaign_funnel(campaign_id=campaign.id, batch_id=empty_batch.id)
+            self.assertEqual(empty_funnel["batch_id"], empty_batch.id)
+            self.assertEqual(empty_funnel["target_sources"], 0)
 
     def test_workbench_snapshot_can_stay_on_active_campaign(self):
         with tempfile.TemporaryDirectory() as tmp:
