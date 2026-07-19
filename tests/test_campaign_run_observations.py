@@ -905,6 +905,93 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(legacy_execution["evidence_path"], "/tmp/reachops/redacted/legacy-action.png")
         self.assertNotIn(legacy_execution_id, [row["id"] for row in self.storage.list_observations_for_run(second.run_id)["outreach_executions"]])
 
+    def test_run_scoped_contacted_requires_verified_live_execution(self):
+        campaign = self.storage.create_campaign("keyword", "serum")
+        run = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+        self.storage.set_active_collection_batch(run.id)
+        candidate, _created = self.storage.upsert_candidate(
+            CandidateUser(
+                id="candidate-contacted-gate",
+                content_id="content-contacted-gate",
+                username="buyer_contacted_gate",
+                profile_url="https://example.test/@buyer_contacted_gate",
+                comment_text="where can I buy this",
+                qualify_score=86,
+                intent_tags=["buy"],
+            )
+        )
+        lead_id, _created = self.storage.upsert_operation_lead(
+            candidate.id,
+            "high_intent",
+            "high",
+            86,
+            "buying signal",
+        )
+        action_id, _created = self.storage.upsert_action_queue_item(
+            ActionQueueItem(
+                id="action-contacted-gate",
+                lead_id=lead_id,
+                action_type="comment_reply",
+                target_username="buyer_contacted_gate",
+                target_url="https://example.test/video/contacted-gate",
+            )
+        )
+
+        preflight_execution_id = self.storage.create_outreach_execution(
+            action_id,
+            "comment_reply",
+            "buyer_contacted_gate",
+            status="success",
+            profile_id="profile-preflight",
+            evidence_path=f"/tmp/reachops/redacted/{run.run_id}-preflight.png",
+            execution_mode="preflight",
+            submission_state="not_attempted",
+            verification_state="not_required",
+            evidence_verified=False,
+        )
+        self.storage.update_action_status(action_id, "success")
+        lead = self.storage.list_operation_leads(run_id=run.run_id)[0]
+        self.assertNotEqual(lead["lifecycle_stage"], "contacted")
+
+        unverified_execution_id = self.storage.create_outreach_execution(
+            action_id,
+            "comment_reply",
+            "buyer_contacted_gate",
+            status="submitted_unverified",
+            profile_id="profile-live-unverified",
+            evidence_path=f"/tmp/reachops/redacted/{run.run_id}-unverified.png",
+            execution_mode="live",
+            submission_state="submitted_unverified",
+            verification_state="pending",
+            evidence_verified=False,
+        )
+        self.storage.update_action_status(action_id, "success")
+        lead = self.storage.list_operation_leads(run_id=run.run_id)[0]
+        self.assertNotEqual(lead["lifecycle_stage"], "contacted")
+
+        verified_execution_id = self.storage.create_outreach_execution(
+            action_id,
+            "comment_reply",
+            "buyer_contacted_gate",
+            status="success",
+            profile_id="profile-live-verified",
+            evidence_path=f"/tmp/reachops/redacted/{run.run_id}-verified.png",
+            execution_mode="live",
+            submission_state="verified_success",
+            verification_state="verified",
+            evidence_verified=True,
+        )
+        self.storage.update_action_status(action_id, "success")
+        lead = self.storage.list_operation_leads(run_id=run.run_id)[0]
+        self.assertEqual(lead["lifecycle_stage"], "contacted")
+
+        trace = self.storage.list_observations_for_run(run.run_id)
+        self.assertEqual(
+            [row["id"] for row in trace["outreach_executions"]],
+            [preflight_execution_id, unverified_execution_id, verified_execution_id],
+        )
+        self.assertEqual({row["run_id"] for row in trace["outreach_executions"]}, {run.run_id})
+
     def test_migration_compatibility_uses_legacy_run_ids_without_rewriting_old_entities(self):
         old_db = Path(self.tmpdir.name) / "legacy.sqlite3"
         with sqlite3.connect(old_db) as conn:
