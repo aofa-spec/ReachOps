@@ -244,6 +244,33 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
   - Final delivery remains blocked until Windows artifacts and authorized live validation are produced and strict final gates pass.
 
+## Latest P4 bilingual UI resource slice
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Start the `zh-CN` / `en-US` UI resource contract for the local client console without claiming full UI localization completion.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now defines `DEFAULT_UI_LOCALE=zh-CN`, `SUPPORTED_UI_LOCALES=("zh-CN","en-US")`, and a core `UI_TEXT_RESOURCES` map for common local-client labels, actions, modes, final-gate labels, no-submit status, and report labels.
+  - `/api/locales` returns `schema_version=reachops.web_ui_locales.v1`, both supported locales, resource key counts, and `no_browser_started=true` / `no_submit=true`.
+  - `tools/reachops_web_panel_runtime_smoke.py` verifies the locale endpoint and required key coverage without side effects.
+  - `tools/reachops_delivery_audit.py` now includes the Web UI locale API/resource contract in the Web-to-local-API evidence check.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile tools/reachops_web_ui.py tools/reachops_web_panel_runtime_smoke.py tools/reachops_delivery_audit.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-p4-locales-pycompile.log`.
+  - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed; locale check `locales_endpoint_exposes_zh_cn_and_en_us_without_side_effects=true`; output `/tmp/reachops-p4-locales-runtime-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; locale source-contract check `web_ui_locales_api_exposes_zh_cn_en_us=true`; output `/tmp/reachops-p4-locales-delivery-audit.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_delivery_audit_reports_local_passes_and_external_pending`: passed; log `/tmp/reachops-p4-locales-focused.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-locales-truth.log`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p4-locales-goal-status.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-locales-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-locales-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-locales-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p4-locales-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-locales-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - This is a resource-contract slice only; full first-viewport UI language switching still remains future P4 work.
+
 ## Non-blocking engineering work available
 
 - P1 observation model and migration.

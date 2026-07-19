@@ -627,6 +627,32 @@ def run_runtime_smoke() -> dict:
                 and version.get("no_browser_started") is True
                 and version.get("no_submit") is True
             )
+            status, locales = _json_request(base + "/api/locales")
+            resources = locales.get("resources") if isinstance(locales.get("resources"), dict) else {}
+            zh_resources = resources.get("zh-CN") if isinstance(resources.get("zh-CN"), dict) else {}
+            en_resources = resources.get("en-US") if isinstance(resources.get("en-US"), dict) else {}
+            required_locale_keys = {
+                "app.title",
+                "action.refresh_groups",
+                "action.start",
+                "status.final_gate",
+                "status.no_submit",
+                "mode.preflight",
+                "mode.live_comment",
+            }
+            checks["locales_endpoint_exposes_zh_cn_and_en_us_without_side_effects"] = (
+                status == 200
+                and locales.get("status") == "ok"
+                and locales.get("schema_version") == "reachops.web_ui_locales.v1"
+                and locales.get("default_locale") == "zh-CN"
+                and locales.get("supported_locales") == ["zh-CN", "en-US"]
+                and required_locale_keys.issubset(set(zh_resources))
+                and required_locale_keys.issubset(set(en_resources))
+                and zh_resources.get("app.title") == "ReachOps 本地客户端控制台"
+                and en_resources.get("app.title") == "ReachOps Local Client Console"
+                and locales.get("no_browser_started") is True
+                and locales.get("no_submit") is True
+            )
             app_entry = (ROOT_DIR / "ReachOpsApp.py").read_text(encoding="utf-8")
             launcher_source = (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8")
             local_client_command = (ROOT_DIR / "启动ReachOps本地客户端.command").read_text(encoding="utf-8")

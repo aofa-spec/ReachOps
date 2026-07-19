@@ -57,6 +57,54 @@ CONTROL_DIR = DATA_DIR / "control"
 DEFAULT_TARGET = ""
 WEB_UI_VERSION = "reachops-unified-ui-2026-07-05-v20-ai-machine-actions"
 CLIENT_DISPLAY_VERSION = "客户端 v20"
+DEFAULT_UI_LOCALE = "zh-CN"
+SUPPORTED_UI_LOCALES = ("zh-CN", "en-US")
+UI_TEXT_RESOURCES = {
+    "zh-CN": {
+        "app.title": "ReachOps 本地客户端控制台",
+        "app.subtitle": "Mac / Windows 同一客户端，后端走本地真实执行链路",
+        "nav.execution": "执行台",
+        "nav.reports": "报告中心",
+        "action.refresh_groups": "刷新账号分组",
+        "action.start": "开始获客",
+        "action.pause": "暂停",
+        "action.resume": "继续",
+        "action.stop": "停止",
+        "status.final_gate": "最终交付门禁",
+        "status.acceptance": "验收状态",
+        "status.no_submit": "默认 no-submit",
+        "field.target": "推广目标",
+        "field.source_type": "目标类型",
+        "field.group": "账号分组",
+        "mode.preflight": "采集 + 触达预检",
+        "mode.collect": "只采集",
+        "mode.live_comment": "授权真实评论",
+        "report.acceptance_inputs": "本地验收输入模板",
+        "report.final_commands": "最终复核命令",
+    },
+    "en-US": {
+        "app.title": "ReachOps Local Client Console",
+        "app.subtitle": "One local client for Mac and Windows with the same local execution chain",
+        "nav.execution": "Execution",
+        "nav.reports": "Reports",
+        "action.refresh_groups": "Refresh account groups",
+        "action.start": "Start acquisition",
+        "action.pause": "Pause",
+        "action.resume": "Resume",
+        "action.stop": "Stop",
+        "status.final_gate": "Final delivery gate",
+        "status.acceptance": "Acceptance status",
+        "status.no_submit": "Default no-submit",
+        "field.target": "Promotion target",
+        "field.source_type": "Target type",
+        "field.group": "Account group",
+        "mode.preflight": "Collect + outreach preflight",
+        "mode.collect": "Collect only",
+        "mode.live_comment": "Authorized live comment",
+        "report.acceptance_inputs": "Local acceptance input template",
+        "report.final_commands": "Final verification commands",
+    },
+}
 MAX_JSON_PAYLOAD_BYTES = 64 * 1024
 MAX_START_PROFILE_LIMIT = 20
 STARTUP_HEALTHCHECK_SECONDS = 0.2
@@ -115,6 +163,22 @@ def build_version_payload() -> dict:
         "display_name": "ReachOps Local Client Console",
         "loopback_host": "127.0.0.1",
         "pid": os.getpid(),
+        "no_browser_started": True,
+        "no_submit": True,
+    }
+
+
+def build_locales_payload() -> dict:
+    return {
+        "status": "ok",
+        "schema_version": "reachops.web_ui_locales.v1",
+        "default_locale": DEFAULT_UI_LOCALE,
+        "supported_locales": list(SUPPORTED_UI_LOCALES),
+        "resources": UI_TEXT_RESOURCES,
+        "resource_key_count": {
+            locale: len(resources)
+            for locale, resources in UI_TEXT_RESOURCES.items()
+        },
         "no_browser_started": True,
         "no_submit": True,
     }
@@ -6571,6 +6635,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/version":
             self._send_json(build_version_payload())
+            return
+        if parsed.path == "/api/locales":
+            self._send_json(build_locales_payload())
             return
         if parsed.path == "/api/heartbeat":
             self._send_json(build_runtime_heartbeat_payload())
