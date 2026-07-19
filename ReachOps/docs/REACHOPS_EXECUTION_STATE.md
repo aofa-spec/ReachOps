@@ -94,22 +94,24 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - Added `tests/test_operator_controls_mapping.py` to lock the delivery-audit operator-control contract.
   - `ReachOps/workbench/tiktok_action_executor.py` now explicitly binds live action browser acquisition to the shared `WorkbenchBrowserAdapter` contract.
   - The action executor already acquired browsers through `get_workbench_browser_adapter().acquire(...)`; this update adds a typed adapter contract and focused test coverage so the Web/API acquisition-chain audit can verify actions use the same ixBrowser/Selenium adapter boundary as collection.
+  - `tools/run_reachops_headless_macos.py` now explicitly advances the auditable run session to `COLLECTING` after the headless collection start and writes a no-AI-token checkpoint with log-line/progress/heartbeat metadata.
+  - The Web/API acquisition-chain audit now verifies `headless_updates_run_session_checkpoints=true`; the false subchecks in that failed aggregate dropped from 5 to 4 in this branch.
 - Tests and checks:
-  - `/usr/bin/python3 -m py_compile ReachOps/workbench/console.py ReachOps/workbench/tiktok_action_executor.py tests/test_operator_controls_mapping.py`: passed; log `/tmp/reachops-pr18-adapter-contract-pycompile.log`.
-  - `/usr/bin/python3 -m unittest -v tests.test_operator_controls_mapping`: passed, 2 tests; log `/tmp/reachops-pr18-adapter-contract-tests.log`.
-  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr18-adapter-contract-truth.log`.
+  - `/usr/bin/python3 -m py_compile ReachOps/workbench/console.py ReachOps/workbench/tiktok_action_executor.py tools/run_reachops_headless_macos.py tests/test_operator_controls_mapping.py`: passed; log `/tmp/reachops-pr18-run-session-checkpoint-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_operator_controls_mapping`: passed, 3 tests; log `/tmp/reachops-pr18-run-session-checkpoint-tests.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr18-run-session-checkpoint-truth.log`.
   - Campaign regression comparison:
-    - branch `codex/p4-operator-controls-ui-mapping`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-pr18-adapter-contract-campaign.log`.
-    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-pr18-adapter-contract-campaign.log`.
-    - comparison `/tmp/reachops-pr18-adapter-contract-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
-  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr18-adapter-contract-operator-pressure.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, summary `passed=47`, `pending_external_validation=3`, `failed=4`; the Web/API acquisition-chain false subchecks dropped from 6 to 5 because `actions_use_workbench_browser_adapter=true`; output `/tmp/reachops-pr18-adapter-contract-delivery-audit.json`.
-  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr18-adapter-contract-goal-delivery-runner.json`.
-  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, local final failures remain 2; output `/tmp/reachops-pr18-adapter-contract-goal-status-report.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr18-adapter-contract-package-check.json`.
-  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr18-adapter-contract-final-gate.json`.
-  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr18-adapter-contract-cleanliness.json`.
-  - `git diff --check`: passed; log `/tmp/reachops-pr18-adapter-contract-diff-check.log`.
+    - branch `codex/p4-operator-controls-ui-mapping`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-pr18-run-session-checkpoint-campaign.log`.
+    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-pr18-run-session-checkpoint-campaign.log`.
+    - comparison `/tmp/reachops-pr18-run-session-checkpoint-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr18-run-session-checkpoint-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, summary `passed=47`, `pending_external_validation=3`, `failed=4`; `headless_updates_run_session_checkpoints=true`; output `/tmp/reachops-pr18-run-session-checkpoint-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr18-run-session-checkpoint-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, local final failures remain 2; output `/tmp/reachops-pr18-run-session-checkpoint-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr18-run-session-checkpoint-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr18-run-session-checkpoint-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr18-run-session-checkpoint-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-pr18-run-session-checkpoint-diff-check.log`.
 - Remaining blockers:
   - Delivery audit still has 4 failed local checks: campaign funnel isolation, web API acquisition chain, web runtime API smoke, and web button JS/API feedback.
   - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.

@@ -26,6 +26,10 @@ class OperatorControlsMappingTests(unittest.TestCase):
         evidence = run_web_local_api_architecture_fixture()
         self.assertTrue(evidence["checks"]["actions_use_workbench_browser_adapter"])
 
+    def test_headless_updates_run_session_checkpoints_contract(self) -> None:
+        evidence = run_web_local_api_architecture_fixture()
+        self.assertTrue(evidence["checks"]["headless_updates_run_session_checkpoints"])
+
 
 if __name__ == "__main__":
     unittest.main()
