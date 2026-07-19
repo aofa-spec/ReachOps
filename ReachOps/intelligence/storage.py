@@ -36,6 +36,7 @@ class GrowthStorage:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.active_collection_batch_id = ""
+        self.active_campaign_run_id = ""
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self.init_schema()
 
@@ -44,6 +45,12 @@ class GrowthStorage:
 
     def _active_batch_id(self) -> str:
         return str(getattr(self, "active_collection_batch_id", "") or "")
+
+    def set_active_campaign_run(self, run_id: str = ""):
+        self.active_campaign_run_id = str(run_id or "").strip()
+
+    def _active_run_id(self) -> str:
+        return str(getattr(self, "active_campaign_run_id", "") or "")
 
     @contextmanager
     def connect(self):
@@ -223,6 +230,69 @@ class GrowthStorage:
                     completed_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS campaign_runs (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    status TEXT DEFAULT 'running',
+                    collector_version TEXT DEFAULT '',
+                    classifier_version TEXT DEFAULT '',
+                    config_json TEXT DEFAULT '{}',
+                    idempotency_key TEXT DEFAULT '',
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS evidence_artifacts (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    local_path TEXT DEFAULT '',
+                    sha256 TEXT DEFAULT '',
+                    sidecar_json TEXT DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, entity_type, entity_id, local_path, sha256)
+                );
+                CREATE TABLE IF NOT EXISTS candidate_observations (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    candidate_user_id TEXT NOT NULL,
+                    content_id TEXT DEFAULT '',
+                    source_id TEXT DEFAULT '',
+                    evidence_id TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    collector_version TEXT DEFAULT '',
+                    classifier_version TEXT DEFAULT '',
+                    feature_snapshot_json TEXT DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, candidate_user_id, content_id, evidence_id)
+                );
+                CREATE TABLE IF NOT EXISTS lead_decisions (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    candidate_observation_id TEXT NOT NULL,
+                    intent_type TEXT DEFAULT '',
+                    intent_score INTEGER DEFAULT 0,
+                    product_fit_score INTEGER DEFAULT 0,
+                    contactability_score INTEGER DEFAULT 0,
+                    source_quality_score INTEGER DEFAULT 0,
+                    total_lead_score INTEGER DEFAULT 0,
+                    confidence INTEGER DEFAULT 0,
+                    reason_codes_json TEXT DEFAULT '[]',
+                    feature_snapshot_json TEXT DEFAULT '{}',
+                    classifier_provider_version TEXT DEFAULT '',
+                    human_review_status TEXT DEFAULT 'pending',
+                    decision_key TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, candidate_observation_id, classifier_provider_version, decision_key)
                 );
                 CREATE TABLE IF NOT EXISTS collection_tasks (
                     id TEXT PRIMARY KEY,
@@ -444,6 +514,7 @@ class GrowthStorage:
                     "source_path": "TEXT DEFAULT ''",
                     "raw_meta": "TEXT DEFAULT '{}'",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -457,6 +528,7 @@ class GrowthStorage:
                     "source_path": "TEXT DEFAULT ''",
                     "raw_meta": "TEXT DEFAULT '{}'",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -478,6 +550,7 @@ class GrowthStorage:
                     "last_error_message": "TEXT DEFAULT ''",
                     "last_executed_at": "TEXT",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -491,9 +564,10 @@ class GrowthStorage:
                     "repeat_seen_count": "INTEGER DEFAULT 1",
                     "raw_meta": "TEXT DEFAULT '{}'",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
-            self._ensure_columns(conn, "shop_contents", {"batch_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "shop_contents", {"batch_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
             self._ensure_columns(conn, "collection_batches", {"campaign_id": "TEXT DEFAULT ''"})
             self._ensure_columns(
                 conn,
@@ -502,6 +576,7 @@ class GrowthStorage:
                     "lifecycle_stage": "TEXT DEFAULT 'new'",
                     "source_path": "TEXT DEFAULT ''",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                     "updated_at": "TEXT DEFAULT ''",
                 },
             )
@@ -510,6 +585,7 @@ class GrowthStorage:
                 "outreach_executions",
                 {
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                     "risk_gate_json": "TEXT DEFAULT ''",
                     "execution_mode": "TEXT DEFAULT 'simulated'",
                     "submission_state": "TEXT DEFAULT 'not_attempted'",
@@ -517,7 +593,7 @@ class GrowthStorage:
                     "evidence_verified": "INTEGER DEFAULT 0",
                 },
             )
-            self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
             self._seed_default_action_templates(conn)
 
     def _ensure_columns(self, conn, table_name: str, columns: Dict[str, str]):
@@ -586,11 +662,317 @@ class GrowthStorage:
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO growth_errors (id, error_code, message, source_id, creator_id, profile_id, batch_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO growth_errors (id, error_code, message, source_id, creator_id, profile_id, batch_id, run_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (new_id("err"), error_code, message, source_id, creator_id, profile_id, self._active_batch_id(), utc_now_iso()),
+                (
+                    new_id("err"),
+                    error_code,
+                    message,
+                    source_id,
+                    creator_id,
+                    profile_id,
+                    self._active_batch_id(),
+                    self._active_run_id(),
+                    utc_now_iso(),
+                ),
             )
+
+    def _require_campaign_run(self, campaign_id: str = "", run_id: str = "") -> tuple[str, str]:
+        campaign = str(campaign_id or "").strip()
+        run = str(run_id or self._active_run_id()).strip()
+        if not campaign:
+            raise ValueError("campaign_id is required")
+        if not run:
+            raise ValueError("run_id is required; legacy rows must not be assigned a fabricated run_id")
+        return campaign, run
+
+    def create_campaign_run(
+        self,
+        campaign_id: str,
+        batch_id: str = "",
+        collector_version: str = "",
+        classifier_version: str = "",
+        config: Optional[Dict[str, Any]] = None,
+        idempotency_key: str = "",
+        status: str = "running",
+    ) -> Dict[str, Any]:
+        campaign = str(campaign_id or "").strip()
+        if not campaign:
+            raise ValueError("campaign_id is required")
+        key = str(idempotency_key or "").strip()
+        now = utc_now_iso()
+        config_json = json.dumps(config or {}, ensure_ascii=False)
+        with self.connect() as conn:
+            if key:
+                row = conn.execute(
+                    "SELECT * FROM campaign_runs WHERE campaign_id=? AND idempotency_key=?",
+                    (campaign, key),
+                ).fetchone()
+                if row:
+                    item = dict(row)
+                    self.set_active_campaign_run(item["id"])
+                    if item.get("batch_id"):
+                        self.set_active_collection_batch(item["batch_id"])
+                    return item
+            run_id = new_id("run")
+            conn.execute(
+                """
+                INSERT INTO campaign_runs
+                (id, campaign_id, batch_id, status, collector_version, classifier_version, config_json,
+                 idempotency_key, started_at, completed_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    campaign,
+                    str(batch_id or ""),
+                    str(status or "running"),
+                    str(collector_version or ""),
+                    str(classifier_version or ""),
+                    config_json,
+                    key,
+                    now,
+                    None,
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM campaign_runs WHERE id=?", (run_id,)).fetchone()
+        item = dict(row) if row else {}
+        self.set_active_campaign_run(run_id)
+        if batch_id:
+            self.set_active_collection_batch(batch_id)
+        self.log_event("campaign_run_created", run_id, {"campaign_id": campaign, "batch_id": batch_id, "idempotency_key": key})
+        return item
+
+    def update_campaign_run(self, run_id: str, status: str, completed: bool = False) -> None:
+        run = str(run_id or "").strip()
+        if not run:
+            return
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE campaign_runs
+                SET status=?, completed_at=COALESCE(?, completed_at), updated_at=?
+                WHERE id=?
+                """,
+                (str(status or "running"), now if completed else None, now, run),
+            )
+
+    def record_evidence_artifact(
+        self,
+        *,
+        campaign_id: str,
+        run_id: str = "",
+        entity_type: str,
+        entity_id: str,
+        local_path: str = "",
+        sha256: str = "",
+        sidecar: Optional[Dict[str, Any]] = None,
+        batch_id: str = "",
+    ) -> Dict[str, Any]:
+        campaign, run = self._require_campaign_run(campaign_id, run_id)
+        entity_type = str(entity_type or "").strip()
+        entity_id = str(entity_id or "").strip()
+        if not entity_type or not entity_id:
+            raise ValueError("entity_type and entity_id are required")
+        local_path = str(local_path or "")
+        sha256 = str(sha256 or "")
+        now = utc_now_iso()
+        sidecar_json = json.dumps(sidecar or {}, ensure_ascii=False, sort_keys=True)
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM evidence_artifacts
+                WHERE campaign_id=? AND run_id=? AND entity_type=? AND entity_id=? AND local_path=? AND sha256=?
+                """,
+                (campaign, run, entity_type, entity_id, local_path, sha256),
+            ).fetchone()
+            if row:
+                return dict(row)
+            evidence_id = new_id("ev")
+            conn.execute(
+                """
+                INSERT INTO evidence_artifacts
+                (id, campaign_id, run_id, batch_id, entity_type, entity_id, local_path, sha256, sidecar_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (evidence_id, campaign, run, str(batch_id or self._active_batch_id()), entity_type, entity_id, local_path, sha256, sidecar_json, now),
+            )
+            row = conn.execute("SELECT * FROM evidence_artifacts WHERE id=?", (evidence_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_candidate_observation(
+        self,
+        *,
+        campaign_id: str,
+        run_id: str = "",
+        candidate_user_id: str,
+        content_id: str = "",
+        source_id: str = "",
+        evidence_id: str,
+        collector_version: str = "",
+        classifier_version: str = "",
+        feature_snapshot: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+        batch_id: str = "",
+    ) -> Dict[str, Any]:
+        campaign, run = self._require_campaign_run(campaign_id, run_id)
+        candidate = str(candidate_user_id or "").strip()
+        evidence = str(evidence_id or "").strip()
+        if not candidate or not evidence:
+            raise ValueError("candidate_user_id and evidence_id are required")
+        observed = str(observed_at or utc_now_iso())
+        snapshot_json = json.dumps(feature_snapshot or {}, ensure_ascii=False, sort_keys=True)
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM candidate_observations
+                WHERE campaign_id=? AND run_id=? AND candidate_user_id=? AND content_id=? AND evidence_id=?
+                """,
+                (campaign, run, candidate, str(content_id or ""), evidence),
+            ).fetchone()
+            if row:
+                return dict(row)
+            observation_id = new_id("obs")
+            conn.execute(
+                """
+                INSERT INTO candidate_observations
+                (id, campaign_id, run_id, batch_id, candidate_user_id, content_id, source_id, evidence_id,
+                 observed_at, collector_version, classifier_version, feature_snapshot_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    campaign,
+                    run,
+                    str(batch_id or self._active_batch_id()),
+                    candidate,
+                    str(content_id or ""),
+                    str(source_id or ""),
+                    evidence,
+                    observed,
+                    str(collector_version or ""),
+                    str(classifier_version or ""),
+                    snapshot_json,
+                    utc_now_iso(),
+                ),
+            )
+            row = conn.execute("SELECT * FROM candidate_observations WHERE id=?", (observation_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_lead_decision(
+        self,
+        *,
+        campaign_id: str,
+        run_id: str = "",
+        candidate_observation_id: str,
+        intent_type: str = "",
+        intent_score: int = 0,
+        product_fit_score: int = 0,
+        contactability_score: int = 0,
+        source_quality_score: int = 0,
+        total_lead_score: int = 0,
+        confidence: int = 0,
+        reason_codes: Optional[List[str]] = None,
+        feature_snapshot: Optional[Dict[str, Any]] = None,
+        classifier_provider_version: str = "",
+        human_review_status: str = "pending",
+        decision_key: str = "",
+    ) -> Dict[str, Any]:
+        campaign, run = self._require_campaign_run(campaign_id, run_id)
+        observation = str(candidate_observation_id or "").strip()
+        if not observation:
+            raise ValueError("candidate_observation_id is required")
+        provider = str(classifier_provider_version or "").strip()
+        key = str(decision_key or "").strip()
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM lead_decisions
+                WHERE campaign_id=? AND run_id=? AND candidate_observation_id=?
+                  AND classifier_provider_version=? AND decision_key=?
+                """,
+                (campaign, run, observation, provider, key),
+            ).fetchone()
+            if row:
+                return dict(row)
+            decision_id = new_id("ld")
+            conn.execute(
+                """
+                INSERT INTO lead_decisions
+                (id, campaign_id, run_id, candidate_observation_id, intent_type, intent_score,
+                 product_fit_score, contactability_score, source_quality_score, total_lead_score,
+                 confidence, reason_codes_json, feature_snapshot_json, classifier_provider_version,
+                 human_review_status, decision_key, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    decision_id,
+                    campaign,
+                    run,
+                    observation,
+                    str(intent_type or ""),
+                    int(intent_score or 0),
+                    int(product_fit_score or 0),
+                    int(contactability_score or 0),
+                    int(source_quality_score or 0),
+                    int(total_lead_score or 0),
+                    int(confidence or 0),
+                    json.dumps(reason_codes or [], ensure_ascii=False),
+                    json.dumps(feature_snapshot or {}, ensure_ascii=False, sort_keys=True),
+                    provider,
+                    str(human_review_status or "pending"),
+                    key,
+                    utc_now_iso(),
+                ),
+            )
+            row = conn.execute("SELECT * FROM lead_decisions WHERE id=?", (decision_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def runtime_traceability_summary(self, campaign_id: str = "", run_id: str = "") -> Dict[str, Any]:
+        campaign = str(campaign_id or "").strip()
+        run = str(run_id or "").strip()
+        filters = []
+        args: list[Any] = []
+        if campaign:
+            filters.append("campaign_id=?")
+            args.append(campaign)
+        if run:
+            filters.append("run_id=?")
+            args.append(run)
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            counts: Dict[str, int] = {}
+            run_filters = []
+            run_args: list[Any] = []
+            if campaign:
+                run_filters.append("campaign_id=?")
+                run_args.append(campaign)
+            if run:
+                run_filters.append("id=?")
+                run_args.append(run)
+            run_where = "WHERE " + " AND ".join(run_filters) if run_filters else ""
+            row = conn.execute(f"SELECT COUNT(*) AS count FROM campaign_runs {run_where}", tuple(run_args)).fetchone()
+            counts["campaign_runs"] = int((row["count"] if row else 0) or 0)
+            for table in ["evidence_artifacts", "candidate_observations", "lead_decisions"]:
+                rows = conn.execute(f"SELECT COUNT(*) AS count FROM {table} {where}", tuple(args)).fetchone()
+                counts[table] = int((rows["count"] if rows else 0) or 0)
+            legacy_empty = {}
+            for table in ["discovered_creators", "discovered_contents", "candidate_users", "operation_leads", "action_queue", "outreach_executions", "growth_errors"]:
+                columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+                if "run_id" in columns:
+                    row = conn.execute(f"SELECT COUNT(*) AS count FROM {table} WHERE COALESCE(run_id, '')=''", ()).fetchone()
+                    legacy_empty[table] = int((row["count"] if row else 0) or 0)
+        return {
+            "campaign_id": campaign,
+            "run_id": run,
+            "counts": counts,
+            "legacy_rows_with_empty_run_id": legacy_empty,
+            "legacy_run_id_fabricated": False,
+        }
 
     def create_campaign(
         self,
@@ -1171,8 +1553,8 @@ class GrowthStorage:
                 """
                 INSERT INTO operation_leads
                 (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage, source_path,
-                 status, batch_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, batch_id, run_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -1185,6 +1567,7 @@ class GrowthStorage:
                     source_path or "",
                     "new",
                     self._active_batch_id(),
+                    self._active_run_id(),
                     now,
                     now,
                 ),
@@ -1203,10 +1586,10 @@ class GrowthStorage:
                 """
                 INSERT INTO action_queue
                 (id, lead_id, action_type, target_username, target_url, suggested_text, reason, status, risk_level,
-                 batch_id, created_at, review_status, reviewed_by, reviewed_at, review_note, daily_quota_key,
+                 batch_id, run_id, created_at, review_status, reviewed_by, reviewed_at, review_note, daily_quota_key,
                  execution_confirmed, confirmed_by, confirmed_at, retry_count, last_execution_id,
                  last_error_code, last_error_message, last_executed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
@@ -1219,6 +1602,7 @@ class GrowthStorage:
                     item.status,
                     item.risk_level,
                     self._active_batch_id(),
+                    self._active_run_id(),
                     item.created_at,
                     "pending",
                     "",
@@ -1238,12 +1622,15 @@ class GrowthStorage:
             self._refresh_lead_lifecycle(conn, item.lead_id)
             return item.id, True
 
-    def list_operation_leads(self, limit: int = 200, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_operation_leads(self, limit: int = 200, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if batch_id:
             filters.append("ol.batch_id=?")
             args.append(str(batch_id))
+        if run_id:
+            filters.append("ol.run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -1336,8 +1723,8 @@ class GrowthStorage:
                 INSERT INTO outreach_executions
                 (id, action_id, action_type, target_username, status, execution_mode, submission_state,
                  verification_state, evidence_verified, profile_id, evidence_path, error_code, error_message,
-                 risk_gate_json, batch_id, started_at, completed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 risk_gate_json, batch_id, run_id, started_at, completed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -1355,6 +1742,7 @@ class GrowthStorage:
                     error_message,
                     risk_gate_json,
                     self._active_batch_id(),
+                    self._active_run_id(),
                     now if status in {"running", "completed", "success", "failed", "skipped", "account_switched"} else None,
                     now if status in {"completed", "success", "failed", "skipped", "account_switched"} else None,
                     now,
@@ -2216,12 +2604,23 @@ class GrowthStorage:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def list_outreach_executions(self, limit: int = 100, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_outreach_executions(self, limit: int = 100, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
+        run_id = str(run_id or "").strip()
         with self.connect() as conn:
-            if batch_id:
+            if batch_id and run_id:
+                rows = conn.execute(
+                    "SELECT * FROM outreach_executions WHERE batch_id=? AND run_id=? ORDER BY created_at DESC LIMIT ?",
+                    (str(batch_id), run_id, limit),
+                ).fetchall()
+            elif batch_id:
                 rows = conn.execute(
                     "SELECT * FROM outreach_executions WHERE batch_id=? ORDER BY created_at DESC LIMIT ?",
                     (str(batch_id), limit),
+                ).fetchall()
+            elif run_id:
+                rows = conn.execute(
+                    "SELECT * FROM outreach_executions WHERE run_id=? ORDER BY created_at DESC LIMIT ?",
+                    (run_id, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -2664,6 +3063,10 @@ class GrowthStorage:
             "acquisition_campaigns",
             "audience_personas",
             "acquisition_sources",
+            "campaign_runs",
+            "evidence_artifacts",
+            "candidate_observations",
+            "lead_decisions",
         }
         if table_name not in allowed:
             raise ValueError(f"unsupported table: {table_name}")
