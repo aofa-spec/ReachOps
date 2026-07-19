@@ -344,7 +344,7 @@ class CampaignRunObservationTests(unittest.TestCase):
         first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=first_campaign.id)
         second = self.storage.create_collection_batch(1, profile_group="CA", campaign_id=second_campaign.id)
 
-        def add_candidate(batch, campaign_id: str, username: str, video_id: str, score: int):
+        def add_candidate(batch, campaign_id: str, username: str, video_id: str, score: int, second_decision: bool = False):
             self.storage.set_active_collection_batch(batch.id)
             content, _ = self.storage.upsert_content(
                 DiscoveredContent(
@@ -394,6 +394,14 @@ class CampaignRunObservationTests(unittest.TestCase):
                 score=score,
                 reason="need signal",
             )
+            if second_decision:
+                self.storage.record_lead_decision(
+                    batch.run_id,
+                    candidate_user_id=candidate.id,
+                    decision_type="high_intent",
+                    score=score + 1,
+                    reason="updated need signal",
+                )
             lead_id, _ = self.storage.upsert_operation_lead(candidate.id, "purchase_need", "high", score, "need signal")
             self.storage.upsert_action_queue_item(
                 ActionQueueItem(
@@ -407,7 +415,7 @@ class CampaignRunObservationTests(unittest.TestCase):
             self.assertEqual(self.storage.run_id_for_batch(batch.id), batch.run_id)
             self.assertEqual(self.storage.get_campaign_run(run_id=batch.run_id)["campaign_id"], campaign_id)
 
-        add_candidate(first, first_campaign.id, "redacted_a", "video_a", 88)
+        add_candidate(first, first_campaign.id, "redacted_a", "video_a", 88, second_decision=True)
         add_candidate(second, second_campaign.id, "redacted_b", "video_b", 92)
 
         with tempfile.TemporaryDirectory() as report_dir:
@@ -415,6 +423,7 @@ class CampaignRunObservationTests(unittest.TestCase):
             report = reporter.build_report(campaign_id=first_campaign.id, run_id=first.run_id, batch_id=first.id)
             json_path, csv_path, markdown_path = reporter.export(report)
             action_csv_path = next(Path(report_dir).glob("*_action_queue.csv"))
+            decision_csv_path = next(Path(report_dir).glob("*_lead_decision_observations.csv"))
 
             self.assertEqual(report.summary["runtime_scope"]["campaign_id"], first_campaign.id)
             self.assertEqual(report.summary["runtime_scope"]["run_id"], first.run_id)
@@ -425,7 +434,15 @@ class CampaignRunObservationTests(unittest.TestCase):
             self.assertEqual(traceability["counts"]["campaign_runs"], 1)
             self.assertEqual(traceability["counts"]["comment_observations"], 1)
             self.assertEqual(traceability["counts"]["candidate_observations"], 1)
-            self.assertEqual(traceability["counts"]["lead_decision_observations"], 2)
+            self.assertEqual(traceability["counts"]["lead_decision_observations"], 3)
+            self.assertEqual(report.summary["lead_decision_observation_schema_version"], "reachops.lead_decision_observation_lineage.v1")
+            self.assertEqual(report.summary["lead_decision_observation_version_count"], 3)
+            high_intent_versions = [
+                row["decision_version"]
+                for row in report.lead_decision_observations
+                if row["decision_type"] == "high_intent"
+            ]
+            self.assertEqual(high_intent_versions, [1, 2])
             self.assertFalse(traceability["legacy_run_id_fabricated"])
             self.assertEqual([row["username"] for row in report.high_value_users], ["redacted_a"])
             self.assertEqual([row["target_username"] for row in report.operation_actions], ["redacted_a"])
@@ -434,15 +451,32 @@ class CampaignRunObservationTests(unittest.TestCase):
                 exported_json = json.load(fh)
             self.assertEqual(exported_json["summary"]["runtime_scope"]["run_id"], first.run_id)
             self.assertEqual(exported_json["summary"]["runtime_traceability"]["counts"]["candidate_observations"], 1)
+            self.assertEqual(exported_json["summary"]["lead_decision_observation_version_count"], 3)
+            exported_high_intent_versions = [
+                row["decision_version"]
+                for row in exported_json["lead_decision_observations"]
+                if row["decision_type"] == "high_intent"
+            ]
+            self.assertEqual(exported_high_intent_versions, [1, 2])
             markdown = Path(markdown_path).read_text(encoding="utf-8")
             self.assertIn(f"campaign={first_campaign.id}", markdown)
             self.assertIn("observations=1", markdown)
+            self.assertIn("decision_versions=3", markdown)
             with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
                 high_value_rows = list(csv.DictReader(fh))
             with open(action_csv_path, "r", encoding="utf-8-sig", newline="") as fh:
                 action_rows = list(csv.DictReader(fh))
+            with open(decision_csv_path, "r", encoding="utf-8-sig", newline="") as fh:
+                decision_rows = list(csv.DictReader(fh))
             self.assertEqual(high_value_rows[0]["run_id"], first.run_id)
             self.assertEqual(action_rows[0]["run_id"], first.run_id)
+            self.assertEqual([row["run_id"] for row in decision_rows], [first.run_id, first.run_id, first.run_id])
+            csv_high_intent_versions = [
+                row["decision_version"]
+                for row in decision_rows
+                if row["decision_type"] == "high_intent"
+            ]
+            self.assertEqual(csv_high_intent_versions, ["1", "2"])
             self.assertNotIn("redacted_b", json.dumps(exported_json, ensure_ascii=False))
 
     def test_run_scoped_material_signals_and_audience_intents_do_not_overwrite(self):

@@ -513,6 +513,7 @@ class GrowthReport:
     operation_actions: List[Dict[str, Any]]
     errors: Dict[str, int]
     recommendations: List[str]
+    lead_decision_observations: List[Dict[str, Any]] = field(default_factory=list)
     content_insights: List[Dict[str, Any]] = field(default_factory=list)
     comment_intents: List[Dict[str, Any]] = field(default_factory=list)
     comment_languages: List[Dict[str, Any]] = field(default_factory=list)

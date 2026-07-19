@@ -1403,6 +1403,39 @@ class GrowthStorage:
             )
             return item_id
 
+    def list_lead_decision_observations(
+        self,
+        campaign_id: str = "",
+        run_id: str = "",
+        candidate_user_id: str = "",
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if candidate_user_id:
+            filters.append("candidate_user_id=?")
+            args.append(str(candidate_user_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM lead_decision_observations
+                {where}
+                ORDER BY campaign_id, run_id, candidate_user_id, decision_type,
+                         decision_version, created_at, rowid
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 500)]),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_observations_for_run(self, run_id: str) -> Dict[str, List[Dict[str, Any]]]:
         run = str(run_id or "").strip()
         if not run:
