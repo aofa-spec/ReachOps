@@ -1933,7 +1933,7 @@ def run_audit(args) -> dict:
                 and campaign_funnel_isolation.get("new_candidate_batch_ids") == [campaign_funnel_isolation.get("new_batch_id")]
                 and campaign_funnel_isolation.get("old_action_batch_ids") == [campaign_funnel_isolation.get("old_batch_id")]
                 and campaign_funnel_isolation.get("new_action_batch_ids") == [campaign_funnel_isolation.get("new_batch_id")]
-                and int(campaign_funnel_isolation.get("old_execution_success") or 0) > 0
+                and int(campaign_funnel_isolation.get("old_execution_success") or 0) == 0
                 and int(campaign_funnel_isolation.get("new_execution_success") or 0) == 0
             ),
             campaign_funnel_isolation,
