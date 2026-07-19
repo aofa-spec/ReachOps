@@ -11367,6 +11367,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(payload["error"], "ixBrowser Local API 未启动或端口不可连接")
         self.assertIn("ixbrowser_group_list_unavailable", payload["error_detail"])
 
+    def test_web_group_count_resolution_is_tunable_for_large_ixbrowser_libraries(self):
+        source = Path("tools/reachops_web_ui.py").read_text(encoding="utf-8")
+
+        self.assertIn("REACHOPS_GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS", source)
+        self.assertIn("REACHOPS_GROUP_COUNT_RESOLVE_WORKERS", source)
+        self.assertIn('or "45"', source)
+        self.assertIn('or "3"', source)
+        self.assertNotIn("GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS = 20.0", source)
+        self.assertNotIn("GROUP_COUNT_RESOLVE_WORKERS = 1\n", source)
+
     def test_web_account_repair_summary_treats_directory_path_as_not_available(self):
         from tools import reachops_web_ui
 
