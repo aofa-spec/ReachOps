@@ -266,6 +266,54 @@ class TruthfulExecutionSemanticsTest(unittest.TestCase):
         saved_lead = next(row for row in self.storage.list_operation_leads(limit=50) if row["id"] == lead_id)
         self.assertNotEqual(saved_lead["lifecycle_stage"], "contacted")
 
+    def test_storage_completed_action_requires_verified_live_execution_to_contact_lead(self):
+        action, lead_id = self.add_lead_action()
+
+        preflight_execution_id = self.storage.create_outreach_execution(
+            action["id"],
+            "comment_reply",
+            "buyer",
+            status="success",
+            profile_id=self.profile_a["profile_id"],
+            execution_mode="preflight",
+            submission_state="prepared",
+            verification_state="not_required",
+            evidence_verified=False,
+        )
+        self.storage.record_action_execution_result(action["id"], preflight_execution_id, "completed")
+        saved_lead = next(row for row in self.storage.list_operation_leads(limit=50) if row["id"] == lead_id)
+        self.assertNotEqual(saved_lead["lifecycle_stage"], "contacted")
+
+        unverified_execution_id = self.storage.create_outreach_execution(
+            action["id"],
+            "comment_reply",
+            "buyer",
+            status="submitted_unverified",
+            profile_id=self.profile_a["profile_id"],
+            execution_mode="live",
+            submission_state="submitted_unverified",
+            verification_state="pending",
+            evidence_verified=False,
+        )
+        self.storage.record_action_execution_result(action["id"], unverified_execution_id, "success")
+        saved_lead = next(row for row in self.storage.list_operation_leads(limit=50) if row["id"] == lead_id)
+        self.assertNotEqual(saved_lead["lifecycle_stage"], "contacted")
+
+        verified_execution_id = self.storage.create_outreach_execution(
+            action["id"],
+            "comment_reply",
+            "buyer",
+            status="success",
+            profile_id=self.profile_a["profile_id"],
+            execution_mode="live",
+            submission_state="verified_success",
+            verification_state="verified",
+            evidence_verified=True,
+        )
+        self.storage.record_action_execution_result(action["id"], verified_execution_id, "completed")
+        saved_lead = next(row for row in self.storage.list_operation_leads(limit=50) if row["id"] == lead_id)
+        self.assertEqual(saved_lead["lifecycle_stage"], "contacted")
+
     def test_generated_evidence_stub_cannot_verify_live_success(self):
         action = self.add_action()
         executor = AlwaysSuccessExecutor("")

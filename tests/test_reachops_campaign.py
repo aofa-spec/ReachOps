@@ -8859,6 +8859,56 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(len(payload["executions"]), 1)
             self.assertEqual(payload["executions"][0]["profile_id"], "exec-new")
 
+    def test_web_operator_lead_touch_counts_require_verified_live_execution(self):
+        from tools.reachops_web_ui import build_operations_payload
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            plan = service.create_campaign_plan("https://www.tiktok.com/@creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@creator"}],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+            )
+            batch = service.storage.latest_collection_batch_for_campaign(plan["campaign"]["id"])
+            batch_id = str(batch["id"])
+            service.storage.set_active_collection_batch(batch_id)
+            action = service.storage.list_action_queue(limit=10, batch_id=batch_id)[0]
+
+            preflight_execution_id = service.storage.create_outreach_execution(
+                action["id"],
+                action["action_type"],
+                action["target_username"],
+                status="success",
+                profile_id="preflight-profile",
+                execution_mode="preflight",
+                submission_state="prepared",
+                verification_state="not_required",
+                evidence_verified=False,
+            )
+            service.storage.record_action_execution_result(action["id"], preflight_execution_id, "completed")
+            preflight_ops = build_operations_payload(Path(service.storage.db_path), batch, {}, [])
+
+            self.assertEqual(preflight_ops["counts"]["touch_success"], 0)
+            self.assertNotEqual(preflight_ops["lead_view"][0]["current_status"], "contacted")
+
+            verified_execution_id = service.storage.create_outreach_execution(
+                action["id"],
+                action["action_type"],
+                action["target_username"],
+                status="success",
+                profile_id="live-profile",
+                execution_mode="live",
+                submission_state="verified_success",
+                verification_state="verified",
+                evidence_verified=True,
+            )
+            service.storage.record_action_execution_result(action["id"], verified_execution_id, "completed")
+            verified_ops = build_operations_payload(Path(service.storage.db_path), batch, {}, [])
+
+            self.assertEqual(verified_ops["counts"]["touch_success"], 1)
+            self.assertEqual(verified_ops["lead_view"][0]["current_status"], "contacted")
+
     def test_standalone_action_preflight_filters_profiles_before_router(self):
         class Value:
             def __init__(self, value):
