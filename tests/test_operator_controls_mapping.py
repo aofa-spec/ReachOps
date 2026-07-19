@@ -30,6 +30,16 @@ class OperatorControlsMappingTests(unittest.TestCase):
         evidence = run_web_local_api_architecture_fixture()
         self.assertTrue(evidence["checks"]["headless_updates_run_session_checkpoints"])
 
+    def test_client_entrypoints_default_to_local_console_contract(self) -> None:
+        evidence = run_web_local_api_architecture_fixture()
+        self.assertTrue(evidence["checks"]["client_entrypoints_default_to_unified_web_console"])
+        self.assertTrue(evidence["checks"]["native_app_entry_unifies_to_web_with_explicit_legacy_tk_diagnostics"])
+        self.assertTrue(evidence["checks"]["client_entry_copy_identifies_local_client_console"])
+
+    def test_web_ui_toolbar_and_metrics_responsive_contract(self) -> None:
+        evidence = run_web_local_api_architecture_fixture()
+        self.assertTrue(evidence["checks"]["web_ui_toolbar_and_metrics_are_responsive"])
+
 
 if __name__ == "__main__":
     unittest.main()

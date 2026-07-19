@@ -86,7 +86,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Date: `2026-07-19`
 - Branch: `codex/p4-operator-controls-ui-mapping`
 - Draft PR: #18 `ReachOps P4: expose operator execution controls`
-- Commit: `d4b646a` exposes customer-visible execution controls, adds the operator-control mapping test, and records validation evidence.
+- Commit: latest branch head plus local PR #18 client-entry update; records operator controls, browser adapter binding, run-session checkpointing, and local-client-console entrypoint convergence.
 - Scope: P4 local operator UI control visibility only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
 - Code evidence:
   - `ReachOps/workbench/console.py` now exposes customer-visible labels and controls for `每个目标最多视频`, `每条视频最多评论`, `参与账号数`, `任务间隔秒`, and `排除词`.
@@ -96,24 +96,28 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - The action executor already acquired browsers through `get_workbench_browser_adapter().acquire(...)`; this update adds a typed adapter contract and focused test coverage so the Web/API acquisition-chain audit can verify actions use the same ixBrowser/Selenium adapter boundary as collection.
   - `tools/run_reachops_headless_macos.py` now explicitly advances the auditable run session to `COLLECTING` after the headless collection start and writes a no-AI-token checkpoint with log-line/progress/heartbeat metadata.
   - The Web/API acquisition-chain audit now verifies `headless_updates_run_session_checkpoints=true`; the false subchecks in that failed aggregate dropped from 5 to 4 in this branch.
+  - `ReachOps/launcher.py`, `ReachOpsApp.py`, root/ReachOps READMEs, and Mac `.command` entrypoints now treat the local Web console as the default client surface.
+  - Legacy Tk remains available only as an explicit diagnostic path through `--legacy-tk` or `REACHOPS_LEGACY_TK=1`; missing Web launcher failures no longer silently fall back to Tk.
+  - `tools/reachops_web_ui.py` now satisfies the responsive toolbar/metric grid contract checked by delivery audit and runtime smoke.
 - Tests and checks:
-  - `/usr/bin/python3 -m py_compile ReachOps/workbench/console.py ReachOps/workbench/tiktok_action_executor.py tools/run_reachops_headless_macos.py tests/test_operator_controls_mapping.py`: passed; log `/tmp/reachops-pr18-run-session-checkpoint-pycompile.log`.
-  - `/usr/bin/python3 -m unittest -v tests.test_operator_controls_mapping`: passed, 3 tests; log `/tmp/reachops-pr18-run-session-checkpoint-tests.log`.
-  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr18-run-session-checkpoint-truth.log`.
+  - `/usr/bin/python3 -m py_compile ReachOps/launcher.py tools/reachops_web_ui.py tests/test_launcher.py tests/test_operator_controls_mapping.py`: passed; log `/tmp/reachops-pr18-client-entry-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_launcher tests.test_operator_controls_mapping`: passed, 11 tests; log `/tmp/reachops-pr18-client-entry-target-tests.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
   - Campaign regression comparison:
-    - branch `codex/p4-operator-controls-ui-mapping`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-pr18-run-session-checkpoint-campaign.log`.
-    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-pr18-run-session-checkpoint-campaign.log`.
-    - comparison `/tmp/reachops-pr18-run-session-checkpoint-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
-  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr18-run-session-checkpoint-operator-pressure.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, summary `passed=47`, `pending_external_validation=3`, `failed=4`; `headless_updates_run_session_checkpoints=true`; output `/tmp/reachops-pr18-run-session-checkpoint-delivery-audit.json`.
-  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr18-run-session-checkpoint-goal-delivery-runner.json`.
-  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, local final failures remain 2; output `/tmp/reachops-pr18-run-session-checkpoint-goal-status-report.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr18-run-session-checkpoint-package-check.json`.
-  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr18-run-session-checkpoint-final-gate.json`.
-  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr18-run-session-checkpoint-cleanliness.json`.
-  - `git diff --check`: passed; log `/tmp/reachops-pr18-run-session-checkpoint-diff-check.log`.
+    - branch `codex/p4-operator-controls-ui-mapping`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-pr18-client-entry-campaign.log`.
+    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-pr18-client-entry-campaign.log`.
+    - comparison `/tmp/reachops-pr18-client-entry-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr18-client-entry-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, summary `passed=48`, `pending_external_validation=3`, `failed=3`; client entrypoint and responsive toolbar checks now pass; output `/tmp/reachops-pr18-client-entry-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; blockers include Mac ixBrowser/API loop readiness, missing Windows artifacts, and pending authorized execution; output `/tmp/reachops-pr18-client-entry-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`; output `/tmp/reachops-pr18-client-entry-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr18-client-entry-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr18-client-entry-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr18-client-entry-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-pr18-client-entry-diff-check.log`.
 - Remaining blockers:
-  - Delivery audit still has 4 failed local checks: campaign funnel isolation, web API acquisition chain, web runtime API smoke, and web button JS/API feedback.
+  - Delivery audit still has 3 failed local checks: campaign funnel isolation, Web panel runtime API smoke, and Web button JS/API feedback.
+  - Current Mac goal-delivery runner also reports ixBrowser Local API / group freshness / latest run completion as not ready in this environment.
   - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
   - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
 

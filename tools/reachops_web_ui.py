@@ -2467,7 +2467,7 @@ def html_page() -> bytes:
     .taskForm {{ display:grid; gap:12px; min-width:0; }}
     .taskForm label {{ min-width:0; }}
     .taskParams {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(176px,1fr)); gap:10px; align-items:end; min-width:0; }}
-    .taskActions {{ display:grid; grid-template-columns:minmax(180px,1fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
+    .taskActions {{ display:grid; grid-template-columns:minmax(140px,.9fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
     .secondaryActions {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding-top:2px; }}
     .secondaryActions button {{ height:32px; padding:0 10px; font-size:12px; color:var(--muted); background:#20262b; }}
     label {{ display:grid; gap:6px; color:var(--muted); font-size:12px; }}
