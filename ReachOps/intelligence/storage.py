@@ -2070,10 +2070,16 @@ class GrowthStorage:
     ) -> str:
         now = utc_now_iso()
         item_id = new_id("oe")
-        run_id = self._active_run_id()
         evidence_path = evidence_path or self._execution_evidence_uri(action_id, profile_id, error_code or status or "recorded")
         risk_gate_json = json.dumps(risk_gate or {}, ensure_ascii=False) if isinstance(risk_gate, dict) else ""
         with self.connect() as conn:
+            action_row = conn.execute("SELECT run_id, batch_id FROM action_queue WHERE id=?", (action_id,)).fetchone()
+            if action_row:
+                run_id = str(action_row["run_id"] or "").strip()
+                batch_id = str(action_row["batch_id"] or "").strip()
+            else:
+                run_id = self._active_run_id()
+                batch_id = self._active_batch_id()
             conn.execute(
                 """
                 INSERT INTO outreach_executions
@@ -2098,7 +2104,7 @@ class GrowthStorage:
                     error_code,
                     error_message,
                     risk_gate_json,
-                    self._active_batch_id(),
+                    batch_id,
                     now if status in {"running", "completed", "success", "failed", "skipped", "account_switched"} else None,
                     now if status in {"completed", "success", "failed", "skipped", "account_switched"} else None,
                     now,

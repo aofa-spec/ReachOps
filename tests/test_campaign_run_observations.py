@@ -634,6 +634,101 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(first_executions[0]["evidence_path"], f"/tmp/reachops/redacted/{first.run_id}.png")
         self.assertEqual(second_executions[0]["evidence_path"], f"/tmp/reachops/redacted/{second.run_id}.png")
 
+    def test_execution_evidence_traceability_follows_action_run_when_active_batch_changes(self):
+        campaign = self.storage.create_campaign("keyword", "serum")
+        first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+        second = self.storage.create_collection_batch(1, profile_group="CA", campaign_id=campaign.id)
+
+        self.storage.set_active_collection_batch(first.id)
+        candidate, _created = self.storage.upsert_candidate(
+            CandidateUser(
+                id="candidate-first",
+                content_id="content-first",
+                username="buyer_first",
+                profile_url="https://example.test/@buyer_first",
+                comment_text="where can I buy this",
+                qualify_score=84,
+                intent_tags=["buy"],
+            )
+        )
+        lead_id, _created = self.storage.upsert_operation_lead(
+            candidate.id,
+            "high_intent",
+            "high",
+            84,
+            "first run buying signal",
+        )
+        action_id, _created = self.storage.upsert_action_queue_item(
+            ActionQueueItem(
+                id="action-first",
+                lead_id=lead_id,
+                action_type="comment_reply",
+                target_username="buyer_first",
+                target_url="https://example.test/video/first",
+            )
+        )
+
+        self.storage.set_active_collection_batch(second.id)
+        execution_id = self.storage.create_outreach_execution(
+            action_id,
+            "comment_reply",
+            "buyer_first",
+            status="success",
+            profile_id="profile-first",
+            evidence_path=f"/tmp/reachops/redacted/{first.run_id}-comment.png",
+            execution_mode="preflight",
+            submission_state="not_attempted",
+            verification_state="not_required",
+            evidence_verified=False,
+        )
+
+        first_trace = self.storage.list_observations_for_run(first.run_id)
+        second_trace = self.storage.list_observations_for_run(second.run_id)
+        self.assertEqual([row["id"] for row in first_trace["outreach_executions"]], [execution_id])
+        self.assertEqual(second_trace["outreach_executions"], [])
+        execution = first_trace["outreach_executions"][0]
+        self.assertEqual(execution["run_id"], first.run_id)
+        self.assertEqual(execution["batch_id"], first.id)
+        self.assertEqual(execution["evidence_path"], f"/tmp/reachops/redacted/{first.run_id}-comment.png")
+        self.assertEqual(execution["execution_mode"], "preflight")
+        self.assertEqual(execution["submission_state"], "not_attempted")
+        self.assertEqual(execution["verification_state"], "not_required")
+        self.assertEqual(execution["evidence_verified"], 0)
+
+        self.storage.set_active_collection_batch(first.id)
+        legacy_action_id, _created = self.storage.upsert_action_queue_item(
+            ActionQueueItem(
+                id="action-legacy-blank-run",
+                lead_id=lead_id,
+                action_type="follow_review",
+                target_username="buyer_first",
+                target_url="https://example.test/@buyer_first",
+            )
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE action_queue SET run_id='' WHERE id=?", (legacy_action_id,))
+
+        self.storage.set_active_collection_batch(second.id)
+        legacy_execution_id = self.storage.create_outreach_execution(
+            legacy_action_id,
+            "follow_review",
+            "buyer_first",
+            status="success",
+            profile_id="profile-legacy",
+            evidence_path="/tmp/reachops/redacted/legacy-action.png",
+            execution_mode="preflight",
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            legacy_execution = conn.execute(
+                "SELECT run_id, batch_id, evidence_path FROM outreach_executions WHERE id=?",
+                (legacy_execution_id,),
+            ).fetchone()
+        self.assertEqual(legacy_execution["run_id"], "")
+        self.assertEqual(legacy_execution["batch_id"], first.id)
+        self.assertEqual(legacy_execution["evidence_path"], "/tmp/reachops/redacted/legacy-action.png")
+        self.assertNotIn(legacy_execution_id, [row["id"] for row in self.storage.list_observations_for_run(second.run_id)["outreach_executions"]])
+
     def test_migration_compatibility_uses_legacy_run_ids_without_rewriting_old_entities(self):
         old_db = Path(self.tmpdir.name) / "legacy.sqlite3"
         with sqlite3.connect(old_db) as conn:
