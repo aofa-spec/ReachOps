@@ -99,7 +99,23 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `ReachOps/launcher.py`, `ReachOpsApp.py`, root/ReachOps READMEs, and Mac `.command` entrypoints now treat the local Web console as the default client surface.
   - Legacy Tk remains available only as an explicit diagnostic path through `--legacy-tk` or `REACHOPS_LEGACY_TK=1`; missing Web launcher failures no longer silently fall back to Tk.
   - `tools/reachops_web_ui.py` now satisfies the responsive toolbar/metric grid contract checked by delivery audit and runtime smoke.
+  - `tools/reachops_web_ui.py` now renders ixBrowser group-count details with `count_source`, disables Start when the current group is blocked by account gate and repair has not been confirmed, and shows stale account-repair guidance before allowing a new precheck.
+  - `tools/reachops_web_panel_dom_smoke.py` now reports account-gate diagnostic fields when DOM feedback checks fail.
 - Tests and checks:
+  - DOM gate rerun: `/usr/bin/python3 -m py_compile tools/reachops_web_ui.py tools/reachops_web_panel_dom_smoke.py tests/test_operator_controls_mapping.py`: passed, exit `0`; log `/tmp/reachops-pr18-dom-gate-pycompile-final.log`.
+  - DOM gate rerun: `/usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed, `status=passed`, `failed_checks=[]`, exit `0`; output `/tmp/reachops-pr18-dom-gate-dom-smoke.log`.
+  - DOM gate rerun: `/usr/bin/python3 -m unittest -v tests.test_operator_controls_mapping`: passed, exit `0`; log `/tmp/reachops-pr18-dom-gate-operator-controls-final.log`.
+  - DOM gate rerun: `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-pr18-dom-gate-truth.log`.
+  - DOM gate rerun: `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-pr18-dom-gate-campaign.log`.
+  - DOM gate baseline comparison: `origin/main` at `887f706` also ran 230 tests with 14 failures and 1 error; comparison artifact `/tmp/reachops-pr18-dom-gate-baseline-comparison.json`, `new_failures=[]`, `new_errors=[]`.
+  - DOM gate rerun: `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-pr18-dom-gate-operator-pressure.json`.
+  - DOM gate rerun: `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, summary `passed=49`, `pending_external_validation=3`, `failed=2`; Web DOM button feedback is no longer failed; output `/tmp/reachops-pr18-dom-gate-delivery-audit.json`.
+  - DOM gate rerun: `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr18-dom-gate-goal-delivery-runner.json`.
+  - DOM gate rerun: `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`; output `/tmp/reachops-pr18-dom-gate-goal-status-report.json`.
+  - DOM gate rerun: `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr18-dom-gate-package-check.json`.
+  - DOM gate rerun: `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr18-dom-gate-final-gate.json`.
+  - DOM gate rerun: `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`, `forbidden_count=0`; output `/tmp/reachops-pr18-dom-gate-cleanliness.json`.
+  - DOM gate rerun: `git diff --check`: passed, exit `0`; log `/tmp/reachops-pr18-dom-gate-diff-check.log`.
   - `/usr/bin/python3 -m py_compile ReachOps/launcher.py tools/reachops_web_ui.py tests/test_launcher.py tests/test_operator_controls_mapping.py`: passed; log `/tmp/reachops-pr18-client-entry-pycompile.log`.
   - `/usr/bin/python3 -m unittest -v tests.test_launcher tests.test_operator_controls_mapping`: passed, 11 tests; log `/tmp/reachops-pr18-client-entry-target-tests.log`.
   - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
@@ -116,7 +132,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr18-client-entry-cleanliness.json`.
   - `git diff --check`: passed; log `/tmp/reachops-pr18-client-entry-diff-check.log`.
 - Remaining blockers:
-  - Delivery audit still has 3 failed local checks: campaign funnel isolation, Web panel runtime API smoke, and Web button JS/API feedback.
+  - Delivery audit still has 2 failed local checks on this branch: campaign funnel isolation and Web panel runtime API smoke. PR #12/#19 and PR #20 address those surfaces separately.
   - Current Mac goal-delivery runner also reports ixBrowser Local API / group freshness / latest run completion as not ready in this environment.
   - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
   - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
