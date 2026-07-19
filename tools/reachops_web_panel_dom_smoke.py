@@ -32,6 +32,7 @@ def run_dom_smoke() -> dict:
 const vm = require('node:vm');
 const calls = [];
 const elements = {{}};
+const storage = {{}};
 const responses = {{
   '/api/logs': {{running:false, paused:false, started_at:0, elapsed_seconds:0, last_stage:'', exit_code:null, run_session_state:'BLOCKED', run_session:{{schema_version:'reachops.run_session.v1', state:'BLOCKED'}}, evidence_bundle:{{schema_version:'reachops.evidence_bundle.v1', page_state_summary:{{schema_version:'reachops.page_state_summary.v1', snapshot_count:2, blocking_count:1, unknown_count:1}}, repair_summary:{{schema_version:'reachops.repair_summary.v1', decision_count:1, block_count:1, audit_events:[{{executable_steps:[{{step:'capture_unknown_state_bundle'}},{{step:'record_offline_learning_candidate'}}]}}]}}, risk_summary:{{schema_version:'reachops.risk_summary.v1', decision_count:1, blocked_count:1, block_execution_count:1, risk_action_count:1, human_review_required_count:1, decisions:[{{risk_actions:[{{step:'block_execution'}}]}}]}}, account_health_summary:{{schema_version:'reachops.account_health_summary.v1', event_count:2, cooldown_event_count:1, forced_cooldown_count:1, consecutive_failure_cooldown_count:1}}, run_recovery_summary:{{schema_version:'reachops.run_recovery_summary.v1', recovered:true, recovery_count:1, latest_reason:'PROCESS_INTERRUPTED', last_stage:'COLLECT profile=profile-1', result_error:'process_interrupted', no_ai_token_used:true}}, autonomous_preflight_reconciliation:{{schema_version:'reachops.autonomous_preflight_reconciliation.v1', status:'partially_matched', matched_route_count:1, unobserved_route_count:1, actual_page_states:['UNKNOWN_PAGE_STATE'], actual_risk_reasons:['LIVE_SUBMIT_NOT_AUTHORIZED'], risk_gate_aligned:true}}, autonomy_readiness_summary:{{schema_version:'reachops.autonomy_readiness_summary.v1', ready:false, passed_count:6, failed_count:2, failed_checks:['page_state_sensed','risk_gate_audited']}}, product_capability_summary:{{schema_version:'reachops.product_capability_summary.v1', ready:false, passed_count:3, failed_count:5, failed_phases:['phase_4_page_state_sensing','phase_6_account_risk_gate'], phases:[{{key:'phase_3_autonomous_execution', passed:true}},{{key:'phase_4_page_state_sensing', passed:false}}]}}}}, lines:[]}},
   '/api/snapshot': {{summary:{{}}, campaign_funnel:{{}}, operations:{{counts:{{}}, lead_view:[], outreach_view:[], profile_queue:[], collection_tasks:[], outreach_executions:[], action_queue:[]}}, candidate_users:[], action_queue:[], profile_health:[], report_artifacts:[]}},
@@ -45,6 +46,36 @@ const responses = {{
     {{name:'Canada', label:'Canada / 2账号', count:2, count_known:true, count_label:'2账号', count_status:'known', count_source:'ixbrowser_profile_list'}},
     {{name:'United States', label:'United States / 3账号', count:3, count_known:true, count_label:'3账号', count_status:'known', count_source:'ixbrowser_profile_list'}}
   ], profile_count:5, known_group_count:2, counts_resolved:true}}
+}};
+responses['/api/locales'] = {{
+  status:'ok',
+  schema_version:'reachops.web_ui_locales.v1',
+  default_locale:'zh-CN',
+  supported_locales:['zh-CN','en-US'],
+  resources:{{
+    'zh-CN':{{
+      'app.title':'ReachOps 本地客户端控制台',
+      'field.target':'推广目标',
+      'field.group':'账号分组',
+      'field.mode':'执行模式',
+      'status.account_gate_enabled':'账号门禁已启用',
+      'action.start':'开始获客',
+      'action.refresh':'刷新',
+      'mode.live_comment':'授权真实评论'
+    }},
+    'en-US':{{
+      'app.title':'ReachOps Local Client Console',
+      'field.target':'Promotion target',
+      'field.group':'Account group',
+      'field.mode':'Execution mode',
+      'status.account_gate_enabled':'Account gate enabled',
+      'action.start':'Start acquisition',
+      'action.refresh':'Refresh',
+      'mode.live_comment':'Authorized live comment'
+    }}
+  }},
+  no_browser_started:true,
+  no_submit:true
 }};
 
 function makeClassList(el) {{
@@ -81,7 +112,7 @@ function getElement(id) {{
   if (!elements[id]) elements[id] = makeElement(id);
   return elements[id];
 }}
-['target','sourceType','group','mode','volume','profiles','commentText','liveConfirm','accountRepairConfirmed','ixbrowserApiPort'].forEach(getElement);
+['target','sourceType','group','mode','volume','profiles','commentText','liveConfirm','accountRepairConfirmed','ixbrowserApiPort','localeSelect'].forEach(getElement);
 elements.target.value = 'anti aging serum';
 elements.sourceType.value = 'keyword'; elements.sourceType.selectedOptions = [{{textContent:'关键词搜索'}}];
 elements.group.value = 'United States';
@@ -90,6 +121,16 @@ elements.volume.value = 'quick'; elements.volume.selectedOptions = [{{textConten
 elements.profiles.value = '3';
 elements.commentText.value = 'Hi';
 elements.ixbrowserApiPort.value = '53201';
+elements.localeSelect.value = 'zh-CN';
+const i18nNodes = [
+  Object.assign(makeElement('i18n-app-title'), {{dataset:{{i18n:'app.title'}}, textContent:'ReachOps 本地客户端控制台'}}),
+  Object.assign(makeElement('i18n-field-target'), {{dataset:{{i18n:'field.target'}}, textContent:'推广目标'}}),
+  Object.assign(makeElement('i18n-field-group'), {{dataset:{{i18n:'field.group'}}, textContent:'账号分组'}}),
+  Object.assign(makeElement('i18n-field-mode'), {{dataset:{{i18n:'field.mode'}}, textContent:'执行模式'}}),
+  Object.assign(elements.start || getElement('start'), {{dataset:{{i18n:'action.start'}}, textContent:'开始获客'}}),
+  Object.assign(elements.refreshGroupsInline || getElement('refreshGroupsInline'), {{dataset:{{i18n:'action.refresh'}}, textContent:'刷新'}}),
+  Object.assign(makeElement('i18n-mode-live-comment'), {{dataset:{{i18n:'mode.live_comment'}}, textContent:'授权真实评论'}}),
+];
 
 async function fetchMock(url, options = {{}}) {{
   const body = options.body ? JSON.parse(options.body) : null;
@@ -194,9 +235,10 @@ async function fetchMock(url, options = {{}}) {{
 }}
 
 const documentMock = {{
+  documentElement: {{lang:'zh-CN'}},
   getElementById: getElement,
   createElement: tag => makeElement('created-' + tag + '-' + Object.keys(elements).length),
-  querySelectorAll: selector => selector === '.tab' ? [makeElement('tab1'), makeElement('tab2')] : [],
+  querySelectorAll: selector => selector === '.tab' ? [makeElement('tab1'), makeElement('tab2')] : (selector === '[data-i18n]' ? i18nNodes : []),
   addEventListener: () => {{}},
 }};
 
@@ -214,6 +256,11 @@ const context = {{
   RegExp,
   JSON,
   Date,
+  localStorage: {{
+    getItem: key => Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : null,
+    setItem: (key, value) => {{ storage[key] = String(value); }},
+    removeItem: key => {{ delete storage[key]; }},
+  }},
 }};
 context.window = context;
 context.__openedUrls = [];
@@ -223,6 +270,38 @@ vm.createContext(context);
 
 (async () => {{
   await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  const localeInitial = {{
+    lang: documentMock.documentElement.lang,
+    appTitle: i18nNodes[0].textContent,
+    targetLabel: i18nNodes[1].textContent,
+    startText: elements.start.textContent,
+    refreshText: elements.refreshGroupsInline.textContent,
+    liveModeText: i18nNodes[6].textContent,
+    stored: storage['reachops.ui.locale'] || ''
+  }};
+  elements.localeSelect.value = 'en-US';
+  elements.localeSelect.onchange();
+  const localeEnglish = {{
+    lang: documentMock.documentElement.lang,
+    appTitle: i18nNodes[0].textContent,
+    targetLabel: i18nNodes[1].textContent,
+    startText: elements.start.textContent,
+    refreshText: elements.refreshGroupsInline.textContent,
+    liveModeText: i18nNodes[6].textContent,
+    stored: storage['reachops.ui.locale'] || ''
+  }};
+  elements.localeSelect.value = 'zh-CN';
+  elements.localeSelect.onchange();
+  const localeChinese = {{
+    lang: documentMock.documentElement.lang,
+    appTitle: i18nNodes[0].textContent,
+    targetLabel: i18nNodes[1].textContent,
+    startText: elements.start.textContent,
+    refreshText: elements.refreshGroupsInline.textContent,
+    liveModeText: i18nNodes[6].textContent,
+    stored: storage['reachops.ui.locale'] || ''
+  }};
   await elements.refreshGroups.onclick();
   elements.group.value = 'Canada';
   elements.mode.value = 'live_comment';
@@ -418,6 +497,9 @@ vm.createContext(context);
   await new Promise(resolve => setImmediate(resolve));
   const result = {{
     calls,
+    localeInitial,
+    localeEnglish,
+    localeChinese,
     unconfirmedLiveRequestCount: afterUnconfirmedLive - beforeUnconfirmedLive,
     unconfirmedLiveTitle,
     controlTitle,
@@ -610,6 +692,23 @@ vm.createContext(context);
     )
     checks["html_group_refresh_button_next_to_select"] = 'id="refreshGroupsInline"' in html and 'class="groupField"' in html and 'class="groupControl"' in html and "$('refreshGroupsInline').onclick" in html and "refreshIxBrowserStatus(); refreshGroups();" in html and "待读取账号数" not in html
     checks["html_selected_group_quantity_is_first_screen_visible"] = 'id="selectedGroupBar"' in html and 'id="selectedGroupCount"' in html and '可读取账号数' in html and "updateSelectedGroupQuantity();" in html
+    checks["locale_selector_switches_first_viewport_text_in_dom"] = (
+        payload.get("localeInitial", {}).get("lang") == "zh-CN"
+        and payload.get("localeEnglish", {}).get("lang") == "en-US"
+        and payload.get("localeEnglish", {}).get("appTitle") == "ReachOps Local Client Console"
+        and payload.get("localeEnglish", {}).get("targetLabel") == "Promotion target"
+        and payload.get("localeEnglish", {}).get("startText") == "Start acquisition"
+        and payload.get("localeEnglish", {}).get("refreshText") == "Refresh"
+        and payload.get("localeEnglish", {}).get("liveModeText") == "Authorized live comment"
+        and payload.get("localeEnglish", {}).get("stored") == "en-US"
+        and payload.get("localeChinese", {}).get("lang") == "zh-CN"
+        and payload.get("localeChinese", {}).get("appTitle") == "ReachOps 本地客户端控制台"
+        and payload.get("localeChinese", {}).get("targetLabel") == "推广目标"
+        and payload.get("localeChinese", {}).get("startText") == "开始获客"
+        and payload.get("localeChinese", {}).get("stored") == "zh-CN"
+        and any(row.get("url") == "/api/locales" for row in calls)
+        and not any(row.get("url") == "/api/start" for row in calls if (row.get("body") or {}).get("locale_switch_probe"))
+    )
     checks["html_local_ai_console_is_visible_and_deterministic"] = (
         'id="aiConsolePanel"' in html
         and 'id="aiConsoleInput"' in html
@@ -982,6 +1081,11 @@ vm.createContext(context);
             "decision_body": payload.get("hourglassDecisionBody"),
             "particles_sample": str(payload.get("hourglassParticles") or "")[:1600],
         },
+        "locale_debug": {
+            "initial": payload.get("localeInitial"),
+            "english": payload.get("localeEnglish"),
+            "chinese": payload.get("localeChinese"),
+        },
         "init_notice_title": payload.get("initNoticeTitle"),
         "init_notice_body": payload.get("initNoticeBody"),
         "mvp_notice_title": payload.get("mvpNoticeTitle"),
@@ -998,6 +1102,8 @@ vm.createContext(context);
             "client_delivery_only_start_title": payload.get("clientDeliveryOnlyGateStartTitle"),
             "client_delivery_only_gate_state": payload.get("clientDeliveryOnlyGateStateText"),
             "account_gate_start_disabled": payload.get("accountGateStartDisabled"),
+            "account_repair_apply_disabled": payload.get("accountRepairApplyDisabled"),
+            "account_repair_apply_title": payload.get("accountRepairApplyTitle"),
             "account_gate_start_title": payload.get("accountGateStartTitle"),
             "account_gate_state": payload.get("accountGateStateText"),
             "account_gate_acceptance_blockers": payload.get("accountGateAcceptanceBlockers"),
@@ -1010,6 +1116,8 @@ vm.createContext(context);
             "account_gate_blocked_title": payload.get("accountGateBlockedTitle"),
             "account_gate_blocked_actions": payload.get("accountGateBlockedActions"),
             "account_gate_different_group_start_disabled": payload.get("accountGateDifferentGroupStartDisabled"),
+            "account_gate_different_group_start_title": payload.get("accountGateDifferentGroupStartTitle"),
+            "account_gate_different_group_state": payload.get("accountGateDifferentGroupStateText"),
             "account_gate_same_group_start_disabled_after_switch": payload.get("accountGateSameGroupStartDisabledAfterSwitch"),
             "account_repair_apply_title_after_click": payload.get("accountRepairApplyTitleAfterClick"),
             "account_repair_apply_body_after_click": payload.get("accountRepairApplyBodyAfterClick"),
