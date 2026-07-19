@@ -15,7 +15,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
 | P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | P1 runtime ledger storage, runtime/lead-pipeline wiring, and scoped report/export surfacing exist on branch `codex/p4-web-runtime-smoke`: `campaign_runs`, `candidate_observations`, `evidence_artifacts`, and immutable/versioned `lead_decisions`; collection batches bind to campaign runs; lead/action/execution rows can carry `run_id`; reports expose `runtime_scope` and `runtime_traceability`; JSON/CSV/Markdown exports include campaign/run traceability; legacy migration keeps old `run_id` empty instead of fabricating run attribution; P1 focused tests passed on 2026-07-20 | Review P1 PR slice and merge without expanding LeadDecision lifecycle beyond traceability |
-| P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Windows Credential Manager secret-storage contract exists on branch `codex/p4-web-runtime-smoke`; license-state evaluator models active/current, revoked, expired, and 7-day grace while keeping grace out of live-submit readiness; encrypted `.reachops-backup` lightweight and full selected-evidence backup/restore contracts now cover customer password, manifest, integrity hashes, preview, wrong password, corrupted archive, interrupted restore rollback, unsafe path rejection, secret/cookie exclusions, lightweight raw-evidence exclusion, and full backup selected evidence inclusion; minimal external license refresh client contract now refreshes only license/device/version metadata over HTTPS and writes local activation status atomically without browser start, submit, or customer-data upload; focused P2 tests passed on 2026-07-20 | Complete Windows Credential Manager validation on Windows |
+| P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Windows Credential Manager secret-storage contract exists on branch `codex/p4-web-runtime-smoke`; secret redaction now fully masks values when `visible_tail=0`, closing a local reporting edge case; license-state evaluator models active/current, revoked, expired, and 7-day grace while keeping grace out of live-submit readiness; encrypted `.reachops-backup` lightweight and full selected-evidence backup/restore contracts now cover customer password, manifest, integrity hashes, preview, wrong password, corrupted archive, interrupted restore rollback, unsafe path rejection, secret/cookie exclusions, lightweight raw-evidence exclusion, and full backup selected evidence inclusion; minimal external license refresh client contract now refreshes only license/device/version metadata over HTTPS and writes local activation status atomically without browser start, submit, or customer-data upload; focused P2 tests passed on 2026-07-20 | Complete Windows Credential Manager validation on Windows |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, Python 3.9-compatible runtime smoke cleanup, customer-visible control evidence, campaign funnel isolation fixture truthfulness, Web-to-local-API execution-chain evidence, and goal delivery boundary reporting. Runtime smoke, DOM smoke, delivery audit, goal status, and campaign regression now pass locally; final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
@@ -823,11 +823,42 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No customer data, cookies, screenshots, raw DOM, credentials, local acceptance inputs, or SQLite customer runtime data was committed.
   - Final delivery remains blocked until a fresh local UI no-submit acceptance run exists, Windows artifacts are generated on Windows, Windows Credential Manager validation is completed, and authorized live evidence passes strict final gates.
 
+## Latest P2 secret-redaction boundary hardening
+
+- Date: `2026-07-20`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Harden the local secret-redaction boundary without creating new architecture, entering Windows packaging, EXE generation, installer generation, ixBrowser execution, or TikTok live-submit.
+- Code evidence:
+  - `ReachOps/security/credential_store.py` now treats `visible_tail=0` as a full-redaction request and returns only `*` characters with a minimum masked length.
+  - This closes the Python `text[-0:]` edge case where a zero visible tail could append the full secret to the masked prefix.
+  - `tests/test_reachops_security.py` adds a regression test proving the full secret and its tail are absent when zero visible characters are requested.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/security/credential_store.py tests/test_reachops_security.py`: passed.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_security`: passed, 13 tests.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 233 tests; log `/tmp/reachops-p2-redact-campaign.log`.
+  - Branch/main comparison: branch campaign regression has no failures or errors; therefore `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_client_delivery_check.py --json`: failed as expected with `status=not_started`, `readiness=not_started`, `failed_checks=["acceptance:ready"]`; output `/tmp/reachops-p2-redact-client-delivery.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p2-redact-goal-status.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p2-redact-package.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p2-redact-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; blocking scopes are `local_mvp`, `windows_final_artifacts`, and `external_authorized_execution`; output `/tmp/reachops-p2-redact-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`.
+  - `git diff --check`: passed; log `/tmp/reachops-p2-redact-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - No customer data, cookies, screenshots, raw DOM, credentials, local acceptance inputs, or SQLite customer runtime data was committed.
+  - P2 remains `IN_PROGRESS` until Windows Credential Manager behavior is validated on Windows.
+  - Final delivery remains blocked until a fresh local UI no-submit acceptance run exists, Windows artifacts are generated on Windows, Windows Credential Manager validation is completed, and authorized live evidence passes strict final gates.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.
 - Follow/DM evidence validators in no-submit fixtures.
-- Windows Credential Manager abstraction and unit tests.
+- Windows Credential Manager validation on Windows.
 - Encrypted backup format and restore tests.
 - License state machine and 7-day grace logic.
 - Localization resource extraction for `zh-CN` and `en-US`.

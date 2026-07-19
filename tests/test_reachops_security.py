@@ -41,6 +41,16 @@ class ReachOpsSecurityTests(unittest.TestCase):
         self.assertTrue(redacted.endswith("3456"))
         self.assertGreaterEqual(redacted.count("*"), 8)
 
+    def test_redact_secret_with_zero_visible_tail_hides_entire_secret(self) -> None:
+        secret = "sk-test-secret-zero-tail"
+        redacted = redact_secret(secret, visible_tail=0)
+
+        self.assertNotEqual(redacted, secret)
+        self.assertNotIn(secret, redacted)
+        self.assertNotIn("zero-tail", redacted)
+        self.assertEqual(set(redacted), {"*"})
+        self.assertGreaterEqual(len(redacted), 8)
+
     def test_non_windows_refuses_secret_persistence(self) -> None:
         if sys.platform.startswith("win"):
             self.skipTest("non-Windows refusal is covered on macOS/Linux")

@@ -42,6 +42,8 @@ def redact_secret(value: Any, visible_tail: int = 4) -> str:
     if not text:
         return ""
     tail_len = max(0, min(int(visible_tail or 0), len(text)))
+    if tail_len == 0:
+        return "*" * max(8, len(text))
     if len(text) <= tail_len:
         return "*" * len(text)
     return f"{'*' * max(8, len(text) - tail_len)}{text[-tail_len:]}"
