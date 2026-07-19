@@ -3529,7 +3529,7 @@ def html_page() -> bytes:
         ? Number((delivery.pending_scopes || []).length || (delivery.final_delivery_blockers || []).length || delivery.external_validation_pending || delivery.windows_final_artifacts_pending || 0)
         : 0;
       const blockedCount = Number((preflight.unavailable || 0) + (counts.touch_failed || 0) + ((acceptance.blockers || []).length || 0) + ((gate.failed_checks || []).length || 0) + pageBlockCount + (repair.block_count || 0) + (risk.block_execution_count || 0));
-      const liveCount = Number(counts.touch_success || funnel.execution_success || 0);
+      const liveCount = Number(Object.prototype.hasOwnProperty.call(counts, 'touch_success') ? counts.touch_success : 0);
       return [
         {{key:'source', label:'信息源', value:sourceCount, stage:'top'}},
         {{key:'user', label:'互动用户', value:userCount, stage:'top'}},
@@ -4050,6 +4050,9 @@ def html_page() -> bytes:
       }};
       return statusChip(map[stage] || stage, statusTone(stage));
     }}
+    function isLeadContacted(row) {{
+      return String(row.current_status || row.lifecycle_stage || '').toLowerCase() === 'contacted';
+    }}
     function outreachStatusLabel(row) {{
       const status = String(row.status || 'queued');
       const map = {{
@@ -4069,8 +4072,8 @@ def html_page() -> bytes:
     }}
     function applyLeadFilter(rows) {{
       if (leadFilter === 'high') return rows.filter(row => Number(row.score || 0) >= 70);
-      if (leadFilter === 'untouched') return rows.filter(row => !['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
-      if (leadFilter === 'touched') return rows.filter(row => ['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'untouched') return rows.filter(row => !isLeadContacted(row));
+      if (leadFilter === 'touched') return rows.filter(row => isLeadContacted(row));
       if (leadFilter === 'failed') return rows.filter(row => ['needs_retry','failed','retryable'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
       if (leadFilter === 'skipped') return rows.filter(row => ['rejected','skipped'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
       return rows;
@@ -4099,8 +4102,8 @@ def html_page() -> bytes:
       const counts = {{
         all: rows.length,
         high: rows.filter(row => Number(row.score || 0) >= 70).length,
-        untouched: rows.filter(row => !['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
-        touched: rows.filter(row => ['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        untouched: rows.filter(row => !isLeadContacted(row)).length,
+        touched: rows.filter(row => isLeadContacted(row)).length,
         failed: rows.filter(row => ['needs_retry','failed','retryable'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
         skipped: rows.filter(row => ['rejected','skipped'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
       }};
@@ -5447,7 +5450,8 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                     for row in conn.execute(
                         """
                         SELECT oe.id, oe.action_id, oe.target_username, oe.action_type, oe.profile_id,
-                               oe.status, oe.evidence_path, oe.error_code, oe.error_message,
+                               oe.status, oe.execution_mode, oe.submission_state, oe.verification_state,
+                               oe.evidence_verified, oe.evidence_path, oe.error_code, oe.error_message,
                                oe.risk_gate_json, oe.completed_at, oe.created_at,
                                aq.suggested_text, aq.reason AS action_reason, aq.target_url,
                                aq.last_error_code, aq.last_error_message,
@@ -5472,7 +5476,7 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
     counts["qualified_leads"] = len([row for row in rows["lead_view"] if safe_int(row.get("score") or row.get("qualify_score"), 0) >= 50])
     counts["actions"] = len(rows["action_queue"])
     counts["touched"] = len(rows["outreach_executions"])
-    counts["touch_success"] = len([row for row in rows["outreach_executions"] if str(row.get("status") or "") in {"success", "completed"}])
+    counts["touch_success"] = len([row for row in rows["outreach_executions"] if is_verified_live_execution(row)])
     counts["touch_failed"] = len([row for row in rows["outreach_executions"] if str(row.get("status") or "") == "failed"])
     counts["touch_skipped"] = len([row for row in rows["outreach_executions"] if str(row.get("status") or "") == "skipped"])
     success_rate = 0
@@ -5504,15 +5508,23 @@ def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str) -> list[dic
                cu.username, cu.profile_url, cu.comment_text, cu.qualify_score, cu.intent_tags,
                cu.source_path AS candidate_source_path,
                dc.video_url, dc.video_id, dc.caption,
-               COUNT(aq.id) AS action_count,
-               GROUP_CONCAT(aq.action_type) AS action_types,
-               SUM(CASE WHEN aq.status IN ('completed','success') THEN 1 ELSE 0 END) AS success_action_count,
-               SUM(CASE WHEN aq.status IN ('failed','retryable') THEN 1 ELSE 0 END) AS failed_action_count,
-               SUM(CASE WHEN aq.status='skipped' OR aq.status='rejected' THEN 1 ELSE 0 END) AS skipped_action_count
+               COUNT(DISTINCT aq.id) AS action_count,
+               GROUP_CONCAT(DISTINCT aq.action_type) AS action_types,
+               COUNT(DISTINCT CASE WHEN aq.status IN ('failed','retryable') THEN aq.id END) AS failed_action_count,
+               COUNT(DISTINCT CASE WHEN aq.status='skipped' OR aq.status='rejected' THEN aq.id END) AS skipped_action_count,
+               COUNT(DISTINCT CASE
+                   WHEN oe.execution_mode='live'
+                    AND oe.status='success'
+                    AND oe.submission_state='verified_success'
+                    AND oe.verification_state='verified'
+                    AND oe.evidence_verified=1
+                   THEN oe.id
+               END) AS verified_live_success_count
         FROM operation_leads ol
         LEFT JOIN candidate_users cu ON cu.id = ol.candidate_user_id
         LEFT JOIN discovered_contents dc ON dc.id = cu.content_id
         LEFT JOIN action_queue aq ON aq.lead_id = ol.id
+        LEFT JOIN outreach_executions oe ON oe.action_id = aq.id
         WHERE ol.batch_id=?
         GROUP BY ol.id
         ORDER BY ol.score DESC, ol.updated_at DESC, ol.created_at DESC
@@ -5706,7 +5718,8 @@ def human_execution_mode(mode: str) -> str:
 
 
 def operator_lead_status(row: dict) -> str:
-    if safe_int(row.get("success_action_count"), 0) > 0:
+    lifecycle_stage = str(row.get("lifecycle_stage") or row.get("status") or "")
+    if lifecycle_stage == "contacted" or safe_int(row.get("verified_live_success_count"), 0) > 0:
         return "contacted"
     if safe_int(row.get("failed_action_count"), 0) > 0:
         return "needs_retry"
@@ -5714,7 +5727,17 @@ def operator_lead_status(row: dict) -> str:
         return "skipped"
     if safe_int(row.get("action_count"), 0) > 0:
         return "queued"
-    return str(row.get("lifecycle_stage") or row.get("status") or "new")
+    return lifecycle_stage or "new"
+
+
+def is_verified_live_execution(row: dict) -> bool:
+    return bool(
+        str(row.get("execution_mode") or "") == "live"
+        and str(row.get("status") or "") == "success"
+        and str(row.get("submission_state") or "") == "verified_success"
+        and str(row.get("verification_state") or "") == "verified"
+        and safe_int(row.get("evidence_verified"), 0) == 1
+    )
 
 
 def outreach_operator_status(action: dict, execution: dict) -> str:
