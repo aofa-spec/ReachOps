@@ -2467,7 +2467,7 @@ def html_page() -> bytes:
     .taskForm {{ display:grid; gap:12px; min-width:0; }}
     .taskForm label {{ min-width:0; }}
     .taskParams {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(176px,1fr)); gap:10px; align-items:end; min-width:0; }}
-    .taskActions {{ display:grid; grid-template-columns:minmax(180px,1fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
+    .taskActions {{ display:grid; grid-template-columns:minmax(140px,.9fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
     .secondaryActions {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding-top:2px; }}
     .secondaryActions button {{ height:32px; padding:0 10px; font-size:12px; color:var(--muted); background:#20262b; }}
     label {{ display:grid; gap:6px; color:var(--muted); font-size:12px; }}
@@ -3068,17 +3068,17 @@ def html_page() -> bytes:
       const startBlockedReason = !groupListReady
         ? '请先刷新 ixBrowser 配置分组，并等待分组数量实时读取完成。'
         : blockedByAccountGate
-          ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；点击后会重新读取分组并自动预检筛选有效账号。`
+          ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；请先执行账号修复计划，或确认账号已修复后重新预检。`
           : '开始获客';
       if ($('start')) {{
-        $('start').disabled = !groupListReady;
+        $('start').disabled = !groupListReady || blockedByAccountGate;
         $('start').title = startBlockedReason;
       }}
       if ($('accountGateState')) {{
         $('accountGateState').textContent = blockedByAccountGate ? `${{blockedGroupLabel}} 账号阻断` : (pendingAccountRecheck ? `${{pendingGroupLabel}} 等待重新预检` : '账号门禁已启用');
         $('accountGateState').className = blockedByAccountGate ? 'pill danger' : (pendingAccountRecheck ? 'pill warn' : 'pill ok');
         $('accountGateState').title = blockedByAccountGate
-          ? `${{blockedGroupLabel}} 最近一次预检没有可用账号；再次开始获客会重新读取分组并重新预检账号。`
+          ? `${{blockedGroupLabel}} 最近一次预检没有可用账号；先隔离硬失败账号或确认修复后再重新预检。`
           : (pendingAccountRecheck
             ? `${{pendingGroupLabel}} 已执行账号修复，下一次开始获客会重新读取分组并重新预检账号。`
             : '启动前会校验分组和账号可用性，避免重复消耗启动次数。');
@@ -3086,7 +3086,7 @@ def html_page() -> bytes:
       if ($('applyAccountRepair')) {{
         $('applyAccountRepair').disabled = !blockedByAccountGate;
         $('applyAccountRepair').title = blockedByAccountGate
-          ? '按最新账号修复计划把硬失败账号移入封禁账号分组。'
+          ? '按最新账号修复计划，硬失败账号移入封禁账号分组。'
           : '仅在当前分组账号阻断时可执行。';
       }}
     }}
@@ -4013,8 +4013,24 @@ def html_page() -> bytes:
 	    function renderGroupDetails(groups, selectedName='') {{
 	      const box = $('groupDetails');
 	      if (!box) return;
-	      box.classList.remove('hasContent');
-	      box.innerHTML = '';
+	      const rows = (groups || []).map(group => {{
+	        const active = String(group.name || '').toLowerCase() === String(selectedName || '').toLowerCase();
+	        const countKnown = group.count_known === true;
+	        const countLabel = String(group.count_label || (countKnown ? `${{Number(group.count || 0)}}账号` : '数量未返回'));
+	        const source = String(group.count_source || (countKnown ? 'ixbrowser_profile_list' : 'ixbrowser_group_list'));
+	        const groupId = String(group.group_id || '-');
+	        return `<div class="groupItem${{active ? ' active' : ''}}">
+	          <div><div class="groupName">${{esc(group.name || '-')}}</div><div class="groupMeta">group_id=${{esc(groupId)}} / source=${{esc(source)}}</div></div>
+	          <div class="groupQty${{countKnown ? '' : ' unknown'}}">${{esc(countLabel)}}</div>
+	        </div>`;
+	      }});
+	      if (!rows.length) {{
+	        box.classList.remove('hasContent');
+	        box.innerHTML = '';
+	        return;
+	      }}
+	      box.classList.add('hasContent');
+	      box.innerHTML = rows.join('');
 	    }}
     function leadIntentChips(row) {{
       const labels = [];
@@ -4746,17 +4762,22 @@ def html_page() -> bytes:
 	        return;
       }}
       if (accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed()) {{
+        const staleAccountRepair = accountRepairApplyState && accountRepairApplyState.stale === true;
         showApiNotice(
-          '重新预检账号',
+          '账号修复后再启动',
           {{
-            status:'ready_for_account_recheck',
-            message:'当前分组上次账号预检未通过；本次会重新读取 ixBrowser 分组并自动筛选有效登录账号。',
+            status:'rejected',
+            error:'account_repair_required',
+            message: staleAccountRepair
+              ? '旧账号修复结果已失效；当前分组最近一次账号预检没有可用账号，已禁止重复启动。'
+              : '当前分组最近一次账号预检没有可用账号，已禁止重复启动。',
             account_repair_apply: accountRepairApplyState || {{}},
-            next_actions:['系统会跳过未登录、内核不匹配、代理异常账号。','如果仍无可用账号，本轮会生成新的阻断证据。']
+            next_actions:['按最新账号修复计划隔离硬失败账号。','查看最新账号修复计划后再确认重新预检。','确认至少 1 个账号能手动打开 TikTok 后，再勾选“已修复账号，允许重新预检”。']
           }},
-          'warning',
-          12000
+          'blocked',
+          30000
         );
+        return;
       }}
 	      if ($('liveConfirm').checked && $('mode').value !== 'live_comment') {{
 	        $('mode').value = 'live_comment';

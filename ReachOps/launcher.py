@@ -16,8 +16,8 @@ _LOCK_HANDLE = None
 _USAGE = """ReachOps unified client launcher.
 
 Usage:
-  python ReachOpsApp.py              Start the native Tk client.
-  python ReachOpsApp.py --web        Start the unified Web console.
+  python ReachOpsApp.py              Start the unified Web console.
+  python ReachOpsApp.py --legacy-tk  Start the legacy Tk diagnostic client.
   python ReachOpsApp.py --help       Show this help without starting clients.
 """
 
@@ -112,7 +112,7 @@ def _launch_web_client() -> int:
     self_check = root / "tools" / "reachops_mac_self_check.py"
     if not self_check.exists():
         print("ReachOps Web 控制台启动器不存在。", file=sys.stderr)
-        print("原生客户端不依赖该 Web 控制台；请直接运行：python ReachOpsApp.py", file=sys.stderr)
+        print("请确认 tools/reachops_mac_self_check.py 已随客户端一起安装。", file=sys.stderr)
         return 2
     command = [sys.executable, str(self_check), "--start-web"]
     completed = subprocess.run(command, cwd=str(root), text=True, capture_output=True, check=False)
@@ -167,13 +167,14 @@ def main(argv: list[str] | None = None) -> int:
     if any(arg in {"-h", "--help"} for arg in args):
         print(_USAGE.strip())
         return 0
-    allowed = {"--legacy-tk", "--web"}
+    allowed = {"--legacy-tk"}
     unknown = [arg for arg in args if arg not in allowed]
     if unknown:
         print(f"未知启动参数: {', '.join(unknown)}", file=sys.stderr)
         print(_USAGE.strip(), file=sys.stderr)
         return 2
-    web_requested = "--web" in args or os.environ.get("REACHOPS_WEB_CLIENT") == "1"
-    if web_requested:
-        return _launch_web_client()
-    return _launch_legacy_tk_client()
+    legacy_requested = "--legacy-tk" in args or os.environ.get("REACHOPS_LEGACY_TK") == "1"
+    if legacy_requested:
+        print("旧 Tk 仅作为诊断入口保留；默认客户端入口是 ReachOps 本地客户端控制台。")
+        return _launch_legacy_tk_client()
+    return _launch_web_client()
