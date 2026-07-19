@@ -1928,6 +1928,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(report["selected_profiles"][0]["proxy"]["proxy_password"], "***redacted***")
         self.assertNotIn("secret-user", json.dumps(report))
         self.assertEqual(report["proxy_type_counts"]["socks5"], 1)
+        reveal_report = build_ixbrowser_profile_metadata_report(
+            client=client,
+            profile_ids=["27273"],
+            reveal_secrets=True,
+        )
+        serialized_reveal_report = json.dumps(reveal_report)
+        self.assertTrue(reveal_report["secret_disclosure_disabled"])
+        self.assertEqual(reveal_report["selected_profiles"][0]["profile"]["name"], "***redacted***")
+        self.assertEqual(reveal_report["selected_profiles"][0]["proxy"]["proxy_user"], "***redacted***")
+        self.assertEqual(reveal_report["selected_profiles"][0]["proxy"]["proxy_password"], "***redacted***")
+        self.assertNotIn("acct@example.com", serialized_reveal_report)
+        self.assertNotIn("hidden-user", serialized_reveal_report)
+        self.assertNotIn("hidden-password", serialized_reveal_report)
+        self.assertNotIn("secret-user", serialized_reveal_report)
+        self.assertNotIn("secret-password", serialized_reveal_report)
 
     def test_ixbrowser_profile_metadata_report_syncs_selected_group_count_into_group_list(self):
         class FakeIXClient:
