@@ -17,7 +17,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
 | P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Windows Credential Manager secret-storage contract exists on branch `codex/p4-web-runtime-smoke`; license-state evaluator models active/current, revoked, expired, and 7-day grace while keeping grace out of live-submit readiness; encrypted `.reachops-backup` lightweight and full selected-evidence backup/restore contracts now cover customer password, manifest, integrity hashes, preview, wrong password, corrupted archive, interrupted restore rollback, unsafe path rejection, secret/cookie exclusions, lightweight raw-evidence exclusion, and full backup selected evidence inclusion; minimal external license refresh client contract now refreshes only license/device/version metadata over HTTPS and writes local activation status atomically without browser start, submit, or customer-data upload; focused P2 tests passed on 2026-07-20 | Complete Windows Credential Manager validation on Windows |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
-| P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, Python 3.9-compatible runtime smoke cleanup, customer-visible control evidence, campaign funnel isolation fixture truthfulness, and Web-to-local-API execution-chain evidence. Runtime smoke, DOM smoke, delivery audit, and goal status now pass locally; final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
+| P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, Python 3.9-compatible runtime smoke cleanup, customer-visible control evidence, campaign funnel isolation fixture truthfulness, Web-to-local-API execution-chain evidence, and goal delivery boundary reporting. Runtime smoke, DOM smoke, delivery audit, goal status, and campaign regression now pass locally; final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
 
 ## Next autonomous action
@@ -616,6 +616,37 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No customer business data is sent to the license refresh endpoint by the client contract.
   - No real TikTok action was executed.
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, Windows Credential Manager validation on Windows, and external authorized live validation.
+
+## Latest P4 goal delivery boundary report cleanup
+
+- Date: `2026-07-20`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Remove the last current-branch campaign regression failure in the goal delivery PM boundary report without entering Windows packaging, EXE generation, installer generation, ixBrowser execution, or TikTok live-submit.
+- Code evidence:
+  - `tools/reachops_goal_delivery_runner.py` now separates current Mac loop execution evidence from PM contract-definition evidence.
+  - When the local UI/loop is not running, the report keeps `local_mvp_ready=false` and `final_delivery_ready=false`, but still emits complete, auditable start-acquisition contract fields.
+  - The report now emits `start_contract_current_evidence_complete=false` when current runtime evidence is incomplete, and `start_contract_evidence_complete=true` only for the PM contract structure.
+  - Zero-action reports now include structured `no_action_reason.code=current_local_loop_not_ready`, so no action is inferred as submitted when the current local loop is not ready.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile tools/reachops_goal_delivery_runner.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-goal-report-boundary-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_goal_delivery_report_summarizes_pm_boundary`: passed; log `/tmp/reachops-goal-report-boundary-focused.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-goal-report-boundary-truth.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 233 tests; log `/tmp/reachops-goal-report-boundary-campaign.log`.
+  - `origin/main` campaign baseline: failed with 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-goal-report-boundary-campaign.log`.
+  - Baseline comparison artifact `/tmp/reachops-goal-report-boundary-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`; output `/tmp/reachops-goal-report-boundary-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-goal-report-boundary-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-goal-report-boundary-goal-status.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-goal-report-boundary-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-goal-report-boundary-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-goal-report-boundary-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-goal-report-boundary-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-goal-report-boundary-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - The report explicitly keeps current local MVP and final delivery not ready when current runtime evidence is incomplete.
   - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, Windows Credential Manager validation on Windows, and external authorized live validation.
 
 ## Non-blocking engineering work available
