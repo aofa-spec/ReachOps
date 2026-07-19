@@ -463,11 +463,18 @@ def inspect_public_reply_ui_surface() -> dict:
     return {
         "kpi_public_replies": "mPublicReplies" in web_ui and "public_replies" in web_ui,
         "kpi_qualified_replies": "mQualifiedReplies" in web_ui and "qualified_replies" in web_ui,
+        "kpi_conversions": "mConvertedLeads" in web_ui and "converted_leads" in web_ui,
+        "kpi_revenue": "mRevenueCents" in web_ui and "revenue_cents" in web_ui,
         "operations_public_reply_events": "\"public_reply_events\"" in web_ui and "FROM public_reply_events" in web_ui,
+        "operations_conversion_events": "\"conversion_events\"" in web_ui and "FROM conversion_events" in web_ui,
         "lead_reply_summary": "reply_summary" in web_ui and "公开回复" in web_ui,
+        "lead_conversion_summary": "conversion_summary" in web_ui and "转化" in web_ui,
         "lead_status_reply_received": "reply_received:'收到回复'" in web_ui,
         "lead_status_qualified": "qualified:'合格线索'" in web_ui,
+        "lead_status_converted": "converted:'已转化'" in web_ui,
+        "conversion_api_no_submit": "/api/conversion-event" in web_ui and "no_submit=true" in web_ui,
         "qualified_state_priority": "qualified_reply_count" in web_ui and 'return "qualified"' in web_ui,
+        "converted_state_priority": "converted_count" in web_ui and 'return "converted"' in web_ui,
     }
 
 
@@ -1643,6 +1650,7 @@ def inspect_exported_campaign_artifacts(
     actions_csv: str,
     executions_csv: str,
     public_replies_csv: str,
+    conversions_csv: str,
     action_report: str,
 ) -> dict:
     payload = {}
@@ -1650,12 +1658,15 @@ def inspect_exported_campaign_artifacts(
     action_header = []
     execution_header = []
     public_reply_header = []
+    conversion_header = []
     execution_csv_rows_data = []
     public_reply_csv_rows_data = []
+    conversion_csv_rows_data = []
     customer_rows = 0
     action_rows = 0
     execution_rows = 0
     public_reply_rows = 0
+    conversion_rows = 0
     action_report_payload = {}
     if campaign_report and Path(campaign_report).exists():
         with open(campaign_report, "r", encoding="utf-8") as fh:
@@ -1682,6 +1693,12 @@ def inspect_exported_campaign_artifacts(
             public_reply_header = list(reader.fieldnames or [])
             public_reply_csv_rows_data = list(reader)
             public_reply_rows = len(public_reply_csv_rows_data)
+    if conversions_csv and Path(conversions_csv).exists():
+        with open(conversions_csv, "r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            conversion_header = list(reader.fieldnames or [])
+            conversion_csv_rows_data = list(reader)
+            conversion_rows = len(conversion_csv_rows_data)
     if action_report and Path(action_report).exists():
         with open(action_report, "r", encoding="utf-8") as fh:
             action_report_payload = json.load(fh)
@@ -1713,11 +1730,27 @@ def inspect_exported_campaign_artifacts(
         "verified_contact",
         "classifier_version",
     }
+    required_conversion_columns = {
+        "campaign_id",
+        "run_id",
+        "batch_id",
+        "lead_id",
+        "action_id",
+        "public_reply_event_id",
+        "conversion_type",
+        "conversion_state",
+        "amount_cents",
+        "currency",
+        "idempotency_key",
+        "recorded_at",
+    }
     funnel = payload.get("funnel") or {}
     execution_summary = payload.get("execution_summary") if isinstance(payload.get("execution_summary"), dict) else {}
     outreach_executions = payload.get("outreach_executions") if isinstance(payload.get("outreach_executions"), list) else []
     public_reply_events = payload.get("public_reply_events") if isinstance(payload.get("public_reply_events"), list) else []
     public_reply_summary = payload.get("public_reply_summary") if isinstance(payload.get("public_reply_summary"), dict) else {}
+    conversion_events = payload.get("conversion_events") if isinstance(payload.get("conversion_events"), list) else []
+    conversion_summary = payload.get("conversion_summary") if isinstance(payload.get("conversion_summary"), dict) else {}
     json_execution_risk_fields_present = bool(outreach_executions) and all(
         "risk_gate_reason_code" in row and "risk_gate_summary" in row and "risk_gate_next_step" in row
         for row in outreach_executions
@@ -1744,6 +1777,17 @@ def inspect_exported_campaign_artifacts(
         for row in public_reply_events
         if isinstance(row, dict)
     )
+    conversion_json_traceability_present = bool(conversion_events) and all(
+        str((row or {}).get("campaign_id") or "").strip()
+        and str((row or {}).get("run_id") or "").strip()
+        and str((row or {}).get("batch_id") or "").strip()
+        and str((row or {}).get("lead_id") or "").strip()
+        and str((row or {}).get("action_id") or "").strip()
+        and str((row or {}).get("public_reply_event_id") or "").strip()
+        and str((row or {}).get("conversion_state") or "").strip()
+        for row in conversion_events
+        if isinstance(row, dict)
+    )
     return {
         "campaign_report_exists": bool(payload),
         "has_campaign": bool(payload.get("campaign")),
@@ -1765,6 +1809,11 @@ def inspect_exported_campaign_artifacts(
         "public_reply_summary_total_matches": int(public_reply_summary.get("total") or 0) == len(public_reply_events),
         "public_reply_summary_has_qualified": int(public_reply_summary.get("qualified") or 0) > 0,
         "public_reply_json_traceability_present": public_reply_json_traceability_present,
+        "conversion_events_present": isinstance(payload.get("conversion_events"), list),
+        "conversion_summary_present": bool(conversion_summary),
+        "conversion_summary_total_matches": int(conversion_summary.get("total") or 0) == len(conversion_events),
+        "conversion_summary_has_revenue": int(conversion_summary.get("revenue_cents") or 0) > 0,
+        "conversion_json_traceability_present": conversion_json_traceability_present,
         "execution_export_has_risk_gate_fields": {
             "risk_gate_reason_code",
             "risk_gate_summary",
@@ -1777,14 +1826,17 @@ def inspect_exported_campaign_artifacts(
         "action_csv_rows": action_rows,
         "execution_csv_rows": execution_rows,
         "public_reply_csv_rows": public_reply_rows,
+        "conversion_csv_rows": conversion_rows,
         "customer_header": customer_header,
         "action_header": action_header,
         "execution_header": execution_header,
         "public_reply_header": public_reply_header,
+        "conversion_header": conversion_header,
         "customer_columns_ok": required_customer_columns.issubset(set(customer_header)),
         "action_columns_ok": required_action_columns.issubset(set(action_header)),
         "execution_columns_ok": required_execution_columns.issubset(set(execution_header)),
         "public_reply_columns_ok": required_public_reply_columns.issubset(set(public_reply_header)),
+        "conversion_columns_ok": required_conversion_columns.issubset(set(conversion_header)),
         "action_report_exists": bool(action_report_payload),
         "action_report_has_summary": bool((action_report_payload.get("summary") or {}).get("total") is not None),
         "action_report_has_errors": isinstance((action_report_payload.get("summary") or {}).get("error_counts"), dict),
@@ -1873,7 +1925,7 @@ def run_audit(args) -> dict:
             evidence_verified=True,
         )
         service.storage.record_action_execution_result(str(export_action.get("id") or ""), export_execution_id, "completed")
-        PublicReplyMonitor(service.storage).ingest_replay_rows(
+        reply_result = PublicReplyMonitor(service.storage).ingest_replay_rows(
             [
                 {
                     "campaign_id": campaign_id,
@@ -1891,6 +1943,18 @@ def run_audit(args) -> dict:
                 }
             ]
         )
+        reply_event_id = str(((reply_result.get("events") or [{}])[0] or {}).get("id") or "")
+        service.storage.record_conversion_event(
+            lead_id=str(export_action.get("lead_id") or ""),
+            action_id=str(export_action.get("id") or ""),
+            public_reply_event_id=reply_event_id,
+            conversion_type="revenue",
+            amount_cents=12900,
+            currency="USD",
+            notes="redacted audit fixture revenue",
+            idempotency_key="delivery-audit-conversion",
+            recorded_at="2026-07-20T10:30:00Z",
+        )
     artifacts = workflow.export_campaign_artifacts(campaign_id=campaign_id)
     funnel = workflow.build_campaign_funnel(campaign_id=campaign_id, batch_id=batch_id)
     candidates = service.storage.list_candidates_with_content(batch_id=batch_id)
@@ -1904,6 +1968,7 @@ def run_audit(args) -> dict:
     actions_csv = artifacts.get("actions_csv_path", "")
     executions_csv = artifacts.get("executions_csv_path", "")
     public_replies_csv = artifacts.get("public_replies_csv_path", "")
+    conversions_csv = artifacts.get("conversions_csv_path", "")
     action_report = (action_result.get("report") or {}).get("json_path", "")
     exported_campaign_payload = {}
     if campaign_report and Path(campaign_report).exists():
@@ -1915,6 +1980,7 @@ def run_audit(args) -> dict:
         actions_csv,
         executions_csv,
         public_replies_csv,
+        conversions_csv,
         action_report,
     )
     live_fixture = run_live_authorized_fixture(args.target)
@@ -2321,13 +2387,18 @@ def run_audit(args) -> dict:
         check("全程有错误码和证据", bool(events), {"event_count": len(events), "error_counts": errors}),
         check(
             "可导出客户名单和执行报告",
-            all(Path(path).exists() for path in [campaign_report, customers_csv, actions_csv, executions_csv, public_replies_csv, action_report] if path),
+            all(
+                Path(path).exists()
+                for path in [campaign_report, customers_csv, actions_csv, executions_csv, public_replies_csv, conversions_csv, action_report]
+                if path
+            ),
             {
                 "campaign_report": campaign_report,
                 "customers_csv": customers_csv,
                 "actions_csv": actions_csv,
                 "executions_csv": executions_csv,
                 "public_replies_csv": public_replies_csv,
+                "conversions_csv": conversions_csv,
                 "action_report": action_report,
             },
         ),
@@ -2353,6 +2424,11 @@ def run_audit(args) -> dict:
                 and export_artifact_inspection.get("public_reply_summary_total_matches")
                 and export_artifact_inspection.get("public_reply_summary_has_qualified")
                 and export_artifact_inspection.get("public_reply_json_traceability_present")
+                and export_artifact_inspection.get("conversion_events_present")
+                and export_artifact_inspection.get("conversion_summary_present")
+                and export_artifact_inspection.get("conversion_summary_total_matches")
+                and export_artifact_inspection.get("conversion_summary_has_revenue")
+                and export_artifact_inspection.get("conversion_json_traceability_present")
                 and export_artifact_inspection.get("execution_export_has_risk_gate_fields")
                 and export_artifact_inspection.get("json_execution_risk_fields_present")
                 and export_artifact_inspection.get("json_execution_risk_values_present")
@@ -2360,10 +2436,12 @@ def run_audit(args) -> dict:
                 and int(export_artifact_inspection.get("customer_csv_rows") or 0) > 0
                 and int(export_artifact_inspection.get("action_csv_rows") or 0) > 0
                 and int(export_artifact_inspection.get("public_reply_csv_rows") or 0) > 0
+                and int(export_artifact_inspection.get("conversion_csv_rows") or 0) > 0
                 and export_artifact_inspection.get("execution_columns_ok")
                 and export_artifact_inspection.get("customer_columns_ok")
                 and export_artifact_inspection.get("action_columns_ok")
                 and export_artifact_inspection.get("public_reply_columns_ok")
+                and export_artifact_inspection.get("conversion_columns_ok")
                 and export_artifact_inspection.get("action_report_exists")
                 and export_artifact_inspection.get("action_report_has_summary")
                 and export_artifact_inspection.get("action_report_has_errors")

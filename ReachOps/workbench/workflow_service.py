@@ -249,6 +249,11 @@ class GrowthWorkflowService:
             campaign_id=campaign_id,
             batch_id=batch_filter,
         )
+        conversion_events = self.storage.list_conversion_events(
+            limit=1000,
+            campaign_id=campaign_id,
+            batch_id=batch_filter,
+        )
         execution_status_counts = self.storage.outreach_execution_status_counts(batch_filter)
         execution_error_counts: dict[str, int] = {}
         for row in outreach_executions:
@@ -263,6 +268,21 @@ class GrowthWorkflowService:
             "qualified": len([row for row in public_reply_events if str(row.get("qualification_state") or "") == "qualified"]),
             "verified_contact": len([row for row in public_reply_events if int(row.get("verified_contact") or 0) == 1]),
             "intent_confirmed": len([row for row in public_reply_events if int(row.get("intent_confirmed") or 0) == 1]),
+        }
+        conversion_summary = {
+            "total": len(conversion_events),
+            "converted": len([row for row in conversion_events if str(row.get("conversion_state") or "") == "converted"]),
+            "revenue_recorded": len(
+                [row for row in conversion_events if str(row.get("conversion_state") or "") == "revenue_recorded"]
+            ),
+            "won": len([row for row in conversion_events if str(row.get("conversion_state") or "") == "won"]),
+            "lost": len([row for row in conversion_events if str(row.get("conversion_state") or "") == "lost"]),
+            "opted_out": len([row for row in conversion_events if str(row.get("conversion_state") or "") == "opted_out"]),
+            "revenue_cents": sum(
+                int(row.get("amount_cents") or 0)
+                for row in conversion_events
+                if str(row.get("conversion_state") or "") in {"revenue_recorded", "won"}
+            ),
         }
         execution_summary = {
             "total": len(outreach_executions),
@@ -283,6 +303,7 @@ class GrowthWorkflowService:
         actions_csv_path = os.path.join(report_dir, f"reachops_actions_{file_key}.csv")
         executions_csv_path = os.path.join(report_dir, f"reachops_executions_{file_key}.csv")
         public_replies_csv_path = os.path.join(report_dir, f"reachops_public_replies_{file_key}.csv")
+        conversions_csv_path = os.path.join(report_dir, f"reachops_conversions_{file_key}.csv")
         with open(json_path, "w", encoding="utf-8") as fh:
             json.dump(
                 {
@@ -298,6 +319,8 @@ class GrowthWorkflowService:
                     "execution_summary": execution_summary,
                     "public_reply_events": public_reply_events,
                     "public_reply_summary": public_reply_summary,
+                    "conversion_events": conversion_events,
+                    "conversion_summary": conversion_summary,
                 },
                 fh,
                 ensure_ascii=False,
@@ -394,6 +417,30 @@ class GrowthWorkflowService:
             writer.writeheader()
             for row in public_reply_events:
                 writer.writerow({key: row.get(key, "") for key in fieldnames})
+        with open(conversions_csv_path, "w", encoding="utf-8", newline="") as fh:
+            fieldnames = [
+                "id",
+                "campaign_id",
+                "run_id",
+                "batch_id",
+                "lead_id",
+                "action_id",
+                "public_reply_event_id",
+                "conversion_type",
+                "conversion_state",
+                "amount_cents",
+                "currency",
+                "source",
+                "notes",
+                "idempotency_key",
+                "recorded_at",
+                "created_by",
+                "created_at",
+            ]
+            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in conversion_events:
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
         self.storage.log_event(
             "campaign_artifacts_exported",
             campaign_id,
@@ -404,10 +451,12 @@ class GrowthWorkflowService:
                 "actions_csv_path": actions_csv_path,
                 "executions_csv_path": executions_csv_path,
                 "public_replies_csv_path": public_replies_csv_path,
+                "conversions_csv_path": conversions_csv_path,
                 "candidate_count": len(candidate_users),
                 "action_count": len(action_queue),
                 "execution_count": len(outreach_executions),
                 "public_reply_count": len(public_reply_events),
+                "conversion_count": len(conversion_events),
             },
         )
         return {
@@ -417,6 +466,7 @@ class GrowthWorkflowService:
             "actions_csv_path": actions_csv_path,
             "executions_csv_path": executions_csv_path,
             "public_replies_csv_path": public_replies_csv_path,
+            "conversions_csv_path": conversions_csv_path,
             "csv_path": customers_csv_path,
         }
 

@@ -502,6 +502,25 @@ class GrowthStorage:
                     created_at TEXT NOT NULL,
                     UNIQUE(lead_id, action_id, reply_text, replied_at)
                 );
+                CREATE TABLE IF NOT EXISTS conversion_events (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    lead_id TEXT NOT NULL,
+                    action_id TEXT DEFAULT '',
+                    public_reply_event_id TEXT DEFAULT '',
+                    conversion_type TEXT NOT NULL,
+                    conversion_state TEXT NOT NULL,
+                    amount_cents INTEGER DEFAULT 0,
+                    currency TEXT DEFAULT '',
+                    source TEXT DEFAULT 'manual_operator',
+                    notes TEXT DEFAULT '',
+                    idempotency_key TEXT DEFAULT '',
+                    recorded_at TEXT NOT NULL,
+                    created_by TEXT DEFAULT 'operator',
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS checkpoints (
                     id TEXT PRIMARY KEY,
                     source_id TEXT NOT NULL,
@@ -628,6 +647,24 @@ class GrowthStorage:
                     "evidence_id": "TEXT DEFAULT ''",
                     "evidence_json": "TEXT DEFAULT '{}'",
                     "classifier_version": "TEXT DEFAULT ''",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "conversion_events",
+                {
+                    "campaign_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
+                    "batch_id": "TEXT DEFAULT ''",
+                    "action_id": "TEXT DEFAULT ''",
+                    "public_reply_event_id": "TEXT DEFAULT ''",
+                    "amount_cents": "INTEGER DEFAULT 0",
+                    "currency": "TEXT DEFAULT ''",
+                    "source": "TEXT DEFAULT 'manual_operator'",
+                    "notes": "TEXT DEFAULT ''",
+                    "idempotency_key": "TEXT DEFAULT ''",
+                    "recorded_at": "TEXT DEFAULT ''",
+                    "created_by": "TEXT DEFAULT 'operator'",
                 },
             )
             self._ensure_columns(
@@ -1708,7 +1745,11 @@ class GrowthStorage:
                        COUNT(DISTINCT CASE WHEN aq.status='completed' THEN aq.id END) AS completed_action_count,
                        COUNT(DISTINCT CASE WHEN aq.status IN ('failed', 'retryable') THEN aq.id END) AS retryable_action_count,
                        COUNT(DISTINCT pre.id) AS public_reply_count,
-                       COUNT(DISTINCT CASE WHEN pre.qualification_state='qualified' THEN pre.id END) AS qualified_reply_count
+                       COUNT(DISTINCT CASE WHEN pre.qualification_state='qualified' THEN pre.id END) AS qualified_reply_count,
+                       (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id) AS conversion_event_count,
+                       (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.conversion_state IN ('converted','revenue_recorded','won')) AS converted_count,
+                       (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.conversion_state='won') AS won_count,
+                       (SELECT COALESCE(SUM(ce.amount_cents), 0) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.conversion_state IN ('revenue_recorded','won')) AS revenue_cents
                 FROM operation_leads ol
                 LEFT JOIN candidate_users cu ON cu.id = ol.candidate_user_id
                 LEFT JOIN discovered_contents dc ON dc.id = cu.content_id
@@ -1945,8 +1986,215 @@ class GrowthStorage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def record_conversion_event(
+        self,
+        lead_id: str,
+        conversion_type: str = "conversion",
+        conversion_state: str = "",
+        amount_cents: int = 0,
+        currency: str = "",
+        notes: str = "",
+        action_id: str = "",
+        public_reply_event_id: str = "",
+        idempotency_key: str = "",
+        recorded_at: str = "",
+        created_by: str = "operator",
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+    ) -> tuple[str, bool]:
+        lead = str(lead_id or "").strip()
+        if not lead:
+            raise ValueError("lead_id is required")
+        conversion_kind = str(conversion_type or "conversion").strip().lower()
+        allowed_types = {"conversion", "revenue", "won", "lost", "opt_out"}
+        if conversion_kind not in allowed_types:
+            raise ValueError("unsupported conversion_type")
+        amount = max(0, int(amount_cents or 0))
+        state = str(conversion_state or "").strip().lower()
+        if not state:
+            if conversion_kind == "revenue" or amount > 0:
+                state = "revenue_recorded"
+            elif conversion_kind == "won":
+                state = "won"
+            elif conversion_kind == "lost":
+                state = "lost"
+            elif conversion_kind == "opt_out":
+                state = "opted_out"
+            else:
+                state = "converted"
+        allowed_states = {"converted", "revenue_recorded", "won", "lost", "opted_out"}
+        if state not in allowed_states:
+            raise ValueError("unsupported conversion_state")
+        now = utc_now_iso()
+        recorded = str(recorded_at or now)
+        idem = str(idempotency_key or "").strip()
+        with self.connect() as conn:
+            lead_row = conn.execute("SELECT * FROM operation_leads WHERE id=?", (lead,)).fetchone()
+            if not lead_row:
+                raise ValueError("lead_id does not exist")
+            action_row = None
+            if action_id:
+                action_row = conn.execute("SELECT * FROM action_queue WHERE id=? AND lead_id=?", (str(action_id), lead)).fetchone()
+                if not action_row:
+                    raise ValueError("action_id does not belong to lead_id")
+            reply_row = None
+            if public_reply_event_id:
+                reply_row = conn.execute(
+                    "SELECT * FROM public_reply_events WHERE id=? AND lead_id=?",
+                    (str(public_reply_event_id), lead),
+                ).fetchone()
+                if not reply_row:
+                    raise ValueError("public_reply_event_id does not belong to lead_id")
+            if idem:
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM conversion_events
+                    WHERE lead_id=? AND conversion_type=? AND idempotency_key=?
+                    """,
+                    (lead, conversion_kind, idem),
+                ).fetchone()
+                if existing:
+                    return existing["id"], False
+            lead_campaign = lead_row["campaign_id"] if "campaign_id" in lead_row.keys() else ""
+            lead_run = lead_row["run_id"] if "run_id" in lead_row.keys() else ""
+            lead_batch = lead_row["batch_id"] if "batch_id" in lead_row.keys() else ""
+            action_run = action_row["run_id"] if action_row and "run_id" in action_row.keys() else ""
+            action_batch = action_row["batch_id"] if action_row and "batch_id" in action_row.keys() else ""
+            reply_campaign = reply_row["campaign_id"] if reply_row and "campaign_id" in reply_row.keys() else ""
+            reply_run = reply_row["run_id"] if reply_row and "run_id" in reply_row.keys() else ""
+            reply_batch = reply_row["batch_id"] if reply_row and "batch_id" in reply_row.keys() else ""
+            resolved_run = str(run_id or reply_run or action_run or lead_run or "").strip()
+            resolved_batch = str(batch_id or reply_batch or action_batch or lead_batch or "").strip()
+            batch_row = None
+            if resolved_batch:
+                batch_row = conn.execute("SELECT campaign_id, run_id FROM collection_batches WHERE id=?", (resolved_batch,)).fetchone()
+            batch_campaign = batch_row["campaign_id"] if batch_row and "campaign_id" in batch_row.keys() else ""
+            batch_run = batch_row["run_id"] if batch_row and "run_id" in batch_row.keys() else ""
+            resolved_campaign = str(campaign_id or reply_campaign or lead_campaign or batch_campaign or "").strip()
+            resolved_run = str(resolved_run or batch_run or "").strip()
+            event_id = new_id("ce")
+            conn.execute(
+                """
+                INSERT INTO conversion_events
+                (id, campaign_id, run_id, batch_id, lead_id, action_id, public_reply_event_id,
+                 conversion_type, conversion_state, amount_cents, currency, source, notes,
+                 idempotency_key, recorded_at, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    resolved_campaign,
+                    resolved_run,
+                    resolved_batch,
+                    lead,
+                    str(action_id or (action_row["id"] if action_row else "") or ""),
+                    str(public_reply_event_id or ""),
+                    conversion_kind,
+                    state,
+                    amount,
+                    str(currency or ""),
+                    "manual_operator",
+                    str(notes or ""),
+                    idem,
+                    recorded,
+                    str(created_by or "operator"),
+                    now,
+                ),
+            )
+            self._refresh_lead_lifecycle(conn, lead)
+        self.log_event(
+            "conversion_event_recorded",
+            lead,
+            {
+                "conversion_type": conversion_kind,
+                "conversion_state": state,
+                "amount_cents": amount,
+                "currency": currency or "",
+                "idempotency_key": idem,
+            },
+        )
+        return event_id, True
+
+    def get_conversion_event(self, event_id: str) -> Optional[Dict[str, Any]]:
+        event = str(event_id or "").strip()
+        if not event:
+            return None
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM conversion_events WHERE id=?", (event,)).fetchone()
+        return dict(row) if row else None
+
+    def list_conversion_events(
+        self,
+        lead_id: str = "",
+        limit: int = 200,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+    ) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if lead_id:
+            filters.append("lead_id=?")
+            args.append(str(lead_id))
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(str(batch_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM conversion_events
+                {where}
+                ORDER BY recorded_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 200)]),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def _refresh_lead_lifecycle(self, conn, lead_id: str):
         if not lead_id:
+            return
+        terminal_row = conn.execute(
+            """
+            SELECT conversion_state
+            FROM conversion_events
+            WHERE lead_id=? AND conversion_state IN ('won','lost','opted_out')
+            ORDER BY recorded_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            (lead_id,),
+        ).fetchone()
+        if terminal_row:
+            stage = str(terminal_row["conversion_state"] or "")
+            conn.execute(
+                "UPDATE operation_leads SET lifecycle_stage=?, status=?, updated_at=? WHERE id=?",
+                (stage, stage, utc_now_iso(), lead_id),
+            )
+            return
+        conversion_row = conn.execute(
+            """
+            SELECT id
+            FROM conversion_events
+            WHERE lead_id=? AND conversion_state IN ('converted','revenue_recorded')
+            LIMIT 1
+            """,
+            (lead_id,),
+        ).fetchone()
+        if conversion_row:
+            conn.execute(
+                "UPDATE operation_leads SET lifecycle_stage=?, status=?, updated_at=? WHERE id=?",
+                ("converted", "converted", utc_now_iso(), lead_id),
+            )
             return
         qualified_reply = conn.execute(
             """
@@ -3420,6 +3668,7 @@ class GrowthStorage:
             "candidate_observations",
             "lead_decisions",
             "public_reply_events",
+            "conversion_events",
         }
         if table_name not in allowed:
             raise ValueError(f"unsupported table: {table_name}")

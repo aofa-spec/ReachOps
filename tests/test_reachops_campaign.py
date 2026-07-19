@@ -7096,6 +7096,192 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertNotEqual(event["run_id"], "run_should_not_be_assigned")
             self.assertNotEqual(event["batch_id"], "batch_should_not_be_assigned")
 
+    def test_conversion_events_record_manual_revenue_with_reply_traceability(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            reply_result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "reply_text": "Can you send me the link and price?",
+                        "replied_at": "2026-07-20T10:30:00Z",
+                    }
+                ]
+            )
+            reply_event = reply_result["events"][0]
+
+            event_id, inserted = service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                public_reply_event_id=reply_event["id"],
+                conversion_type="revenue",
+                amount_cents=12900,
+                currency="USD",
+                notes="redacted fixture order",
+                idempotency_key="order-1",
+                recorded_at="2026-07-20T10:35:00Z",
+            )
+
+            self.assertTrue(inserted)
+            event = service.storage.get_conversion_event(event_id)
+            self.assertIsNotNone(event)
+            self.assertEqual(event["campaign_id"], plan["campaign"]["id"])
+            self.assertEqual(event["run_id"], action["run_id"])
+            self.assertEqual(event["batch_id"], action["batch_id"])
+            self.assertEqual(event["lead_id"], action["lead_id"])
+            self.assertEqual(event["action_id"], action["id"])
+            self.assertEqual(event["public_reply_event_id"], reply_event["id"])
+            self.assertEqual(event["conversion_state"], "revenue_recorded")
+            self.assertEqual(event["amount_cents"], 12900)
+            self.assertEqual(event["currency"], "USD")
+            lead = next(row for row in service.storage.list_operation_leads(limit=20) if row["id"] == action["lead_id"])
+            self.assertEqual(lead["lifecycle_stage"], "converted")
+            self.assertEqual(lead["conversion_event_count"], 1)
+            self.assertEqual(lead["revenue_cents"], 12900)
+
+    def test_conversion_events_are_campaign_and_run_isolated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            first_plan = service.create_campaign_plan("https://www.tiktok.com/@beauty_creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(campaign_id=first_plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+            )
+            first_action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "comment_reply")
+            second_plan = service.create_campaign_plan("https://www.tiktok.com/@skincare_creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@skincare_creator"}],
+                [{"profile_id": "discovery-2", "group_name": "US"}],
+                GrowthTaskConfig(campaign_id=second_plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+            )
+            second_batch = service.storage.latest_collection_batch_for_campaign(second_plan["campaign"]["id"])
+            second_action = next(
+                row
+                for row in service.storage.list_action_queue(limit=50, batch_id=str(second_batch.get("id") or ""))
+                if row["action_type"] == "comment_reply"
+            )
+            service.storage.record_conversion_event(
+                lead_id=first_action["lead_id"],
+                action_id=first_action["id"],
+                conversion_type="conversion",
+                idempotency_key="first-conversion",
+            )
+            service.storage.record_conversion_event(
+                lead_id=second_action["lead_id"],
+                action_id=second_action["id"],
+                conversion_type="won",
+                amount_cents=9900,
+                currency="USD",
+                idempotency_key="second-won",
+            )
+
+            first_events = service.storage.list_conversion_events(
+                campaign_id=first_plan["campaign"]["id"],
+                run_id=first_action["run_id"],
+                batch_id=first_action["batch_id"],
+            )
+            second_events = service.storage.list_conversion_events(
+                campaign_id=second_plan["campaign"]["id"],
+                run_id=second_action["run_id"],
+                batch_id=second_action["batch_id"],
+            )
+
+            self.assertEqual(len(first_events), 1)
+            self.assertEqual(len(second_events), 1)
+            self.assertEqual(first_events[0]["run_id"], first_action["run_id"])
+            self.assertEqual(second_events[0]["run_id"], second_action["run_id"])
+            self.assertNotEqual(first_events[0]["campaign_id"], second_events[0]["campaign_id"])
+
+    def test_conversion_events_are_idempotent_by_operator_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, _plan, action, _execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            first_id, first_inserted = service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                conversion_type="conversion",
+                idempotency_key="same-manual-action",
+            )
+            second_id, second_inserted = service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                conversion_type="conversion",
+                idempotency_key="same-manual-action",
+            )
+
+            self.assertTrue(first_inserted)
+            self.assertFalse(second_inserted)
+            self.assertEqual(first_id, second_id)
+            self.assertEqual(len(service.storage.list_conversion_events(lead_id=action["lead_id"])), 1)
+
+    def test_conversion_event_does_not_fabricate_active_run_for_legacy_lead(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "legacy-conversion.db"))
+            now = "2026-07-20T10:40:00Z"
+            with storage.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                     source_path, status, batch_id, run_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "legacy-conversion-lead-1",
+                        "legacy-conversion-candidate-1",
+                        "comment_intent",
+                        "normal",
+                        80,
+                        "legacy row before campaign run ledger",
+                        "new",
+                        "",
+                        "new",
+                        "",
+                        "",
+                        now,
+                        now,
+                    ),
+                )
+            storage.set_active_campaign_run("run_should_not_be_assigned")
+            storage.set_active_collection_batch("batch_should_not_be_assigned")
+
+            event_id, inserted = storage.record_conversion_event(
+                lead_id="legacy-conversion-lead-1",
+                conversion_type="conversion",
+                idempotency_key="legacy-conversion",
+                recorded_at=now,
+            )
+
+            self.assertTrue(inserted)
+            event = storage.get_conversion_event(event_id)
+            self.assertIsNotNone(event)
+            self.assertEqual(event["run_id"], "")
+            self.assertEqual(event["batch_id"], "")
+            self.assertNotEqual(event["run_id"], "run_should_not_be_assigned")
+            self.assertNotEqual(event["batch_id"], "batch_should_not_be_assigned")
+
+    def test_conversion_events_schema_migrates_existing_local_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "conversion-schema.db"))
+            with storage.connect() as conn:
+                tables = {
+                    row["name"]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='conversion_events'"
+                    ).fetchall()
+                }
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversion_events)").fetchall()}
+
+            self.assertIn("conversion_events", tables)
+            self.assertIn("run_id", columns)
+            self.assertIn("amount_cents", columns)
+            self.assertIn("idempotency_key", columns)
+
     def test_web_operations_payload_surfaces_public_reply_lifecycle(self):
         from tools import reachops_web_ui
 
@@ -7135,6 +7321,47 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(lead["current_status"], "qualified")
             self.assertIn("合格回复", lead["reply_summary"])
             self.assertIn("Can you send me", lead["reply_summary"])
+
+    def test_web_operations_payload_surfaces_conversion_lifecycle(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            batch = service.storage.latest_collection_batch_for_campaign(plan["campaign"]["id"])
+            reply_result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "reply_text": "Can you send me the link and price?",
+                        "replied_at": "2026-07-20T10:45:00Z",
+                    }
+                ]
+            )
+            service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                public_reply_event_id=reply_result["events"][0]["id"],
+                conversion_type="revenue",
+                amount_cents=12900,
+                currency="USD",
+                idempotency_key="web-revenue",
+            )
+
+            payload = reachops_web_ui.build_operations_payload(Path(service.storage.db_path), batch, {}, [])
+
+            self.assertEqual(payload["counts"]["conversion_events"], 1)
+            self.assertEqual(payload["counts"]["converted_leads"], 1)
+            self.assertEqual(payload["counts"]["revenue_cents"], 12900)
+            self.assertEqual(len(payload["conversion_events"]), 1)
+            self.assertEqual(payload["conversion_events"][0]["run_id"], action["run_id"])
+            lead = next(row for row in payload["lead_view"] if row["id"] == action["lead_id"])
+            self.assertEqual(lead["current_status"], "converted")
+            self.assertIn("已记收入", lead["conversion_summary"])
 
     def test_web_operations_payload_handles_legacy_db_without_public_reply_table(self):
         from tools import reachops_web_ui
@@ -7178,6 +7405,49 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(lead["public_reply_count"], 0)
             self.assertEqual(lead["qualified_reply_count"], 0)
             self.assertEqual(lead["reply_summary"], "无公开回复")
+
+    def test_web_operations_payload_handles_legacy_db_without_conversion_table(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "legacy-conversion-web.db"))
+            batch = storage.create_collection_batch(1, profile_group="US", initial_status="completed")
+            now = "2026-07-20T10:46:00Z"
+            with storage.connect() as conn:
+                conn.execute("DROP TABLE conversion_events")
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                     source_path, status, batch_id, run_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "legacy-conversion-ui-lead-1",
+                        "legacy-conversion-ui-candidate-1",
+                        "purchase",
+                        "high",
+                        88,
+                        "legacy lead visible without conversion table",
+                        "new",
+                        "https://www.tiktok.com/@demo/video/1",
+                        "new",
+                        batch.id,
+                        "",
+                        now,
+                        now,
+                    ),
+                )
+
+            payload = reachops_web_ui.build_operations_payload(Path(storage.db_path), {"id": batch.id}, {}, [])
+
+            self.assertEqual(payload["counts"]["conversion_events"], 0)
+            self.assertEqual(payload["counts"]["converted_leads"], 0)
+            self.assertEqual(payload["counts"]["revenue_cents"], 0)
+            self.assertEqual(payload["conversion_events"], [])
+            lead = next(row for row in payload["lead_view"] if row["id"] == "legacy-conversion-ui-lead-1")
+            self.assertEqual(lead["conversion_event_count"], 0)
+            self.assertEqual(lead["conversion_summary"], "未记录转化")
 
     def test_collection_uses_injected_comment_intent_classifier_for_customer_pool(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -8273,7 +8543,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 evidence_verified=True,
             )
             service.storage.record_action_execution_result(action["id"], verified_execution_id, "completed")
-            PublicReplyMonitor(service.storage).ingest_replay_rows(
+            reply_result = PublicReplyMonitor(service.storage).ingest_replay_rows(
                 [
                     {
                         "campaign_id": campaign_id,
@@ -8291,6 +8561,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     }
                 ]
             )
+            service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                public_reply_event_id=reply_result["events"][0]["id"],
+                conversion_type="revenue",
+                amount_cents=12900,
+                currency="USD",
+                idempotency_key="campaign-export-revenue",
+            )
 
             artifacts = workflow.export_campaign_artifacts(campaign_id=campaign_id)
             for key in [
@@ -8300,6 +8579,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "actions_csv_path",
                 "executions_csv_path",
                 "public_replies_csv_path",
+                "conversions_csv_path",
             ]:
                 self.assertTrue(os.path.exists(artifacts[key]), key)
 
@@ -8316,8 +8596,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("error_counts", payload["execution_summary"])
             self.assertIn("public_reply_events", payload)
             self.assertIn("public_reply_summary", payload)
+            self.assertIn("conversion_events", payload)
+            self.assertIn("conversion_summary", payload)
             self.assertEqual(payload["public_reply_summary"]["total"], len(payload["public_reply_events"]))
             self.assertEqual(payload["public_reply_summary"]["qualified"], 1)
+            self.assertEqual(payload["conversion_summary"]["total"], len(payload["conversion_events"]))
+            self.assertEqual(payload["conversion_summary"]["revenue_cents"], 12900)
             self.assertEqual(payload["public_reply_events"][0]["campaign_id"], campaign_id)
             self.assertEqual(payload["public_reply_events"][0]["run_id"], action["run_id"])
             self.assertEqual(payload["public_reply_events"][0]["batch_id"], action["batch_id"])
@@ -8326,6 +8610,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(payload["public_reply_events"][0]["execution_id"], verified_execution_id)
             self.assertEqual(payload["public_reply_events"][0]["qualification_state"], "qualified")
             self.assertEqual(payload["public_reply_events"][0]["verified_contact"], 1)
+            self.assertEqual(payload["conversion_events"][0]["campaign_id"], campaign_id)
+            self.assertEqual(payload["conversion_events"][0]["run_id"], action["run_id"])
+            self.assertEqual(payload["conversion_events"][0]["batch_id"], action["batch_id"])
+            self.assertEqual(payload["conversion_events"][0]["lead_id"], action["lead_id"])
+            self.assertEqual(payload["conversion_events"][0]["action_id"], action["id"])
+            self.assertEqual(payload["conversion_events"][0]["public_reply_event_id"], reply_result["events"][0]["id"])
+            self.assertEqual(payload["conversion_events"][0]["conversion_state"], "revenue_recorded")
             self.assertTrue(any("DUPLICATE_ACTION_TEXT" in row.get("risk_gate_summary", "") for row in payload["outreach_executions"]))
             self.assertTrue(any(row.get("risk_gate_next_step") == "改写或轮换话术后重试" for row in payload["outreach_executions"]))
             self.assertEqual(payload["strategy"]["campaign_id"], campaign_id)
@@ -8364,6 +8655,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(reply_rows[0]["qualification_state"], "qualified")
             self.assertEqual(reply_rows[0]["run_id"], action["run_id"])
             self.assertEqual(reply_rows[0]["execution_id"], verified_execution_id)
+
+            with open(artifacts["conversions_csv_path"], "r", encoding="utf-8") as fh:
+                conversion_reader = csv.DictReader(fh)
+                self.assertIn("campaign_id", conversion_reader.fieldnames or [])
+                self.assertIn("run_id", conversion_reader.fieldnames or [])
+                self.assertIn("lead_id", conversion_reader.fieldnames or [])
+                self.assertIn("action_id", conversion_reader.fieldnames or [])
+                self.assertIn("public_reply_event_id", conversion_reader.fieldnames or [])
+                self.assertIn("conversion_state", conversion_reader.fieldnames or [])
+                conversion_rows = list(conversion_reader)
+            self.assertEqual(len(conversion_rows), 1)
+            self.assertEqual(conversion_rows[0]["conversion_state"], "revenue_recorded")
+            self.assertEqual(conversion_rows[0]["run_id"], action["run_id"])
 
     def test_campaign_report_export_paths_do_not_overwrite_same_second_runs(self):
         with tempfile.TemporaryDirectory() as tmp:

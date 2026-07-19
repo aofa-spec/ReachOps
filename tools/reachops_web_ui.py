@@ -33,6 +33,7 @@ from ReachOps.execution_plan import (
     write_execution_plan,
 )
 from ReachOps.ai_console import LocalAIConsole
+from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.run_session import (
     RUN_SESSION_STATE_RANK,
     TERMINAL_RUN_SESSION_STATES,
@@ -3067,6 +3068,8 @@ def html_page() -> bytes:
         <div class="metric"><span>高意向</span><b id="mHigh">0</b></div>
         <div class="metric"><span>公开回复</span><b id="mPublicReplies">0</b></div>
         <div class="metric"><span>合格回复</span><b id="mQualifiedReplies">0</b></div>
+        <div class="metric"><span>转化</span><b id="mConvertedLeads">0</b></div>
+        <div class="metric"><span>收入分</span><b id="mRevenueCents">0</b></div>
         <div class="metric"><span>入队数</span><b id="mActions">0</b></div>
         <div class="metric"><span>成功触达</span><b id="mTouchSuccess">0</b></div>
         <div class="metric"><span>失败</span><b id="mTouchFailed">0</b></div>
@@ -4255,8 +4258,8 @@ def html_page() -> bytes:
     }}
     function statusTone(status) {{
       const value = String(status || '').toLowerCase();
-      if (['contacted','completed','success','reply_received','qualified'].includes(value)) return 'ok';
-      if (['failed','needs_retry','retryable','skipped','rejected'].includes(value)) return value === 'skipped' ? 'warn' : 'bad';
+      if (['contacted','completed','success','reply_received','qualified','converted','won'].includes(value)) return 'ok';
+      if (['failed','needs_retry','retryable','skipped','rejected','lost','opted_out'].includes(value)) return value === 'skipped' ? 'warn' : 'bad';
       if (['queued','pending_review','approved','ready_to_execute','running'].includes(value)) return 'warn';
       return '';
     }}
@@ -4271,6 +4274,10 @@ def html_page() -> bytes:
         contacted:'已触达',
         reply_received:'收到回复',
         qualified:'合格线索',
+        converted:'已转化',
+        won:'已成交',
+        lost:'已流失',
+        opted_out:'已退订',
         needs_retry:'失败待重试',
         rejected:'已跳过',
         skipped:'已跳过',
@@ -4296,10 +4303,10 @@ def html_page() -> bytes:
     }}
     function applyLeadFilter(rows) {{
       if (leadFilter === 'high') return rows.filter(row => Number(row.score || 0) >= 70);
-      if (leadFilter === 'untouched') return rows.filter(row => !['contacted','completed','success','reply_received','qualified'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
-      if (leadFilter === 'touched') return rows.filter(row => ['contacted','completed','success','reply_received','qualified'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
-      if (leadFilter === 'failed') return rows.filter(row => ['needs_retry','failed','retryable'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
-      if (leadFilter === 'skipped') return rows.filter(row => ['rejected','skipped'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'untouched') return rows.filter(row => !['contacted','completed','success','reply_received','qualified','converted','won','lost','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'touched') return rows.filter(row => ['contacted','completed','success','reply_received','qualified','converted','won'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'failed') return rows.filter(row => ['needs_retry','failed','retryable','lost','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'skipped') return rows.filter(row => ['rejected','skipped','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
       return rows;
     }}
     function applyOutreachFilter(rows) {{
@@ -4326,23 +4333,26 @@ def html_page() -> bytes:
       const counts = {{
         all: rows.length,
         high: rows.filter(row => Number(row.score || 0) >= 70).length,
-        untouched: rows.filter(row => !['contacted','completed','success','reply_received','qualified'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
-        touched: rows.filter(row => ['contacted','completed','success','reply_received','qualified'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
-        failed: rows.filter(row => ['needs_retry','failed','retryable'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
-        skipped: rows.filter(row => ['rejected','skipped'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        untouched: rows.filter(row => !['contacted','completed','success','reply_received','qualified','converted','won','lost','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        touched: rows.filter(row => ['contacted','completed','success','reply_received','qualified','converted','won'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        failed: rows.filter(row => ['needs_retry','failed','retryable','lost','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        skipped: rows.filter(row => ['rejected','skipped','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
       }};
       filterButtons('leadFilters', leadFilter, counts, 'lead-filter');
       const filtered = applyLeadFilter(rows);
       const publicReplies = Number((ops.counts || {{}}).public_replies || 0);
       const qualifiedReplies = Number((ops.counts || {{}}).qualified_replies || 0);
-      $('leadPanelSummary').textContent = `有效 ${{counts.all}} / 高意向 ${{counts.high}} / 回复 ${{publicReplies}} / 合格 ${{qualifiedReplies}}`;
+      const convertedLeads = Number((ops.counts || {{}}).converted_leads || 0);
+      const revenueCents = Number((ops.counts || {{}}).revenue_cents || 0);
+      $('leadPanelSummary').textContent = `有效 ${{counts.all}} / 高意向 ${{counts.high}} / 回复 ${{publicReplies}} / 合格 ${{qualifiedReplies}} / 转化 ${{convertedLeads}} / 收入分 ${{revenueCents}}`;
       $('leadTableMeta').textContent = `显示 ${{filtered.length}} / ${{rows.length}} 条`;
-      table('leadTable', ['用户', '评分', '意图', '命中原因', '公开回复', '来源视频', '推荐触达', '当前状态'], filtered.slice(0, 80).map(row => [
+      table('leadTable', ['用户', '评分', '意图', '命中原因', '公开回复', '转化', '来源视频', '推荐触达', '当前状态'], filtered.slice(0, 80).map(row => [
         row.username || '-',
         row.score || 0,
         leadIntentChips(row),
         {{html:`<div class="reasonText">${{esc(compactText(row.reason || row.comment_text || row.matched_reason))}}</div>`}},
         {{html:`<div class="reasonText">${{esc(compactText(row.reply_summary || '无公开回复'))}}</div>`}},
+        {{html:`<div class="reasonText">${{esc(compactText(row.conversion_summary || '未记录转化'))}}</div>`}},
         actionLink(row.source_label || '查看来源', row.source_url || row.source_path),
         chipList((row.recommended_actions || []).map(label => ({{label}}))),
         leadStatusLabel(row),
@@ -4387,6 +4397,8 @@ def html_page() -> bytes:
       $('mHigh').textContent = counts.high_intent || 0;
       $('mPublicReplies').textContent = counts.public_replies || 0;
       $('mQualifiedReplies').textContent = counts.qualified_replies || 0;
+      $('mConvertedLeads').textContent = counts.converted_leads || 0;
+      $('mRevenueCents').textContent = counts.revenue_cents || 0;
       $('mActions').textContent = counts.actions || 0;
       $('mTouchSuccess').textContent = counts.touch_success || 0;
       $('mTouchFailed').textContent = counts.touch_failed || 0;
@@ -5632,6 +5644,7 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "lead_view": [],
         "outreach_view": [],
         "public_reply_events": [],
+        "conversion_events": [],
     }
     counts = {
         "candidates": 0,
@@ -5644,12 +5657,16 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "qualified_leads": 0,
         "public_replies": 0,
         "qualified_replies": 0,
+        "conversion_events": 0,
+        "converted_leads": 0,
+        "revenue_cents": 0,
     }
     if db_path.exists() and batch_id:
         try:
             with sqlite3.connect(str(db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 public_reply_table_exists = sqlite_table_exists(conn, "public_reply_events")
+                conversion_table_exists = sqlite_table_exists(conn, "conversion_events")
                 count_row = conn.execute(
                     "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=?",
                     (batch_id,),
@@ -5710,7 +5727,12 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                         (batch_id,),
                     ).fetchall()
                 ]
-                rows["lead_view"] = load_operator_lead_rows(conn, batch_id, include_public_replies=public_reply_table_exists)
+                rows["lead_view"] = load_operator_lead_rows(
+                    conn,
+                    batch_id,
+                    include_public_replies=public_reply_table_exists,
+                    include_conversions=conversion_table_exists,
+                )
                 if not rows["lead_view"]:
                     rows["lead_view"] = load_candidate_lead_rows(conn, batch_id)
                 rows["outreach_view"] = build_operator_outreach_rows(rows["action_queue"], rows["outreach_executions"], config)
@@ -5731,6 +5753,22 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                             (batch_id,),
                         ).fetchall()
                     ]
+                if conversion_table_exists:
+                    rows["conversion_events"] = [
+                        dict(row)
+                        for row in conn.execute(
+                            """
+                            SELECT id, campaign_id, run_id, batch_id, lead_id, action_id, public_reply_event_id,
+                                   conversion_type, conversion_state, amount_cents, currency, source,
+                                   notes, idempotency_key, recorded_at, created_by, created_at
+                            FROM conversion_events
+                            WHERE batch_id=?
+                            ORDER BY recorded_at DESC, created_at DESC, rowid DESC
+                            LIMIT 80
+                            """,
+                            (batch_id,),
+                        ).fetchall()
+                    ]
                 rows["profile_queue"] = load_profile_queue_rows(conn, batch_id)
         except Exception:
             pass
@@ -5738,6 +5776,19 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
     counts["public_replies"] = len(rows["public_reply_events"])
     counts["qualified_replies"] = len(
         [row for row in rows["public_reply_events"] if str(row.get("qualification_state") or "") == "qualified"]
+    )
+    counts["conversion_events"] = len(rows["conversion_events"])
+    counts["converted_leads"] = len(
+        {
+            str(row.get("lead_id") or "")
+            for row in rows["conversion_events"]
+            if str(row.get("conversion_state") or "") in {"converted", "revenue_recorded", "won"}
+        }
+    )
+    counts["revenue_cents"] = sum(
+        safe_int(row.get("amount_cents"), 0)
+        for row in rows["conversion_events"]
+        if str(row.get("conversion_state") or "") in {"revenue_recorded", "won"}
     )
     counts["actions"] = len(rows["action_queue"])
     counts["touched"] = len(rows["outreach_executions"])
@@ -5762,6 +5813,7 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "lead_view": rows["lead_view"],
         "outreach_view": rows["outreach_view"],
         "public_reply_events": rows["public_reply_events"],
+        "conversion_events": rows["conversion_events"],
         "profile_queue": rows["profile_queue"],
     }
 
@@ -5774,7 +5826,12 @@ def sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return bool(row)
 
 
-def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str, include_public_replies: bool = True) -> list[dict]:
+def load_operator_lead_rows(
+    conn: sqlite3.Connection,
+    batch_id: str,
+    include_public_replies: bool = True,
+    include_conversions: bool = True,
+) -> list[dict]:
     public_reply_select = """
                COUNT(DISTINCT pre.id) AS public_reply_count,
                COUNT(DISTINCT CASE WHEN pre.qualification_state='qualified' THEN pre.id END) AS qualified_reply_count,
@@ -5811,6 +5868,25 @@ def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str, include_pub
         if include_public_replies
         else ""
     )
+    conversion_select = """
+               (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.batch_id=ol.batch_id) AS conversion_event_count,
+               (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.batch_id=ol.batch_id AND ce.conversion_state IN ('converted','revenue_recorded','won')) AS converted_count,
+               (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.batch_id=ol.batch_id AND ce.conversion_state='won') AS won_count,
+               (SELECT COALESCE(SUM(ce.amount_cents), 0) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.batch_id=ol.batch_id AND ce.conversion_state IN ('revenue_recorded','won')) AS revenue_cents,
+               (
+                   SELECT latest_ce.conversion_state
+                   FROM conversion_events latest_ce
+                   WHERE latest_ce.lead_id=ol.id AND latest_ce.batch_id=ol.batch_id
+                   ORDER BY latest_ce.recorded_at DESC, latest_ce.created_at DESC, latest_ce.rowid DESC
+                   LIMIT 1
+               ) AS latest_conversion_state
+    """ if include_conversions else """
+               0 AS conversion_event_count,
+               0 AS converted_count,
+               0 AS won_count,
+               0 AS revenue_cents,
+               '' AS latest_conversion_state
+    """
     rows = conn.execute(
         f"""
         SELECT ol.id, ol.candidate_user_id, ol.lead_type, ol.priority, ol.score, ol.reason,
@@ -5823,7 +5899,8 @@ def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str, include_pub
                COUNT(DISTINCT CASE WHEN aq.status IN ('completed','success') THEN aq.id END) AS success_action_count,
                COUNT(DISTINCT CASE WHEN aq.status IN ('failed','retryable') THEN aq.id END) AS failed_action_count,
                COUNT(DISTINCT CASE WHEN aq.status='skipped' OR aq.status='rejected' THEN aq.id END) AS skipped_action_count,
-               {public_reply_select}
+               {public_reply_select},
+               {conversion_select}
         FROM operation_leads ol
         LEFT JOIN candidate_users cu ON cu.id = ol.candidate_user_id
         LEFT JOIN discovered_contents dc ON dc.id = cu.content_id
@@ -5850,6 +5927,7 @@ def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str, include_pub
         item["matched_reason"] = item.get("reason") or item.get("comment_text") or item.get("caption") or ""
         item["recommended_actions"] = [human_action_type(value) for value in compact_csv(item.get("action_types"))]
         item["reply_summary"] = human_reply_summary(item)
+        item["conversion_summary"] = human_conversion_summary(item)
         item["current_status"] = operator_lead_status(item)
         result.append(item)
     return result
@@ -5884,6 +5962,8 @@ def load_candidate_lead_rows(conn: sqlite3.Connection, batch_id: str) -> list[di
         item["intent_confidence"] = extract_intent_confidence(tags)
         item["matched_reason"] = item.get("comment_text") or item.get("caption") or "采集候选用户，等待线索入队"
         item["recommended_actions"] = ["评论回复"] if score >= 50 else ["继续观察"]
+        item["reply_summary"] = "无公开回复"
+        item["conversion_summary"] = "未记录转化"
         item["current_status"] = "new"
         result.append(item)
     return result
@@ -6023,6 +6103,11 @@ def human_execution_mode(mode: str) -> str:
 
 
 def operator_lead_status(row: dict) -> str:
+    latest_conversion = str(row.get("latest_conversion_state") or "").strip()
+    if latest_conversion in {"won", "lost", "opted_out"}:
+        return latest_conversion
+    if safe_int(row.get("converted_count"), 0) > 0:
+        return "converted"
     if safe_int(row.get("qualified_reply_count"), 0) > 0:
         return "qualified"
     if safe_int(row.get("public_reply_count"), 0) > 0:
@@ -6051,6 +6136,29 @@ def human_reply_summary(row: dict) -> str:
     if latest:
         return f"{label} {qualified_count}/{reply_count}{suffix}: {latest[:80]}"
     return f"{label} {qualified_count}/{reply_count}{suffix}"
+
+
+def human_conversion_summary(row: dict) -> str:
+    total = safe_int(row.get("conversion_event_count"), 0)
+    if total <= 0:
+        return "未记录转化"
+    converted = safe_int(row.get("converted_count"), 0)
+    won = safe_int(row.get("won_count"), 0)
+    revenue = safe_int(row.get("revenue_cents"), 0)
+    latest = str(row.get("latest_conversion_state") or "").strip()
+    label = {
+        "won": "已成交",
+        "lost": "已流失",
+        "opted_out": "已退订",
+        "revenue_recorded": "已记收入",
+        "converted": "已转化",
+    }.get(latest, "已记录")
+    parts = [f"{label} {converted}/{total}"]
+    if won:
+        parts.append(f"成交 {won}")
+    if revenue:
+        parts.append(f"收入分 {revenue}")
+    return " / ".join(parts)
 
 
 def outreach_operator_status(action: dict, execution: dict) -> str:
@@ -7308,6 +7416,38 @@ class Handler(BaseHTTPRequestHandler):
             result = review_offline_policy_candidate(payload)
             status_code = 200 if result.get("status") == "review_recorded" else 400
             self._send_json(result, status_code)
+            return
+        if parsed.path == "/api/conversion-event":
+            payload, error = self._read_json_payload()
+            if error:
+                self._send_json({"status": "rejected", "error": error}, 400)
+                return
+            try:
+                storage = GrowthStorage(str(DATA_DIR / "data/growth_intelligence/growth_intelligence.db"))
+                event_id, inserted = storage.record_conversion_event(
+                    lead_id=str((payload or {}).get("lead_id") or ""),
+                    conversion_type=str((payload or {}).get("conversion_type") or "conversion"),
+                    conversion_state=str((payload or {}).get("conversion_state") or ""),
+                    amount_cents=safe_int((payload or {}).get("amount_cents"), 0),
+                    currency=str((payload or {}).get("currency") or ""),
+                    notes=str((payload or {}).get("notes") or ""),
+                    action_id=str((payload or {}).get("action_id") or ""),
+                    public_reply_event_id=str((payload or {}).get("public_reply_event_id") or ""),
+                    idempotency_key=str((payload or {}).get("idempotency_key") or ""),
+                    recorded_at=str((payload or {}).get("recorded_at") or ""),
+                    created_by=str((payload or {}).get("created_by") or "operator"),
+                )
+                event = storage.get_conversion_event(event_id) or {}
+                append_web_log(
+                    f"CHECK  conversion_event_recorded lead_id={event.get('lead_id') or '-'} "
+                    f"state={event.get('conversion_state') or '-'} inserted={str(bool(inserted)).lower()} no_submit=true"
+                )
+                self._send_json({"status": "recorded", "inserted": bool(inserted), "event": event})
+            except ValueError as exc:
+                self._send_json({"status": "rejected", "error": "invalid_conversion_event", "message": str(exc)}, 400)
+            except Exception as exc:
+                append_web_log(f"ERROR  conversion_event_failed error={exc}")
+                self._send_json({"status": "failed", "error": "conversion_event_failed", "message": str(exc)}, 500)
             return
         start_from_plan = parsed.path == "/api/start-from-plan"
         if parsed.path not in {"/api/start", "/api/start-from-plan"}:
