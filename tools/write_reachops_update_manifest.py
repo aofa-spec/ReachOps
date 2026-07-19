@@ -38,7 +38,7 @@ def build_manifest(installer: Path, version: str, build: str, channel: str, down
         "arch": "x64compatible",
         "installer": {
             "file_name": installer.name,
-            "path": str(installer),
+            "path": installer.name,
             "download_url": download_url,
             "size_bytes": installer.stat().st_size,
             "sha256": sha256_file(installer),

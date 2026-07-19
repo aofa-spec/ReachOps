@@ -131,6 +131,7 @@ def _check_manifest(root: Path, manifest_path: Path, installer_path: Path) -> tu
         return failures, detail
 
     installer = manifest.get("installer") if isinstance(manifest.get("installer"), dict) else {}
+    raw_installer_path = str(installer.get("path") or "")
     manifest_installer = _manifest_installer_path(root, manifest_path, manifest)
     expected_sha = str(installer.get("sha256") or "")
     expected_size = int(installer.get("size_bytes") or 0)
@@ -140,6 +141,8 @@ def _check_manifest(root: Path, manifest_path: Path, installer_path: Path) -> tu
             "product_id": manifest.get("product_id"),
             "version": manifest.get("version"),
             "platform": manifest.get("platform"),
+            "installer_path_raw": raw_installer_path,
+            "installer_path_is_portable": not Path(raw_installer_path).is_absolute() if raw_installer_path else True,
             "installer_path": str(actual_installer),
             "expected_sha256": expected_sha,
             "expected_size": expected_size,
@@ -152,6 +155,8 @@ def _check_manifest(root: Path, manifest_path: Path, installer_path: Path) -> tu
         failures.append("manifest_version_mismatch")
     if str(manifest.get("platform") or "") != "windows":
         failures.append("manifest_platform_mismatch")
+    if raw_installer_path and Path(raw_installer_path).is_absolute():
+        failures.append("manifest_installer_path_not_portable")
     if not actual_installer.exists():
         failures.append("manifest_installer_missing")
         return failures, detail

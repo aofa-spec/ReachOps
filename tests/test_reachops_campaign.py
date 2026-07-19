@@ -2413,6 +2413,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(broken["passed"])
             self.assertIn("manifest_sha256_mismatch", broken["failures"])
 
+            absolute_path_manifest = json.loads(json.dumps(manifest))
+            absolute_path_manifest["installer"]["path"] = str(installer.resolve())
+            manifest_path.write_text(json.dumps(absolute_path_manifest), encoding="utf-8")
+            absolute_path_result = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(absolute_path_result["passed"])
+            self.assertIn("manifest_installer_path_not_portable", absolute_path_result["failures"])
+            self.assertFalse(absolute_path_result["artifacts"]["manifest"]["installer_path_is_portable"])
+            self.assertEqual(absolute_path_result["artifacts"]["manifest"]["installer_path_raw"], str(installer.resolve()))
+
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             exe.write_bytes(b"not a PE executable")
             invalid_exe = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
