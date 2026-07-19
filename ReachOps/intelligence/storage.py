@@ -203,16 +203,29 @@ class GrowthStorage:
                 CREATE TABLE IF NOT EXISTS lead_decisions (
                     id TEXT PRIMARY KEY,
                     lead_id TEXT NOT NULL,
+                    campaign_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     candidate_user_id TEXT NOT NULL,
+                    candidate_observation_id TEXT DEFAULT '',
                     content_id TEXT DEFAULT '',
                     decision_version INTEGER NOT NULL,
                     decision_type TEXT NOT NULL,
                     lead_type TEXT NOT NULL,
+                    intent_type TEXT DEFAULT '',
                     priority TEXT DEFAULT 'normal',
+                    intent_score INTEGER DEFAULT 0,
+                    product_fit_score INTEGER DEFAULT 0,
+                    contactability_score INTEGER DEFAULT 0,
+                    source_quality_score INTEGER DEFAULT 0,
+                    total_lead_score INTEGER DEFAULT 0,
                     score INTEGER DEFAULT 0,
                     confidence INTEGER DEFAULT 0,
                     reason TEXT DEFAULT '',
                     evidence TEXT DEFAULT '',
+                    feature_snapshot TEXT DEFAULT '{}',
+                    classifier_version TEXT DEFAULT '',
+                    provider_version TEXT DEFAULT '',
+                    human_review_status TEXT DEFAULT 'unreviewed',
                     decision_source TEXT DEFAULT 'rule_based',
                     decision_schema_version TEXT DEFAULT 'reachops.lead_decision.v1',
                     rule_version TEXT DEFAULT 'reachops.rule_based_lead_decision.v1',
@@ -535,9 +548,22 @@ class GrowthStorage:
                 conn,
                 "lead_decisions",
                 {
+                    "campaign_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
+                    "candidate_observation_id": "TEXT DEFAULT ''",
                     "content_id": "TEXT DEFAULT ''",
+                    "intent_type": "TEXT DEFAULT ''",
+                    "intent_score": "INTEGER DEFAULT 0",
+                    "product_fit_score": "INTEGER DEFAULT 0",
+                    "contactability_score": "INTEGER DEFAULT 0",
+                    "source_quality_score": "INTEGER DEFAULT 0",
+                    "total_lead_score": "INTEGER DEFAULT 0",
                     "confidence": "INTEGER DEFAULT 0",
                     "evidence": "TEXT DEFAULT ''",
+                    "feature_snapshot": "TEXT DEFAULT '{}'",
+                    "classifier_version": "TEXT DEFAULT ''",
+                    "provider_version": "TEXT DEFAULT ''",
+                    "human_review_status": "TEXT DEFAULT 'unreviewed'",
                     "decision_source": "TEXT DEFAULT 'rule_based'",
                     "decision_schema_version": "TEXT DEFAULT 'reachops.lead_decision.v1'",
                     "rule_version": "TEXT DEFAULT 'reachops.rule_based_lead_decision.v1'",
@@ -1289,43 +1315,92 @@ class GrowthStorage:
         ).fetchone()
         content_id = str((candidate["content_id"] if candidate else "") or context.get("content_id") or "")
         batch_id = str(context.get("batch_id") or (candidate["batch_id"] if candidate else "") or self._active_batch_id() or "")
+        campaign_id = str(context.get("campaign_id") or "")
+        if not campaign_id and batch_id:
+            batch_row = conn.execute("SELECT campaign_id FROM collection_batches WHERE id=?", (batch_id,)).fetchone()
+            campaign_id = str((batch_row["campaign_id"] if batch_row else "") or "")
+        run_id = str(context.get("run_id") or "")
+        candidate_observation_id = str(context.get("candidate_observation_id") or candidate_id or "")
         confidence = int(context.get("confidence") or 0)
+        intent_type = str(context.get("intent_type") or lead_type or "")
+        intent_score = int(context.get("intent_score") if context.get("intent_score") is not None else score or 0)
+        product_fit_score = int(context.get("product_fit_score") or 0)
+        contactability_score = int(context.get("contactability_score") or 0)
+        source_quality_score = int(context.get("source_quality_score") or 0)
+        total_lead_score = int(context.get("total_lead_score") if context.get("total_lead_score") is not None else score or 0)
         rule_version = str(context.get("rule_version") or LEAD_DECISION_RULE_VERSION)
         decision_source = str(context.get("decision_source") or "rule_based")
+        classifier_version = str(context.get("classifier_version") or rule_version)
+        provider_version = str(context.get("provider_version") or "")
+        human_review_status = str(context.get("human_review_status") or "unreviewed")
         evidence = str(context.get("evidence") or reason or "")
+        feature_snapshot = context.get("feature_snapshot")
+        if not isinstance(feature_snapshot, dict):
+            feature_snapshot = {}
+        candidate_snapshot = {
+            "qualify_score": int(candidate["qualify_score"] or 0) if candidate else None,
+            "intent_tags": candidate["intent_tags"] if candidate else "",
+            "comment_text_present": bool(candidate["comment_text"]) if candidate else False,
+        }
+        feature_snapshot = {
+            **candidate_snapshot,
+            **feature_snapshot,
+        }
         decision_payload = {
             "schema_version": LEAD_DECISION_SCHEMA_VERSION,
             "lead_id": str(lead_id or ""),
+            "campaign_id": campaign_id,
+            "run_id": run_id,
             "candidate_user_id": str(candidate_id or ""),
+            "candidate_observation_id": candidate_observation_id,
             "content_id": content_id,
+            "intent_type": intent_type,
             "lead_type": str(lead_type or ""),
             "priority": str(priority or "normal"),
+            "intent_score": intent_score,
+            "product_fit_score": product_fit_score,
+            "contactability_score": contactability_score,
+            "source_quality_score": source_quality_score,
+            "total_lead_score": total_lead_score,
             "score": int(score or 0),
             "confidence": confidence,
             "reason": str(reason or ""),
             "evidence": evidence,
+            "feature_snapshot": feature_snapshot,
+            "classifier_version": classifier_version,
+            "provider_version": provider_version,
+            "human_review_status": human_review_status,
             "decision_source": decision_source,
             "rule_version": rule_version,
             "batch_id": batch_id,
-            "candidate_snapshot": {
-                "qualify_score": int(candidate["qualify_score"] or 0) if candidate else None,
-                "intent_tags": candidate["intent_tags"] if candidate else "",
-                "comment_text_present": bool(candidate["comment_text"]) if candidate else False,
-            },
+            "candidate_snapshot": candidate_snapshot,
             "local_data_only": True,
         }
         fingerprint_material = {
             key: decision_payload[key]
             for key in [
                 "lead_id",
+                "campaign_id",
+                "run_id",
                 "candidate_user_id",
+                "candidate_observation_id",
                 "content_id",
+                "intent_type",
                 "lead_type",
                 "priority",
+                "intent_score",
+                "product_fit_score",
+                "contactability_score",
+                "source_quality_score",
+                "total_lead_score",
                 "score",
                 "confidence",
                 "reason",
                 "evidence",
+                "feature_snapshot",
+                "classifier_version",
+                "provider_version",
+                "human_review_status",
                 "decision_source",
                 "rule_version",
                 "batch_id",
@@ -1348,24 +1423,40 @@ class GrowthStorage:
         conn.execute(
             """
             INSERT INTO lead_decisions
-            (id, lead_id, candidate_user_id, content_id, decision_version, decision_type, lead_type, priority,
-             score, confidence, reason, evidence, decision_source, decision_schema_version, rule_version,
+            (id, lead_id, campaign_id, run_id, candidate_user_id, candidate_observation_id, content_id,
+             decision_version, decision_type, lead_type, intent_type, priority, intent_score,
+             product_fit_score, contactability_score, source_quality_score, total_lead_score, score,
+             confidence, reason, evidence, feature_snapshot, classifier_version, provider_version,
+             human_review_status, decision_source, decision_schema_version, rule_version,
              decision_fingerprint, decision_json, batch_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item_id,
                 str(lead_id or ""),
+                campaign_id,
+                run_id,
                 str(candidate_id or ""),
+                candidate_observation_id,
                 content_id,
                 decision_version,
                 str(decision_type or "updated"),
                 str(lead_type or ""),
+                intent_type,
                 str(priority or "normal"),
+                intent_score,
+                product_fit_score,
+                contactability_score,
+                source_quality_score,
+                total_lead_score,
                 int(score or 0),
                 confidence,
                 str(reason or ""),
                 evidence,
+                json.dumps(feature_snapshot, ensure_ascii=False, sort_keys=True),
+                classifier_version,
+                provider_version,
+                human_review_status,
                 decision_source,
                 LEAD_DECISION_SCHEMA_VERSION,
                 rule_version,

@@ -66,6 +66,54 @@ class LeadDecisionTests(unittest.TestCase):
         lead = next(row for row in storage.list_operation_leads() if row["id"] == lead_id)
         self.assertEqual(lead["latest_decision_version"], 1)
 
+    def test_lead_decision_records_master_contract_fields(self) -> None:
+        storage = self.temp_storage()
+        campaign = storage.create_campaign("keyword", "anti aging serum")
+        batch = storage.create_collection_batch(1, campaign_id=campaign.id)
+        storage.set_active_collection_batch(batch.id)
+        candidate = add_candidate(storage, "candidate-contract", "content-contract")
+
+        lead_id, _created = storage.upsert_operation_lead(
+            candidate.id,
+            "buying_intent",
+            "high",
+            93,
+            "contract evidence",
+            decision_context={
+                "run_id": "run-contract-1",
+                "candidate_observation_id": "candidate-observation-1",
+                "intent_type": "purchase_question",
+                "intent_score": 91,
+                "product_fit_score": 82,
+                "contactability_score": 77,
+                "source_quality_score": 64,
+                "total_lead_score": 88,
+                "confidence": 86,
+                "feature_snapshot": {"language": "en", "matched_terms": ["buy"]},
+                "classifier_version": "intent-classifier.v2",
+                "provider_version": "local-rules.v2",
+                "human_review_status": "pending_review",
+            },
+        )
+
+        decision = storage.list_lead_decisions(lead_id=lead_id)[0]
+        self.assertEqual(decision["campaign_id"], campaign.id)
+        self.assertEqual(decision["run_id"], "run-contract-1")
+        self.assertEqual(decision["candidate_observation_id"], "candidate-observation-1")
+        self.assertEqual(decision["intent_type"], "purchase_question")
+        self.assertEqual(decision["intent_score"], 91)
+        self.assertEqual(decision["product_fit_score"], 82)
+        self.assertEqual(decision["contactability_score"], 77)
+        self.assertEqual(decision["source_quality_score"], 64)
+        self.assertEqual(decision["total_lead_score"], 88)
+        self.assertEqual(decision["classifier_version"], "intent-classifier.v2")
+        self.assertEqual(decision["provider_version"], "local-rules.v2")
+        self.assertEqual(decision["human_review_status"], "pending_review")
+        self.assertEqual(decision["decision"]["campaign_id"], campaign.id)
+        self.assertEqual(decision["decision"]["run_id"], "run-contract-1")
+        self.assertEqual(decision["decision"]["feature_snapshot"]["language"], "en")
+        self.assertEqual(decision["decision"]["feature_snapshot"]["qualify_score"], 72)
+
     def test_repeated_same_lead_decision_is_idempotent(self) -> None:
         storage = self.temp_storage()
         candidate = add_candidate(storage)

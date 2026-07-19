@@ -91,6 +91,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Code evidence:
   - Added local SQLite table `lead_decisions` as an append-only ledger for operation-lead decisions.
   - Each decision records schema version, rule version, lead ID, candidate ID, content ID, batch ID, score, confidence, reason, evidence, fingerprint, and decision JSON.
+  - Each decision now also exposes the master-contract traceability fields as queryable columns and in `decision_json`: `campaign_id`, `run_id`, `candidate_observation_id`, `intent_type`, component scores, `feature_snapshot`, `classifier_version`, `provider_version`, and `human_review_status`.
   - Repeated identical upserts are idempotent through `UNIQUE(lead_id, decision_fingerprint)`.
   - Changed scoring/reason/context appends a new `decision_version` without rewriting prior rows.
   - New operation leads and lead-decision ledger rows resolve batch attribution as explicit decision context first, then candidate observation batch, then current active batch, preventing old observations from being silently attributed to a later run.
@@ -112,6 +113,18 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr17-batch-trace-final-gate.json`.
   - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr17-batch-trace-cleanliness.json`.
   - `git diff --check`: passed; log `/tmp/reachops-pr17-batch-trace-diff-check.log`.
+  - Contract-field rerun: `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/operation_lead_manager.py tests/test_lead_decisions.py`: passed; log `/tmp/reachops-pr17-contract-fields-pycompile.log`.
+  - Contract-field rerun: `/usr/bin/python3 -m unittest -v tests.test_lead_decisions`: passed, 7 tests; log `/tmp/reachops-pr17-contract-fields-tests.log`.
+  - Contract-field rerun: `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr17-contract-fields-truth.log`.
+  - Contract-field rerun: `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with the same known failure/error set as `origin/main`; branch and main both ran 230 tests with 14 failures and 1 error; comparison artifact `/tmp/reachops-pr17-contract-fields-baseline-comparison.json`, `new_failures=[]`, `new_errors=[]`.
+  - Contract-field rerun: `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr17-contract-fields-operator-pressure.json`.
+  - Contract-field rerun: `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-pr17-contract-fields-delivery-audit.json`.
+  - Contract-field rerun: `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr17-contract-fields-goal-delivery-runner.json`.
+  - Contract-field rerun: `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-pr17-contract-fields-goal-status-report.json`.
+  - Contract-field rerun: `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr17-contract-fields-package-check.json`.
+  - Contract-field rerun: `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr17-contract-fields-final-gate.json`.
+  - Contract-field rerun: `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr17-contract-fields-cleanliness.json`.
+  - Contract-field rerun: `git diff --check`: passed; log `/tmp/reachops-pr17-contract-fields-diff-check.log`.
 - Remaining blockers:
   - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
   - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
