@@ -117,6 +117,72 @@ class LicenseClientTests(unittest.TestCase):
             self.assertFalse(written["customer_data_uploaded"])
             self.assertTrue(written["last_verified_at"])
 
+    def test_refresh_sanitizes_activation_status_before_writing_local_file(self):
+        def opener(request, *, timeout):
+            return FakeResponse(
+                {
+                    "activation_status": {
+                        "active": True,
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "pro",
+                        "license_key": "secret-license",
+                        "customer_username": "real-user",
+                        "comment_text": "customer comment",
+                        "screenshot_path": "C:/private/screenshot.png",
+                        "database_path": "C:/private/customer.sqlite",
+                        "cookie": "tiktok-cookie",
+                        "proxy_password": "proxy-secret",
+                        "capabilities": {"live_submit": True, "comment_reply": 1},
+                        "device_seats": {
+                            "allowed": 2,
+                            "devices": [
+                                {
+                                    "device_id": "device-a",
+                                    "label": "Office PC",
+                                    "secret": "device-secret",
+                                    "username": "operator",
+                                }
+                            ],
+                            "billing_email": "customer@example.test",
+                        },
+                    }
+                }
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = RuntimePaths.build(base_dir=tmp)
+            client = ReachOpsLicenseClient(
+                endpoint="https://license.example.test/activate",
+                license_key="secret-license",
+                runtime_paths=paths,
+                device_id="device-a",
+                opener=opener,
+            )
+
+            result = client.refresh().as_dict()
+            written = json.loads(Path(paths.activation_status_path).read_text(encoding="utf-8"))
+            encoded_result = json.dumps(result, ensure_ascii=False, sort_keys=True)
+            encoded_written = json.dumps(written, ensure_ascii=False, sort_keys=True)
+
+            self.assertEqual(result["status"], "refreshed")
+            self.assertEqual(written["license_tier"], "pro")
+            self.assertTrue(written["capabilities"]["live_submit"])
+            self.assertEqual(written["device_seats"]["devices"][0]["device_id"], "device-a")
+            for forbidden in [
+                "secret-license",
+                "real-user",
+                "customer comment",
+                "screenshot.png",
+                "customer.sqlite",
+                "tiktok-cookie",
+                "proxy-secret",
+                "customer@example.test",
+                "operator",
+                "device-secret",
+            ]:
+                self.assertNotIn(forbidden, encoded_result)
+                self.assertNotIn(forbidden, encoded_written)
+
     def test_license_key_resolves_from_windows_credential_manager_before_env(self):
         requests = []
         store = FakeWindowsCredentialStore()

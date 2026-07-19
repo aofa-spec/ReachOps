@@ -28,6 +28,32 @@ ALLOWED_REQUEST_FIELDS = {
     "runtime_mode",
     "requested_capabilities",
 }
+ALLOWED_ACTIVATION_STATUS_FIELDS = {
+    "active",
+    "template_only",
+    "status",
+    "expires_at",
+    "license_tier",
+    "capabilities",
+    "device_id",
+    "device_ids",
+    "registered_device_ids",
+    "activated_device_ids",
+    "device_seats",
+    "seat_limit",
+    "device_seat_limit",
+    "max_devices",
+    "last_verified_at",
+    "verified_at",
+    "last_license_check_at",
+    "next_verify_at",
+    "next_license_check_at",
+    "verification_interval_hours",
+    "license_verification_interval_hours",
+    "check_interval_hours",
+}
+ALLOWED_DEVICE_SEAT_FIELDS = {"allowed", "limit", "max_devices", "devices"}
+ALLOWED_DEVICE_FIELDS = {"device_id", "id", "activated_at"}
 
 
 @dataclass(frozen=True)
@@ -185,7 +211,7 @@ class ReachOpsLicenseClient:
 
     def _normalize_activation_status(self, activation_status: dict[str, Any]) -> dict[str, Any]:
         now = _utc_now_iso()
-        result = dict(activation_status)
+        result = _sanitize_activation_status(activation_status)
         result["last_verified_at"] = str(result.get("last_verified_at") or result.get("verified_at") or now)
         result["current_device_id"] = self.device_id
         result["license_client"] = "reachops_local_v1"
@@ -217,3 +243,55 @@ def _redact_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if result.get("license_key"):
         result["license_key"] = "***redacted***"
     return result
+
+
+def _sanitize_activation_status(activation_status: dict[str, Any]) -> dict[str, Any]:
+    status = activation_status if isinstance(activation_status, dict) else {}
+    result: dict[str, Any] = {}
+    for key in ALLOWED_ACTIVATION_STATUS_FIELDS:
+        if key not in status:
+            continue
+        value = status.get(key)
+        if key == "capabilities":
+            result[key] = _sanitize_capabilities(value)
+        elif key == "device_seats":
+            result[key] = _sanitize_device_seats(value)
+        else:
+            result[key] = value
+    return result
+
+
+def _sanitize_capabilities(value: Any) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, bool] = {}
+    for key, enabled in value.items():
+        clean = "".join(ch for ch in str(key or "").strip() if ch.isalnum() or ch in {"_", "-"})
+        if clean:
+            result[clean] = bool(enabled)
+    return result
+
+
+def _sanitize_device_seats(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in ALLOWED_DEVICE_SEAT_FIELDS:
+        if key not in value:
+            continue
+        if key == "devices":
+            rows = []
+            for row in value.get(key) or []:
+                clean = _sanitize_device_row(row)
+                if clean:
+                    rows.append(clean)
+            result[key] = rows
+        else:
+            result[key] = value.get(key)
+    return result
+
+
+def _sanitize_device_row(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {key: value.get(key) for key in ALLOWED_DEVICE_FIELDS if key in value}
