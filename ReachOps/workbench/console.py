@@ -8,6 +8,8 @@ import webbrowser
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
+from ReachOps.security.credential_store import CredentialStoreUnavailable, ReachOpsCredentialStore, get_secret_if_available
+
 from .view_models import GrowthOpsSnapshot, status_label
 
 
@@ -451,8 +453,9 @@ class GrowthOpsConsole(ttk.Frame):
         self.comment_reply_ai_endpoint_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_ENDPOINT", ""))
         self.comment_reply_ai_model_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_MODEL", "reachops-default"))
         self.comment_reply_ai_key_var = tk.StringVar(value="")
+        stored_ai_key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or get_secret_if_available("ai_api_key"))
         self.comment_reply_ai_status_var = tk.StringVar(
-            value="AI Key 已配置" if os.environ.get("REACHOPS_AI_API_KEY") else "AI Key 未配置"
+            value="AI Key 已配置" if stored_ai_key_configured else "AI Key 未配置"
         )
         self.recommended_source_value_var = tk.StringVar(value="")
         self.template_action_type_var = tk.StringVar(value=display_action_type("comment_reply"))
@@ -1174,25 +1177,36 @@ class GrowthOpsConsole(ttk.Frame):
             os.environ["REACHOPS_AI_MODEL"] = model
         else:
             os.environ.pop("REACHOPS_AI_MODEL", None)
+        key_saved = bool(os.environ.get("REACHOPS_AI_API_KEY") or get_secret_if_available("ai_api_key"))
+        key_error = ""
         if key:
-            os.environ["REACHOPS_AI_API_KEY"] = key
+            try:
+                ReachOpsCredentialStore().set_secret("ai_api_key", key)
+                key_saved = True
+                self.comment_reply_ai_key_var.set("")
+            except (CredentialStoreUnavailable, ValueError) as exc:
+                key_error = exc.__class__.__name__
+                key_saved = False
 
-        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or key)
+        key_configured = key_saved
         if endpoint:
             status = f"外部AI已配置：model={model or '未指定'}，key={'已配置' if key_configured else '未配置'}"
+            if key and key_error:
+                status += "，key 未保存：需要 Windows Credential Manager"
         else:
             status = "外部AI未启用：未填写Endpoint"
         self.comment_reply_ai_status_var.set(status)
         self.append_runtime_log(
             f"CONFIG comment_reply_ai strategy={self.comment_reply_strategy_var.get()} "
             f"endpoint_configured={str(bool(endpoint)).lower()} model={model or 'none'} "
-            f"key_configured={str(key_configured).lower()} ai_suggestion_only=true"
+            f"key_configured={str(key_configured).lower()} key_backend=windows_credential_manager "
+            f"key_save_error={key_error or 'none'} ai_suggestion_only=true"
         )
 
     def comment_reply_ai_settings(self) -> dict:
         endpoint = self.comment_reply_ai_endpoint_var.get().strip()
         model = self.comment_reply_ai_model_var.get().strip()
-        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or self.comment_reply_ai_key_var.get().strip())
+        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or get_secret_if_available("ai_api_key"))
         return {
             "strategy": self.comment_reply_strategy_var.get(),
             "endpoint_configured": bool(endpoint),

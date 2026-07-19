@@ -8,6 +8,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Protocol
 
+from ReachOps.security.credential_store import get_secret_if_available
+
 from .schemas import AcquisitionCampaign
 from .source_planner import split_operator_keywords
 
@@ -36,9 +38,12 @@ def build_default_acquisition_intelligence_provider(env: dict[str, str] | None =
     endpoint = str(env.get("REACHOPS_AI_ENDPOINT") or "").strip()
     if not endpoint:
         return RuleBasedAcquisitionIntelligenceProvider()
+    api_key = str(env.get("REACHOPS_AI_API_KEY") or "").strip()
+    if not api_key:
+        api_key = get_secret_if_available("ai_api_key")
     return HTTPAcquisitionIntelligenceProvider(
         endpoint=endpoint,
-        api_key=str(env.get("REACHOPS_AI_API_KEY") or "").strip(),
+        api_key=api_key,
         model=str(env.get("REACHOPS_AI_MODEL") or "").strip() or "reachops-default",
         timeout_seconds=float(env.get("REACHOPS_AI_TIMEOUT_SECONDS") or 20),
         provider_name=str(env.get("REACHOPS_AI_PROVIDER_NAME") or "").strip() or "http_ai_provider",
