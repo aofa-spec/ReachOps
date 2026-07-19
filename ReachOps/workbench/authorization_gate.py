@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from ReachOps.device_seats import evaluate_device_seat_state
+from ReachOps.license_state import evaluate_license_state
+from ReachOps.license_verification import evaluate_license_verification_state
+
 from .device_identity import DeviceIdentity
 
 
@@ -64,17 +68,33 @@ class LiveSubmitAuthorizationGate:
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status is a template", evidence)
         if not bool(status.get("active")):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation is inactive", evidence)
-        bound_device_id = str(status.get("device_id") or "").strip()
-        if bound_device_id and bound_device_id != evidence["current_device_id"]:
+        device_seat_state = evaluate_device_seat_state(status, evidence["current_device_id"])
+        evidence = {**evidence, "device_seat_state": device_seat_state.as_dict()}
+        if not device_seat_state.device_allowed:
             return AuthorizationDecision(
                 False,
                 "LIVE_SUBMIT_DEVICE_MISMATCH",
-                "activation is bound to another device",
-                {**evidence, "bound_device_id": bound_device_id},
+                device_seat_state.reason or "activation is not bound to this device",
+                evidence,
             )
-        expires_at = str(status.get("expires_at") or "").strip()
-        if expires_at and self._is_expired(expires_at):
-            return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_EXPIRED", "activation has expired", {**evidence, "expires_at": expires_at})
+        license_state = evaluate_license_state(status)
+        evidence = {**evidence, "license_state": license_state.as_dict()}
+        if not license_state.live_submit_allowed:
+            if license_state.reason_code == "LIVE_SUBMIT_LICENSE_GRACE_PERIOD":
+                return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_GRACE_PERIOD", license_state.reason, evidence)
+            if license_state.reason_code == "LIVE_SUBMIT_LICENSE_EXPIRED":
+                return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_EXPIRED", license_state.reason, evidence)
+            return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", license_state.reason or "license is not active", evidence)
+        verification_state = evaluate_license_verification_state(status)
+        evidence = {**evidence, "license_verification_state": verification_state.as_dict()}
+        if self._license_verification_declared(status) and verification_state.verification_required:
+            return AuthorizationDecision(
+                False,
+                "LIVE_SUBMIT_LICENSE_VERIFICATION_REQUIRED",
+                verification_state.reason or "license verification is due",
+                evidence,
+            )
+        expires_at = license_state.expires_at
         capabilities = status.get("capabilities") if isinstance(status.get("capabilities"), dict) else {}
         if not bool(capabilities.get(feature)):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", f"feature not enabled: {feature}", evidence)
@@ -90,6 +110,19 @@ class LiveSubmitAuthorizationGate:
         except Exception:
             return {}
 
+    @staticmethod
+    def _license_verification_declared(status: dict[str, Any]) -> bool:
+        return any(
+            str(status.get(key) or "").strip()
+            for key in [
+                "last_verified_at",
+                "verified_at",
+                "last_license_check_at",
+                "next_verify_at",
+                "next_license_check_at",
+            ]
+        )
+
     @classmethod
     def is_packaged_runtime(cls) -> bool:
         return bool(getattr(sys, "frozen", False))
@@ -101,7 +134,7 @@ class LiveSubmitAuthorizationGate:
             return True
         if explicit in {"0", "false", "no", "off"}:
             return False
-        return cls.is_packaged_runtime()
+        return True
 
     @classmethod
     def runtime_mode(cls) -> str:

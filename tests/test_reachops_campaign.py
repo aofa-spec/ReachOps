@@ -792,6 +792,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(manifest["build"], "7")
             self.assertEqual(manifest["installer"]["sha256"], digest)
             self.assertEqual(manifest["installer"]["size_bytes"], len(b"reachops-installer"))
+            self.assertEqual(manifest["installer"]["path"], installer.name)
+            self.assertFalse(Path(manifest["installer"]["path"]).is_absolute())
             self.assertTrue(manifest["runtime_policy"]["preserve_activation_status"])
             self.assertTrue(manifest["runtime_policy"]["preserve_data"])
 
@@ -811,6 +813,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(update.available)
             self.assertEqual(update.latest_version, "0.5.0")
             self.assertTrue(manager.verify_installer(installer, loaded))
+            self.assertEqual(manager.installer_path_from_manifest(loaded, base_dir=tmp_path), str(installer))
             args = manager.silent_install_args(installer)
             self.assertEqual(args[0], str(installer))
             self.assertIn("/VERYSILENT", args)
@@ -1221,6 +1224,23 @@ class ReachOpsCampaignTests(unittest.TestCase):
             },
             "json_path": "reports/reachops_acceptance/current/windows_package_preflight.json",
         }
+        passed_summary["license_refresh"] = {
+            "status": "preview",
+            "refreshed": False,
+            "endpoint_configured": True,
+            "activation_status_path": "C:/Users/aofa/AppData/Local/ReachOps/config/reachops_activation_status.json",
+            "no_browser_started": True,
+            "no_submit": True,
+            "customer_data_uploaded": False,
+            "request_payload": {
+                "license_key": "***redacted***",
+                "device_id": "device-a",
+                "app_version": "0.4.0",
+                "platform": "windows_local_client",
+                "runtime_mode": "packaged",
+            },
+            "json_path": "reports/reachops_acceptance/current/license_refresh_payload.json",
+        }
         passed_summary["client_delivery"] = {
             "status": "passed",
             "readiness": "pass",
@@ -1328,6 +1348,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(passed["windows_package_preflight"]["default_build_requires_installer"])
         self.assertTrue(passed["windows_package_preflight"]["skip_installer_is_non_final"])
         self.assertTrue(passed["windows_package_preflight"]["json_path"].endswith("windows_package_preflight.json"))
+        self.assertEqual(passed["license_refresh"]["status"], "preview")
+        self.assertFalse(passed["license_refresh"]["refreshed"])
+        self.assertTrue(passed["license_refresh"]["endpoint_configured"])
+        self.assertTrue(passed["license_refresh"]["no_browser_started"])
+        self.assertTrue(passed["license_refresh"]["no_submit"])
+        self.assertFalse(passed["license_refresh"]["customer_data_uploaded"])
+        self.assertTrue(passed["license_refresh"]["request_payload_redacted"])
+        self.assertTrue(passed["license_refresh"]["json_path"].endswith("license_refresh_payload.json"))
         self.assertEqual(passed["client_delivery"]["status"], "passed")
         self.assertEqual(passed["client_delivery"]["readiness"], "pass")
         self.assertTrue(passed["client_delivery"]["final_delivery_ready"])
@@ -1370,6 +1398,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("authorization_handoff_submitted_action", unsafe_authorization_handoff["failures"])
         self.assertIn("authorization_handoff_bundle_path_missing", unsafe_authorization_handoff["failures"])
         self.assertIn("authorization_handoff_json_path_missing", unsafe_authorization_handoff["failures"])
+
+        unsafe_license_refresh_summary = json.loads(json.dumps(passed_summary))
+        unsafe_license_refresh_summary["license_refresh"] = {
+            "status": "preview",
+            "refreshed": False,
+            "endpoint_configured": True,
+            "no_browser_started": False,
+            "no_submit": False,
+            "customer_data_uploaded": True,
+            "request_payload": {"license_key": "unredacted-fixture-license"},
+            "json_path": "reports/reachops_acceptance/current/license_refresh_payload.json",
+        }
+        unsafe_license_refresh = verify_reachops_acceptance_summary(unsafe_license_refresh_summary)
+        self.assertFalse(unsafe_license_refresh["passed"])
+        self.assertIn("license_refresh_started_browser", unsafe_license_refresh["failures"])
+        self.assertIn("license_refresh_submitted_action", unsafe_license_refresh["failures"])
+        self.assertIn("license_refresh_uploaded_customer_data", unsafe_license_refresh["failures"])
+        self.assertIn("license_refresh_license_key_not_redacted", unsafe_license_refresh["failures"])
 
         missing_live_acceptance_status_summary = json.loads(json.dumps(passed_summary))
         missing_live_acceptance_status_summary.pop("live_acceptance_status")
@@ -1492,12 +1538,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             report_dir.mkdir()
             summary_path = report_dir / "acceptance_summary.json"
             (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (report_dir / "license_refresh_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (report_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (report_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             path_checked_summary = json.loads(json.dumps(passed_summary))
             path_checked_summary["repository_cleanliness"]["json_path"] = "repository_cleanliness_payload.json"
+            path_checked_summary["license_refresh"]["json_path"] = "license_refresh_payload.json"
             path_checked_summary["windows_package_preflight"]["json_path"] = "windows_package_preflight.json"
             path_checked_summary["client_delivery"]["json_path"] = "client_delivery.json"
             path_checked_summary["final_acceptance_gate"]["json_path"] = "final_acceptance_gate.json"
@@ -1505,11 +1553,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_exists"])
+            self.assertTrue(path_checked["license_refresh"]["json_exists"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_exists"])
             self.assertTrue(path_checked["client_delivery"]["json_exists"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_exists"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["license_refresh"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["client_delivery"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_inside_summary_dir"])
@@ -1521,6 +1571,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("repository_cleanliness_json_missing", missing_report_file["failures"])
 
             (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (report_dir / "license_refresh_payload.json").unlink()
+            missing_license_refresh_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_license_refresh_file["passed"])
+            self.assertIn("license_refresh_json_missing", missing_license_refresh_file["failures"])
+
+            (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (report_dir / "license_refresh_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "windows_package_preflight.json").unlink()
             missing_preflight_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_preflight_report_file["passed"])
@@ -1547,12 +1604,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             outside_dir = Path(tmp) / "outside"
             outside_dir.mkdir()
             (outside_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "license_refresh_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (outside_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (outside_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (outside_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             outside_summary = json.loads(json.dumps(path_checked_summary))
             outside_summary["repository_cleanliness"]["json_path"] = str(outside_dir / "repository_cleanliness_payload.json")
+            outside_summary["license_refresh"]["json_path"] = "../outside/license_refresh_payload.json"
             outside_summary["windows_package_preflight"]["json_path"] = "../outside/windows_package_preflight.json"
             outside_summary["client_delivery"]["json_path"] = "../outside/client_delivery.json"
             outside_summary["final_acceptance_gate"]["json_path"] = "../outside/final_acceptance_gate.json"
@@ -1560,11 +1619,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             outside_report_file = verify_reachops_acceptance_summary(outside_summary, summary_path=summary_path)
             self.assertFalse(outside_report_file["passed"])
             self.assertIn("repository_cleanliness_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("license_refresh_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("windows_package_preflight_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("client_delivery_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("final_acceptance_gate_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("authorization_handoff_json_outside_summary_dir", outside_report_file["failures"])
             self.assertFalse(outside_report_file["repository_cleanliness"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["license_refresh"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["windows_package_preflight"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["client_delivery"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["final_acceptance_gate"]["json_inside_summary_dir"])
@@ -1867,6 +1928,21 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(report["selected_profiles"][0]["proxy"]["proxy_password"], "***redacted***")
         self.assertNotIn("secret-user", json.dumps(report))
         self.assertEqual(report["proxy_type_counts"]["socks5"], 1)
+        reveal_report = build_ixbrowser_profile_metadata_report(
+            client=client,
+            profile_ids=["27273"],
+            reveal_secrets=True,
+        )
+        serialized_reveal_report = json.dumps(reveal_report)
+        self.assertTrue(reveal_report["secret_disclosure_disabled"])
+        self.assertEqual(reveal_report["selected_profiles"][0]["profile"]["name"], "***redacted***")
+        self.assertEqual(reveal_report["selected_profiles"][0]["proxy"]["proxy_user"], "***redacted***")
+        self.assertEqual(reveal_report["selected_profiles"][0]["proxy"]["proxy_password"], "***redacted***")
+        self.assertNotIn("acct@example.com", serialized_reveal_report)
+        self.assertNotIn("hidden-user", serialized_reveal_report)
+        self.assertNotIn("hidden-password", serialized_reveal_report)
+        self.assertNotIn("secret-user", serialized_reveal_report)
+        self.assertNotIn("secret-password", serialized_reveal_report)
 
     def test_ixbrowser_profile_metadata_report_syncs_selected_group_count_into_group_list(self):
         class FakeIXClient:
@@ -1913,6 +1989,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(report["files"]["authorization_handoff_bundle"]["exists"])
         self.assertTrue(report["contract_checks"]["tools/build_reachops_windows.ps1"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/run_reachops_acceptance_windows.ps1"]["ok"])
+        self.assertTrue(report["manifest_contract"]["ok"])
+        self.assertTrue(report["manifest_contract"]["checks"]["installer_path_portable"])
+        self.assertTrue(report["manifest_contract"]["checks"]["preserve_activation_status"])
+        self.assertTrue(report["manifest_contract"]["checks"]["no_customer_data_fields"])
         self.assertTrue(report["build_contract"]["default_build_requires_installer"])
         self.assertTrue(report["build_contract"]["skip_installer_is_non_final"])
         self.assertTrue(report["build_contract"]["preflight_report_path"].endswith("windows_package_preflight.json"))
@@ -2086,6 +2166,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "live_acceptance_status_payload.json",
                 "authorization_handoff_payload.json",
                 "live_validation_manifest.json",
+                "license_refresh_payload.json",
                 "repository_cleanliness_payload.json",
                 "windows_package_preflight.json",
                 "client_delivery.json",
@@ -2141,6 +2222,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "process_running": True,
                     "interactive_task": True,
                     "json_path": str(report_dir / "ui_startup_payload.json"),
+                },
+                "license_refresh": {
+                    "status": "preview",
+                    "refreshed": False,
+                    "endpoint_configured": True,
+                    "no_browser_started": True,
+                    "no_submit": True,
+                    "customer_data_uploaded": False,
+                    "request_payload": {"license_key": "***redacted***"},
+                    "json_path": str(report_dir / "license_refresh_payload.json"),
                 },
                 "activation_status": {
                     "status": "ready",
@@ -2290,6 +2381,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["artifacts"]["installer"]["pe_dos_signature_valid"])
             self.assertTrue(result["artifacts"]["installer"]["pe_header_signature_valid"])
             self.assertTrue(result["report_files"]["repository_cleanliness"]["exists"])
+            self.assertTrue(result["report_files"]["license_refresh"]["exists"])
             self.assertTrue(result["report_files"]["windows_package_preflight"]["exists"])
             self.assertTrue(result["report_files"]["client_delivery"]["exists"])
             self.assertTrue(result["report_files"]["final_acceptance_gate"]["exists"])
@@ -5140,6 +5232,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("tools\\reachops_live_readiness.py", acceptance_script)
         self.assertIn("tools\\reachops_live_validation_manifest.py", acceptance_script)
         self.assertIn("tools\\reachops_repository_cleanliness_check.py", acceptance_script)
+        self.assertIn("tools\\reachops_license_refresh.py", acceptance_script)
+        self.assertIn("--preview", acceptance_script)
+        self.assertIn("LicenseEndpoint", acceptance_script)
+        self.assertNotIn("LicenseKey", acceptance_script)
         self.assertIn("tools\\reachops_live_submit_acceptance.py", acceptance_script)
         self.assertIn("Assert-LastExitCode", acceptance_script)
         self.assertIn("Invoke-PythonCapture", acceptance_script)
@@ -5156,6 +5252,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("repository_cleanliness_payload.json", acceptance_script)
         self.assertIn("repository_cleanliness", acceptance_script)
         self.assertIn("WINDOWS_PACKAGE_PREFLIGHT_JSON", acceptance_script)
+        self.assertIn("license_refresh_payload.json", acceptance_script)
+        self.assertIn("license_refresh", acceptance_script)
         self.assertIn("windows_package_preflight.json", acceptance_script)
         self.assertIn("windows_package_preflight", acceptance_script)
         self.assertIn("ReachOps client delivery gate", acceptance_script)

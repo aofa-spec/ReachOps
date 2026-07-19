@@ -1,0 +1,207 @@
+import os
+import unittest
+from unittest.mock import patch
+
+from ReachOps.credentials import (
+    AI_API_KEY_SECRET,
+    ReachOpsCredentialStore,
+    SecretLookup,
+    ai_api_key_status,
+    resolve_ai_api_key,
+)
+from ReachOps.intelligence.ai_strategy import HTTPAcquisitionIntelligenceProvider, build_default_acquisition_intelligence_provider
+from ReachOps.workbench.console import GrowthOpsConsole
+
+
+class DummyVar:
+    def __init__(self, value=""):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+
+class FakeWindowsCredentialStore(ReachOpsCredentialStore):
+    def __init__(self):
+        super().__init__()
+        self.values = {}
+        self.deleted = []
+
+    def supported(self) -> bool:
+        return True
+
+    def _read_windows_secret(self, target_name: str) -> str:
+        return self.values.get(target_name, "")
+
+    def _write_windows_secret(self, target_name: str, secret_value: str) -> None:
+        self.values[target_name] = secret_value
+
+    def _delete_windows_secret(self, target_name: str) -> bool:
+        self.deleted.append(target_name)
+        return self.values.pop(target_name, None) is not None
+
+
+class FailingWindowsCredentialStore(ReachOpsCredentialStore):
+    def supported(self) -> bool:
+        return True
+
+    def _read_windows_secret(self, target_name: str) -> str:
+        raise RuntimeError("native read failed with super-secret")
+
+    def _write_windows_secret(self, target_name: str, secret_value: str) -> None:
+        raise RuntimeError(f"native write failed with {secret_value}")
+
+    def _delete_windows_secret(self, target_name: str) -> bool:
+        raise RuntimeError("native delete failed")
+
+
+class ReachOpsCredentialTests(unittest.TestCase):
+    def test_non_windows_store_does_not_persist_secret(self):
+        store = ReachOpsCredentialStore()
+        with patch("platform.system", return_value="Darwin"):
+            result = store.write_secret(AI_API_KEY_SECRET, "secret-value")
+            lookup = store.read_secret(AI_API_KEY_SECRET)
+
+        self.assertFalse(result.stored)
+        self.assertFalse(result.persistent)
+        self.assertEqual(result.status, "unsupported_platform")
+        self.assertFalse(lookup.configured)
+        self.assertEqual(lookup.source, "unsupported_platform")
+
+    def test_environment_key_is_session_fallback_only(self):
+        env = {"REACHOPS_AI_API_KEY": "session-secret"}
+        with patch("platform.system", return_value="Darwin"):
+            lookup = resolve_ai_api_key(env=env)
+            status = ai_api_key_status(env=env)
+
+        self.assertEqual(lookup.value, "session-secret")
+        self.assertEqual(lookup.source, "environment_session")
+        self.assertFalse(lookup.persistent)
+        self.assertTrue(status["configured"])
+        self.assertFalse(status["persistent"])
+        self.assertTrue(status["secret_value_redacted"])
+
+    def test_windows_credential_manager_round_trip_uses_reachops_target(self):
+        store = FakeWindowsCredentialStore()
+
+        stored = store.write_secret(AI_API_KEY_SECRET, "win-secret")
+        lookup = store.read_secret(AI_API_KEY_SECRET)
+        deleted = store.write_secret(AI_API_KEY_SECRET, "")
+
+        self.assertTrue(stored.stored)
+        self.assertTrue(stored.persistent)
+        self.assertEqual(stored.source, "windows_credential_manager")
+        self.assertEqual(lookup.value, "win-secret")
+        self.assertEqual(lookup.source, "windows_credential_manager")
+        self.assertEqual(store.deleted, ["ReachOps:ai_api_key"])
+        self.assertTrue(deleted.deleted)
+
+    def test_windows_credential_manager_precedes_environment_key(self):
+        store = FakeWindowsCredentialStore()
+        store.write_secret(AI_API_KEY_SECRET, "stored-secret")
+
+        lookup = resolve_ai_api_key(env={"REACHOPS_AI_API_KEY": "env-secret"}, credential_store=store)
+
+        self.assertEqual(lookup.value, "stored-secret")
+        self.assertEqual(lookup.source, "windows_credential_manager")
+        self.assertTrue(lookup.persistent)
+
+    def test_windows_does_not_fallback_to_environment_when_store_is_empty(self):
+        store = FakeWindowsCredentialStore()
+
+        lookup = resolve_ai_api_key(env={"REACHOPS_AI_API_KEY": "env-secret"}, credential_store=store)
+        status = ai_api_key_status(env={"REACHOPS_AI_API_KEY": "env-secret"}, credential_store=store)
+
+        self.assertEqual(lookup.value, "")
+        self.assertEqual(lookup.source, "windows_credential_manager")
+        self.assertFalse(lookup.configured)
+        self.assertTrue(lookup.persistent)
+        self.assertFalse(status["configured"])
+        self.assertEqual(status["source"], "windows_credential_manager")
+
+    def test_windows_does_not_fallback_to_environment_when_store_read_fails(self):
+        store = FailingWindowsCredentialStore()
+
+        lookup = resolve_ai_api_key(env={"REACHOPS_AI_API_KEY": "env-secret"}, credential_store=store)
+        status = ai_api_key_status(env={"REACHOPS_AI_API_KEY": "env-secret"}, credential_store=store)
+
+        self.assertEqual(lookup.value, "")
+        self.assertEqual(lookup.source, "windows_credential_manager")
+        self.assertEqual(lookup.error, "RuntimeError")
+        self.assertFalse(status["configured"])
+        self.assertEqual(status["source"], "windows_credential_manager")
+        self.assertEqual(status["error"], "RuntimeError")
+        self.assertNotIn("env-secret", repr((lookup, status)))
+
+    def test_default_http_ai_provider_uses_secret_resolver(self):
+        env = {"REACHOPS_AI_ENDPOINT": "https://ai.local/analyze", "REACHOPS_AI_MODEL": "test-model"}
+        with patch(
+            "ReachOps.intelligence.ai_strategy.resolve_ai_api_key",
+            return_value=SecretLookup("resolved-secret", "windows_credential_manager", True, True),
+        ):
+            provider = build_default_acquisition_intelligence_provider(env=env)
+
+        self.assertIsInstance(provider, HTTPAcquisitionIntelligenceProvider)
+        self.assertEqual(provider.api_key, "resolved-secret")
+        self.assertEqual(provider._headers()["Authorization"], "Bearer resolved-secret")
+
+    def test_windows_credential_manager_failures_are_structured_and_redacted(self):
+        store = FailingWindowsCredentialStore()
+
+        read = store.read_secret(AI_API_KEY_SECRET)
+        written = store.write_secret(AI_API_KEY_SECRET, "super-secret")
+        deleted = store.write_secret(AI_API_KEY_SECRET, "")
+        status = ai_api_key_status(env={}, credential_store=store)
+        encoded = repr((read, written, deleted, status))
+
+        self.assertEqual(read.source, "windows_credential_manager")
+        self.assertEqual(read.error, "RuntimeError")
+        self.assertEqual(written.status, "store_failed")
+        self.assertEqual(written.error, "RuntimeError")
+        self.assertEqual(deleted.status, "delete_failed")
+        self.assertEqual(deleted.error, "RuntimeError")
+        self.assertFalse(status["configured"])
+        self.assertEqual(status["error"], "RuntimeError")
+        self.assertNotIn("super-secret", encoded)
+
+    def test_windows_credential_manager_rejects_oversized_secret_before_native_write(self):
+        store = FakeWindowsCredentialStore()
+        oversized = "x" * ((store.MAX_CREDENTIAL_BLOB_BYTES // 2) + 1)
+
+        result = store.write_secret(AI_API_KEY_SECRET, oversized)
+        lookup = store.read_secret(AI_API_KEY_SECRET)
+
+        self.assertFalse(result.stored)
+        self.assertEqual(result.status, "secret_too_large")
+        self.assertEqual(result.error, "credential_blob_limit_exceeded")
+        self.assertFalse(lookup.configured)
+        self.assertNotIn(oversized, repr(result))
+
+    def test_console_does_not_fallback_to_environment_when_windows_credential_write_fails(self):
+        console = GrowthOpsConsole.__new__(GrowthOpsConsole)
+        console.credential_store = FailingWindowsCredentialStore()
+        console.comment_reply_ai_endpoint_var = DummyVar("https://ai.example.test")
+        console.comment_reply_ai_model_var = DummyVar("reachops-model")
+        console.comment_reply_ai_key_var = DummyVar("super-secret")
+        console.comment_reply_ai_status_var = DummyVar("")
+        console.comment_reply_strategy_var = DummyVar("外部AI")
+        console.logs = []
+        console.append_runtime_log = lambda message: console.logs.append(message)
+
+        with patch.dict("os.environ", {}, clear=True):
+            GrowthOpsConsole.apply_comment_reply_ai_settings(console)
+            env_value = os.environ.get("REACHOPS_AI_API_KEY", "")
+
+        self.assertEqual(env_value, "")
+        self.assertEqual(console.comment_reply_ai_key_var.get(), "super-secret")
+        self.assertIn("Credential Manager写入失败", console.comment_reply_ai_status_var.get())
+        self.assertIn("credential_write_status=store_failed", console.logs[-1])
+        encoded = repr((console.comment_reply_ai_status_var.get(), console.logs))
+        self.assertNotIn("super-secret", encoded)
+
+
+if __name__ == "__main__":
+    unittest.main()

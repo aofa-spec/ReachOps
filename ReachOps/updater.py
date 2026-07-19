@@ -84,7 +84,10 @@ class ReachOpsUpdateManager:
         installer = manifest.get("installer") or {}
         path = str(installer.get("path") or "").strip()
         if path:
-            return path
+            candidate = Path(path)
+            if candidate.is_absolute():
+                return str(candidate)
+            return str(Path(base_dir or os.getcwd()) / candidate)
         file_name = str(installer.get("file_name") or "").strip()
         if not file_name:
             raise ValueError("manifest installer file_name/path is required")

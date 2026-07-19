@@ -8,6 +8,7 @@ param(
     [string]$DmProfileUrl = "",
     [string]$TargetUsername = "",
     [string]$ActivationStatusPath = "",
+    [string]$LicenseEndpoint = "",
     [int]$Limit = 3,
     [string]$AllowPressureSubmit = "",
     [switch]$AllowMissingInstaller,
@@ -188,6 +189,7 @@ function Write-AcceptanceSummary {
         [string]$OperatorPressureJsonPath,
         [string]$InstallerSmokeJsonPath,
         [string]$UiStartupJsonPath,
+        [string]$LicenseRefreshJsonPath,
         [string]$ActivationStatusJsonPath,
         [string]$LiveAcceptanceStatusJsonPath,
         [string]$AuthorizationHandoffJsonPath,
@@ -204,6 +206,7 @@ function Write-AcceptanceSummary {
     $operatorPressure = Read-JsonObject $OperatorPressureJsonPath
     $installer = Read-JsonObject $InstallerSmokeJsonPath
     $uiStartup = Read-JsonObject $UiStartupJsonPath
+    $licenseRefresh = Read-JsonObject $LicenseRefreshJsonPath
     $activationStatus = Read-JsonObject $ActivationStatusJsonPath
     $liveAcceptanceStatus = Read-JsonObject $LiveAcceptanceStatusJsonPath
     $authorizationHandoff = Read-JsonObject $AuthorizationHandoffJsonPath
@@ -339,6 +342,17 @@ function Write-AcceptanceSummary {
             interactive_task = if ($uiStartup) { [bool]$uiStartup.interactive_task } else { $false }
             pid = if ($uiStartup) { [int]$uiStartup.pid } else { 0 }
             json_path = if (Test-Path $UiStartupJsonPath) { $UiStartupJsonPath } else { "" }
+        }
+        license_refresh = [ordered]@{
+            status = if ($licenseRefresh) { [string]$licenseRefresh.status } else { "skipped" }
+            refreshed = if ($licenseRefresh) { [bool]$licenseRefresh.refreshed } else { $false }
+            endpoint_configured = if ($licenseRefresh) { [bool]$licenseRefresh.endpoint_configured } else { $false }
+            activation_status_path = if ($licenseRefresh) { [string]$licenseRefresh.activation_status_path } else { "" }
+            no_browser_started = if ($licenseRefresh) { [bool]$licenseRefresh.no_browser_started } else { $true }
+            no_submit = if ($licenseRefresh) { [bool]$licenseRefresh.no_submit } else { $true }
+            customer_data_uploaded = if ($licenseRefresh) { [bool]$licenseRefresh.customer_data_uploaded } else { $false }
+            request_payload = if ($licenseRefresh) { $licenseRefresh.request_payload } else { @{} }
+            json_path = if (Test-Path $LicenseRefreshJsonPath) { $LicenseRefreshJsonPath } else { "" }
         }
         activation_status = [ordered]@{
             status = if ($activationStatus) { [string]$activationStatus.status } else { "skipped" }
@@ -497,6 +511,8 @@ $installerSmokeStdout = Join-Path $root "installer_smoke_stdout.json"
 $installerSmokeJson = Join-Path $root "installer_smoke_payload.json"
 $uiStartupStdout = Join-Path $root "ui_startup_stdout.json"
 $uiStartupJson = Join-Path $root "ui_startup_payload.json"
+$licenseRefreshStdout = Join-Path $root "license_refresh_stdout.json"
+$licenseRefreshJson = Join-Path $root "license_refresh_payload.json"
 $activationStatusStdout = Join-Path $root "activation_status_stdout.json"
 $activationStatusJson = Join-Path $root "activation_status_payload.json"
 $liveAcceptanceStatusStdout = Join-Path $root "live_acceptance_status_stdout.json"
@@ -574,6 +590,14 @@ if ($ReuseExistingUiStartup) {
 } else {
     Write-Step "Skipping UI startup smoke: script not found"
 }
+
+Write-Step "ReachOps license refresh preview without browser"
+$licenseRefreshArgs = @("tools\reachops_license_refresh.py", "--preview", "--json")
+if ($LicenseEndpoint) {
+    $licenseRefreshArgs += @("--endpoint", $LicenseEndpoint)
+}
+Invoke-PythonCapture -StepName "ReachOps license refresh preview" -StdoutPath $licenseRefreshStdout -Arguments $licenseRefreshArgs
+Convert-StdoutJson -StdoutPath $licenseRefreshStdout -OutputPath $licenseRefreshJson | Out-Null
 
 Write-Step "ReachOps activation status check without browser"
 $activationStatusArgs = @("tools\reachops_activation_status_check.py", "--json")
@@ -797,7 +821,7 @@ if ($RunLiveSubmit) {
     Write-Step "Skipping controlled live submit: RunLiveSubmit not set"
 }
 
-Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveAcceptanceStatusJsonPath $liveAcceptanceStatusJson -AuthorizationHandoffJsonPath $authorizationHandoffJson -LiveValidationJsonPath $liveValidationJson -RepositoryCleanlinessJsonPath $repositoryCleanlinessJson -WindowsPackagePreflightJsonPath $windowsPackagePreflightJson -ClientDeliveryJsonPath $clientDeliveryJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
+Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -LicenseRefreshJsonPath $licenseRefreshJson -ActivationStatusJsonPath $activationStatusJson -LiveAcceptanceStatusJsonPath $liveAcceptanceStatusJson -AuthorizationHandoffJsonPath $authorizationHandoffJson -LiveValidationJsonPath $liveValidationJson -RepositoryCleanlinessJsonPath $repositoryCleanlinessJson -WindowsPackagePreflightJsonPath $windowsPackagePreflightJson -ClientDeliveryJsonPath $clientDeliveryJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
 
 Write-Step "ReachOps goal status report"
 Invoke-PythonCapture -StepName "ReachOps goal status report" -StdoutPath $goalStatusStdout -Arguments @("tools\reachops_goal_status_report.py", "--audit-json", $auditJson, "--acceptance-summary", $acceptanceSummaryJson, "--json")

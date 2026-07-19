@@ -8,6 +8,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
+from ..credentials import AI_API_KEY_SECRET, ReachOpsCredentialStore, ai_api_key_status
 from .view_models import GrowthOpsSnapshot, status_label
 
 
@@ -451,8 +452,10 @@ class GrowthOpsConsole(ttk.Frame):
         self.comment_reply_ai_endpoint_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_ENDPOINT", ""))
         self.comment_reply_ai_model_var = tk.StringVar(value=os.environ.get("REACHOPS_AI_MODEL", "reachops-default"))
         self.comment_reply_ai_key_var = tk.StringVar(value="")
+        self.credential_store = ReachOpsCredentialStore()
+        ai_key_status = ai_api_key_status(credential_store=self.credential_store)
         self.comment_reply_ai_status_var = tk.StringVar(
-            value="AI Key 已配置" if os.environ.get("REACHOPS_AI_API_KEY") else "AI Key 未配置"
+            value=f"AI Key {'已配置' if ai_key_status['configured'] else '未配置'} ({ai_key_status['source']})"
         )
         self.recommended_source_value_var = tk.StringVar(value="")
         self.template_action_type_var = tk.StringVar(value=display_action_type("comment_reply"))
@@ -891,18 +894,28 @@ class GrowthOpsConsole(ttk.Frame):
             width=8,
         ).grid(row=0, column=3, sticky="w")
         ttk.Button(rule_box, text="应用预设", command=self.apply_quick_send_preset).grid(row=0, column=4, columnspan=2, sticky="w")
-        ttk.Label(rule_box, text="参与账号").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="参与账号数").grid(row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Spinbox(rule_box, from_=1, to=50, width=5, textvariable=self.scan_profile_limit_var).grid(row=1, column=1, sticky="w", pady=(6, 0))
-        ttk.Label(rule_box, text="评论回复").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="每个目标最多视频").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Spinbox(rule_box, from_=1, to=20, width=5, textvariable=self.scan_max_videos_var).grid(row=1, column=3, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="每条视频最多评论").grid(row=1, column=4, sticky="w", pady=(6, 0))
+        ttk.Spinbox(rule_box, from_=1, to=100, width=5, textvariable=self.scan_max_comments_var).grid(row=1, column=5, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="任务间隔秒").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Spinbox(rule_box, from_=1, to=3600, width=5, textvariable=self.scan_interval_var).grid(row=2, column=1, sticky="w", pady=(6, 0))
+        ttk.Label(rule_box, text="评论回复").grid(row=2, column=2, sticky="w", pady=(6, 0))
         ttk.Combobox(
             rule_box,
             textvariable=self.comment_reply_strategy_var,
             values=("规则模板（默认）", "外部AI生成建议", "固定文案"),
             state="readonly",
             width=16,
-        ).grid(row=1, column=3, columnspan=3, sticky="ew", pady=(6, 0))
-        ttk.Label(rule_box, text="固定文案").grid(row=2, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(rule_box, textvariable=self.quick_comment_text_var).grid(row=2, column=1, columnspan=5, sticky="ew", pady=(6, 0))
+        ).grid(row=2, column=3, columnspan=3, sticky="ew", pady=(6, 0))
+        ttk.Label(rule_box, text="意向词").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(rule_box, textvariable=self.scan_intent_keywords_var).grid(row=3, column=1, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(rule_box, text="排除词").grid(row=3, column=3, sticky="w", pady=(6, 0))
+        ttk.Entry(rule_box, textvariable=self.scan_exclude_keywords_var).grid(row=3, column=4, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(rule_box, text="固定文案").grid(row=4, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(rule_box, textvariable=self.quick_comment_text_var).grid(row=4, column=1, columnspan=5, sticky="ew", pady=(6, 0))
         ai_box = ttk.LabelFrame(left_stack, text="评论回复 AI 接入点", padding=6, style="Panel.TLabelframe")
         ai_box.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         for idx in range(6):
@@ -1155,6 +1168,7 @@ class GrowthOpsConsole(ttk.Frame):
         endpoint = self.comment_reply_ai_endpoint_var.get().strip()
         model = self.comment_reply_ai_model_var.get().strip()
         key = self.comment_reply_ai_key_var.get().strip()
+        credential_result = None
 
         if endpoint:
             os.environ["REACHOPS_AI_ENDPOINT"] = endpoint
@@ -1165,29 +1179,48 @@ class GrowthOpsConsole(ttk.Frame):
         else:
             os.environ.pop("REACHOPS_AI_MODEL", None)
         if key:
-            os.environ["REACHOPS_AI_API_KEY"] = key
+            credential_result = self.credential_store.write_secret(AI_API_KEY_SECRET, key)
+            if credential_result.stored:
+                os.environ.pop("REACHOPS_AI_API_KEY", None)
+                self.comment_reply_ai_key_var.set("")
+            elif not credential_result.persistent:
+                os.environ["REACHOPS_AI_API_KEY"] = key
 
-        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or key)
+        key_status = ai_api_key_status(credential_store=self.credential_store)
+        session_key_configured = bool(key and credential_result is not None and not credential_result.persistent)
+        key_configured = bool(key_status["configured"] or session_key_configured)
         if endpoint:
-            status = f"外部AI已配置：model={model or '未指定'}，key={'已配置' if key_configured else '未配置'}"
+            credential_note = ""
+            if credential_result and not credential_result.stored and credential_result.persistent:
+                credential_note = f"，Credential Manager写入失败：{credential_result.status}"
+            status = f"外部AI已配置：model={model or '未指定'}，key={'已配置' if key_configured else '未配置'} ({key_status['source']}){credential_note}"
         else:
             status = "外部AI未启用：未填写Endpoint"
         self.comment_reply_ai_status_var.set(status)
+        credential_source = key_status["source"]
+        credential_persistent = bool(key_status["persistent"])
+        credential_write_status = credential_result.status if credential_result else "not_requested"
         self.append_runtime_log(
             f"CONFIG comment_reply_ai strategy={self.comment_reply_strategy_var.get()} "
             f"endpoint_configured={str(bool(endpoint)).lower()} model={model or 'none'} "
-            f"key_configured={str(key_configured).lower()} ai_suggestion_only=true"
+            f"key_configured={str(key_configured).lower()} credential_source={credential_source} "
+            f"credential_persistent={str(credential_persistent).lower()} credential_write_status={credential_write_status} "
+            f"ai_suggestion_only=true"
         )
 
     def comment_reply_ai_settings(self) -> dict:
         endpoint = self.comment_reply_ai_endpoint_var.get().strip()
         model = self.comment_reply_ai_model_var.get().strip()
-        key_configured = bool(os.environ.get("REACHOPS_AI_API_KEY") or self.comment_reply_ai_key_var.get().strip())
+        key_status = ai_api_key_status(credential_store=self.credential_store)
+        key_configured = bool(key_status["configured"] or self.comment_reply_ai_key_var.get().strip())
         return {
             "strategy": self.comment_reply_strategy_var.get(),
             "endpoint_configured": bool(endpoint),
             "model": model,
             "api_key_configured": key_configured,
+            "api_key_source": key_status["source"],
+            "api_key_persistent": bool(key_status["persistent"]),
+            "windows_credential_manager_required": True,
             "fixed_comment_text_configured": bool(self.quick_comment_text_var.get().strip()),
             "execution_policy": "ai_suggestion_only_live_submit_requires_confirmation",
             "no_auto_ai_submit": True,

@@ -79,6 +79,7 @@ def verify_summary(
     operator_pressure = summary.get("operator_pressure") or {}
     installer_smoke = summary.get("installer_smoke") or {}
     ui_startup = summary.get("ui_startup") or {}
+    license_refresh = summary.get("license_refresh") or {}
     live_validation = summary.get("live_validation") or {}
     repository_cleanliness = summary.get("repository_cleanliness") or {}
     windows_package_preflight = summary.get("windows_package_preflight") or {}
@@ -178,6 +179,33 @@ def verify_summary(
             failures.append("live_validation_started_browser")
         if not bool(live_validation.get("no_submit", True)):
             failures.append("live_validation_submitted_action")
+
+    license_refresh_payload = (
+        license_refresh.get("request_payload")
+        if isinstance(license_refresh.get("request_payload"), dict)
+        else {}
+    )
+    license_refresh_json = report_path_status(
+        summary_path,
+        str(license_refresh.get("json_path") or ""),
+    )
+    if license_refresh:
+        license_key_value = str(license_refresh_payload.get("license_key") or "")
+        if not bool(license_refresh.get("no_browser_started", True)):
+            failures.append("license_refresh_started_browser")
+        if not bool(license_refresh.get("no_submit", True)):
+            failures.append("license_refresh_submitted_action")
+        if bool(license_refresh.get("customer_data_uploaded")):
+            failures.append("license_refresh_uploaded_customer_data")
+        if license_key_value and license_key_value != "***redacted***":
+            failures.append("license_refresh_license_key_not_redacted")
+        if status == STATUS_PASSED and str(license_refresh.get("json_path") or "").strip() and summary_path:
+            if not license_refresh_json["exists"]:
+                failures.append("license_refresh_json_missing")
+            elif int(license_refresh_json.get("size") or 0) <= 0:
+                failures.append("license_refresh_json_empty")
+            elif not bool(license_refresh_json.get("inside_summary_dir")):
+                failures.append("license_refresh_json_outside_summary_dir")
 
     repository_cleanliness_status = str(repository_cleanliness.get("status") or "")
     repository_cleanliness_passed = bool(repository_cleanliness.get("passed"))
@@ -627,6 +655,20 @@ def verify_summary(
             "no_submit": bool(live_validation.get("no_submit", True)),
             "missing_inputs": as_list(live_validation.get("missing_inputs")),
             "selected_profile_ids": as_list(live_validation.get("selected_profile_ids")),
+        },
+        "license_refresh": {
+            "status": str(license_refresh.get("status") or ""),
+            "refreshed": bool(license_refresh.get("refreshed")),
+            "endpoint_configured": bool(license_refresh.get("endpoint_configured")),
+            "activation_status_path": str(license_refresh.get("activation_status_path") or ""),
+            "no_browser_started": bool(license_refresh.get("no_browser_started", True)),
+            "no_submit": bool(license_refresh.get("no_submit", True)),
+            "customer_data_uploaded": bool(license_refresh.get("customer_data_uploaded")),
+            "request_payload_redacted": str(license_refresh_payload.get("license_key") or "") in {"", "***redacted***"},
+            "json_path": str(license_refresh.get("json_path") or ""),
+            "json_exists": bool(license_refresh_json.get("exists")),
+            "json_size": int(license_refresh_json.get("size") or 0),
+            "json_inside_summary_dir": bool(license_refresh_json.get("inside_summary_dir")),
         },
         "repository_cleanliness": {
             "status": repository_cleanliness_status,

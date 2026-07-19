@@ -51,7 +51,7 @@ def split_csv(value: str) -> list[str]:
 
 
 def redact_value(key: str, value: Any, reveal_secrets: bool = False) -> Any:
-    if reveal_secrets or key not in SECRET_KEYS:
+    if key not in SECRET_KEYS:
         return value
     text = str(value or "")
     if not text:
@@ -309,6 +309,7 @@ def build_report(
     return {
         "status": "ok",
         "safe_read_only": True,
+        "secret_disclosure_disabled": True,
         "open_profile_called": False,
         "profile_count": max(len(profiles_raw), known_profile_total),
         "group_count": len(groups_raw),
@@ -328,7 +329,7 @@ def build_report(
         "available_profile_ids_sample": sorted(profiles_by_id)[:100],
         "notes": [
             "This report only calls ixBrowser list APIs and never opens a profile.",
-            "Proxy usernames, passwords, account usernames, and account passwords are redacted by default.",
+            "Proxy usernames, passwords, account usernames, and account passwords are always redacted.",
         ],
     }
 
@@ -339,7 +340,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--group-name", default="", help="Optional ixBrowser group name filter.")
     parser.add_argument("--max-pages", type=int, default=50)
     parser.add_argument("--profile-limit", type=int, default=200)
-    parser.add_argument("--reveal-secrets", action="store_true", help="Print proxy/account secret fields. Off by default.")
+    parser.add_argument(
+        "--reveal-secrets",
+        action="store_true",
+        help="Deprecated compatibility flag; ReachOps always redacts proxy/account secret fields.",
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 

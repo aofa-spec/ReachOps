@@ -3068,10 +3068,10 @@ def html_page() -> bytes:
       const startBlockedReason = !groupListReady
         ? '请先刷新 ixBrowser 配置分组，并等待分组数量实时读取完成。'
         : blockedByAccountGate
-          ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；点击后会重新读取分组并自动预检筛选有效账号。`
+          ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；账号修复后再启动。`
           : '开始获客';
       if ($('start')) {{
-        $('start').disabled = !groupListReady;
+        $('start').disabled = !groupListReady || blockedByAccountGate;
         $('start').title = startBlockedReason;
       }}
       if ($('accountGateState')) {{
@@ -4014,7 +4014,23 @@ def html_page() -> bytes:
 	      const box = $('groupDetails');
 	      if (!box) return;
 	      box.classList.remove('hasContent');
-	      box.innerHTML = '';
+	      if (!groups.length) {{
+	        box.innerHTML = '';
+	        return;
+	      }}
+	      const selected = normGroupName(selectedName);
+	      const rows = groups.map(group => {{
+	        const name = String(group.name || '');
+	        const countKnown = group.count_known === true;
+	        const countLabel = String(group.count_label || (countKnown ? `${{Number(group.count || 0)}}账号` : '数量未返回'));
+	        const source = String(group.count_source || group.source || (countKnown ? 'ixbrowser_profile_list' : 'unknown'));
+	        const status = String(group.count_status || (countKnown ? 'known' : 'unknown'));
+	        const active = selected && normGroupName(name) === selected ? ' active' : '';
+	        const qtyClass = countKnown ? 'groupQty' : 'groupQty unknown';
+	        return `<div class="groupItem${{active}}"><div><div class="groupName">${{esc(name || '未命名分组')}}</div><div class="groupMeta">${{esc(source)}} / ${{esc(status)}}</div></div><div class="${{qtyClass}}">${{esc(countLabel)}}</div></div>`;
+	      }}).join('');
+	      box.classList.add('hasContent');
+	      box.innerHTML = rows;
 	    }}
     function leadIntentChips(row) {{
       const labels = [];
@@ -4746,17 +4762,29 @@ def html_page() -> bytes:
 	        return;
       }}
       if (accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed()) {{
+        const staleRepair = accountRepairApplyState && accountRepairApplyState.stale === true;
+        const repairActions = [
+          ...accountRepairApplyItems(accountRepairApplyState || {{}}),
+          ...accountRepairActionItems(accountRepairSummary)
+        ];
         showApiNotice(
-          '重新预检账号',
+          '账号修复后再启动',
           {{
-            status:'ready_for_account_recheck',
-            message:'当前分组上次账号预检未通过；本次会重新读取 ixBrowser 分组并自动筛选有效登录账号。',
+            status:'rejected',
+            error: staleRepair ? 'stale_account_repair_result' : 'account_repair_required',
+            message: staleRepair
+              ? '旧账号修复结果已失效；请按最新账号修复计划处理当前失败账号后再启动。'
+              : '当前分组最近一次账号预检没有可用账号；请先修复账号或移出硬阻断账号后再启动。',
             account_repair_apply: accountRepairApplyState || {{}},
-            next_actions:['系统会跳过未登录、内核不匹配、代理异常账号。','如果仍无可用账号，本轮会生成新的阻断证据。']
+            account_repair_summary: accountRepairSummary || {{}},
+            next_actions: repairActions.length ? repairActions : ['在 ixBrowser 中修复该分组账号登录状态、内核版本和代理可用性。','确认至少 1 个账号可正常打开 TikTok 后再次启动。']
           }},
-          'warning',
-          12000
+          'blocked',
+          30000
         );
+        logClientEvent('start_blocked', {{reason:'account_gate_blocked', group:$('group').value, stale_account_repair:staleRepair}});
+        updateStartAvailability();
+        return;
       }}
 	      if ($('liveConfirm').checked && $('mode').value !== 'live_comment') {{
 	        $('mode').value = 'live_comment';

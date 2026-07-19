@@ -185,6 +185,9 @@ def _report_sections(summary: dict[str, Any], final_required: bool, require_fina
         "live_preflight",
         "goal_status",
     ]
+    license_refresh = summary.get("license_refresh") if isinstance(summary.get("license_refresh"), dict) else {}
+    if license_refresh.get("json_path"):
+        sections.append("license_refresh")
     if final_required:
         sections.append("live_submit")
     else:

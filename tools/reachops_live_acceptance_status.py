@@ -414,8 +414,14 @@ def activation_actions(activation: dict[str, Any]) -> list[str]:
         _append_unique(actions, "使用真实激活状态文件替换 template_only=true 的模板文件。")
     if "activation_active" in failed:
         _append_unique(actions, "确认激活状态 active=true。")
-    if "device_binding_matches" in failed:
-        _append_unique(actions, "确认激活状态 device_id 绑定当前设备，或使用未绑定/重新签发的激活文件。")
+    if "license_app_access_allowed" in failed:
+        _append_unique(actions, "刷新或重新签发 ReachOps 激活状态，当前 license 已不可继续使用。")
+    if "license_live_submit_allowed" in failed:
+        _append_unique(actions, "当前 license 未允许真实提交；如处于 7 天宽限期，请先续期/刷新激活后再运行 live-submit。")
+    if "license_verification_current" in failed:
+        _append_unique(actions, "联网刷新 ReachOps license verification；客户端每 24 小时需要重新校验一次授权状态。")
+    if "device_seat_allows_current_device" in failed or "device_binding_matches" in failed:
+        _append_unique(actions, "确认激活状态 device_id/device_seats 包含当前设备，或购买/释放席位后重新签发激活文件。")
     capability_failures = [
         name
         for name in failed

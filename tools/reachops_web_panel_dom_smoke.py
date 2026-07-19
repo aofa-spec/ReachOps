@@ -603,7 +603,7 @@ vm.createContext(context);
         and "taskParams" in html
         and "taskActions" in html
         and "grid-template-columns:repeat(auto-fit,minmax(176px,1fr))" in html
-        and "grid-template-columns:minmax(140px,.9fr)" in html
+        and "grid-template-columns:minmax(180px,1fr) repeat(3,minmax(86px,.42fr))" in html
         and "grid-template-columns:repeat(auto-fit,minmax(106px,1fr))" in html
         and "grid-template-columns:repeat(auto-fit,minmax(92px,1fr))" in html
         and ".selectedGroupBar { grid-template-columns:1fr; }" in html
