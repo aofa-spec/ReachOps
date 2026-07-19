@@ -189,6 +189,36 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, or update manifest was generated on macOS.
   - Fixture live success used local redacted evidence and `REACHOPS_ALLOW_TEST_FIXTURE_LIVE=1`, then restored the previous environment value.
 
+## Latest P4 local client validation refresh
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-runtime-smoke`
+- PR: Draft PR #26, comment `https://github.com/aofa-spec/ReachOps/pull/26#issuecomment-5015049709`
+- Scope: Validate the current local client console and P4 Web runtime slice without entering Windows packaging, EXE generation, installer generation, or TikTok live-submit.
+- Verified current UI:
+  - Local client console is reachable at `http://127.0.0.1:8769/`.
+  - `/api/version` returned `status=ok`, `display_version=客户端 v20`, `client_surface=local_client_console`, `loopback_host=127.0.0.1`, and `no_submit=true`.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/launcher.py ReachOps/workbench/console.py ReachOps/workbench/tiktok_action_executor.py tools/reachops_web_panel_runtime_smoke.py tools/reachops_web_panel_dom_smoke.py tools/reachops_web_ui.py tools/run_reachops_headless_macos.py tools/reachops_delivery_audit.py tools/reachops_delivery_package_check.py tools/verify_reachops_acceptance_summary.py tools/write_reachops_update_manifest.py tests/test_launcher.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-pr26-pycompile-latest.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_launcher tests.test_truthful_execution_semantics`: passed, 13 tests; log `/tmp/reachops-pr26-launcher-truth-latest.log`.
+  - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed; output `/tmp/reachops-pr26-web-runtime-smoke-latest.json`.
+  - `/usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-pr26-web-dom-smoke-latest.json`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`; output `/tmp/reachops-pr26-operator-pressure-latest.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-pr26-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_client_delivery_check.py --json`: failed, `status=not_started`, `final_delivery_ready=false`, failed check `acceptance:ready`; blocker: `未看到 PLAN campaign，推广目标未进入任务规划。`
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-pr26-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, `status=failed`, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr26-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr26-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-pr26-diff-check.log`.
+- Current blocker clarification:
+  - The current Mac client-delivery evidence is `not_started` and must not be treated as current local MVP pass.
+  - Final Windows delivery remains blocked by missing `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
+  - Authorized Windows/TikTok live validation remains external and pending.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, or live-submit was attempted on macOS.
+  - The local UI remains default no-submit.
+
 ## Non-blocking engineering work available
 
 - P1 observation model and migration.
