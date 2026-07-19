@@ -10776,6 +10776,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(payload["error"], "ixBrowser Local API 未启动或端口不可连接")
         self.assertIn("ixbrowser_group_list_unavailable", payload["error_detail"])
 
+    def test_web_account_repair_summary_treats_directory_path_as_not_available(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = reachops_web_ui.summarize_account_repair_plan(Path(tmp))
+
+        self.assertEqual(payload["status"], "not_available")
+        self.assertEqual(payload["reason"], "account_repair_plan_not_file")
+        self.assertNotIn("error", payload)
+
     def test_web_group_refresh_failure_keeps_last_successful_group_counts(self):
         from tools import reachops_web_ui
 

@@ -5295,9 +5295,14 @@ def build_snapshot_payload() -> dict:
 
 
 def summarize_account_repair_plan(path_value: str | Path) -> dict:
-    path = Path(str(path_value or ""))
+    raw = str(path_value or "").strip()
+    if not raw:
+        return {"status": "not_available", "path": "", "reason": "account_repair_plan_not_generated"}
+    path = Path(raw)
     if not path.exists():
-        return {}
+        return {"status": "not_available", "path": str(path), "reason": "account_repair_plan_not_found"}
+    if not path.is_file():
+        return {"status": "not_available", "path": str(path), "reason": "account_repair_plan_not_file"}
     try:
         plan = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
