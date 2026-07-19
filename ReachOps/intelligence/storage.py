@@ -1321,7 +1321,7 @@ class GrowthStorage:
             stage = "reply_received"
         elif not rows:
             stage = "new"
-        elif any(row["status"] in {"completed", "success"} for row in rows):
+        elif self._lead_has_verified_live_success(conn, lead_id):
             stage = "contacted"
         elif any(row["status"] in {"failed", "retryable"} for row in rows):
             stage = "needs_retry"
@@ -1351,6 +1351,24 @@ class GrowthStorage:
             SELECT 1
             FROM lead_qualification_decisions
             WHERE lead_id=? AND qualified=1
+            LIMIT 1
+            """,
+            (lead_id,),
+        ).fetchone()
+        return bool(row)
+
+    def _lead_has_verified_live_success(self, conn, lead_id: str) -> bool:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM action_queue aq
+            INNER JOIN outreach_executions oe ON oe.action_id = aq.id
+            WHERE aq.lead_id=?
+              AND oe.execution_mode='live'
+              AND oe.status='success'
+              AND oe.submission_state='verified_success'
+              AND oe.verification_state='verified'
+              AND oe.evidence_verified=1
             LIMIT 1
             """,
             (lead_id,),

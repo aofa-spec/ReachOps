@@ -75,6 +75,38 @@ class PublicReplyLifecycleTests(unittest.TestCase):
         self.assertEqual(replies[0]["reply_author"], "buyer_reply")
         self.assertEqual(self._lead(lead_id)["lifecycle_stage"], "reply_received")
 
+    def test_contacted_requires_verified_live_execution_before_public_reply(self):
+        lead_id, action_id = self._lead_action()
+
+        self.storage.update_action_status(action_id, "completed", note="preflight completed")
+        self.assertNotEqual(self._lead(lead_id)["lifecycle_stage"], "contacted")
+
+        self.storage.create_outreach_execution(
+            action_id,
+            "comment_reply",
+            "buyer_reply",
+            status="submitted_unverified",
+            execution_mode="live",
+            submission_state="submitted_unverified",
+            verification_state="pending",
+            evidence_verified=False,
+        )
+        self.storage.update_action_status(action_id, "success", note="unverified live submission")
+        self.assertNotEqual(self._lead(lead_id)["lifecycle_stage"], "contacted")
+
+        self.storage.create_outreach_execution(
+            action_id,
+            "comment_reply",
+            "buyer_reply",
+            status="success",
+            execution_mode="live",
+            submission_state="verified_success",
+            verification_state="verified",
+            evidence_verified=True,
+        )
+        self.storage.update_action_status(action_id, "success", note="verified live success")
+        self.assertEqual(self._lead(lead_id)["lifecycle_stage"], "contacted")
+
     def test_qualified_lead_requires_linked_reply_confirming_need(self):
         lead_id, action_id = self._lead_action()
         reply_id, _created = self.storage.record_reply_observation(
