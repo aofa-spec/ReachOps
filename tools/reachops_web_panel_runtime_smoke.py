@@ -199,6 +199,7 @@ def run_runtime_smoke() -> dict:
     old_killpg = getattr(reachops_web_ui.os, "killpg", None)
     old_final_status = reachops_web_ui.build_final_status_payload
     old_ixbrowser_status = reachops_web_ui.build_ixbrowser_status_payload
+    old_live_comment_activation_status = reachops_web_ui.live_comment_activation_status
     old_ixbrowser_override = reachops_web_ui.IXBROWSER_API_PORT_OVERRIDE
     old_ixbrowser_env = reachops_web_ui.os.environ.get("REACHOPS_IXBROWSER_API_PORT")
     old_web_settings_path = reachops_web_ui.WEB_SETTINGS_PATH
@@ -221,7 +222,11 @@ def run_runtime_smoke() -> dict:
     checks: dict[str, bool] = {}
     diagnostics: dict[str, object] = {}
 
-    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-", ignore_cleanup_errors=True) as tmpdir:
+    try:
+        temp_context = tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-", ignore_cleanup_errors=True)
+    except TypeError:
+        temp_context = tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-")
+    with temp_context as tmpdir:
         try:
             reachops_web_ui.DATA_DIR = Path(tmpdir)
             reachops_web_ui.WEB_SETTINGS_PATH = Path(tmpdir) / "config" / "reachops_web_settings.json"
@@ -520,8 +525,21 @@ def run_runtime_smoke() -> dict:
                 captured["signals"].append(sig)
                 fake_process.signals.append(sig)
 
+            def fake_live_comment_activation_status():
+                return {
+                    "allowed": False,
+                    "error_code": "LIVE_SUBMIT_NOT_AUTHORIZED",
+                    "error_message": "runtime smoke fixture has no live-submit activation",
+                    "activation_status_path": str(Path(tmpdir) / "config" / "reachops_activation_status.json"),
+                    "failed_checks": ["activation:ready"],
+                    "next_actions": ["Use explicit authorized Windows acceptance inputs before live submit."],
+                    "no_browser_started": True,
+                    "no_submit": True,
+                }
+
             reachops_web_ui.subprocess.Popen = fake_popen
             reachops_web_ui.load_groups = fake_load_groups
+            reachops_web_ui.live_comment_activation_status = fake_live_comment_activation_status
             if old_killpg is not None:
                 reachops_web_ui.os.killpg = fake_killpg
 
@@ -2246,6 +2264,7 @@ def run_runtime_smoke() -> dict:
             reachops_web_ui.load_groups = old_load_groups
             reachops_web_ui.build_final_status_payload = old_final_status
             reachops_web_ui.build_ixbrowser_status_payload = old_ixbrowser_status
+            reachops_web_ui.live_comment_activation_status = old_live_comment_activation_status
             reachops_web_ui.IXBROWSER_API_PORT_OVERRIDE = old_ixbrowser_override
             reachops_web_ui.WEB_SETTINGS_PATH = old_web_settings_path
             reachops_web_ui.MVP_ACCEPTANCE_SUMMARY_PATH = old_web_mvp_path

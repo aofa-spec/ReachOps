@@ -86,7 +86,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Date: `2026-07-19`
 - Branch: `codex/p4-operator-controls-ui-mapping`
 - Draft PR: #18 `ReachOps P4: expose operator execution controls`
-- Commit: latest branch head plus local PR #18 client-entry update; records operator controls, browser adapter binding, run-session checkpointing, and local-client-console entrypoint convergence.
+- Commit: latest branch head plus local PR #18 runtime-smoke compatibility closeout; records operator controls, browser adapter binding, run-session checkpointing, local-client-console entrypoint convergence, and isolated Web runtime smoke fixtures.
 - Scope: P4 local operator UI control visibility only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
 - Code evidence:
   - `ReachOps/workbench/console.py` now exposes customer-visible labels and controls for `每个目标最多视频`, `每条视频最多评论`, `参与账号数`, `任务间隔秒`, and `排除词`.
@@ -101,6 +101,8 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `tools/reachops_web_ui.py` now satisfies the responsive toolbar/metric grid contract checked by delivery audit and runtime smoke.
   - `tools/reachops_web_ui.py` now renders ixBrowser group-count details with `count_source`, disables Start when the current group is blocked by account gate and repair has not been confirmed, and shows stale account-repair guidance before allowing a new precheck.
   - `tools/reachops_web_panel_dom_smoke.py` now reports account-gate diagnostic fields when DOM feedback checks fail.
+  - `tools/reachops_web_panel_runtime_smoke.py` now remains compatible with Python builds that do not support `TemporaryDirectory(ignore_cleanup_errors=...)`.
+  - Runtime smoke now isolates live-comment activation as a blocked fixture, so the Web API no-live-action gate is tested independently from any host-local activation file.
 - Tests and checks:
   - DOM gate rerun: `/usr/bin/python3 -m py_compile tools/reachops_web_ui.py tools/reachops_web_panel_dom_smoke.py tests/test_operator_controls_mapping.py`: passed, exit `0`; log `/tmp/reachops-pr18-dom-gate-pycompile-final.log`.
   - DOM gate rerun: `/usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed, `status=passed`, `failed_checks=[]`, exit `0`; output `/tmp/reachops-pr18-dom-gate-dom-smoke.log`.
@@ -131,8 +133,23 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr18-client-entry-final-gate.json`.
   - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr18-client-entry-cleanliness.json`.
   - `git diff --check`: passed; log `/tmp/reachops-pr18-client-entry-diff-check.log`.
+  - Runtime-smoke closeout: `/usr/bin/python3 -m py_compile tools/reachops_web_panel_runtime_smoke.py`: passed; log `/tmp/reachops-pr18-fix2-runtime-pycompile.log`.
+  - Runtime-smoke closeout: `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed, `status=passed`, `failed_checks=[]`; output `/tmp/reachops-pr18-fix2-runtime-smoke.json`.
+  - Runtime-smoke closeout: `/usr/bin/python3 -m py_compile ReachOps/launcher.py ReachOps/workbench/console.py ReachOps/workbench/tiktok_action_executor.py tools/reachops_web_ui.py tools/reachops_web_panel_runtime_smoke.py tools/reachops_web_panel_dom_smoke.py tools/run_reachops_headless_macos.py tests/test_operator_controls_mapping.py tests/test_launcher.py`: passed; log `/tmp/reachops-pr18-fix2-pycompile.log`.
+  - Runtime-smoke closeout: `/usr/bin/python3 -m unittest -v tests.test_operator_controls_mapping tests.test_launcher`: passed, 11 tests; log `/tmp/reachops-pr18-fix2-focused.log`.
+  - Runtime-smoke closeout: `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, summary `passed=50`, `pending_external_validation=3`, `failed=1`; operator controls, client entry, Web DOM smoke, and Web runtime smoke checks passed; remaining failed check is `漏斗只显示本轮 Campaign`; output `/tmp/reachops-pr18-fix2-delivery-audit.json`.
+  - Final PR #18 closeout: `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr18-final-truth.log`.
+  - Final PR #18 closeout: `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-pr18-final-campaign.log`.
+  - Final PR #18 campaign baseline comparison: `origin/main` at `887f706` also ran 230 tests with 14 failures and 1 error; comparison artifact `/tmp/reachops-pr18-final-baseline-comparison.json`, `new_failures=[]`, `new_errors=[]`.
+  - Final PR #18 closeout: `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr18-final-operator-pressure.json`.
+  - Final PR #18 closeout: `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr18-final-goal-delivery-runner.json`.
+  - Final PR #18 closeout: `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, summary `final_passed=29`, `final_pending_external_validation=3`, `final_failed=1`; output `/tmp/reachops-pr18-final-goal-status-report.json`.
+  - Final PR #18 closeout: `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr18-final-package-check.json`.
+  - Final PR #18 closeout: `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr18-final-final-gate.json`.
+  - Final PR #18 closeout: `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr18-final-cleanliness.json`.
+  - Final PR #18 closeout: `git diff --check`: passed; log `/tmp/reachops-pr18-final-diff-check.log`.
 - Remaining blockers:
-  - Delivery audit still has 2 failed local checks on this branch: campaign funnel isolation and Web panel runtime API smoke. PR #12/#19 and PR #20 address those surfaces separately.
+  - Delivery audit still has 1 failed local check on this branch: campaign funnel isolation. PR #12/#19 address that surface separately.
   - Current Mac goal-delivery runner also reports ixBrowser Local API / group freshness / latest run completion as not ready in this environment.
   - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
   - External authorized live TikTok validation remains pending and must not be fabricated on Mac.
