@@ -2449,6 +2449,33 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(absolute_path_result["artifacts"]["manifest"]["installer_path_is_portable"])
             self.assertEqual(absolute_path_result["artifacts"]["manifest"]["installer_path_raw"], str(installer.resolve()))
 
+            wrong_file_name_manifest = json.loads(json.dumps(manifest))
+            wrong_file_name_manifest["installer"]["file_name"] = "ReachOps-Setup-old.exe"
+            wrong_file_name_manifest["installer"]["path"] = "ReachOps-Setup-old.exe"
+            manifest_path.write_text(json.dumps(wrong_file_name_manifest), encoding="utf-8")
+            wrong_file_name = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(wrong_file_name["passed"])
+            self.assertIn("manifest_installer_file_name_mismatch", wrong_file_name["failures"])
+            self.assertIn("manifest_installer_path_name_mismatch", wrong_file_name["failures"])
+            self.assertIn("manifest_installer_resolved_name_mismatch", wrong_file_name["failures"])
+            self.assertEqual(
+                wrong_file_name["artifacts"]["manifest"]["expected_installer_name"],
+                "ReachOps-Setup-0.4.0.exe",
+            )
+            self.assertEqual(
+                wrong_file_name["artifacts"]["manifest"]["installer_file_name"],
+                "ReachOps-Setup-old.exe",
+            )
+
+            missing_installer_locator_manifest = json.loads(json.dumps(manifest))
+            missing_installer_locator_manifest["installer"].pop("file_name", None)
+            missing_installer_locator_manifest["installer"].pop("path", None)
+            manifest_path.write_text(json.dumps(missing_installer_locator_manifest), encoding="utf-8")
+            missing_installer_locator = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(missing_installer_locator["passed"])
+            self.assertIn("manifest_installer_file_name_missing", missing_installer_locator["failures"])
+            self.assertIn("manifest_installer_path_missing", missing_installer_locator["failures"])
+
             missing_runtime_policy_manifest = json.loads(json.dumps(manifest))
             missing_runtime_policy_manifest.pop("runtime_policy", None)
             manifest_path.write_text(json.dumps(missing_runtime_policy_manifest), encoding="utf-8")

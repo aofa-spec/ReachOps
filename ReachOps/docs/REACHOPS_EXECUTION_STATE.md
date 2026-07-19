@@ -219,6 +219,31 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, or live-submit was attempted on macOS.
   - The local UI remains default no-submit.
 
+## Latest P4 manifest installer binding hardening
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Tighten final Windows package evidence validation without generating Windows artifacts on macOS.
+- Code evidence:
+  - `tools/reachops_delivery_package_check.py` now rejects update manifests that omit `installer.file_name` or `installer.path`, or whose `installer.file_name`, `installer.path`, or resolved installer path name does not match the expected versioned final installer `ReachOps-Setup-<VERSION>.exe`.
+  - This prevents a final package from passing with a manifest that points at a stale or differently named installer while local expected artifacts happen to exist.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile tools/reachops_delivery_package_check.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-p4-manifest-installer-name-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_delivery_package_check_validates_artifacts_manifest_and_reports tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_update_manifest_contains_hash_and_preserve_policy`: passed; log `/tmp/reachops-p4-manifest-installer-name-focused.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-manifest-installer-name-truth.log`.
+  - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed; output `/tmp/reachops-p4-manifest-installer-name-runtime-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p4-manifest-installer-name-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p4-manifest-installer-name-goal-status.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-manifest-installer-name-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-manifest-installer-name-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-manifest-installer-name-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p4-manifest-installer-name-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-manifest-installer-name-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - Final delivery remains blocked until Windows artifacts and authorized live validation are produced and strict final gates pass.
+
 ## Non-blocking engineering work available
 
 - P1 observation model and migration.
