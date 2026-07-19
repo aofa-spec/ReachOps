@@ -847,6 +847,72 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(second_executions[0]["run_id"], second.run_id)
         self.assertEqual(second_executions[0]["id"], second_ids["execution"])
 
+    def test_campaign_export_includes_repeated_candidate_observed_in_later_run(self):
+        class ExportService:
+            def __init__(self, storage, report_dir):
+                self.storage = storage
+                self.report_dir = str(report_dir)
+
+            def build_campaign_strategy(self, campaign_id):
+                return {"campaign_id": campaign_id, "generator": "test"}
+
+        campaign = self.storage.create_campaign("keyword", "serum")
+        first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+        second = self.storage.create_collection_batch(1, profile_group="CA", campaign_id=campaign.id)
+
+        def observe_shared_candidate(batch, score):
+            self.storage.set_active_collection_batch(batch.id)
+            content, _created = self.storage.upsert_content(
+                DiscoveredContent(
+                    id="shared-content",
+                    creator_id="shared-creator",
+                    video_id="shared-video",
+                    video_url="https://example.test/video/shared",
+                )
+            )
+            candidate, _created = self.storage.upsert_candidate(
+                CandidateUser(
+                    id=f"candidate-{batch.id}",
+                    content_id=content.id,
+                    username="buyer_repeat",
+                    profile_url="https://example.test/@buyer_repeat",
+                    comment_text="where can I buy this serum",
+                    qualify_score=score,
+                    intent_tags=["buy", f"score-{score}"],
+                )
+            )
+            lead_id, _created = self.storage.upsert_operation_lead(
+                candidate.id,
+                "high_intent",
+                "high",
+                score,
+                f"run score {score}",
+                source_path=content.video_url,
+            )
+            return candidate.id, lead_id
+
+        candidate_id, first_lead = observe_shared_candidate(first, 81)
+        repeated_candidate_id, second_lead = observe_shared_candidate(second, 94)
+        self.assertEqual(repeated_candidate_id, candidate_id)
+        self.assertNotEqual(first_lead, second_lead)
+
+        workflow = GrowthWorkflowService(ExportService(self.storage, Path(self.tmpdir.name) / "reports"))
+        second_artifacts = workflow.export_campaign_artifacts(campaign_id=campaign.id, run_id=second.run_id)
+
+        with open(second_artifacts["json_path"], "r", encoding="utf-8") as fh:
+            second_payload = json.load(fh)
+        with open(second_artifacts["customers_csv_path"], "r", encoding="utf-8", newline="") as fh:
+            second_customers = list(csv.DictReader(fh))
+
+        self.assertEqual([row["id"] for row in second_payload["candidate_users"]], [candidate_id])
+        self.assertEqual(second_payload["candidate_users"][0]["run_id"], second.run_id)
+        self.assertEqual(second_payload["candidate_users"][0]["batch_id"], second.id)
+        self.assertEqual(second_payload["candidate_users"][0]["qualify_score"], 94)
+        self.assertEqual(json.loads(second_payload["candidate_users"][0]["intent_tags"]), ["buy", "score-94"])
+        self.assertEqual(second_customers[0]["run_id"], second.run_id)
+        self.assertEqual(second_customers[0]["batch_id"], second.id)
+        self.assertEqual(second_customers[0]["username"], "buyer_repeat")
+
     def test_observation_idempotency_and_lead_decision_versioning(self):
         campaign = self.storage.create_campaign("keyword", "serum")
         run = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)

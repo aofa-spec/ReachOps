@@ -2626,30 +2626,71 @@ class GrowthStorage:
     def list_candidates_with_content(self, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
-        if batch_id:
+        run = str(run_id or "").strip()
+        if run:
+            filters.append(
+                """
+                (
+                    cu.run_id=?
+                    OR EXISTS (
+                        SELECT 1 FROM candidate_observations co
+                        WHERE co.run_id=? AND co.candidate_user_id=cu.id
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM operation_leads ol
+                        WHERE ol.run_id=? AND ol.candidate_user_id=cu.id
+                    )
+                )
+                """
+            )
+            args.extend([run, run, run])
+        elif batch_id:
             filters.append("cu.batch_id=?")
             args.append(str(batch_id))
-        if run_id:
-            filters.append("cu.run_id=?")
-            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT cu.*, dc.video_url, dc.video_id, dc.views, dc.comments AS video_comments, dc.caption,
+                SELECT cu.*,
+                       COALESCE(co.batch_id, cu.batch_id) AS scoped_batch_id,
+                       COALESCE(NULLIF(co.run_id, ''), cu.run_id) AS scoped_run_id,
+                       COALESCE(co.score, cu.qualify_score) AS scoped_qualify_score,
+                       COALESCE(co.intent_tags_json, cu.intent_tags) AS scoped_intent_tags,
+                       dc.video_url, dc.video_id, dc.views, dc.comments AS video_comments, dc.caption,
                        dc.content_language, dc.country AS content_country, dc.material_type,
                        dc.source_path AS content_source_path,
                        cr.vertical AS creator_vertical, cr.country AS creator_country, cr.language AS creator_language,
                        cr.source_path AS creator_source_path
                 FROM candidate_users cu
+                LEFT JOIN (
+                    SELECT co.*
+                    FROM candidate_observations co
+                    JOIN (
+                        SELECT candidate_user_id, MAX(rowid) AS latest_rowid
+                        FROM candidate_observations
+                        WHERE run_id=?
+                        GROUP BY candidate_user_id
+                    ) latest
+                      ON latest.candidate_user_id=co.candidate_user_id
+                     AND latest.latest_rowid=co.rowid
+                    WHERE co.run_id=?
+                ) co ON co.candidate_user_id=cu.id
                 LEFT JOIN discovered_contents dc ON dc.id = cu.content_id
                 LEFT JOIN discovered_creators cr ON cr.id = dc.creator_id
                 {where}
                 """
                 ,
-                tuple(args),
+                tuple([run, run] + args),
             ).fetchall()
-            return [dict(row) for row in rows]
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["batch_id"] = item.pop("scoped_batch_id", item.get("batch_id") or "")
+                item["run_id"] = item.pop("scoped_run_id", item.get("run_id") or "")
+                item["qualify_score"] = item.pop("scoped_qualify_score", item.get("qualify_score") or 0)
+                item["intent_tags"] = item.pop("scoped_intent_tags", item.get("intent_tags") or "[]")
+                result.append(item)
+            return result
 
     def list_top_topic_contents(self, limit: int = 20) -> List[Dict[str, Any]]:
         with self.connect() as conn:
