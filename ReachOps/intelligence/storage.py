@@ -477,6 +477,31 @@ class GrowthStorage:
                     completed_at TEXT,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS public_reply_events (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    lead_id TEXT NOT NULL,
+                    action_id TEXT DEFAULT '',
+                    execution_id TEXT DEFAULT '',
+                    target_username TEXT DEFAULT '',
+                    reply_author_username TEXT DEFAULT '',
+                    reply_text TEXT NOT NULL,
+                    reply_language TEXT DEFAULT 'unknown',
+                    source_url TEXT DEFAULT '',
+                    replied_at TEXT DEFAULT '',
+                    intent_confirmed INTEGER DEFAULT 0,
+                    qualification_state TEXT DEFAULT 'reply_received',
+                    confidence INTEGER DEFAULT 0,
+                    reason_codes_json TEXT DEFAULT '[]',
+                    verified_contact INTEGER DEFAULT 0,
+                    evidence_id TEXT DEFAULT '',
+                    evidence_json TEXT DEFAULT '{}',
+                    classifier_version TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(lead_id, action_id, reply_text, replied_at)
+                );
                 CREATE TABLE IF NOT EXISTS checkpoints (
                     id TEXT PRIMARY KEY,
                     source_id TEXT NOT NULL,
@@ -579,6 +604,30 @@ class GrowthStorage:
                     "batch_id": "TEXT DEFAULT ''",
                     "run_id": "TEXT DEFAULT ''",
                     "updated_at": "TEXT DEFAULT ''",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "public_reply_events",
+                {
+                    "campaign_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
+                    "batch_id": "TEXT DEFAULT ''",
+                    "action_id": "TEXT DEFAULT ''",
+                    "execution_id": "TEXT DEFAULT ''",
+                    "target_username": "TEXT DEFAULT ''",
+                    "reply_author_username": "TEXT DEFAULT ''",
+                    "reply_language": "TEXT DEFAULT 'unknown'",
+                    "source_url": "TEXT DEFAULT ''",
+                    "replied_at": "TEXT DEFAULT ''",
+                    "intent_confirmed": "INTEGER DEFAULT 0",
+                    "qualification_state": "TEXT DEFAULT 'reply_received'",
+                    "confidence": "INTEGER DEFAULT 0",
+                    "reason_codes_json": "TEXT DEFAULT '[]'",
+                    "verified_contact": "INTEGER DEFAULT 0",
+                    "evidence_id": "TEXT DEFAULT ''",
+                    "evidence_json": "TEXT DEFAULT '{}'",
+                    "classifier_version": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -1653,15 +1702,18 @@ class GrowthStorage:
                        dc.views,
                        dc.comments AS video_comments,
                        COALESCE(NULLIF(ol.source_path, ''), NULLIF(cu.source_path, ''), NULLIF(dc.source_path, ''), dc.video_url, '') AS resolved_source_path,
-                       COUNT(aq.id) AS action_count,
-                       SUM(CASE WHEN aq.status='pending_review' THEN 1 ELSE 0 END) AS pending_action_count,
-                       SUM(CASE WHEN aq.status='approved' THEN 1 ELSE 0 END) AS approved_action_count,
-                       SUM(CASE WHEN aq.status='completed' THEN 1 ELSE 0 END) AS completed_action_count,
-                       SUM(CASE WHEN aq.status IN ('failed', 'retryable') THEN 1 ELSE 0 END) AS retryable_action_count
+                       COUNT(DISTINCT aq.id) AS action_count,
+                       COUNT(DISTINCT CASE WHEN aq.status='pending_review' THEN aq.id END) AS pending_action_count,
+                       COUNT(DISTINCT CASE WHEN aq.status='approved' THEN aq.id END) AS approved_action_count,
+                       COUNT(DISTINCT CASE WHEN aq.status='completed' THEN aq.id END) AS completed_action_count,
+                       COUNT(DISTINCT CASE WHEN aq.status IN ('failed', 'retryable') THEN aq.id END) AS retryable_action_count,
+                       COUNT(DISTINCT pre.id) AS public_reply_count,
+                       COUNT(DISTINCT CASE WHEN pre.qualification_state='qualified' THEN pre.id END) AS qualified_reply_count
                 FROM operation_leads ol
                 LEFT JOIN candidate_users cu ON cu.id = ol.candidate_user_id
                 LEFT JOIN discovered_contents dc ON dc.id = cu.content_id
                 LEFT JOIN action_queue aq ON aq.lead_id = ol.id
+                LEFT JOIN public_reply_events pre ON pre.lead_id = ol.id
                 {where}
                 GROUP BY ol.id
                 ORDER BY ol.score DESC, ol.updated_at DESC, ol.created_at DESC
@@ -1676,8 +1728,231 @@ class GrowthStorage:
                 result.append(item)
             return result
 
+    def record_public_reply_event(
+        self,
+        lead_id: str,
+        reply_text: str,
+        action_id: str = "",
+        execution_id: str = "",
+        target_username: str = "",
+        reply_author_username: str = "",
+        reply_language: str = "unknown",
+        source_url: str = "",
+        replied_at: str = "",
+        intent_confirmed: bool = False,
+        confidence: int = 0,
+        reason_codes: Optional[List[str]] = None,
+        evidence_id: str = "",
+        evidence: Optional[Dict[str, Any]] = None,
+        classifier_version: str = "",
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+    ) -> tuple[str, bool]:
+        lead = str(lead_id or "").strip()
+        text = str(reply_text or "").strip()
+        if not lead:
+            raise ValueError("lead_id is required")
+        if not text:
+            raise ValueError("reply_text is required")
+        now = utc_now_iso()
+        reasons = [str(item) for item in reason_codes or [] if str(item or "").strip()]
+        evidence_json = json.dumps(evidence or {}, ensure_ascii=False)
+        with self.connect() as conn:
+            lead_row = conn.execute("SELECT * FROM operation_leads WHERE id=?", (lead,)).fetchone()
+            if not lead_row:
+                raise ValueError("lead_id does not exist")
+            action_row = None
+            if action_id:
+                action_row = conn.execute("SELECT * FROM action_queue WHERE id=? AND lead_id=?", (str(action_id), lead)).fetchone()
+                if not action_row:
+                    raise ValueError("action_id does not belong to lead_id")
+            else:
+                action_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM action_queue
+                    WHERE lead_id=?
+                    ORDER BY last_executed_at DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (lead,),
+                ).fetchone()
+            resolved_action_id = str(action_id or (action_row["id"] if action_row else "") or "")
+            execution_row = None
+            if execution_id:
+                execution_row = conn.execute(
+                    "SELECT * FROM outreach_executions WHERE id=? AND action_id=COALESCE(NULLIF(?, ''), action_id)",
+                    (str(execution_id), resolved_action_id),
+                ).fetchone()
+                if not execution_row:
+                    raise ValueError("execution_id does not belong to action_id")
+            elif resolved_action_id:
+                execution_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM outreach_executions
+                    WHERE action_id=?
+                    ORDER BY completed_at DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (resolved_action_id,),
+                ).fetchone()
+            verified_contact = bool(
+                execution_row
+                and int(execution_row["evidence_verified"] or 0) == 1
+                and str(execution_row["verification_state"] or "") == "verified"
+                and str(execution_row["submission_state"] or "") == "verified_success"
+                and str(execution_row["status"] or "") in {"success", "completed"}
+            )
+            qualification_state = "qualified" if bool(intent_confirmed) and verified_contact else "reply_received"
+            lead_campaign = lead_row["campaign_id"] if "campaign_id" in lead_row.keys() else ""
+            lead_run = lead_row["run_id"] if "run_id" in lead_row.keys() else ""
+            lead_batch = lead_row["batch_id"] if "batch_id" in lead_row.keys() else ""
+            action_run = action_row["run_id"] if action_row and "run_id" in action_row.keys() else ""
+            action_batch = action_row["batch_id"] if action_row and "batch_id" in action_row.keys() else ""
+            action_target = action_row["target_username"] if action_row and "target_username" in action_row.keys() else ""
+            resolved_campaign = str(campaign_id or lead_campaign or "").strip()
+            resolved_run = str(run_id or action_run or lead_run or "").strip()
+            resolved_batch = str(batch_id or action_batch or lead_batch or "").strip()
+            resolved_target = str(target_username or action_target or "").strip()
+            row = conn.execute(
+                """
+                SELECT id
+                FROM public_reply_events
+                WHERE lead_id=? AND action_id=? AND reply_text=? AND replied_at=?
+                """,
+                (lead, resolved_action_id, text, str(replied_at or "")),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    UPDATE public_reply_events
+                    SET execution_id=?, target_username=?, reply_author_username=?, reply_language=?, source_url=?,
+                        intent_confirmed=?, qualification_state=?, confidence=?, reason_codes_json=?,
+                        verified_contact=?, evidence_id=?, evidence_json=?, classifier_version=?
+                    WHERE id=?
+                    """,
+                    (
+                        str(execution_id or (execution_row["id"] if execution_row else "") or ""),
+                        resolved_target,
+                        str(reply_author_username or ""),
+                        str(reply_language or "unknown"),
+                        str(source_url or ""),
+                        1 if intent_confirmed else 0,
+                        qualification_state,
+                        int(confidence or 0),
+                        json.dumps(reasons, ensure_ascii=False),
+                        1 if verified_contact else 0,
+                        str(evidence_id or ""),
+                        evidence_json,
+                        str(classifier_version or ""),
+                        row["id"],
+                    ),
+                )
+                self._refresh_lead_lifecycle(conn, lead)
+                return row["id"], False
+            event_id = new_id("pre")
+            conn.execute(
+                """
+                INSERT INTO public_reply_events
+                (id, campaign_id, run_id, batch_id, lead_id, action_id, execution_id, target_username,
+                 reply_author_username, reply_text, reply_language, source_url, replied_at, intent_confirmed,
+                 qualification_state, confidence, reason_codes_json, verified_contact, evidence_id,
+                 evidence_json, classifier_version, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    resolved_campaign,
+                    resolved_run,
+                    resolved_batch,
+                    lead,
+                    resolved_action_id,
+                    str(execution_id or (execution_row["id"] if execution_row else "") or ""),
+                    resolved_target,
+                    str(reply_author_username or ""),
+                    text,
+                    str(reply_language or "unknown"),
+                    str(source_url or ""),
+                    str(replied_at or ""),
+                    1 if intent_confirmed else 0,
+                    qualification_state,
+                    int(confidence or 0),
+                    json.dumps(reasons, ensure_ascii=False),
+                    1 if verified_contact else 0,
+                    str(evidence_id or ""),
+                    evidence_json,
+                    str(classifier_version or ""),
+                    now,
+                ),
+            )
+            self._refresh_lead_lifecycle(conn, lead)
+        self.log_event(
+            "public_reply_event_recorded",
+            lead,
+            {
+                "action_id": action_id or "",
+                "execution_id": execution_id or "",
+                "qualification_state": qualification_state,
+                "intent_confirmed": bool(intent_confirmed),
+                "verified_contact": verified_contact,
+            },
+        )
+        return event_id, True
+
+    def get_public_reply_event(self, event_id: str) -> Optional[Dict[str, Any]]:
+        event = str(event_id or "").strip()
+        if not event:
+            return None
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM public_reply_events WHERE id=?", (event,)).fetchone()
+        return dict(row) if row else None
+
+    def list_public_reply_events(self, lead_id: str = "", limit: int = 200) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if lead_id:
+            filters.append("lead_id=?")
+            args.append(str(lead_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM public_reply_events
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 200)]),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def _refresh_lead_lifecycle(self, conn, lead_id: str):
         if not lead_id:
+            return
+        qualified_reply = conn.execute(
+            """
+            SELECT id
+            FROM public_reply_events
+            WHERE lead_id=? AND qualification_state='qualified' AND intent_confirmed=1 AND verified_contact=1
+            LIMIT 1
+            """,
+            (lead_id,),
+        ).fetchone()
+        if qualified_reply:
+            conn.execute(
+                "UPDATE operation_leads SET lifecycle_stage=?, status=?, updated_at=? WHERE id=?",
+                ("qualified", "qualified", utc_now_iso(), lead_id),
+            )
+            return
+        reply_row = conn.execute("SELECT id FROM public_reply_events WHERE lead_id=? LIMIT 1", (lead_id,)).fetchone()
+        if reply_row:
+            conn.execute(
+                "UPDATE operation_leads SET lifecycle_stage=?, status=?, updated_at=? WHERE id=?",
+                ("reply_received", "reply_received", utc_now_iso(), lead_id),
+            )
             return
         rows = conn.execute(
             "SELECT status, execution_confirmed FROM action_queue WHERE lead_id=?",

@@ -23,6 +23,7 @@ from ReachOps.updater import ReachOpsUpdateManager
 from ReachOps.version import VERSION
 from ReachOps.intelligence import GrowthIntelligenceService
 from ReachOps.intelligence.ai_strategy import HTTPAcquisitionIntelligenceProvider
+from ReachOps.intelligence.public_reply_monitor import PublicReplyMonitor
 from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.action_router import ActionRouterConfig, FixtureActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
@@ -377,6 +378,84 @@ def run_live_submit_acceptance_block_fixture() -> dict:
         args,
         platform_executor=FixtureActionExecutor([{"status": "success", "evidence_path": "evidence://should-not-run"}]),
     )
+
+
+def run_public_reply_monitor_fixture(target: str) -> dict:
+    base_dir = tempfile.mkdtemp(prefix="reachops-audit-public-reply-")
+    service = build_service(base_dir)
+    plan = service.create_campaign_plan(target, max_sources=1)
+    campaign_id = str((plan.get("campaign") or {}).get("id") or "")
+    service.run_collection(
+        [{"type": "keyword", "value": target}],
+        [{"profile_id": "reply-discovery-1", "group_name": "AUDIT"}],
+        GrowthTaskConfig(campaign_id=campaign_id, max_videos_per_creator=1, max_comments_per_video=5, test_mode=True),
+    )
+    action = next(
+        (row for row in service.storage.list_action_queue(limit=1000) if str(row.get("action_type") or "") == "comment_reply"),
+        {},
+    )
+    if not action:
+        return {"status": "failed", "reason": "comment_action_missing"}
+    execution_id = service.storage.create_outreach_execution(
+        str(action.get("id") or ""),
+        str(action.get("action_type") or ""),
+        str(action.get("target_username") or ""),
+        status="success",
+        profile_id="reply-exec-1",
+        evidence_path=str(Path(base_dir) / "verified-reply-comment.png"),
+        execution_mode="live",
+        submission_state="verified_success",
+        verification_state="verified",
+        evidence_verified=True,
+    )
+    service.storage.record_action_execution_result(str(action.get("id") or ""), execution_id, "completed")
+    monitor = PublicReplyMonitor(service.storage)
+    first = monitor.ingest_replay_rows(
+        [
+            {
+                "campaign_id": campaign_id,
+                "run_id": str(action.get("run_id") or ""),
+                "batch_id": str(action.get("batch_id") or ""),
+                "lead_id": str(action.get("lead_id") or ""),
+                "action_id": str(action.get("id") or ""),
+                "execution_id": execution_id,
+                "target_username": str(action.get("target_username") or ""),
+                "reply_author_username": str(action.get("target_username") or ""),
+                "reply_text": "Can you send me the link and price?",
+                "reply_language": "en",
+                "source_url": str(action.get("target_url") or ""),
+                "replied_at": "2026-07-20T10:00:00Z",
+            }
+        ]
+    )
+    second = monitor.ingest_replay_rows(
+        [
+            {
+                "campaign_id": campaign_id,
+                "run_id": str(action.get("run_id") or ""),
+                "batch_id": str(action.get("batch_id") or ""),
+                "lead_id": str(action.get("lead_id") or ""),
+                "action_id": str(action.get("id") or ""),
+                "execution_id": execution_id,
+                "reply_text": "Can you send me the link and price?",
+                "replied_at": "2026-07-20T10:00:00Z",
+            }
+        ]
+    )
+    lead = next(
+        (row for row in service.storage.list_operation_leads(limit=1000) if str(row.get("id") or "") == str(action.get("lead_id") or "")),
+        {},
+    )
+    events = service.storage.list_public_reply_events(str(action.get("lead_id") or ""))
+    return {
+        "status": "passed" if lead.get("lifecycle_stage") == "qualified" and len(events) == 1 else "failed",
+        "first": first,
+        "second": second,
+        "lead_stage": lead.get("lifecycle_stage"),
+        "qualified_reply_count": lead.get("qualified_reply_count"),
+        "event_count": len(events),
+        "event": events[0] if events else {},
+    }
 
 
 def run_packaging_update_fixture() -> dict:
@@ -1748,6 +1827,7 @@ def run_audit(args) -> dict:
     ai_fallback_fixture = run_ai_fallback_fixture(args.target)
     live_submit_acceptance_fixture = run_live_submit_acceptance_fixture()
     live_submit_block_fixture = run_live_submit_acceptance_block_fixture()
+    public_reply_monitor_fixture = run_public_reply_monitor_fixture(args.target)
     packaging_update_fixture = run_packaging_update_fixture()
     client_delivery_gate = run_client_delivery_gate_fixture()
     web_local_api_architecture = run_web_local_api_architecture_fixture()
@@ -2090,6 +2170,16 @@ def run_audit(args) -> dict:
                 "missing_evidence_path": runtime_evidence_guard.get("missing_evidence_path"),
                 "result": runtime_evidence_guard.get("result"),
             },
+        ),
+        check(
+            "公开回复监控只在验证触达后确认合格线索",
+            public_reply_monitor_fixture.get("status") == "passed"
+            and int(public_reply_monitor_fixture.get("event_count") or 0) == 1
+            and str(public_reply_monitor_fixture.get("lead_stage") or "") == "qualified"
+            and int(public_reply_monitor_fixture.get("qualified_reply_count") or 0) == 1
+            and int((public_reply_monitor_fixture.get("first") or {}).get("created") or 0) == 1
+            and int((public_reply_monitor_fixture.get("second") or {}).get("updated") or 0) == 1,
+            public_reply_monitor_fixture,
         ),
         check(
             "授权门覆盖设备绑定、过期和能力限制",

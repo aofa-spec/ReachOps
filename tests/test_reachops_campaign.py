@@ -24,8 +24,10 @@ from ReachOps.intelligence.comment_intent import CommentIntentResult, RuleBasedC
 from ReachOps.intelligence.growth_task_router import GrowthTaskRouter
 from ReachOps.intelligence.operation_lead_manager import OperationLeadManager
 from ReachOps.intelligence.outreach_copy import OutreachCopySuggestion
+from ReachOps.intelligence.public_reply_monitor import PublicReplyMonitor
 from ReachOps.intelligence.schemas import ActionQueueItem, CampaignFunnel, CandidateUser, DiscoveredContent, DiscoveredCreator
 from ReachOps.intelligence.source_planner import CampaignAnalyzer
+from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.action_router import ActionRouterConfig
 from ReachOps.workbench.action_router import FixtureActionExecutor
@@ -772,6 +774,31 @@ class ReachOpsCampaignTests(unittest.TestCase):
             os.environ.pop("REACHOPS_ALLOW_TEST_FIXTURE_LIVE", None)
         else:
             os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = self._previous_live_fixture_override
+
+    def _create_reply_monitor_fixture(self, tmp: str, evidence_verified: bool = True):
+        service = make_reachops_service(tmp)
+        plan = service.create_campaign_plan("https://www.tiktok.com/@beauty_creator", max_sources=1)
+        service.run_collection(
+            [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+            [{"profile_id": "discovery-1", "group_name": "US"}],
+            GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+        )
+        action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "comment_reply")
+        execution_id = service.storage.create_outreach_execution(
+            action["id"],
+            action["action_type"],
+            action["target_username"],
+            status="success",
+            profile_id="exec-1",
+            evidence_path=str(Path(tmp) / "verified-comment.png"),
+            execution_mode="live",
+            submission_state="verified_success" if evidence_verified else "submitted_unverified",
+            verification_state="verified" if evidence_verified else "pending",
+            evidence_verified=evidence_verified,
+        )
+        if evidence_verified:
+            service.storage.record_action_execution_result(action["id"], execution_id, "completed")
+        return service, plan, action, execution_id
 
     def test_reachops_version_info_is_standalone_product_metadata(self):
         info = version_info()
@@ -6887,6 +6914,180 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(intent_type, "")
         self.assertEqual(confidence, 0)
         self.assertIn("自促", evidence)
+
+    def test_public_reply_monitor_qualifies_lead_only_after_verified_contact_reply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "target_username": action["target_username"],
+                        "reply_author_username": action["target_username"],
+                        "reply_text": "Can you send me the link and price?",
+                        "reply_language": "en",
+                        "source_url": action["target_url"],
+                        "replied_at": "2026-07-20T10:00:00Z",
+                    }
+                ]
+            )
+
+            self.assertEqual(result["created"], 1)
+            self.assertEqual(result["qualified"], 1)
+            event = service.storage.list_public_reply_events(action["lead_id"])[0]
+            self.assertEqual(event["qualification_state"], "qualified")
+            self.assertEqual(event["verified_contact"], 1)
+            lead = next(row for row in service.storage.list_operation_leads(limit=20) if row["id"] == action["lead_id"])
+            self.assertEqual(lead["lifecycle_stage"], "qualified")
+            self.assertEqual(lead["qualified_reply_count"], 1)
+
+    def test_public_reply_monitor_records_reply_without_qualified_need(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "reply_text": "Thanks for the info.",
+                        "replied_at": "2026-07-20T10:01:00Z",
+                    }
+                ]
+            )
+
+            self.assertEqual(result["created"], 1)
+            self.assertEqual(result["qualified"], 0)
+            event = service.storage.list_public_reply_events(action["lead_id"])[0]
+            self.assertEqual(event["qualification_state"], "reply_received")
+            lead = next(row for row in service.storage.list_operation_leads(limit=20) if row["id"] == action["lead_id"])
+            self.assertEqual(lead["lifecycle_stage"], "reply_received")
+            self.assertEqual(lead["qualified_reply_count"], 0)
+
+    def test_public_reply_monitor_does_not_qualify_unverified_submission_reply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=False)
+            result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "reply_text": "I want to buy, send the link please.",
+                        "replied_at": "2026-07-20T10:02:00Z",
+                    }
+                ]
+            )
+
+            self.assertEqual(result["created"], 1)
+            self.assertEqual(result["qualified"], 0)
+            event = service.storage.list_public_reply_events(action["lead_id"])[0]
+            self.assertEqual(event["intent_confirmed"], 1)
+            self.assertEqual(event["verified_contact"], 0)
+            self.assertEqual(event["qualification_state"], "reply_received")
+            self.assertEqual(result["events"][0]["qualification_state"], "reply_received")
+            self.assertFalse(result["events"][0]["verified_contact"])
+            lead = next(row for row in service.storage.list_operation_leads(limit=20) if row["id"] == action["lead_id"])
+            self.assertNotEqual(lead["lifecycle_stage"], "qualified")
+            self.assertEqual(lead["qualified_reply_count"], 0)
+
+    def test_public_reply_monitor_replay_rows_are_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            row = {
+                "campaign_id": plan["campaign"]["id"],
+                "run_id": action["run_id"],
+                "batch_id": action["batch_id"],
+                "lead_id": action["lead_id"],
+                "action_id": action["id"],
+                "execution_id": execution_id,
+                "reply_text": "Precio? Can you send the link?",
+                "replied_at": "2026-07-20T10:03:00Z",
+            }
+
+            first = PublicReplyMonitor(service.storage).ingest_replay_rows([row])
+            second = PublicReplyMonitor(service.storage).ingest_replay_rows([row])
+
+            self.assertEqual(first["created"], 1)
+            self.assertEqual(second["created"], 0)
+            self.assertEqual(second["updated"], 1)
+            self.assertEqual(len(service.storage.list_public_reply_events(action["lead_id"])), 1)
+
+    def test_public_reply_events_schema_migrates_existing_local_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "legacy.db"
+            storage = GrowthStorage(str(db_path))
+            with storage.connect() as conn:
+                tables = {
+                    row["name"]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='public_reply_events'"
+                    ).fetchall()
+                }
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(public_reply_events)").fetchall()}
+
+            self.assertIn("public_reply_events", tables)
+            self.assertIn("run_id", columns)
+            self.assertIn("verified_contact", columns)
+
+    def test_public_reply_event_does_not_fabricate_active_run_for_legacy_lead(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "legacy.db"))
+            now = "2026-07-20T10:04:00Z"
+            with storage.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                     source_path, status, batch_id, run_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "legacy-lead-1",
+                        "legacy-candidate-1",
+                        "comment_intent",
+                        "normal",
+                        80,
+                        "legacy row before campaign run ledger",
+                        "new",
+                        "",
+                        "new",
+                        "",
+                        "",
+                        now,
+                        now,
+                    ),
+                )
+            storage.set_active_campaign_run("run_should_not_be_assigned")
+            storage.set_active_collection_batch("batch_should_not_be_assigned")
+
+            event_id, inserted = storage.record_public_reply_event(
+                lead_id="legacy-lead-1",
+                reply_text="Can you send the price?",
+                replied_at=now,
+                intent_confirmed=True,
+                confidence=80,
+                reason_codes=["price_request"],
+            )
+
+            self.assertTrue(inserted)
+            event = storage.get_public_reply_event(event_id)
+            self.assertIsNotNone(event)
+            self.assertEqual(event["run_id"], "")
+            self.assertEqual(event["batch_id"], "")
+            self.assertNotEqual(event["run_id"], "run_should_not_be_assigned")
+            self.assertNotEqual(event["batch_id"], "batch_should_not_be_assigned")
 
     def test_collection_uses_injected_comment_intent_classifier_for_customer_pool(self):
         with tempfile.TemporaryDirectory() as tmp:
