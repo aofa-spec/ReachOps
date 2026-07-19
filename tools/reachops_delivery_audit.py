@@ -458,6 +458,19 @@ def run_public_reply_monitor_fixture(target: str) -> dict:
     }
 
 
+def inspect_public_reply_ui_surface() -> dict:
+    web_ui = (ROOT_DIR / "tools" / "reachops_web_ui.py").read_text(encoding="utf-8")
+    return {
+        "kpi_public_replies": "mPublicReplies" in web_ui and "public_replies" in web_ui,
+        "kpi_qualified_replies": "mQualifiedReplies" in web_ui and "qualified_replies" in web_ui,
+        "operations_public_reply_events": "\"public_reply_events\"" in web_ui and "FROM public_reply_events" in web_ui,
+        "lead_reply_summary": "reply_summary" in web_ui and "公开回复" in web_ui,
+        "lead_status_reply_received": "reply_received:'收到回复'" in web_ui,
+        "lead_status_qualified": "qualified:'合格线索'" in web_ui,
+        "qualified_state_priority": "qualified_reply_count" in web_ui and 'return "qualified"' in web_ui,
+    }
+
+
 def run_packaging_update_fixture() -> dict:
     base_dir = Path(tempfile.mkdtemp(prefix="reachops-audit-packaging-"))
     installer = base_dir / "ReachOps-Setup.exe"
@@ -1912,6 +1925,7 @@ def run_audit(args) -> dict:
     live_submit_acceptance_fixture = run_live_submit_acceptance_fixture()
     live_submit_block_fixture = run_live_submit_acceptance_block_fixture()
     public_reply_monitor_fixture = run_public_reply_monitor_fixture(args.target)
+    public_reply_ui_surface = inspect_public_reply_ui_surface()
     packaging_update_fixture = run_packaging_update_fixture()
     client_delivery_gate = run_client_delivery_gate_fixture()
     web_local_api_architecture = run_web_local_api_architecture_fixture()
@@ -2264,6 +2278,11 @@ def run_audit(args) -> dict:
             and int((public_reply_monitor_fixture.get("first") or {}).get("created") or 0) == 1
             and int((public_reply_monitor_fixture.get("second") or {}).get("updated") or 0) == 1,
             public_reply_monitor_fixture,
+        ),
+        check(
+            "本地客户端展示公开回复和合格回复状态",
+            all(bool(value) for value in public_reply_ui_surface.values()),
+            public_reply_ui_surface,
         ),
         check(
             "授权门覆盖设备绑定、过期和能力限制",

@@ -3065,6 +3065,8 @@ def html_page() -> bytes:
         <div class="metric"><span>采集数</span><b id="mCandidates">0</b></div>
         <div class="metric"><span>有效线索</span><b id="mQualified">0</b></div>
         <div class="metric"><span>高意向</span><b id="mHigh">0</b></div>
+        <div class="metric"><span>公开回复</span><b id="mPublicReplies">0</b></div>
+        <div class="metric"><span>合格回复</span><b id="mQualifiedReplies">0</b></div>
         <div class="metric"><span>入队数</span><b id="mActions">0</b></div>
         <div class="metric"><span>成功触达</span><b id="mTouchSuccess">0</b></div>
         <div class="metric"><span>失败</span><b id="mTouchFailed">0</b></div>
@@ -4253,7 +4255,7 @@ def html_page() -> bytes:
     }}
     function statusTone(status) {{
       const value = String(status || '').toLowerCase();
-      if (['contacted','completed','success'].includes(value)) return 'ok';
+      if (['contacted','completed','success','reply_received','qualified'].includes(value)) return 'ok';
       if (['failed','needs_retry','retryable','skipped','rejected'].includes(value)) return value === 'skipped' ? 'warn' : 'bad';
       if (['queued','pending_review','approved','ready_to_execute','running'].includes(value)) return 'warn';
       return '';
@@ -4267,6 +4269,8 @@ def html_page() -> bytes:
         ready_to_execute:'待执行',
         queued:'已入队',
         contacted:'已触达',
+        reply_received:'收到回复',
+        qualified:'合格线索',
         needs_retry:'失败待重试',
         rejected:'已跳过',
         skipped:'已跳过',
@@ -4292,8 +4296,8 @@ def html_page() -> bytes:
     }}
     function applyLeadFilter(rows) {{
       if (leadFilter === 'high') return rows.filter(row => Number(row.score || 0) >= 70);
-      if (leadFilter === 'untouched') return rows.filter(row => !['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
-      if (leadFilter === 'touched') return rows.filter(row => ['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'untouched') return rows.filter(row => !['contacted','completed','success','reply_received','qualified'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'touched') return rows.filter(row => ['contacted','completed','success','reply_received','qualified'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
       if (leadFilter === 'failed') return rows.filter(row => ['needs_retry','failed','retryable'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
       if (leadFilter === 'skipped') return rows.filter(row => ['rejected','skipped'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
       return rows;
@@ -4322,20 +4326,23 @@ def html_page() -> bytes:
       const counts = {{
         all: rows.length,
         high: rows.filter(row => Number(row.score || 0) >= 70).length,
-        untouched: rows.filter(row => !['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
-        touched: rows.filter(row => ['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        untouched: rows.filter(row => !['contacted','completed','success','reply_received','qualified'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        touched: rows.filter(row => ['contacted','completed','success','reply_received','qualified'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
         failed: rows.filter(row => ['needs_retry','failed','retryable'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
         skipped: rows.filter(row => ['rejected','skipped'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
       }};
       filterButtons('leadFilters', leadFilter, counts, 'lead-filter');
       const filtered = applyLeadFilter(rows);
-      $('leadPanelSummary').textContent = `有效 ${{counts.all}} / 高意向 ${{counts.high}} / 已触达 ${{counts.touched}}`;
+      const publicReplies = Number((ops.counts || {{}}).public_replies || 0);
+      const qualifiedReplies = Number((ops.counts || {{}}).qualified_replies || 0);
+      $('leadPanelSummary').textContent = `有效 ${{counts.all}} / 高意向 ${{counts.high}} / 回复 ${{publicReplies}} / 合格 ${{qualifiedReplies}}`;
       $('leadTableMeta').textContent = `显示 ${{filtered.length}} / ${{rows.length}} 条`;
-      table('leadTable', ['用户', '评分', '意图', '命中原因', '来源视频', '推荐触达', '当前状态'], filtered.slice(0, 80).map(row => [
+      table('leadTable', ['用户', '评分', '意图', '命中原因', '公开回复', '来源视频', '推荐触达', '当前状态'], filtered.slice(0, 80).map(row => [
         row.username || '-',
         row.score || 0,
         leadIntentChips(row),
         {{html:`<div class="reasonText">${{esc(compactText(row.reason || row.comment_text || row.matched_reason))}}</div>`}},
+        {{html:`<div class="reasonText">${{esc(compactText(row.reply_summary || '无公开回复'))}}</div>`}},
         actionLink(row.source_label || '查看来源', row.source_url || row.source_path),
         chipList((row.recommended_actions || []).map(label => ({{label}}))),
         leadStatusLabel(row),
@@ -4378,6 +4385,8 @@ def html_page() -> bytes:
       $('mCandidates').textContent = counts.candidates || 0;
       $('mQualified').textContent = counts.qualified_leads || 0;
       $('mHigh').textContent = counts.high_intent || 0;
+      $('mPublicReplies').textContent = counts.public_replies || 0;
+      $('mQualifiedReplies').textContent = counts.qualified_replies || 0;
       $('mActions').textContent = counts.actions || 0;
       $('mTouchSuccess').textContent = counts.touch_success || 0;
       $('mTouchFailed').textContent = counts.touch_failed || 0;
@@ -5622,6 +5631,7 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "profile_queue": [],
         "lead_view": [],
         "outreach_view": [],
+        "public_reply_events": [],
     }
     counts = {
         "candidates": 0,
@@ -5632,11 +5642,14 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "touch_skipped": 0,
         "high_intent": 0,
         "qualified_leads": 0,
+        "public_replies": 0,
+        "qualified_replies": 0,
     }
     if db_path.exists() and batch_id:
         try:
             with sqlite3.connect(str(db_path)) as conn:
                 conn.row_factory = sqlite3.Row
+                public_reply_table_exists = sqlite_table_exists(conn, "public_reply_events")
                 count_row = conn.execute(
                     "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=?",
                     (batch_id,),
@@ -5697,14 +5710,35 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                         (batch_id,),
                     ).fetchall()
                 ]
-                rows["lead_view"] = load_operator_lead_rows(conn, batch_id)
+                rows["lead_view"] = load_operator_lead_rows(conn, batch_id, include_public_replies=public_reply_table_exists)
                 if not rows["lead_view"]:
                     rows["lead_view"] = load_candidate_lead_rows(conn, batch_id)
                 rows["outreach_view"] = build_operator_outreach_rows(rows["action_queue"], rows["outreach_executions"], config)
+                if public_reply_table_exists:
+                    rows["public_reply_events"] = [
+                        dict(row)
+                        for row in conn.execute(
+                            """
+                            SELECT id, campaign_id, run_id, batch_id, lead_id, action_id, execution_id,
+                                   target_username, reply_author_username, reply_text, reply_language,
+                                   source_url, replied_at, intent_confirmed, qualification_state,
+                                   confidence, verified_contact, evidence_id, classifier_version, created_at
+                            FROM public_reply_events
+                            WHERE batch_id=?
+                            ORDER BY created_at DESC, rowid DESC
+                            LIMIT 80
+                            """,
+                            (batch_id,),
+                        ).fetchall()
+                    ]
                 rows["profile_queue"] = load_profile_queue_rows(conn, batch_id)
         except Exception:
             pass
     counts["qualified_leads"] = len([row for row in rows["lead_view"] if safe_int(row.get("score") or row.get("qualify_score"), 0) >= 50])
+    counts["public_replies"] = len(rows["public_reply_events"])
+    counts["qualified_replies"] = len(
+        [row for row in rows["public_reply_events"] if str(row.get("qualification_state") or "") == "qualified"]
+    )
     counts["actions"] = len(rows["action_queue"])
     counts["touched"] = len(rows["outreach_executions"])
     counts["touch_success"] = len([row for row in rows["outreach_executions"] if str(row.get("status") or "") in {"success", "completed"}])
@@ -5727,27 +5761,74 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "outreach_executions": rows["outreach_executions"],
         "lead_view": rows["lead_view"],
         "outreach_view": rows["outreach_view"],
+        "public_reply_events": rows["public_reply_events"],
         "profile_queue": rows["profile_queue"],
     }
 
 
-def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
+def sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (str(table_name or ""),),
+    ).fetchone()
+    return bool(row)
+
+
+def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str, include_public_replies: bool = True) -> list[dict]:
+    public_reply_select = """
+               COUNT(DISTINCT pre.id) AS public_reply_count,
+               COUNT(DISTINCT CASE WHEN pre.qualification_state='qualified' THEN pre.id END) AS qualified_reply_count,
+               (
+                   SELECT latest_pre.reply_text
+                   FROM public_reply_events latest_pre
+                   WHERE latest_pre.lead_id=ol.id AND latest_pre.batch_id=ol.batch_id
+                   ORDER BY latest_pre.created_at DESC, latest_pre.rowid DESC
+                   LIMIT 1
+               ) AS latest_reply_text,
+               (
+                   SELECT latest_pre.qualification_state
+                   FROM public_reply_events latest_pre
+                   WHERE latest_pre.lead_id=ol.id AND latest_pre.batch_id=ol.batch_id
+                   ORDER BY latest_pre.created_at DESC, latest_pre.rowid DESC
+                   LIMIT 1
+               ) AS latest_reply_state,
+               (
+                   SELECT latest_pre.verified_contact
+                   FROM public_reply_events latest_pre
+                   WHERE latest_pre.lead_id=ol.id AND latest_pre.batch_id=ol.batch_id
+                   ORDER BY latest_pre.created_at DESC, latest_pre.rowid DESC
+                   LIMIT 1
+               ) AS latest_reply_verified_contact
+    """ if include_public_replies else """
+               0 AS public_reply_count,
+               0 AS qualified_reply_count,
+               '' AS latest_reply_text,
+               '' AS latest_reply_state,
+               0 AS latest_reply_verified_contact
+    """
+    public_reply_join = (
+        "LEFT JOIN public_reply_events pre ON pre.lead_id = ol.id AND pre.batch_id = ol.batch_id"
+        if include_public_replies
+        else ""
+    )
     rows = conn.execute(
-        """
+        f"""
         SELECT ol.id, ol.candidate_user_id, ol.lead_type, ol.priority, ol.score, ol.reason,
                ol.lifecycle_stage, ol.status, ol.source_path, ol.created_at, ol.updated_at,
                cu.username, cu.profile_url, cu.comment_text, cu.qualify_score, cu.intent_tags,
                cu.source_path AS candidate_source_path,
                dc.video_url, dc.video_id, dc.caption,
-               COUNT(aq.id) AS action_count,
+               COUNT(DISTINCT aq.id) AS action_count,
                GROUP_CONCAT(aq.action_type) AS action_types,
-               SUM(CASE WHEN aq.status IN ('completed','success') THEN 1 ELSE 0 END) AS success_action_count,
-               SUM(CASE WHEN aq.status IN ('failed','retryable') THEN 1 ELSE 0 END) AS failed_action_count,
-               SUM(CASE WHEN aq.status='skipped' OR aq.status='rejected' THEN 1 ELSE 0 END) AS skipped_action_count
+               COUNT(DISTINCT CASE WHEN aq.status IN ('completed','success') THEN aq.id END) AS success_action_count,
+               COUNT(DISTINCT CASE WHEN aq.status IN ('failed','retryable') THEN aq.id END) AS failed_action_count,
+               COUNT(DISTINCT CASE WHEN aq.status='skipped' OR aq.status='rejected' THEN aq.id END) AS skipped_action_count,
+               {public_reply_select}
         FROM operation_leads ol
         LEFT JOIN candidate_users cu ON cu.id = ol.candidate_user_id
         LEFT JOIN discovered_contents dc ON dc.id = cu.content_id
         LEFT JOIN action_queue aq ON aq.lead_id = ol.id
+        {public_reply_join}
         WHERE ol.batch_id=?
         GROUP BY ol.id
         ORDER BY ol.score DESC, ol.updated_at DESC, ol.created_at DESC
@@ -5768,6 +5849,7 @@ def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str) -> list[dic
         item["intent_confidence"] = extract_intent_confidence(tags)
         item["matched_reason"] = item.get("reason") or item.get("comment_text") or item.get("caption") or ""
         item["recommended_actions"] = [human_action_type(value) for value in compact_csv(item.get("action_types"))]
+        item["reply_summary"] = human_reply_summary(item)
         item["current_status"] = operator_lead_status(item)
         result.append(item)
     return result
@@ -5941,6 +6023,10 @@ def human_execution_mode(mode: str) -> str:
 
 
 def operator_lead_status(row: dict) -> str:
+    if safe_int(row.get("qualified_reply_count"), 0) > 0:
+        return "qualified"
+    if safe_int(row.get("public_reply_count"), 0) > 0:
+        return "reply_received"
     if safe_int(row.get("success_action_count"), 0) > 0:
         return "contacted"
     if safe_int(row.get("failed_action_count"), 0) > 0:
@@ -5950,6 +6036,21 @@ def operator_lead_status(row: dict) -> str:
     if safe_int(row.get("action_count"), 0) > 0:
         return "queued"
     return str(row.get("lifecycle_stage") or row.get("status") or "new")
+
+
+def human_reply_summary(row: dict) -> str:
+    reply_count = safe_int(row.get("public_reply_count"), 0)
+    if reply_count <= 0:
+        return "无公开回复"
+    qualified_count = safe_int(row.get("qualified_reply_count"), 0)
+    latest = str(row.get("latest_reply_text") or "").strip()
+    state = str(row.get("latest_reply_state") or "").strip()
+    verified = safe_int(row.get("latest_reply_verified_contact"), 0) == 1
+    label = "合格回复" if qualified_count > 0 or state == "qualified" else "收到回复"
+    suffix = " / 已验证触达" if verified else " / 未验证触达"
+    if latest:
+        return f"{label} {qualified_count}/{reply_count}{suffix}: {latest[:80]}"
+    return f"{label} {qualified_count}/{reply_count}{suffix}"
 
 
 def outreach_operator_status(action: dict, execution: dict) -> str:

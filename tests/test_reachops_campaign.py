@@ -7096,6 +7096,89 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertNotEqual(event["run_id"], "run_should_not_be_assigned")
             self.assertNotEqual(event["batch_id"], "batch_should_not_be_assigned")
 
+    def test_web_operations_payload_surfaces_public_reply_lifecycle(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            batch = service.storage.latest_collection_batch_for_campaign(plan["campaign"]["id"])
+            PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "target_username": action["target_username"],
+                        "reply_author_username": action["target_username"],
+                        "reply_text": "Can you send me the link and price?",
+                        "reply_language": "en",
+                        "source_url": action["target_url"],
+                        "replied_at": "2026-07-20T10:20:00Z",
+                    }
+                ]
+            )
+
+            payload = reachops_web_ui.build_operations_payload(Path(service.storage.db_path), batch, {}, [])
+
+            self.assertEqual(payload["counts"]["public_replies"], 1)
+            self.assertEqual(payload["counts"]["qualified_replies"], 1)
+            self.assertEqual(len(payload["public_reply_events"]), 1)
+            self.assertEqual(payload["public_reply_events"][0]["run_id"], action["run_id"])
+            self.assertEqual(payload["public_reply_events"][0]["action_id"], action["id"])
+            self.assertEqual(payload["public_reply_events"][0]["execution_id"], execution_id)
+            lead = next(row for row in payload["lead_view"] if row["id"] == action["lead_id"])
+            self.assertEqual(lead["public_reply_count"], 1)
+            self.assertEqual(lead["qualified_reply_count"], 1)
+            self.assertEqual(lead["current_status"], "qualified")
+            self.assertIn("合格回复", lead["reply_summary"])
+            self.assertIn("Can you send me", lead["reply_summary"])
+
+    def test_web_operations_payload_handles_legacy_db_without_public_reply_table(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "legacy-web.db"))
+            batch = storage.create_collection_batch(1, profile_group="US", initial_status="completed")
+            now = "2026-07-20T10:21:00Z"
+            with storage.connect() as conn:
+                conn.execute("DROP TABLE public_reply_events")
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                     source_path, status, batch_id, run_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "legacy-ui-lead-1",
+                        "legacy-ui-candidate-1",
+                        "purchase",
+                        "high",
+                        88,
+                        "legacy lead visible without public reply table",
+                        "new",
+                        "https://www.tiktok.com/@demo/video/1",
+                        "new",
+                        batch.id,
+                        "",
+                        now,
+                        now,
+                    ),
+                )
+
+            payload = reachops_web_ui.build_operations_payload(Path(storage.db_path), {"id": batch.id}, {}, [])
+
+            self.assertEqual(payload["counts"]["public_replies"], 0)
+            self.assertEqual(payload["counts"]["qualified_replies"], 0)
+            self.assertEqual(payload["public_reply_events"], [])
+            lead = next(row for row in payload["lead_view"] if row["id"] == "legacy-ui-lead-1")
+            self.assertEqual(lead["public_reply_count"], 0)
+            self.assertEqual(lead["qualified_reply_count"], 0)
+            self.assertEqual(lead["reply_summary"], "无公开回复")
+
     def test_collection_uses_injected_comment_intent_classifier_for_customer_pool(self):
         with tempfile.TemporaryDirectory() as tmp:
             classifier = FakeCommentIntentClassifier()
