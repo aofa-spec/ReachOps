@@ -131,6 +131,7 @@ def _check_manifest(root: Path, manifest_path: Path, installer_path: Path) -> tu
         return failures, detail
 
     installer = manifest.get("installer") if isinstance(manifest.get("installer"), dict) else {}
+    runtime_policy = manifest.get("runtime_policy") if isinstance(manifest.get("runtime_policy"), dict) else {}
     raw_installer_path = str(installer.get("path") or "")
     manifest_installer = _manifest_installer_path(root, manifest_path, manifest)
     expected_sha = str(installer.get("sha256") or "")
@@ -146,6 +147,11 @@ def _check_manifest(root: Path, manifest_path: Path, installer_path: Path) -> tu
             "installer_path": str(actual_installer),
             "expected_sha256": expected_sha,
             "expected_size": expected_size,
+            "runtime_policy": {
+                "preserve_config": bool(runtime_policy.get("preserve_config")),
+                "preserve_data": bool(runtime_policy.get("preserve_data")),
+                "preserve_activation_status": bool(runtime_policy.get("preserve_activation_status")),
+            },
         }
     )
 
@@ -157,6 +163,14 @@ def _check_manifest(root: Path, manifest_path: Path, installer_path: Path) -> tu
         failures.append("manifest_platform_mismatch")
     if raw_installer_path and Path(raw_installer_path).is_absolute():
         failures.append("manifest_installer_path_not_portable")
+    if not runtime_policy:
+        failures.append("manifest_runtime_policy_missing")
+    if not bool(runtime_policy.get("preserve_config")):
+        failures.append("manifest_preserve_config_missing")
+    if not bool(runtime_policy.get("preserve_data")):
+        failures.append("manifest_preserve_data_missing")
+    if not bool(runtime_policy.get("preserve_activation_status")):
+        failures.append("manifest_preserve_activation_status_missing")
     if not actual_installer.exists():
         failures.append("manifest_installer_missing")
         return failures, detail

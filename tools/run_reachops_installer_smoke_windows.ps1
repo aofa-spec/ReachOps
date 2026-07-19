@@ -82,6 +82,15 @@ $exePath = Join-Path $InstallDir "ReachOps.exe"
 $manifest = Get-Content $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $actualHash = (Get-FileHash $InstallerPath -Algorithm SHA256).Hash.ToLower()
 $expectedHash = [string]$manifest.installer.sha256
+$runtimePolicy = $manifest.runtime_policy
+$preserveConfig = $false
+$preserveData = $false
+$preserveActivationStatus = $false
+if ($null -ne $runtimePolicy) {
+    $preserveConfig = [bool]$runtimePolicy.preserve_config
+    $preserveData = [bool]$runtimePolicy.preserve_data
+    $preserveActivationStatus = [bool]$runtimePolicy.preserve_activation_status
+}
 $dataInInstallDir = Test-Path (Join-Path $InstallDir "data")
 
 $result = [ordered]@{
@@ -95,6 +104,9 @@ $result = [ordered]@{
     manifest_build = [string]$manifest.build
     installer_size = (Get-Item $InstallerPath).Length
     hash_ok = ($actualHash -eq $expectedHash.ToLower())
+    preserve_config = $preserveConfig
+    preserve_data = $preserveData
+    preserve_activation_status = $preserveActivationStatus
     install_log = $InstallLogPath
     report_path = $ReportPath
 }
@@ -104,6 +116,9 @@ if ($process.ExitCode -ne 0) { $failures += "installer_exit" }
 if (!$result.exe_exists) { $failures += "exe_missing" }
 if ($dataInInstallDir) { $failures += "data_written_to_install_dir" }
 if (!$result.hash_ok) { $failures += "manifest_hash_mismatch" }
+if (!$preserveConfig) { $failures += "manifest_preserve_config_missing" }
+if (!$preserveData) { $failures += "manifest_preserve_data_missing" }
+if (!$preserveActivationStatus) { $failures += "manifest_preserve_activation_status_missing" }
 
 if ($failures.Count -gt 0) {
     $result.status = "failed"

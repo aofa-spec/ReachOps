@@ -2442,6 +2442,34 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(absolute_path_result["artifacts"]["manifest"]["installer_path_is_portable"])
             self.assertEqual(absolute_path_result["artifacts"]["manifest"]["installer_path_raw"], str(installer.resolve()))
 
+            missing_runtime_policy_manifest = json.loads(json.dumps(manifest))
+            missing_runtime_policy_manifest.pop("runtime_policy", None)
+            manifest_path.write_text(json.dumps(missing_runtime_policy_manifest), encoding="utf-8")
+            missing_runtime_policy = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(missing_runtime_policy["passed"])
+            self.assertIn("manifest_runtime_policy_missing", missing_runtime_policy["failures"])
+            self.assertIn("manifest_preserve_config_missing", missing_runtime_policy["failures"])
+            self.assertIn("manifest_preserve_data_missing", missing_runtime_policy["failures"])
+            self.assertIn("manifest_preserve_activation_status_missing", missing_runtime_policy["failures"])
+            self.assertEqual(
+                missing_runtime_policy["artifacts"]["manifest"]["runtime_policy"],
+                {
+                    "preserve_config": False,
+                    "preserve_data": False,
+                    "preserve_activation_status": False,
+                },
+            )
+
+            destructive_runtime_policy_manifest = json.loads(json.dumps(manifest))
+            destructive_runtime_policy_manifest["runtime_policy"]["preserve_data"] = False
+            manifest_path.write_text(json.dumps(destructive_runtime_policy_manifest), encoding="utf-8")
+            destructive_runtime_policy = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(destructive_runtime_policy["passed"])
+            self.assertIn("manifest_preserve_data_missing", destructive_runtime_policy["failures"])
+            self.assertTrue(destructive_runtime_policy["artifacts"]["manifest"]["runtime_policy"]["preserve_config"])
+            self.assertFalse(destructive_runtime_policy["artifacts"]["manifest"]["runtime_policy"]["preserve_data"])
+            self.assertTrue(destructive_runtime_policy["artifacts"]["manifest"]["runtime_policy"]["preserve_activation_status"])
+
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             exe.write_bytes(b"not a PE executable")
             invalid_exe = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
@@ -5378,6 +5406,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("-Wait -PassThru", installer_smoke_script)
         self.assertIn("data_in_install_dir", installer_smoke_script)
         self.assertIn("manifest_hash_mismatch", installer_smoke_script)
+        self.assertIn("preserve_config", installer_smoke_script)
+        self.assertIn("preserve_data", installer_smoke_script)
+        self.assertIn("preserve_activation_status", installer_smoke_script)
+        self.assertIn("manifest_preserve_config_missing", installer_smoke_script)
+        self.assertIn("manifest_preserve_data_missing", installer_smoke_script)
+        self.assertIn("manifest_preserve_activation_status_missing", installer_smoke_script)
         self.assertIn("UTF8Encoding]::new($false)", installer_smoke_script)
         self.assertIn("pythonw.exe", ui_start_script)
         self.assertIn("Start-Process -FilePath $Pythonw", ui_start_script)
