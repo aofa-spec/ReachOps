@@ -194,6 +194,7 @@ function Write-AcceptanceSummary {
         [string]$LiveValidationJsonPath,
         [string]$RepositoryCleanlinessJsonPath,
         [string]$WindowsPackagePreflightJsonPath,
+        [string]$WindowsCredentialManagerJsonPath,
         [string]$ClientDeliveryJsonPath,
         [string]$ReadinessJsonPath,
         [string]$PreflightJsonPath,
@@ -209,6 +210,7 @@ function Write-AcceptanceSummary {
     $authorizationHandoff = Read-JsonObject $AuthorizationHandoffJsonPath
     $liveValidation = Read-JsonObject $LiveValidationJsonPath
     $windowsPackagePreflight = Read-JsonObject $WindowsPackagePreflightJsonPath
+    $windowsCredentialManager = Read-JsonObject $WindowsCredentialManagerJsonPath
     $clientDelivery = Read-JsonObject $ClientDeliveryJsonPath
     $readiness = Read-JsonObject $ReadinessJsonPath
     $preflight = Read-JsonObject $PreflightJsonPath
@@ -405,6 +407,17 @@ function Write-AcceptanceSummary {
             build_contract = if ($windowsPackagePreflight) { $windowsPackagePreflight.build_contract } else { @{} }
             json_path = if (Test-Path $WindowsPackagePreflightJsonPath) { $WindowsPackagePreflightJsonPath } else { "" }
         }
+        windows_credential_manager_validation = [ordered]@{
+            status = if ($windowsCredentialManager) { [string]$windowsCredentialManager.status } else { "skipped" }
+            passed = if ($windowsCredentialManager) { [bool]$windowsCredentialManager.passed } else { $false }
+            backend = if ($windowsCredentialManager) { [string]$windowsCredentialManager.backend } else { "" }
+            no_browser_started = if ($windowsCredentialManager) { [bool]$windowsCredentialManager.no_browser_started } else { $true }
+            no_submit = if ($windowsCredentialManager) { [bool]$windowsCredentialManager.no_submit } else { $true }
+            customer_data_uploaded = if ($windowsCredentialManager) { [bool]$windowsCredentialManager.customer_data_uploaded } else { $false }
+            secret_value_included = if ($windowsCredentialManager) { [bool]$windowsCredentialManager.secret_value_included } else { $false }
+            checks = if ($windowsCredentialManager) { $windowsCredentialManager.checks } else { @{} }
+            json_path = if (Test-Path $WindowsCredentialManagerJsonPath) { $WindowsCredentialManagerJsonPath } else { "" }
+        }
         client_delivery = [ordered]@{
             status = if ($clientDelivery) { [string]$clientDelivery.status } else { "skipped" }
             readiness = if ($clientDelivery) { [string]$clientDelivery.readiness } else { "" }
@@ -512,6 +525,8 @@ $repositoryCleanlinessStdout = Join-Path $root "repository_cleanliness_stdout.js
 $repositoryCleanlinessJson = Join-Path $root "repository_cleanliness_payload.json"
 $windowsPackagePreflightStdout = Join-Path $root "windows_package_preflight_stdout.json"
 $windowsPackagePreflightJson = Join-Path $root "windows_package_preflight.json"
+$windowsCredentialManagerStdout = Join-Path $root "windows_credential_manager_validation_stdout.json"
+$windowsCredentialManagerJson = Join-Path $root "windows_credential_manager_validation.json"
 $clientDeliveryStdout = Join-Path $root "client_delivery_stdout.json"
 $clientDeliveryJson = Join-Path $root "client_delivery.json"
 $goalStatusStdout = Join-Path $root "goal_status_stdout.json"
@@ -693,6 +708,10 @@ Write-Step "ReachOps Windows package preflight"
 Invoke-PythonCapture -StepName "ReachOps Windows package preflight" -StdoutPath $windowsPackagePreflightStdout -Arguments @("tools\reachops_windows_package_preflight.py", "--json")
 Convert-StdoutJson -StdoutPath $windowsPackagePreflightStdout -OutputPath $windowsPackagePreflightJson | Out-Null
 
+Write-Step "ReachOps Windows Credential Manager validation"
+Invoke-PythonCapture -StepName "ReachOps Windows Credential Manager validation" -StdoutPath $windowsCredentialManagerStdout -Arguments @("tools\reachops_windows_credential_manager_check.py", "--json")
+Convert-StdoutJson -StdoutPath $windowsCredentialManagerStdout -OutputPath $windowsCredentialManagerJson | Out-Null
+
 Write-Step "ReachOps client delivery gate"
 $clientDeliveryOutput = & python @("tools\reachops_client_delivery_check.py", "--output", $clientDeliveryJson, "--json") 2>&1
 $clientDeliveryOutput | ForEach-Object { Write-Host $_ }
@@ -797,7 +816,7 @@ if ($RunLiveSubmit) {
     Write-Step "Skipping controlled live submit: RunLiveSubmit not set"
 }
 
-Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveAcceptanceStatusJsonPath $liveAcceptanceStatusJson -AuthorizationHandoffJsonPath $authorizationHandoffJson -LiveValidationJsonPath $liveValidationJson -RepositoryCleanlinessJsonPath $repositoryCleanlinessJson -WindowsPackagePreflightJsonPath $windowsPackagePreflightJson -ClientDeliveryJsonPath $clientDeliveryJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
+Write-AcceptanceSummary -OutputPath $acceptanceSummaryJson -RootDir $root -AuditJsonPath $auditJson -OperatorPressureJsonPath $operatorPressureJson -InstallerSmokeJsonPath $installerSmokeJson -UiStartupJsonPath $uiStartupJson -ActivationStatusJsonPath $activationStatusJson -LiveAcceptanceStatusJsonPath $liveAcceptanceStatusJson -AuthorizationHandoffJsonPath $authorizationHandoffJson -LiveValidationJsonPath $liveValidationJson -RepositoryCleanlinessJsonPath $repositoryCleanlinessJson -WindowsPackagePreflightJsonPath $windowsPackagePreflightJson -WindowsCredentialManagerJsonPath $windowsCredentialManagerJson -ClientDeliveryJsonPath $clientDeliveryJson -ReadinessJsonPath $readinessJson -PreflightJsonPath $preflightJson -LiveSubmitJsonPath $liveSubmitJson -InstallerOptional ([bool]$AllowMissingInstaller)
 
 Write-Step "ReachOps goal status report"
 Invoke-PythonCapture -StepName "ReachOps goal status report" -StdoutPath $goalStatusStdout -Arguments @("tools\reachops_goal_status_report.py", "--audit-json", $auditJson, "--acceptance-summary", $acceptanceSummaryJson, "--json")
@@ -891,6 +910,7 @@ Write-Host "LIVE_ACCEPTANCE_STATUS_JSON=$liveAcceptanceStatusJson"
 Write-Host "LIVE_VALIDATION_MANIFEST_JSON=$liveValidationJson"
 Write-Host "REPOSITORY_CLEANLINESS_JSON=$repositoryCleanlinessJson"
 Write-Host "WINDOWS_PACKAGE_PREFLIGHT_JSON=$windowsPackagePreflightJson"
+Write-Host "WINDOWS_CREDENTIAL_MANAGER_JSON=$windowsCredentialManagerJson"
 Write-Host "CLIENT_DELIVERY_JSON=$clientDeliveryJson"
 Write-Host "GOAL_STATUS_JSON=$goalStatusJson"
 Write-Host "PACKAGE_CHECK_JSON=$packageCheckJson"

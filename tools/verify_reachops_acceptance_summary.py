@@ -82,6 +82,7 @@ def verify_summary(
     live_validation = summary.get("live_validation") or {}
     repository_cleanliness = summary.get("repository_cleanliness") or {}
     windows_package_preflight = summary.get("windows_package_preflight") or {}
+    windows_credential_manager_validation = summary.get("windows_credential_manager_validation") or {}
     client_delivery = summary.get("client_delivery") or {}
     live_readiness = summary.get("live_readiness") or {}
     live_acceptance_status = summary.get("live_acceptance_status") or {}
@@ -236,6 +237,53 @@ def verify_summary(
                 failures.append("windows_package_preflight_json_empty")
             elif not bool(windows_preflight_json.get("inside_summary_dir")):
                 failures.append("windows_package_preflight_json_outside_summary_dir")
+
+    credential_validation_status = str(windows_credential_manager_validation.get("status") or "")
+    credential_validation_checks = (
+        windows_credential_manager_validation.get("checks")
+        if isinstance(windows_credential_manager_validation.get("checks"), dict)
+        else {}
+    )
+    credential_validation_json = report_path_status(
+        summary_path,
+        str(windows_credential_manager_validation.get("json_path") or ""),
+    )
+    if status == STATUS_PASSED and not windows_credential_manager_validation:
+        failures.append("windows_credential_manager_validation_missing")
+    if windows_credential_manager_validation:
+        if credential_validation_status != STATUS_PASSED:
+            failures.append("windows_credential_manager_validation_not_passed")
+        if not bool(windows_credential_manager_validation.get("passed")):
+            failures.append("windows_credential_manager_validation_failed")
+        if str(windows_credential_manager_validation.get("backend") or "") != "windows_credential_manager":
+            failures.append("windows_credential_manager_validation_backend_invalid")
+        if not bool(credential_validation_checks.get("windows_credential_manager_available")):
+            failures.append("windows_credential_manager_validation_unavailable")
+        if not bool(credential_validation_checks.get("secret_write_succeeded")):
+            failures.append("windows_credential_manager_validation_write_failed")
+        if not bool(credential_validation_checks.get("secret_readback_matched")):
+            failures.append("windows_credential_manager_validation_readback_failed")
+        if not bool(credential_validation_checks.get("secret_delete_succeeded")):
+            failures.append("windows_credential_manager_validation_delete_failed")
+        if not bool(credential_validation_checks.get("output_excludes_secret_value")):
+            failures.append("windows_credential_manager_validation_output_leaked_secret")
+        if not bool(windows_credential_manager_validation.get("no_browser_started", True)):
+            failures.append("windows_credential_manager_validation_opened_browser")
+        if not bool(windows_credential_manager_validation.get("no_submit", True)):
+            failures.append("windows_credential_manager_validation_submitted_action")
+        if bool(windows_credential_manager_validation.get("customer_data_uploaded")):
+            failures.append("windows_credential_manager_validation_uploaded_customer_data")
+        if bool(windows_credential_manager_validation.get("secret_value_included")):
+            failures.append("windows_credential_manager_validation_included_secret_value")
+        if status == STATUS_PASSED and not str(windows_credential_manager_validation.get("json_path") or "").strip():
+            failures.append("windows_credential_manager_validation_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(windows_credential_manager_validation.get("json_path") or "").strip():
+            if not credential_validation_json["exists"]:
+                failures.append("windows_credential_manager_validation_json_missing")
+            elif int(credential_validation_json.get("size") or 0) <= 0:
+                failures.append("windows_credential_manager_validation_json_empty")
+            elif not bool(credential_validation_json.get("inside_summary_dir")):
+                failures.append("windows_credential_manager_validation_json_outside_summary_dir")
 
     client_delivery_status = str(client_delivery.get("status") or "")
     client_delivery_readiness = str(client_delivery.get("readiness") or "")
@@ -656,6 +704,20 @@ def verify_summary(
             "json_exists": bool(windows_preflight_json.get("exists")),
             "json_size": int(windows_preflight_json.get("size") or 0),
             "json_inside_summary_dir": bool(windows_preflight_json.get("inside_summary_dir")),
+        },
+        "windows_credential_manager_validation": {
+            "status": credential_validation_status,
+            "passed": bool(windows_credential_manager_validation.get("passed")),
+            "backend": str(windows_credential_manager_validation.get("backend") or ""),
+            "no_browser_started": bool(windows_credential_manager_validation.get("no_browser_started", True)),
+            "no_submit": bool(windows_credential_manager_validation.get("no_submit", True)),
+            "customer_data_uploaded": bool(windows_credential_manager_validation.get("customer_data_uploaded")),
+            "secret_value_included": bool(windows_credential_manager_validation.get("secret_value_included")),
+            "checks": credential_validation_checks,
+            "json_path": str(windows_credential_manager_validation.get("json_path") or ""),
+            "json_exists": bool(credential_validation_json.get("exists")),
+            "json_size": int(credential_validation_json.get("size") or 0),
+            "json_inside_summary_dir": bool(credential_validation_json.get("inside_summary_dir")),
         },
         "client_delivery": {
             "status": client_delivery_status,

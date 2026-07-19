@@ -214,6 +214,7 @@ def _report_sections(summary: dict[str, Any], final_required: bool, require_fina
         "live_validation",
         "repository_cleanliness",
         "windows_package_preflight",
+        "windows_credential_manager_validation",
         "client_delivery",
         "live_readiness",
         "live_preflight",
