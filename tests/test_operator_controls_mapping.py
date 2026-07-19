@@ -4,6 +4,7 @@ from __future__ import annotations
 import unittest
 
 from tools.reachops_delivery_audit import run_operator_console_contract_fixture
+from tools.reachops_delivery_audit import run_web_local_api_architecture_fixture
 
 
 class OperatorControlsMappingTests(unittest.TestCase):
@@ -20,6 +21,10 @@ class OperatorControlsMappingTests(unittest.TestCase):
             "触达并发",
         ]:
             self.assertTrue(evidence["operator_control_evidence"][label]["passed"], label)
+
+    def test_live_actions_use_workbench_browser_adapter_contract(self) -> None:
+        evidence = run_web_local_api_architecture_fixture()
+        self.assertTrue(evidence["checks"]["actions_use_workbench_browser_adapter"])
 
 
 if __name__ == "__main__":

@@ -7,11 +7,14 @@ import hashlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from ReachOps.workbench.offline_learning_ledger import OfflineLearningLedger
 from ReachOps.workbench.page_state_detector import PageStateDetector
 from ReachOps.workbench.repair_policy_engine import RepairPolicyEngine
+
+if TYPE_CHECKING:
+    from ReachOps.adapters.browser_manager import WorkbenchBrowserAdapter
 
 
 @dataclass
@@ -310,7 +313,7 @@ class TikTokSeleniumActionExecutor:
             from ReachOps.adapters.browser_manager import get_workbench_browser_adapter
 
             profile_id = str(profile.get("profile_id") or profile.get("id") or "")
-            manager = get_workbench_browser_adapter()
+            manager: "WorkbenchBrowserAdapter" = get_workbench_browser_adapter()
             inst = manager.acquire(
                 account_id=profile_id,
                 profile_id=profile_id,

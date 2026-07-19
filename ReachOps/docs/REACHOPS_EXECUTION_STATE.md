@@ -92,22 +92,24 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `ReachOps/workbench/console.py` now exposes customer-visible labels and controls for `每个目标最多视频`, `每条视频最多评论`, `参与账号数`, `任务间隔秒`, and `排除词`.
   - These controls already feed execution through `scan_max_videos_var`, `scan_max_comments_var`, `scan_profile_limit_var`, `scan_interval_var`, and `scan_exclude_keywords_var`; this slice closes the UI visibility/evidence mapping gap.
   - Added `tests/test_operator_controls_mapping.py` to lock the delivery-audit operator-control contract.
+  - `ReachOps/workbench/tiktok_action_executor.py` now explicitly binds live action browser acquisition to the shared `WorkbenchBrowserAdapter` contract.
+  - The action executor already acquired browsers through `get_workbench_browser_adapter().acquire(...)`; this update adds a typed adapter contract and focused test coverage so the Web/API acquisition-chain audit can verify actions use the same ixBrowser/Selenium adapter boundary as collection.
 - Tests and checks:
-  - `/usr/bin/python3 -m py_compile ReachOps/workbench/console.py tests/test_operator_controls_mapping.py`: passed; log `/tmp/reachops-p4-controls-pycompile.log`.
-  - `/usr/bin/python3 -m unittest -v tests.test_operator_controls_mapping`: passed, 1 test; log `/tmp/reachops-p4-controls-tests.log`.
-  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-controls-truth.log`.
+  - `/usr/bin/python3 -m py_compile ReachOps/workbench/console.py ReachOps/workbench/tiktok_action_executor.py tests/test_operator_controls_mapping.py`: passed; log `/tmp/reachops-pr18-adapter-contract-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_operator_controls_mapping`: passed, 2 tests; log `/tmp/reachops-pr18-adapter-contract-tests.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr18-adapter-contract-truth.log`.
   - Campaign regression comparison:
-    - branch `codex/p4-operator-controls-ui-mapping`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-p4-controls-campaign.log`.
-    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-p4-controls-campaign.log`.
-    - comparison `/tmp/reachops-p4-controls-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
-  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p4-controls-operator-pressure.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed but improved from `passed=46`, `failed=5` to `passed=47`, `failed=4`; output `/tmp/reachops-p4-controls-delivery-audit.json`.
-  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-p4-controls-goal-delivery-runner.json`.
-  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, local final failures reduced to 2; output `/tmp/reachops-p4-controls-goal-status-report.json`.
-  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-controls-package-check.json`.
-  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p4-controls-final-acceptance-gate.json`.
-  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p4-controls-cleanliness.json`.
-  - `git diff --check`: passed; log `/tmp/reachops-p4-controls-diff-check.log`.
+    - branch `codex/p4-operator-controls-ui-mapping`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-pr18-adapter-contract-campaign.log`.
+    - `origin/main`: 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-baseline-pr18-adapter-contract-campaign.log`.
+    - comparison `/tmp/reachops-pr18-adapter-contract-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr18-adapter-contract-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, summary `passed=47`, `pending_external_validation=3`, `failed=4`; the Web/API acquisition-chain false subchecks dropped from 6 to 5 because `actions_use_workbench_browser_adapter=true`; output `/tmp/reachops-pr18-adapter-contract-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr18-adapter-contract-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, `status=failed`, local final failures remain 2; output `/tmp/reachops-pr18-adapter-contract-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr18-adapter-contract-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr18-adapter-contract-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr18-adapter-contract-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-pr18-adapter-contract-diff-check.log`.
 - Remaining blockers:
   - Delivery audit still has 4 failed local checks: campaign funnel isolation, web API acquisition chain, web runtime API smoke, and web button JS/API feedback.
   - Windows final artifacts are still missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
