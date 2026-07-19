@@ -348,6 +348,7 @@ class OutreachExecution:
 class CollectionBatch:
     id: str
     campaign_id: str = ""
+    run_id: str = ""
     status: str = "running"
     total_sources: int = 0
     processed_sources: int = 0
@@ -559,6 +560,7 @@ class GrowthTaskConfig:
     profile_group: str = ""
     campaign_id: str = ""
     active_batch_id: str = ""
+    active_run_id: str = ""
     intent_keywords: List[str] = field(default_factory=list)
     exclude_keywords: List[str] = field(default_factory=list)
     test_mode: bool = False

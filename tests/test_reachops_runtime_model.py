@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ReachOps.intelligence.schemas import ActionQueueItem
+from ReachOps.intelligence.growth_task_router import GrowthTaskRouter
+from ReachOps.intelligence.operation_lead_manager import OperationLeadManager
+from ReachOps.intelligence.schemas import ActionQueueItem, CandidateUser, DiscoveredContent, GrowthTaskConfig
 from ReachOps.intelligence.storage import GrowthStorage
 
 
@@ -252,6 +254,62 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in executions_a], [execution_a])
         self.assertEqual(leads_a[0]["run_id"], run_a["id"])
         self.assertEqual(executions_a[0]["run_id"], run_a["id"])
+
+    def test_growth_task_router_creates_and_binds_campaign_run(self) -> None:
+        storage = self.make_storage()
+        campaign = storage.create_campaign("keyword", "running gear")
+        with tempfile.TemporaryDirectory() as report_dir:
+            router = GrowthTaskRouter(storage, report_dir=report_dir)
+            result = router.run([], [], GrowthTaskConfig(campaign_id=campaign.id, test_mode=True))
+
+        self.assertEqual(result.processed_sources, 0)
+        summary = storage.runtime_traceability_summary(campaign.id)
+        self.assertEqual(summary["counts"]["campaign_runs"], 1)
+        with storage.connect() as conn:
+            batch = conn.execute("SELECT campaign_id, run_id FROM collection_batches").fetchone()
+        self.assertEqual(batch["campaign_id"], campaign.id)
+        self.assertTrue(batch["run_id"].startswith("run_"))
+
+    def test_scoring_and_lead_pipeline_write_runtime_traceability(self) -> None:
+        storage = self.make_storage()
+        campaign = storage.create_campaign("keyword", "shopify tool")
+        batch = storage.create_collection_batch(1, campaign_id=campaign.id)
+        run = storage.create_campaign_run(campaign.id, batch_id=batch.id, idempotency_key="trace-pipeline")
+        storage.bind_collection_batch_run(batch.id, run["id"])
+        storage.set_active_collection_batch(batch.id)
+        storage.set_active_campaign_run(run["id"])
+
+        content, _ = storage.upsert_content(
+            DiscoveredContent(
+                id="dc_trace",
+                creator_id="creator_trace",
+                video_id="video_trace",
+                video_url="https://www.tiktok.com/@creator/video/1",
+                caption="Demo",
+                views=50000,
+                comments=500,
+                source_path="https://www.tiktok.com/@creator/video/1",
+            )
+        )
+        storage.upsert_candidate(
+            CandidateUser(
+                id="cu_trace",
+                content_id=content.id,
+                username="redacted_trace",
+                profile_url="https://www.tiktok.com/@redacted_trace",
+                comment_text="where can I buy this app",
+                comment_likes=2,
+                source_path=content.source_path,
+            )
+        )
+        config = GrowthTaskConfig(campaign_id=campaign.id, active_batch_id=batch.id, active_run_id=run["id"])
+        OperationLeadManager(storage).build_from_scored_candidates(config)
+
+        summary = storage.runtime_traceability_summary(campaign.id, run["id"])
+        self.assertEqual(summary["counts"]["evidence_artifacts"], 1)
+        self.assertEqual(summary["counts"]["candidate_observations"], 1)
+        self.assertEqual(summary["counts"]["lead_decisions"], 1)
+        self.assertEqual(storage.list_operation_leads(run_id=run["id"])[0]["run_id"], run["id"])
 
     def test_legacy_migration_keeps_run_id_empty_instead_of_fabricating_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

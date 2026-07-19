@@ -14,7 +14,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | Priority | Milestone | Status | Verified evidence | Exit condition |
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
-| P1 | Immutable Campaign Run / Observation model | `IN_PROGRESS` | P1 runtime ledger storage slice exists on branch `codex/p4-web-runtime-smoke`: `campaign_runs`, `candidate_observations`, `evidence_artifacts`, and immutable/versioned `lead_decisions`; legacy migration keeps old `run_id` empty instead of fabricating run attribution; P1 focused tests passed on 2026-07-20 | Wire live collection/scoring/report paths into the runtime ledger and complete P1 PR review |
+| P1 | Immutable Campaign Run / Observation model | `IN_PROGRESS` | P1 runtime ledger storage and runtime/lead-pipeline wiring exists on branch `codex/p4-web-runtime-smoke`: `campaign_runs`, `candidate_observations`, `evidence_artifacts`, and immutable/versioned `lead_decisions`; collection batches bind to campaign runs; lead/action/execution rows can carry `run_id`; legacy migration keeps old `run_id` empty instead of fabricating run attribution; P1 focused tests passed on 2026-07-20 | Complete report/export surfacing from the runtime ledger and P1 PR review |
 | P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Windows Credential Manager secret-storage contract exists on branch `codex/p4-web-runtime-smoke`; license-state evaluator models active/current, revoked, expired, and 7-day grace while keeping grace out of live-submit readiness; encrypted `.reachops-backup` lightweight and full selected-evidence backup/restore contracts now cover customer password, manifest, integrity hashes, preview, wrong password, corrupted archive, interrupted restore rollback, unsafe path rejection, secret/cookie exclusions, lightweight raw-evidence exclusion, and full backup selected evidence inclusion; minimal external license refresh client contract now refreshes only license/device/version metadata over HTTPS and writes local activation status atomically without browser start, submit, or customer-data upload; focused P2 tests passed on 2026-07-20 | Complete Windows Credential Manager validation on Windows |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, Python 3.9-compatible runtime smoke cleanup, customer-visible control evidence, campaign funnel isolation fixture truthfulness, Web-to-local-API execution-chain evidence, and goal delivery boundary reporting. Runtime smoke, DOM smoke, delivery audit, goal status, and campaign regression now pass locally; final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
@@ -22,7 +22,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 ## Next autonomous action
 
-1. Continue P1 immutable Campaign Run / Observation model by wiring live collection/scoring/report paths into the runtime ledger; keep unrelated LeadDecision lifecycle expansion split unless required for traceability.
+1. Continue P1 immutable Campaign Run / Observation model by surfacing runtime ledger data in reports/exports and completing PR review; keep unrelated LeadDecision lifecycle expansion split unless required for traceability.
 2. Review Draft PR from branch `codex/p4-web-runtime-smoke`; accept only the Web runtime smoke slice and keep Windows/installer/live-submit validation out of scope.
 3. Continue P2 convergence only where non-external work remains; minimal external license refresh client contract is complete, and the remaining P2 exit gate is Windows Credential Manager validation on Windows.
 4. After P1/P4 review, return to the final Windows delivery chain: `ReachOps.exe`, installer, update manifest, Windows acceptance, and authorized live evidence.
@@ -684,9 +684,44 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
   - P1 remains incomplete until live collection/scoring/report paths write through the runtime ledger end to end.
 
+## Latest P1 runtime ledger pipeline wiring
+
+- Date: `2026-07-20`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Wire the existing collection/scoring/lead pipeline into the P1 runtime ledger without replacing GrowthStorage, changing the product architecture, entering Windows packaging, or attempting live TikTok submit.
+- Code evidence:
+  - `GrowthTaskConfig` now carries `active_run_id`.
+  - `GrowthTaskRouter.run()` creates an idempotent `campaign_run` for campaign-scoped runs, binds the collection batch to that run, sets active batch/run context, records the run id in pipeline events, and completes the run ledger at terminal collection status.
+  - `collection_batches` now has a compatibility `run_id` column and stores the bridge from legacy batch to immutable run.
+  - New creator/content/candidate/topic-content rows created during an active run carry `run_id`; existing stable rows are not overwritten to avoid cross-run contamination.
+  - `OperationLeadManager.build_from_scored_candidates()` records local evidence artifacts, candidate observations, and immutable/versioned lead decisions for each run-scoped candidate when campaign/run attribution is available.
+  - Existing lead/action/execution writes continue to capture active `run_id`, and query APIs preserve default compatibility while allowing run filtering.
+  - `tools/reachops_delivery_audit.py` now checks that the runtime router and lead pipeline are wired to the P1 ledger, not only that storage tables exist.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/schemas.py ReachOps/intelligence/growth_task_router.py ReachOps/intelligence/operation_lead_manager.py tests/test_reachops_runtime_model.py tools/reachops_delivery_audit.py`: passed; log `/tmp/reachops-p1-runtime-ledger-wiring-pycompile-final.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 8 tests; log `/tmp/reachops-p1-runtime-ledger-wiring-focused-final.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p1-runtime-ledger-wiring-truth.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 233 tests; log `/tmp/reachops-p1-runtime-ledger-wiring-campaign.log`.
+  - `origin/main` campaign baseline: failed with 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-p1-runtime-ledger-wiring-campaign.log`.
+  - Baseline comparison artifact `/tmp/reachops-p1-runtime-ledger-wiring-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`; output `/tmp/reachops-p1-runtime-ledger-wiring-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p1-runtime-ledger-wiring-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p1-runtime-ledger-wiring-goal-status.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p1-runtime-ledger-wiring-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p1-runtime-ledger-wiring-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p1-runtime-ledger-wiring-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p1-runtime-ledger-wiring-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p1-runtime-ledger-wiring-diff-check.log`.
+- Safety:
+  - No old data is assigned a fabricated `run_id`; stable entities are not overwritten to force run attribution.
+  - Tests use synthetic temp SQLite data only; no customer data, screenshots, cookies, TikTok state, secrets, or customer runtime database was committed.
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - P1 remains incomplete until runtime ledger traceability is surfaced in user-facing reports/exports and PR review is complete.
+
 ## Non-blocking engineering work available
 
-- P1 live collection/scoring/report integration with the runtime ledger.
+- P1 report/export surfacing from the runtime ledger.
 - LeadDecision versioning and unified scoring contract.
 - Follow/DM evidence validators in no-submit fixtures.
 - Windows Credential Manager abstraction and unit tests.

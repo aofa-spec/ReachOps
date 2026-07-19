@@ -92,6 +92,8 @@ class GrowthTaskRouter:
         source_list, duplicate_sources = self._dedupe_sources(raw_source_list)
         before_counts = self._snapshot_counts()
         active_batch_id = str(getattr(config, "active_batch_id", "") or "").strip()
+        campaign_id = str(getattr(config, "campaign_id", "") or "").strip()
+        active_run_id = str(getattr(config, "active_run_id", "") or "").strip()
         if active_batch_id:
             batch_id = active_batch_id
             self.storage.update_collection_batch(batch_id, "running")
@@ -106,12 +108,35 @@ class GrowthTaskRouter:
                     "min_comments": config.min_comments,
                     "target_mode": config.target_mode,
                     "vertical": config.vertical,
-                    "campaign_id": getattr(config, "campaign_id", "") or "",
+                    "campaign_id": campaign_id,
+                    "run_id": active_run_id,
                 },
-                campaign_id=getattr(config, "campaign_id", "") or "",
+                campaign_id=campaign_id,
             )
             batch_id = batch.id
         self.storage.set_active_collection_batch(batch_id)
+        if campaign_id:
+            if not active_run_id:
+                run = self.storage.create_campaign_run(
+                    campaign_id,
+                    batch_id=batch_id,
+                    collector_version="growth_task_router.v1",
+                    classifier_version="candidate_user_scorer.v1",
+                    config={
+                        "target_mode": config.target_mode,
+                        "vertical": config.vertical,
+                        "profile_group": getattr(config, "profile_group", "") or "",
+                        "source_count": len(source_list),
+                    },
+                    idempotency_key=str(getattr(config, "idempotency_key", "") or batch_id),
+                )
+                active_run_id = str(run.get("id") or "")
+            self.storage.set_active_campaign_run(active_run_id)
+            self.storage.bind_collection_batch_run(batch_id, active_run_id)
+            try:
+                setattr(config, "active_run_id", active_run_id)
+            except Exception:
+                pass
         if duplicate_sources:
             self.storage.log_event(
                 "collection_sources_deduped",
@@ -193,6 +218,7 @@ class GrowthTaskRouter:
             batch_id,
             {
                 "batch_id": batch_id,
+                "run_id": active_run_id,
                 "candidate_users": after_counts["candidates"] - before_counts["candidates"],
                 "high_value_candidates": after_counts["high_value"] - before_counts["high_value"],
                 "operation_leads": after_counts["operation_leads"] - before_counts["operation_leads"],
@@ -226,7 +252,10 @@ class GrowthTaskRouter:
         except Exception as exc:
             self.storage.log_error("REPORT_EXPORT_FAILED", str(exc))
             json_path, csv_path, markdown_path = "", "", ""
+        if active_run_id:
+            self.storage.update_campaign_run(active_run_id, final_status, completed=True)
         self.storage.set_active_collection_batch("")
+        self.storage.set_active_campaign_run("")
         return GrowthTaskResult(
             report=report,
             report_json_path=json_path,

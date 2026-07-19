@@ -220,6 +220,7 @@ class GrowthStorage:
                 CREATE TABLE IF NOT EXISTS collection_batches (
                     id TEXT PRIMARY KEY,
                     campaign_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     status TEXT DEFAULT 'running',
                     total_sources INTEGER DEFAULT 0,
                     processed_sources INTEGER DEFAULT 0,
@@ -568,7 +569,7 @@ class GrowthStorage:
                 },
             )
             self._ensure_columns(conn, "shop_contents", {"batch_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
-            self._ensure_columns(conn, "collection_batches", {"campaign_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "collection_batches", {"campaign_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
             self._ensure_columns(
                 conn,
                 "operation_leads",
@@ -1261,8 +1262,8 @@ class GrowthStorage:
                 """
                 INSERT INTO discovered_creators
                 (id, source_id, username, profile_url, followers, likes_total, vertical, country,
-                 language, source_path, raw_meta, batch_id, status, last_checked_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 language, source_path, raw_meta, batch_id, run_id, status, last_checked_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     creator.id,
@@ -1277,6 +1278,7 @@ class GrowthStorage:
                     creator.source_path,
                     json.dumps(creator.raw_meta or {}, ensure_ascii=False),
                     self._active_batch_id(),
+                    self._active_run_id(),
                     creator.status,
                     creator.last_checked_at,
                     creator.created_at,
@@ -1296,9 +1298,9 @@ class GrowthStorage:
                 """
                 INSERT INTO discovered_contents
                 (id, creator_id, video_id, video_url, caption, views, likes, comments, shares,
-                 content_language, country, material_type, collector_level, source_path, raw_meta, batch_id,
+                 content_language, country, material_type, collector_level, source_path, raw_meta, batch_id, run_id,
                  published_at, collected_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     content.id,
@@ -1317,6 +1319,7 @@ class GrowthStorage:
                     content.source_path,
                     json.dumps(content.raw_meta or {}, ensure_ascii=False),
                     self._active_batch_id(),
+                    self._active_run_id(),
                     content.published_at,
                     content.collected_at,
                 ),
@@ -1355,8 +1358,8 @@ class GrowthStorage:
                 INSERT INTO candidate_users
                 (id, content_id, username, profile_url, comment_text, comment_likes, reply_count,
                  qualify_score, intent_tags, comment_language, author_profile_completed, collector_level,
-                 source_path, repeat_seen_count, raw_meta, batch_id, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 source_path, repeat_seen_count, raw_meta, batch_id, run_id, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate.id,
@@ -1375,6 +1378,7 @@ class GrowthStorage:
                     int(candidate.repeat_seen_count or 1),
                     json.dumps(candidate.raw_meta or {}, ensure_ascii=False),
                     self._active_batch_id(),
+                    self._active_run_id(),
                     candidate.status,
                     candidate.created_at,
                 ),
@@ -1456,8 +1460,8 @@ class GrowthStorage:
                 """
                 INSERT INTO shop_contents
                 (id, source_id, product_id, creator_username, video_id, video_url, caption,
-                 material_type, hook_text, views, likes, comments, shares, batch_id, collected_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 material_type, hook_text, views, likes, comments, shares, batch_id, run_id, collected_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -1474,6 +1478,7 @@ class GrowthStorage:
                     int(data.get("comments") or 0),
                     int(data.get("shares") or 0),
                     self._active_batch_id(),
+                    self._active_run_id(),
                     now,
                 ),
             )
@@ -1769,11 +1774,15 @@ class GrowthStorage:
         config = dict(config or {})
         if campaign_id:
             config.setdefault("campaign_id", campaign_id)
+        run_id = str(config.get("run_id") or self._active_run_id()).strip()
+        if run_id:
+            config.setdefault("run_id", run_id)
         if initial_status not in {"pending", "running"}:
             initial_status = "running"
         item = CollectionBatch(
             id=new_id("gb"),
             campaign_id=campaign_id or "",
+            run_id=run_id,
             status=initial_status,
             total_sources=int(total_sources or 0),
             processed_sources=0,
@@ -1788,13 +1797,14 @@ class GrowthStorage:
             conn.execute(
                 """
                 INSERT INTO collection_batches
-                (id, campaign_id, status, total_sources, processed_sources, failed_sources, profile_group,
+                (id, campaign_id, run_id, status, total_sources, processed_sources, failed_sources, profile_group,
                  config_json, started_at, completed_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
                     campaign_id or "",
+                    run_id,
                     item.status,
                     item.total_sources,
                     item.processed_sources,
@@ -1809,6 +1819,27 @@ class GrowthStorage:
             )
         self.log_event("collection_batch_created", item.id, {"total_sources": item.total_sources, "profile_group": item.profile_group})
         return item
+
+    def bind_collection_batch_run(self, batch_id: str, run_id: str) -> None:
+        batch = str(batch_id or "").strip()
+        run = str(run_id or "").strip()
+        if not batch or not run:
+            return
+        now = utc_now_iso()
+        with self.connect() as conn:
+            row = conn.execute("SELECT config_json FROM collection_batches WHERE id=?", (batch,)).fetchone()
+            if not row:
+                return
+            try:
+                config = json.loads(row["config_json"] or "{}")
+            except Exception:
+                config = {}
+            if isinstance(config, dict):
+                config.setdefault("run_id", run)
+            conn.execute(
+                "UPDATE collection_batches SET run_id=?, config_json=?, updated_at=? WHERE id=?",
+                (run, json.dumps(config if isinstance(config, dict) else {}, ensure_ascii=False), now, batch),
+            )
 
     def update_collection_batch(self, batch_id: str, status: str, processed_delta: int = 0, failed_delta: int = 0):
         now = utc_now_iso()

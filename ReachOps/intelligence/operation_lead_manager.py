@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+
 from .schemas import ActionQueueItem, utc_now_iso
 from .storage import GrowthStorage, new_id
 from ReachOps.collectors.normalizer import normalize_language_text
@@ -55,6 +57,9 @@ class OperationLeadManager:
         for row in rows:
             score = int(row.get("qualify_score") or 0)
             intent_type, confidence, evidence = self.detect_intent(row, config)
+            observation = self._record_runtime_observation(row, config)
+            if observation:
+                self._record_runtime_lead_decision(row, config, observation, intent_type, confidence, evidence)
             if intent_type:
                 _, created = self.storage.upsert_audience_intent(row["id"], row["content_id"], intent_type, confidence, evidence)
                 if created:
@@ -80,6 +85,87 @@ class OperationLeadManager:
             if getattr(config, "enable_action_queue", True):
                 stats["actions"] += self._create_actions(lead_id, row, lead_type, priority, config)
         return stats
+
+    def _record_runtime_observation(self, row: dict, config) -> dict:
+        campaign_id = str(getattr(config, "campaign_id", "") or row.get("campaign_id") or "").strip()
+        run_id = str(getattr(config, "active_run_id", "") or row.get("run_id") or "").strip()
+        if not campaign_id or not run_id:
+            return {}
+        candidate_id = str(row.get("id") or "").strip()
+        if not candidate_id:
+            return {}
+        source_path = str(row.get("source_path") or row.get("content_source_path") or row.get("video_url") or "")
+        evidence = self.storage.record_evidence_artifact(
+            campaign_id=campaign_id,
+            run_id=run_id,
+            entity_type="candidate_observation",
+            entity_id=candidate_id,
+            local_path=source_path,
+            sidecar={
+                "candidate_user_id": candidate_id,
+                "content_id": str(row.get("content_id") or ""),
+                "source_id": str(row.get("source_id") or ""),
+                "no_submit": True,
+            },
+        )
+        return self.storage.record_candidate_observation(
+            campaign_id=campaign_id,
+            run_id=run_id,
+            candidate_user_id=candidate_id,
+            content_id=str(row.get("content_id") or ""),
+            source_id=str(row.get("source_id") or ""),
+            evidence_id=evidence["id"],
+            collector_version=str(row.get("collector_level") or "collector_runtime"),
+            classifier_version="operation_lead_manager.v1",
+            feature_snapshot={
+                "qualify_score": int(row.get("qualify_score") or 0),
+                "intent_tags": self._intent_tags(row),
+                "comment_language": str(row.get("comment_language") or ""),
+                "source_path": source_path,
+            },
+            batch_id=str(getattr(config, "active_batch_id", "") or row.get("batch_id") or ""),
+        )
+
+    def _record_runtime_lead_decision(self, row: dict, config, observation: dict, intent_type: str, confidence: int, evidence: str) -> dict:
+        campaign_id = str(getattr(config, "campaign_id", "") or "").strip()
+        run_id = str(getattr(config, "active_run_id", "") or "").strip()
+        observation_id = str((observation or {}).get("id") or "").strip()
+        if not campaign_id or not run_id or not observation_id:
+            return {}
+        score = int(row.get("qualify_score") or 0)
+        tags = self._intent_tags(row)
+        return self.storage.record_lead_decision(
+            campaign_id=campaign_id,
+            run_id=run_id,
+            candidate_observation_id=observation_id,
+            intent_type=str(intent_type or "engaged_commenter"),
+            intent_score=max(score, int(confidence or 0)),
+            product_fit_score=score,
+            contactability_score=50 if str(row.get("profile_url") or "") else 0,
+            source_quality_score=min(100, int(row.get("views") or 0) // 1000 + int(row.get("video_comments") or 0)),
+            total_lead_score=max(score, int(confidence or 0)),
+            confidence=int(confidence or 0),
+            reason_codes=[tag for tag in tags if tag] + ([evidence] if evidence else []),
+            feature_snapshot={
+                "qualify_score": score,
+                "intent_tags": tags,
+                "comment_language": str(row.get("comment_language") or ""),
+            },
+            classifier_provider_version="operation_lead_manager.v1",
+            decision_key=str(row.get("id") or ""),
+        )
+
+    def _intent_tags(self, row: dict) -> list[str]:
+        raw = row.get("intent_tags")
+        if isinstance(raw, list):
+            return [str(item) for item in raw if str(item or "").strip()]
+        try:
+            parsed = json.loads(raw or "[]")
+        except Exception:
+            parsed = []
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if str(item or "").strip()]
+        return []
 
     def detect_intent(self, row: dict, config=None) -> tuple[str, int, str]:
         raw_text = str(row.get("comment_text") or "")
