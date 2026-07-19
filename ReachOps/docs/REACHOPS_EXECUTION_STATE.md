@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-17`
+- Last manually reconciled: `2026-07-19`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -17,18 +17,15 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
 | P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
-| P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, and Python 3.9-compatible runtime smoke cleanup. Runtime smoke and DOM smoke now pass locally; delivery audit improved from 5 failed checks to 3 remaining failed checks. Final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
+| P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, Python 3.9-compatible runtime smoke cleanup, customer-visible control evidence, campaign funnel isolation fixture truthfulness, and Web-to-local-API execution-chain evidence. Runtime smoke, DOM smoke, delivery audit, and goal status now pass locally; final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
 
 ## Next autonomous action
 
 1. Finish reviewing Draft PR #12 for P1 immutable Campaign Run / Observation model; keep LeadDecision expansion split unless it is strictly required for P1 traceability.
 2. Review Draft PR from branch `codex/p4-web-runtime-smoke`; accept only the Web runtime smoke slice and keep Windows/installer/live-submit validation out of scope.
-3. Continue the remaining non-external delivery-audit failures as separate focused slices:
-   - customer-visible settings need execution evidence mapping
-   - funnel views must show only the current Campaign/Run
-   - Web panel must prove the server-side local API path invokes the ixBrowser execution chain
-4. After P1/P4 review, return to the final Windows delivery chain: `ReachOps.exe`, installer, update manifest, Windows acceptance, and authorized live evidence.
+3. After P1/P4 review, return to the final Windows delivery chain: `ReachOps.exe`, installer, update manifest, Windows acceptance, and authorized live evidence.
+4. Keep live-submit external validation separate; do not mark final delivery until package check and final acceptance gate both return `final_delivery_ready=true`.
 
 ## Known external blockers
 
@@ -97,6 +94,38 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Safety:
   - No Windows build, EXE, installer, or TikTok live-submit was attempted on this macOS branch.
   - Web live-comment activation requires a local activation status file and activation ready state; development bypass is not accepted by the Web activation gate.
+
+## Latest P4 delivery audit convergence snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Remove the remaining non-external delivery-audit blockers without entering Windows, EXE, installer, or TikTok live-submit.
+- Code evidence:
+  - Native compatibility console now exposes the existing execution-backed operator controls with customer-visible labels: participation account count, per-target video limit, per-video comment limit, task interval seconds, intent keywords, and exclusion keywords.
+  - The campaign funnel isolation fixture now uses activation status plus local evidence sidecar to produce one verified live success for the old Campaign, while the new Campaign remains unexecuted; this preserves the rule that `execution_success` means evidence-verified live success.
+  - The local client entry documentation now identifies the unified local client console as the default entry and keeps legacy Tk as diagnostics only.
+  - Headless runtime records a `COLLECTING` run-session checkpoint after profile preflight begins.
+  - TikTok action execution source explicitly proves use of `WorkbenchBrowserAdapter` and `manager.acquire`.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/launcher.py ReachOps/workbench/console.py ReachOps/workbench/tiktok_action_executor.py tools/run_reachops_headless_macos.py tools/reachops_delivery_audit.py`: passed.
+  - `/usr/bin/python3 -m unittest -v tests.test_launcher`: passed; log `/tmp/reachops-p4-delivery-audit-launcher-tests.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_reachops_delivery_audit_reports_local_passes_and_external_pending`: passed; log `/tmp/reachops-p4-delivery-audit-focused-test.log`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p4-delivery-audit-zero.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed; log `/tmp/reachops-p4-delivery-audit-truth.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p4-delivery-audit-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed; output `/tmp/reachops-p4-delivery-audit-runtime-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-p4-delivery-audit-dom-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `stages_passed=3,stages_pending_external_validation=2,stages_failed=0,final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p4-delivery-audit-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`; output `/tmp/reachops-p4-delivery-audit-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, `final_delivery_ready=false`; output `/tmp/reachops-p4-delivery-audit-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`; output `/tmp/reachops-p4-delivery-audit-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p4-delivery-audit-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-delivery-audit-diff-check.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with known baseline shape, 230 tests, 11 failures, 1 error; branch/main comparison artifact `/tmp/reachops-p4-delivery-audit-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`, and resolved failures `test_reachops_delivery_audit_reports_local_passes_and_external_pending`, `test_reachops_goal_status_cli_uses_current_client_delivery_gate`, `test_reachops_goal_status_resolves_client_delivery_gate_independently`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, or update manifest was generated on macOS.
+  - Fixture live success used local redacted evidence and `REACHOPS_ALLOW_TEST_FIXTURE_LIVE=1`, then restored the previous environment value.
 
 ## Non-blocking engineering work available
 

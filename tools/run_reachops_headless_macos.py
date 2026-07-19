@@ -675,6 +675,10 @@ def main() -> int:
         app._log(f"WARN   headless_refresh_profiles_failed error={exc}")
     app.start_collection_from_console()
     update_run_session("PROFILE_PREFLIGHT", last_stage="headless_profile_preflight_started")
+    update_run_session("COLLECTING",
+        last_stage="headless_collection_started",
+        checkpoint_update={"headless_started_collection": True, "no_ai_token_used": True},
+    )
 
     deadline = time.monotonic() + max(30, int(args.timeout))
     lines: list[str] = []

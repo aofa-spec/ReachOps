@@ -17,9 +17,11 @@ _USAGE = """ReachOps unified client launcher.
 
 Usage:
   python ReachOpsApp.py              Start the unified Web console.
-  python ReachOpsApp.py --legacy-tk  Start the native Tk compatibility client.
+  python ReachOpsApp.py --legacy-tk  Start the legacy Tk diagnostic client.
   python ReachOpsApp.py --help       Show this help without starting clients.
 """
+
+_LEGACY_TK_DIAGNOSTIC_NOTE = "旧 Tk 仅作为诊断入口保留；默认客户入口是 ReachOps 本地客户端控制台。"
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -142,6 +144,7 @@ def _launch_legacy_tk_client() -> int:
 
     from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp
 
+    print(_LEGACY_TK_DIAGNOSTIC_NOTE)
     if not _acquire_single_instance_lock():
         _bring_existing_native_client_to_front()
         print("ReachOps 客户端已在运行，已尝试切回现有窗口。")

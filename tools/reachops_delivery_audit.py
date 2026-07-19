@@ -1278,12 +1278,55 @@ def run_campaign_funnel_isolation_fixture(target: str) -> dict:
         ),
     )
     old_batch = service.storage.latest_collection_batch_for_campaign(old_plan["campaign"]["id"]) or {}
-    workflow.run_action_router(
-        [{"profile_id": "audit-old-action", "group_name": "US"}],
-        config=ActionRouterConfig(max_workers=1, per_profile_action_limit=10, action_types=["comment_reply"], dry_run=True),
-        campaign_id=old_plan["campaign"]["id"],
-        export_report=False,
+    os.makedirs(os.path.dirname(service.paths.activation_status_path), exist_ok=True)
+    with open(service.paths.activation_status_path, "w", encoding="utf-8") as fh:
+        json.dump(
+            {
+                "active": True,
+                "expires_at": "2999-01-01T00:00:00Z",
+                "license_tier": "enterprise",
+                "capabilities": {"live_submit": True, "comment_reply": True},
+            },
+            fh,
+        )
+    old_comment_action = next(
+        (
+            row
+            for row in service.storage.list_action_queue(limit=1000, batch_id=str(old_batch.get("id") or ""))
+            if str(row.get("action_type") or "") == "comment_reply"
+        ),
+        {},
     )
+    old_comment_evidence = write_local_action_evidence(
+        base_dir,
+        "comment_reply",
+        "audit-old-action",
+        str(old_comment_action.get("id") or "comment-1"),
+        str(old_comment_action.get("suggested_text") or ""),
+    )
+    previous_override = os.environ.get("REACHOPS_ALLOW_TEST_FIXTURE_LIVE")
+    os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = "1"
+    try:
+        workflow.run_action_router(
+            [{"profile_id": "audit-old-action", "group_name": "US"}],
+            config=ActionRouterConfig(
+                max_workers=1,
+                per_profile_action_limit=10,
+                action_types=["comment_reply"],
+                dry_run=False,
+                allow_live_submit=True,
+                live_preflight_only=False,
+                per_profile_video_hour_limit=99,
+            ),
+            campaign_id=old_plan["campaign"]["id"],
+            fixture_outcomes=[{"action_type": "comment_reply", "status": "success", "evidence_path": old_comment_evidence}],
+            export_report=False,
+        )
+    finally:
+        if previous_override is None:
+            os.environ.pop("REACHOPS_ALLOW_TEST_FIXTURE_LIVE", None)
+        else:
+            os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = previous_override
 
     new_plan = service.create_campaign_plan(f"{target} new audience", max_sources=1)
     service.run_collection(
