@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-19`
+- Last manually reconciled: `2026-07-20`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -15,7 +15,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
 | P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
-| P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Windows Credential Manager secret-storage contract exists on branch `codex/p4-web-runtime-smoke`; license-state evaluator models active/current, revoked, expired, and 7-day grace while keeping grace out of live-submit readiness; encrypted `.reachops-backup` lightweight and full selected-evidence backup/restore contracts now cover customer password, manifest, integrity hashes, preview, wrong password, corrupted archive, interrupted restore rollback, unsafe path rejection, secret/cookie exclusions, lightweight raw-evidence exclusion, and full backup selected evidence inclusion; focused P2 tests passed on 2026-07-19 | Complete minimal external license refresh client and Windows Credential Manager validation on Windows |
+| P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Windows Credential Manager secret-storage contract exists on branch `codex/p4-web-runtime-smoke`; license-state evaluator models active/current, revoked, expired, and 7-day grace while keeping grace out of live-submit readiness; encrypted `.reachops-backup` lightweight and full selected-evidence backup/restore contracts now cover customer password, manifest, integrity hashes, preview, wrong password, corrupted archive, interrupted restore rollback, unsafe path rejection, secret/cookie exclusions, lightweight raw-evidence exclusion, and full backup selected evidence inclusion; minimal external license refresh client contract now refreshes only license/device/version metadata over HTTPS and writes local activation status atomically without browser start, submit, or customer-data upload; focused P2 tests passed on 2026-07-20 | Complete Windows Credential Manager validation on Windows |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, Python 3.9-compatible runtime smoke cleanup, customer-visible control evidence, campaign funnel isolation fixture truthfulness, and Web-to-local-API execution-chain evidence. Runtime smoke, DOM smoke, delivery audit, and goal status now pass locally; final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
@@ -24,7 +24,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 1. Finish reviewing Draft PR #12 for P1 immutable Campaign Run / Observation model; keep LeadDecision expansion split unless it is strictly required for P1 traceability.
 2. Review Draft PR from branch `codex/p4-web-runtime-smoke`; accept only the Web runtime smoke slice and keep Windows/installer/live-submit validation out of scope.
-3. Continue P2 convergence with the next non-external slice: minimal external license refresh client contract, without storing secrets or customer business data outside the local device boundary.
+3. Continue P2 convergence only where non-external work remains; minimal external license refresh client contract is complete, and the remaining P2 exit gate is Windows Credential Manager validation on Windows.
 4. After P1/P4 review, return to the final Windows delivery chain: `ReachOps.exe`, installer, update manifest, Windows acceptance, and authorized live evidence.
 5. Keep live-submit external validation separate; do not mark final delivery until package check and final acceptance gate both return `final_delivery_ready=true`.
 
@@ -583,6 +583,40 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
   - Tests used synthetic temp SQLite/config/evidence only; no customer data, secret, cookie, screenshot, raw DOM, or customer SQLite database was committed.
   - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, and external authorized live validation.
+
+## Latest P2 minimal license refresh client contract
+
+- Date: `2026-07-20`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Add the minimal external license refresh client contract without entering Windows packaging, EXE generation, installer generation, Windows Credential Manager real-machine validation, ixBrowser execution, or TikTok live-submit.
+- Code evidence:
+  - `ReachOps/workbench/license_refresh_client.py` defines `reachops.license_refresh.v1`, a strict request allow-list, and forbidden customer-data tokens.
+  - License refresh requests contain only `schema_version`, `license_id`, `device_id`, `app_version`, `platform`, and `requested_at`.
+  - The default transport requires `https://`, posts JSON explicitly, and has no import-time network action.
+  - A successful refresh normalizes the server response into local activation status with `reachops.license_state.v1`, evaluates the local license state, and writes the activation status atomically with `os.replace`.
+  - Refresh results and written activation status carry `customer_data_uploaded=false`, `no_browser_started=true`, and `no_submit=true`.
+  - `ReachOps/workbench/__init__.py` exports the refresh schema and refresh entry point.
+  - `tools/reachops_delivery_audit.py` now requires the minimal license refresh client contract in the local architecture audit.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/workbench/license_refresh_client.py ReachOps/workbench/license_state.py ReachOps/workbench/__init__.py tests/test_reachops_security.py tools/reachops_delivery_audit.py`: passed; log `/tmp/reachops-p2-license-refresh-pycompile-final.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_security`: passed, 12 tests; log `/tmp/reachops-p2-license-refresh-security-final.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p2-license-refresh-truth-final.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`; output `/tmp/reachops-p2-license-refresh-operator-pressure-final.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p2-license-refresh-delivery-audit-final.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p2-license-refresh-goal-status-final.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with known improved branch shape, 233 tests, 1 failure, 0 errors; branch log `/tmp/reachops-p2-license-refresh-campaign-final.log`.
+  - `origin/main` campaign baseline: failed with 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-p2-license-refresh-campaign-final.log`.
+  - Baseline comparison artifact `/tmp/reachops-p2-license-refresh-baseline-comparison-final.json`: `new_failures=[]`, `new_errors=[]`; branch still has existing `test_reachops_goal_delivery_report_summarizes_pm_boundary` failure.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p2-license-refresh-package-check-final.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p2-license-refresh-final-gate-final.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p2-license-refresh-goal-delivery-runner-final.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p2-license-refresh-cleanliness-final.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p2-license-refresh-diff-check-final.log`.
+- Safety:
+  - No customer business data is sent to the license refresh endpoint by the client contract.
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, Windows Credential Manager validation on Windows, and external authorized live validation.
 
 ## Non-blocking engineering work available
 

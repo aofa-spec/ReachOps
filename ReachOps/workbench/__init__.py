@@ -8,6 +8,7 @@ from .action_router import ActionRouter, ActionRouterConfig, FixtureActionExecut
 from .authorization_gate import AuthorizationDecision, LiveSubmitAuthorizationGate
 from .device_identity import DeviceIdentity
 from .license_state import LICENSE_STATE_SCHEMA_VERSION, evaluate_license_state
+from .license_refresh_client import LICENSE_REFRESH_SCHEMA_VERSION, refresh_license_status
 from .execution_controller import ExecutionMVPConfig, ExecutionMVPController, FixturePlatformActionExecutor
 from .tiktok_action_executor import TikTokActionExecutorConfig, TikTokSeleniumActionExecutor
 from .execution_guard import ExecutionGuard
@@ -67,6 +68,7 @@ __all__ = [
     "load_ixbrowser_profiles",
     "LiveSubmitAuthorizationGate",
     "LICENSE_STATE_SCHEMA_VERSION",
+    "LICENSE_REFRESH_SCHEMA_VERSION",
     "OutreachExecutor",
     "OutreachPolicy",
     "OfflineLearningLedger",
@@ -77,4 +79,5 @@ __all__ = [
     "summarize_profile_groups",
     "TemplateManager",
     "evaluate_license_state",
+    "refresh_license_status",
 ]
