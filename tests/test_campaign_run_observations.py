@@ -488,6 +488,8 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertGreaterEqual(len(actions), 1)
         self.assertEqual({row["run_id"] for row in leads}, {run_id})
         self.assertEqual({row["run_id"] for row in actions}, {run_id})
+        self.assertEqual({row["run_id"] for row in trace["action_queue"]}, {run_id})
+        self.assertEqual({row["id"] for row in trace["action_queue"]}, {row["id"] for row in actions})
         self.assertTrue(any(row["event"] == "collection_batch_created" for row in trace["growth_events"]))
         self.assertTrue(any(row["event"] == "lead_pipeline_completed" for row in trace["growth_events"]))
 
@@ -831,6 +833,8 @@ class CampaignRunObservationTests(unittest.TestCase):
 
         first_trace = self.storage.list_observations_for_run(first.run_id)
         second_trace = self.storage.list_observations_for_run(second.run_id)
+        self.assertEqual([row["id"] for row in first_trace["action_queue"]], [action_id])
+        self.assertEqual(second_trace["action_queue"], [])
         self.assertEqual([row["id"] for row in first_trace["outreach_executions"]], [execution_id])
         self.assertEqual(second_trace["outreach_executions"], [])
         execution = first_trace["outreach_executions"][0]

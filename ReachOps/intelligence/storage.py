@@ -1355,6 +1355,7 @@ class GrowthStorage:
                 "comment_observations": [dict(row) for row in conn.execute("SELECT * FROM comment_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "candidate_observations": [dict(row) for row in conn.execute("SELECT * FROM candidate_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "lead_decisions": [dict(row) for row in conn.execute("SELECT * FROM lead_decisions WHERE run_id=? ORDER BY decision_version ASC, created_at ASC", (run,)).fetchall()],
+                "action_queue": [dict(row) for row in conn.execute("SELECT * FROM action_queue WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "outreach_executions": [dict(row) for row in conn.execute("SELECT * FROM outreach_executions WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "growth_events": [dict(row) for row in conn.execute("SELECT * FROM growth_events WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "growth_errors": [dict(row) for row in conn.execute("SELECT * FROM growth_errors WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
