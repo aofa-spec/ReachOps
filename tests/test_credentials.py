@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +10,18 @@ from ReachOps.credentials import (
     resolve_ai_api_key,
 )
 from ReachOps.intelligence.ai_strategy import HTTPAcquisitionIntelligenceProvider, build_default_acquisition_intelligence_provider
+from ReachOps.workbench.console import GrowthOpsConsole
+
+
+class DummyVar:
+    def __init__(self, value=""):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
 
 
 class FakeWindowsCredentialStore(ReachOpsCredentialStore):
@@ -139,6 +152,28 @@ class ReachOpsCredentialTests(unittest.TestCase):
         self.assertEqual(result.error, "credential_blob_limit_exceeded")
         self.assertFalse(lookup.configured)
         self.assertNotIn(oversized, repr(result))
+
+    def test_console_does_not_fallback_to_environment_when_windows_credential_write_fails(self):
+        console = GrowthOpsConsole.__new__(GrowthOpsConsole)
+        console.credential_store = FailingWindowsCredentialStore()
+        console.comment_reply_ai_endpoint_var = DummyVar("https://ai.example.test")
+        console.comment_reply_ai_model_var = DummyVar("reachops-model")
+        console.comment_reply_ai_key_var = DummyVar("super-secret")
+        console.comment_reply_ai_status_var = DummyVar("")
+        console.comment_reply_strategy_var = DummyVar("外部AI")
+        console.logs = []
+        console.append_runtime_log = lambda message: console.logs.append(message)
+
+        with patch.dict("os.environ", {}, clear=True):
+            GrowthOpsConsole.apply_comment_reply_ai_settings(console)
+            env_value = os.environ.get("REACHOPS_AI_API_KEY", "")
+
+        self.assertEqual(env_value, "")
+        self.assertEqual(console.comment_reply_ai_key_var.get(), "super-secret")
+        self.assertIn("Credential Manager写入失败", console.comment_reply_ai_status_var.get())
+        self.assertIn("credential_write_status=store_failed", console.logs[-1])
+        encoded = repr((console.comment_reply_ai_status_var.get(), console.logs))
+        self.assertNotIn("super-secret", encoded)
 
 
 if __name__ == "__main__":

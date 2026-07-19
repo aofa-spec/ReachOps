@@ -1173,23 +1173,29 @@ class GrowthOpsConsole(ttk.Frame):
             if credential_result.stored:
                 os.environ.pop("REACHOPS_AI_API_KEY", None)
                 self.comment_reply_ai_key_var.set("")
-            else:
+            elif not credential_result.persistent:
                 os.environ["REACHOPS_AI_API_KEY"] = key
 
         key_status = ai_api_key_status(credential_store=self.credential_store)
-        key_configured = bool(key_status["configured"] or key)
+        session_key_configured = bool(key and credential_result is not None and not credential_result.persistent)
+        key_configured = bool(key_status["configured"] or session_key_configured)
         if endpoint:
-            status = f"外部AI已配置：model={model or '未指定'}，key={'已配置' if key_configured else '未配置'} ({key_status['source']})"
+            credential_note = ""
+            if credential_result and not credential_result.stored and credential_result.persistent:
+                credential_note = f"，Credential Manager写入失败：{credential_result.status}"
+            status = f"外部AI已配置：model={model or '未指定'}，key={'已配置' if key_configured else '未配置'} ({key_status['source']}){credential_note}"
         else:
             status = "外部AI未启用：未填写Endpoint"
         self.comment_reply_ai_status_var.set(status)
         credential_source = key_status["source"]
         credential_persistent = bool(key_status["persistent"])
+        credential_write_status = credential_result.status if credential_result else "not_requested"
         self.append_runtime_log(
             f"CONFIG comment_reply_ai strategy={self.comment_reply_strategy_var.get()} "
             f"endpoint_configured={str(bool(endpoint)).lower()} model={model or 'none'} "
             f"key_configured={str(key_configured).lower()} credential_source={credential_source} "
-            f"credential_persistent={str(credential_persistent).lower()} ai_suggestion_only=true"
+            f"credential_persistent={str(credential_persistent).lower()} credential_write_status={credential_write_status} "
+            f"ai_suggestion_only=true"
         )
 
     def comment_reply_ai_settings(self) -> dict:
