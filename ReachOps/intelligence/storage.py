@@ -531,7 +531,7 @@ class GrowthStorage:
                     created_at TEXT NOT NULL,
                     UNIQUE(run_id, candidate_user_id, observation_key)
                 );
-                CREATE TABLE IF NOT EXISTS lead_decisions (
+                CREATE TABLE IF NOT EXISTS lead_decision_observations (
                     id TEXT PRIMARY KEY,
                     run_id TEXT NOT NULL,
                     campaign_id TEXT DEFAULT '',
@@ -1313,7 +1313,7 @@ class GrowthStorage:
                 row = conn.execute(
                     """
                     SELECT COALESCE(MAX(decision_version), 0) AS latest_version
-                    FROM lead_decisions
+                    FROM lead_decision_observations
                     WHERE run_id=? AND candidate_user_id=? AND decision_type=?
                     """,
                     (run["id"], str(candidate_user_id or ""), str(decision_type or "lead_decision")),
@@ -1322,7 +1322,7 @@ class GrowthStorage:
             item_id = new_id("ld")
             conn.execute(
                 """
-                INSERT INTO lead_decisions
+                INSERT INTO lead_decision_observations
                 (id, run_id, campaign_id, batch_id, candidate_user_id, lead_id, decision_version,
                  decision_type, score, reason, payload_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1355,7 +1355,7 @@ class GrowthStorage:
                 "content_observations": [dict(row) for row in conn.execute("SELECT * FROM content_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "comment_observations": [dict(row) for row in conn.execute("SELECT * FROM comment_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "candidate_observations": [dict(row) for row in conn.execute("SELECT * FROM candidate_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
-                "lead_decisions": [dict(row) for row in conn.execute("SELECT * FROM lead_decisions WHERE run_id=? ORDER BY decision_version ASC, created_at ASC", (run,)).fetchall()],
+                "lead_decision_observations": [dict(row) for row in conn.execute("SELECT * FROM lead_decision_observations WHERE run_id=? ORDER BY decision_version ASC, created_at ASC", (run,)).fetchall()],
                 "action_queue": [dict(row) for row in conn.execute("SELECT * FROM action_queue WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "outreach_executions": [dict(row) for row in conn.execute("SELECT * FROM outreach_executions WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
                 "growth_events": [dict(row) for row in conn.execute("SELECT * FROM growth_events WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
@@ -1911,7 +1911,7 @@ class GrowthStorage:
             row = conn.execute(
                 """
                 SELECT score, reason
-                FROM lead_decisions
+                FROM lead_decision_observations
                 WHERE run_id=? AND candidate_user_id=? AND decision_type=?
                 ORDER BY decision_version DESC, created_at DESC
                 LIMIT 1
@@ -3496,7 +3496,7 @@ class GrowthStorage:
             "content_observations",
             "comment_observations",
             "candidate_observations",
-            "lead_decisions",
+            "lead_decision_observations",
         }
         if table_name not in allowed:
             raise ValueError(f"unsupported table: {table_name}")

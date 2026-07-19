@@ -306,14 +306,14 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(second_trace["comment_observations"]), 1)
         self.assertEqual(len(first_trace["candidate_observations"]), 1)
         self.assertEqual(len(second_trace["candidate_observations"]), 1)
-        self.assertEqual(len(first_trace["lead_decisions"]), 2)
-        self.assertEqual(len(second_trace["lead_decisions"]), 1)
+        self.assertEqual(len(first_trace["lead_decision_observations"]), 2)
+        self.assertEqual(len(second_trace["lead_decision_observations"]), 1)
         self.assertEqual(len(first_trace["outreach_executions"]), 1)
         self.assertEqual(len(second_trace["outreach_executions"]), 0)
         self.assertEqual(len(first_trace["growth_errors"]), 1)
         self.assertEqual(len(second_trace["growth_errors"]), 0)
-        self.assertEqual(first_trace["lead_decisions"][0]["batch_id"], first.id)
-        self.assertEqual(second_trace["lead_decisions"][0]["batch_id"], second.id)
+        self.assertEqual(first_trace["lead_decision_observations"][0]["batch_id"], first.id)
+        self.assertEqual(second_trace["lead_decision_observations"][0]["batch_id"], second.id)
         self.assertEqual(first_trace["outreach_executions"][0]["evidence_path"], "/tmp/reachops/redacted/evidence.png")
 
     def test_workflow_storage_writes_run_observation_ledger_automatically(self):
@@ -397,8 +397,8 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(trace["comment_observations"][0]["comment_text"], "where can I buy this")
         self.assertEqual(len(trace["candidate_observations"]), 1)
         self.assertEqual(trace["candidate_observations"][0]["score"], 81)
-        self.assertEqual([row["decision_version"] for row in trace["lead_decisions"]], [1, 2])
-        self.assertEqual([row["score"] for row in trace["lead_decisions"]], [81, 92])
+        self.assertEqual([row["decision_version"] for row in trace["lead_decision_observations"]], [1, 2])
+        self.assertEqual([row["score"] for row in trace["lead_decision_observations"]], [81, 92])
 
         self.storage.create_collection_task(
             run.id,
@@ -432,7 +432,7 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(repeated_trace["content_observations"]), 1)
         self.assertEqual(len(repeated_trace["comment_observations"]), 1)
         self.assertEqual(len(repeated_trace["candidate_observations"]), 1)
-        self.assertEqual(len(repeated_trace["lead_decisions"]), 2)
+        self.assertEqual(len(repeated_trace["lead_decision_observations"]), 2)
 
     def test_run_collection_workflow_populates_single_run_trace_end_to_end(self):
         service = GrowthIntelligenceService(
@@ -482,8 +482,8 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(trace["candidate_observations"]), 2)
         self.assertTrue({row["observation_key"] for row in trace["candidate_observations"]}.issuperset({"scored"}))
         self.assertTrue(any(row["observation_key"].startswith("score_updated:") for row in trace["candidate_observations"]))
-        self.assertGreaterEqual(len(trace["lead_decisions"]), 1)
-        self.assertEqual({row["run_id"] for row in trace["lead_decisions"]}, {run_id})
+        self.assertGreaterEqual(len(trace["lead_decision_observations"]), 1)
+        self.assertEqual({row["run_id"] for row in trace["lead_decision_observations"]}, {run_id})
         self.assertGreaterEqual(len(leads), 1)
         self.assertGreaterEqual(len(actions), 1)
         self.assertEqual({row["run_id"] for row in leads}, {run_id})
@@ -709,7 +709,31 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(trace["content_observations"]), 1)
         self.assertEqual(len(trace["comment_observations"]), 2)
         self.assertEqual(len(trace["candidate_observations"]), 1)
-        self.assertEqual([row["decision_version"] for row in trace["lead_decisions"]], [1, 2])
+        self.assertEqual([row["decision_version"] for row in trace["lead_decision_observations"]], [1, 2])
+
+    def test_run_trace_decisions_do_not_claim_canonical_lead_decisions_table(self):
+        campaign = self.storage.create_campaign("keyword", "serum")
+        run = self.storage.create_collection_batch(1, profile_group="US", campaign_id=campaign.id)
+
+        decision_id = self.storage.record_lead_decision(
+            run.run_id,
+            "candidate-1",
+            "high_intent",
+            score=80,
+            reason="run trace observation",
+        )
+
+        trace = self.storage.list_observations_for_run(run.run_id)
+        self.assertEqual([row["id"] for row in trace["lead_decision_observations"]], [decision_id])
+        self.assertNotIn("lead_decisions", trace)
+        with sqlite3.connect(self.db_path) as conn:
+            table_names = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('lead_decisions', 'lead_decision_observations')"
+                ).fetchall()
+            }
+        self.assertEqual(table_names, {"lead_decision_observations"})
 
     def test_repeated_candidate_can_generate_independent_run_scoped_leads_actions_and_evidence(self):
         campaign = self.storage.create_campaign("keyword", "serum")
@@ -1090,7 +1114,7 @@ class CampaignRunObservationTests(unittest.TestCase):
             legacy_trace_config["legacy_handling_strategy"],
             "deterministic_legacy_run_id_for_existing_batch_only",
         )
-        self.assertEqual(legacy_trace["lead_decisions"], [])
+        self.assertEqual(legacy_trace["lead_decision_observations"], [])
         self.assertEqual(legacy_trace["outreach_executions"], [])
         self.assertEqual(legacy_trace["growth_errors"], [])
         self.assertEqual(migrated.list_action_queue(run_id=run_id), [])
