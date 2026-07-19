@@ -30,6 +30,7 @@ from ReachOps.workbench.license_refresh_client import (
     refresh_license_status,
     validate_license_refresh_request,
 )
+from tools import reachops_windows_credential_manager_check
 
 
 class ReachOpsSecurityTests(unittest.TestCase):
@@ -106,6 +107,83 @@ class ReachOpsSecurityTests(unittest.TestCase):
         self.assertIn("CRED_TYPE_GENERIC", source)
         self.assertIn(BACKEND_WINDOWS_CREDENTIAL_MANAGER, source)
         self.assertIn("must not be written to SQLite", source)
+
+    def test_windows_credential_manager_check_blocks_without_non_windows_success(self) -> None:
+        with patch.object(
+            reachops_windows_credential_manager_check,
+            "credential_storage_status",
+            return_value={
+                "schema_version": CREDENTIAL_STORAGE_SCHEMA_VERSION,
+                "platform": "darwin",
+                "backend": BACKEND_NON_WINDOWS_UNAVAILABLE,
+                "available": False,
+                "secret_persistence_allowed": False,
+                "windows_credential_manager_required": True,
+                "status_includes_secret_values": False,
+            },
+        ):
+            result = reachops_windows_credential_manager_check.run_validation()
+
+        self.assertEqual(result["schema_version"], "reachops.windows_credential_manager_validation.v1")
+        self.assertEqual(result["status"], "blocked_external_validation")
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["checks"]["windows_credential_manager_available"])
+        self.assertTrue(result["no_browser_started"])
+        self.assertTrue(result["no_submit"])
+        self.assertFalse(result["customer_data_uploaded"])
+
+    def test_windows_credential_manager_check_roundtrip_excludes_secret_value(self) -> None:
+        stored: dict[str, str] = {}
+
+        class FakeCredentialStore:
+            def __init__(self, namespace: str = "ReachOpsValidation"):
+                self.namespace = namespace
+
+            def set_secret(self, name: str, value: str) -> dict:
+                stored[name] = value
+                return {
+                    "stored": True,
+                    "backend": BACKEND_WINDOWS_CREDENTIAL_MANAGER,
+                    "target_name": f"{self.namespace}:{name}",
+                    "secret_value": None,
+                    "secret_redacted": "********oken",
+                }
+
+            def get_secret(self, name: str) -> str:
+                return stored[name]
+
+            def delete_secret(self, name: str) -> dict:
+                stored.pop(name, None)
+                return {"deleted": True, "backend": BACKEND_WINDOWS_CREDENTIAL_MANAGER}
+
+        with patch.object(
+            reachops_windows_credential_manager_check,
+            "credential_storage_status",
+            return_value={
+                "schema_version": CREDENTIAL_STORAGE_SCHEMA_VERSION,
+                "platform": "win32",
+                "backend": BACKEND_WINDOWS_CREDENTIAL_MANAGER,
+                "available": True,
+                "secret_persistence_allowed": True,
+                "windows_credential_manager_required": True,
+                "status_includes_secret_values": False,
+            },
+        ), patch.object(
+            reachops_windows_credential_manager_check,
+            "ReachOpsCredentialStore",
+            FakeCredentialStore,
+        ), patch.object(reachops_windows_credential_manager_check.secrets, "token_urlsafe", return_value="known-secret-token"):
+            result = reachops_windows_credential_manager_check.run_validation(credential_name="unit_test")
+
+        serialized = json.dumps(result, ensure_ascii=False)
+        self.assertEqual(result["status"], "passed")
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["checks"]["secret_write_succeeded"])
+        self.assertTrue(result["checks"]["secret_readback_matched"])
+        self.assertTrue(result["checks"]["secret_delete_succeeded"])
+        self.assertNotIn("known-secret-token", serialized)
+        self.assertNotIn("reachops-validation-known-secret-token", serialized)
+        self.assertEqual(stored, {})
 
     def test_legacy_tk_ai_settings_do_not_persist_key_to_environment(self) -> None:
         source = Path("ReachOps/workbench/console.py").read_text(encoding="utf-8")
