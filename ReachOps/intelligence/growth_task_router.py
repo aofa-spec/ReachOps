@@ -211,7 +211,7 @@ class GrowthTaskRouter:
         self.storage.update_collection_batch(batch_id, final_status)
         self.scorer.score_all(config)
         lead_stats = self.operation_leads.build_from_scored_candidates(config)
-        report = self.reporter.build_report()
+        report = self.reporter.build_report(campaign_id=campaign_id, run_id=active_run_id, batch_id=batch_id)
         after_counts = self._snapshot_counts()
         self.storage.log_event(
             "lead_pipeline_completed",

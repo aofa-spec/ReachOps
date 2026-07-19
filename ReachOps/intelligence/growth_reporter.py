@@ -6,7 +6,7 @@ import json
 import os
 import re
 from collections import Counter
-from typing import Any, Tuple
+from typing import Any, Dict, Tuple
 
 from .schemas import GrowthReport, utc_now_iso
 from .storage import GrowthStorage, new_id
@@ -18,11 +18,17 @@ class GrowthReporter:
         self.report_dir = report_dir
         os.makedirs(report_dir, exist_ok=True)
 
-    def build_report(self) -> GrowthReport:
-        rows = self.storage.list_candidates_with_content()
-        contents = self.storage.list_contents()
-        top_topic_contents = self.storage.list_top_topic_contents()
-        operation_actions = [self._with_public_action_status(row) for row in self.storage.list_action_queue()]
+    def build_report(self, campaign_id: str = "", run_id: str = "", batch_id: str = "") -> GrowthReport:
+        runtime_scope = self._resolve_runtime_scope(campaign_id=campaign_id, run_id=run_id, batch_id=batch_id)
+        scoped_batch_id = str(runtime_scope.get("batch_id") or "")
+        scoped_run_id = str(runtime_scope.get("run_id") or "")
+        rows = self.storage.list_candidates_with_content(batch_id=scoped_batch_id, run_id=scoped_run_id)
+        contents = self.storage.list_contents(batch_id=scoped_batch_id, run_id=scoped_run_id)
+        top_topic_contents = self.storage.list_top_topic_contents(batch_id=scoped_batch_id, run_id=scoped_run_id)
+        operation_actions = [
+            self._with_public_action_status(row)
+            for row in self.storage.list_action_queue(batch_id=scoped_batch_id, run_id=scoped_run_id)
+        ]
         high_value = [row for row in rows if int(row.get("qualify_score") or 0) >= 70]
         medium_value = [row for row in rows if 40 <= int(row.get("qualify_score") or 0) < 70]
         low_value = [row for row in rows if int(row.get("qualify_score") or 0) < 40]
@@ -117,6 +123,9 @@ class GrowthReporter:
                     "video_url": row.get("video_url"),
                     "creator_vertical": row.get("creator_vertical") or "general",
                     "source_path": row.get("source_path") or row.get("content_source_path") or row.get("creator_source_path") or "",
+                    "batch_id": row.get("batch_id") or "",
+                    "run_id": row.get("run_id") or "",
+                    "campaign_id": runtime_scope.get("campaign_id") or "",
                 }
                 for row in high_value
             ],
@@ -138,7 +147,25 @@ class GrowthReporter:
             "collection_batch_count": self.storage.count_table("collection_batches"),
             "collection_task_count": self.storage.count_table("collection_tasks"),
             "profile_health_count": self.storage.count_table("profile_health"),
+            "runtime_traceability_schema_version": "reachops.runtime_traceability_report.v1",
+            "runtime_scope": runtime_scope,
+            "runtime_traceability": self.storage.runtime_traceability_summary(
+                campaign_id=str(runtime_scope.get("campaign_id") or ""),
+                run_id=scoped_run_id,
+            ),
         }
+        if scoped_batch_id or scoped_run_id:
+            summary.update(
+                {
+                    "new_content_count": len(contents),
+                    "candidate_user_count": len(rows),
+                    "high_value_candidate_count": len(high_value),
+                    "topic_content_count": len(top_topic_contents),
+                    "operation_lead_count": len(self.storage.list_operation_leads(batch_id=scoped_batch_id, run_id=scoped_run_id)),
+                    "action_queue_count": len(operation_actions),
+                    "outreach_execution_count": len(self.storage.list_outreach_executions(batch_id=scoped_batch_id, run_id=scoped_run_id)),
+                }
+            )
         lead_tiers = {
             "high": len(high_value),
             "observe": len(medium_value),
@@ -203,13 +230,38 @@ class GrowthReporter:
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(
                 f,
-                fieldnames=["username", "profile_url", "qualify_score", "comment_text", "video_url", "creator_vertical", "source_path"],
+                fieldnames=[
+                    "campaign_id",
+                    "run_id",
+                    "batch_id",
+                    "username",
+                    "profile_url",
+                    "qualify_score",
+                    "comment_text",
+                    "video_url",
+                    "creator_vertical",
+                    "source_path",
+                ],
             )
             writer.writeheader()
             for row in report.high_value_users:
                 writer.writerow(row)
         with open(action_csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            fieldnames = ["action_type", "target_username", "target_url", "suggested_text", "public_status", "status", "risk_level", "priority", "lead_score", "reason"]
+            fieldnames = [
+                "campaign_id",
+                "run_id",
+                "batch_id",
+                "action_type",
+                "target_username",
+                "target_url",
+                "suggested_text",
+                "public_status",
+                "status",
+                "risk_level",
+                "priority",
+                "lead_score",
+                "reason",
+            ]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for row in report.operation_actions:
@@ -240,7 +292,59 @@ class GrowthReporter:
             return value
         return "pending"
 
+    def _resolve_runtime_scope(self, campaign_id: str = "", run_id: str = "", batch_id: str = "") -> Dict[str, Any]:
+        campaign = str(campaign_id or "").strip()
+        run = str(run_id or "").strip()
+        batch = str(batch_id or "").strip()
+        with self.storage.connect() as conn:
+            if run and (not campaign or not batch):
+                row = conn.execute(
+                    "SELECT campaign_id, batch_id FROM campaign_runs WHERE id=?",
+                    (run,),
+                ).fetchone()
+                if row:
+                    campaign = campaign or str(row["campaign_id"] or "")
+                    batch = batch or str(row["batch_id"] or "")
+            if batch and (not campaign or not run):
+                row = conn.execute(
+                    "SELECT campaign_id, run_id FROM collection_batches WHERE id=?",
+                    (batch,),
+                ).fetchone()
+                if row:
+                    campaign = campaign or str(row["campaign_id"] or "")
+                    run = run or str(row["run_id"] or "")
+            if campaign and not batch:
+                row = conn.execute(
+                    "SELECT id, run_id FROM collection_batches WHERE campaign_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                    (campaign,),
+                ).fetchone()
+                if row:
+                    batch = str(row["id"] or "")
+                    run = run or str(row["run_id"] or "")
+            if campaign and not run:
+                row = conn.execute(
+                    "SELECT id, batch_id FROM campaign_runs WHERE campaign_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                    (campaign,),
+                ).fetchone()
+                if row:
+                    run = str(row["id"] or "")
+                    batch = batch or str(row["batch_id"] or "")
+        if not batch:
+            batch = str(getattr(self.storage, "active_collection_batch_id", "") or "")
+        if not run:
+            run = str(getattr(self.storage, "active_campaign_run_id", "") or "")
+        return {
+            "campaign_id": campaign,
+            "run_id": run,
+            "batch_id": batch,
+            "scope_type": "run" if run else ("campaign" if campaign else ("batch" if batch else "global")),
+            "legacy_rows_preserved": True,
+        }
+
     def render_markdown(self, report: GrowthReport) -> str:
+        runtime_scope = report.summary.get("runtime_scope") or {}
+        runtime_traceability = report.summary.get("runtime_traceability") or {}
+        trace_counts = runtime_traceability.get("counts") or {}
         lines = [
             f"# GrowthOps 运营日报",
             "",
@@ -250,6 +354,8 @@ class GrowthReporter:
             f"- CandidateUser: {report.summary.get('candidate_user_count', 0)}",
             f"- 高价值线索: {report.summary.get('high_value_candidate_count', 0)}",
             f"- 动作队列: {report.summary.get('action_queue_count', 0)}",
+            f"- Runtime scope: {runtime_scope.get('scope_type', 'global')} campaign={runtime_scope.get('campaign_id', '')} run={runtime_scope.get('run_id', '')} batch={runtime_scope.get('batch_id', '')}",
+            f"- Traceability: runs={trace_counts.get('campaign_runs', 0)} observations={trace_counts.get('candidate_observations', 0)} evidence={trace_counts.get('evidence_artifacts', 0)} decisions={trace_counts.get('lead_decisions', 0)}",
             "",
             "## 线索分层",
             "",

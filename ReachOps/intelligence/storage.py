@@ -2132,12 +2132,26 @@ class GrowthStorage:
                 )
             return self._row_to_checkpoint(conn.execute("SELECT * FROM checkpoints WHERE id=?", (cp_id,)).fetchone())
 
-    def list_contents(self, creator_id: Optional[str] = None) -> List[DiscoveredContent]:
+    def list_contents(
+        self,
+        creator_id: Optional[str] = None,
+        batch_id: str = "",
+        run_id: str = "",
+    ) -> List[DiscoveredContent]:
         query = "SELECT * FROM discovered_contents"
-        args: Iterable[Any] = ()
+        filters = []
+        args: list[Any] = []
         if creator_id:
-            query += " WHERE creator_id=?"
-            args = (creator_id,)
+            filters.append("creator_id=?")
+            args.append(creator_id)
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(str(batch_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
         query += " ORDER BY collected_at DESC"
         with self.connect() as conn:
             return [self._row_to_content(row) for row in conn.execute(query, tuple(args)).fetchall()]
@@ -2154,12 +2168,15 @@ class GrowthStorage:
         with self.connect() as conn:
             return [self._row_to_candidate(row) for row in conn.execute("SELECT * FROM candidate_users").fetchall()]
 
-    def list_candidates_with_content(self, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_candidates_with_content(self, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if batch_id:
             filters.append("cu.batch_id=?")
             args.append(str(batch_id))
+        if run_id:
+            filters.append("cu.run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -2179,20 +2196,30 @@ class GrowthStorage:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def list_top_topic_contents(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def list_top_topic_contents(self, limit: int = 20, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if batch_id:
+            filters.append("sc.batch_id=?")
+            args.append(str(batch_id))
+        if run_id:
+            filters.append("sc.run_id=?")
+            args.append(str(run_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT sc.*, sp.title AS product_title, sp.shop_name, sp.price,
                        COALESCE(ms.signal_score, 0) AS signal_score,
                        COALESCE(ms.signal_tags, '[]') AS signal_tags
                 FROM shop_contents sc
                 LEFT JOIN shop_products sp ON sp.product_id = sc.product_id AND sp.source_id = sc.source_id
                 LEFT JOIN material_signals ms ON ms.content_id = sc.id
+                {where}
                 ORDER BY signal_score DESC, sc.views DESC, sc.comments DESC
                 LIMIT ?
                 """,
-                (limit,),
+                tuple(args + [limit]),
             ).fetchall()
             rows = [dict(row) for row in rows]
         for row in rows:
@@ -2200,12 +2227,15 @@ class GrowthStorage:
             row["commerce_title"] = row.get("product_title") or ""
         return rows
 
-    def list_action_queue(self, limit: int = 100, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_action_queue(self, limit: int = 100, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if batch_id:
             filters.append("aq.batch_id=?")
             args.append(str(batch_id))
+        if run_id:
+            filters.append("aq.run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
