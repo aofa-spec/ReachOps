@@ -25,7 +25,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 1. Review the P1 immutable Campaign Run / Observation model slice now that storage, pipeline wiring, and report/export traceability are implemented; keep unrelated LeadDecision lifecycle expansion split unless required for traceability.
 2. Review Draft PR from branch `codex/p4-web-runtime-smoke`; keep Windows/installer/live-submit validation out of scope.
 3. Continue P2 convergence only where non-external work remains; minimal external license refresh client contract is complete, and the remaining P2 exit gate is Windows Credential Manager validation on Windows.
-4. After P1/P4 review, return to the final Windows delivery chain: `ReachOps.exe`, installer, update manifest, Windows acceptance, and authorized live evidence.
+4. Start the current local client UI acceptance loop, enter a promotion target, select a live ixBrowser group, and generate fresh `PLAN campaign` / `START campaign` / no-submit collection evidence before rerunning `tools/reachops_client_delivery_check.py --json`.
 5. Keep live-submit external validation separate; do not mark final delivery until package check and final acceptance gate both return `final_delivery_ready=true`.
 
 ## Known external blockers
@@ -754,6 +754,38 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
   - LeadDecision lifecycle expansion beyond immutable/versioned traceability remains split out of this P1 slice.
   - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, Windows Credential Manager validation on Windows, and external authorized live validation.
+
+## Latest P4 client-delivery next-action correction
+
+- Date: `2026-07-20`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Correct the current client-delivery handoff guidance for the `not_started` state without entering Windows packaging, EXE generation, installer generation, ixBrowser execution, or TikTok live-submit.
+- Code evidence:
+  - `tools/reachops_client_acceptance_status.py` now distinguishes `readiness=not_started` from `blocked_by_accounts` when building operator next actions.
+  - When no current `PLAN campaign` evidence exists, `tools/reachops_client_delivery_check.py --json` now instructs the operator to launch the ReachOps local client, enter a promotion target, start acquisition, and wait for `PLAN campaign` / `START campaign` evidence.
+  - Account-repair guidance remains limited to `blocked_by_accounts` runs where a current started batch has `available<=0`.
+  - `tests/test_reachops_client_acceptance_status.py` adds a regression test proving that `not_started` does not ask the operator to repair the United States group before a run exists.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile tools/reachops_client_acceptance_status.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_client_acceptance_status.ReachOpsClientAcceptanceStatusTest.test_not_started_next_actions_start_client_not_account_repair`: passed.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_client_acceptance_status.ReachOpsClientAcceptanceStatusTest.test_blocked_by_accounts_uses_real_profile_group tests.test_reachops_client_acceptance_status.ReachOpsClientAcceptanceStatusTest.test_not_started_next_actions_start_client_not_account_repair tests.test_reachops_client_acceptance_status.ReachOpsClientAcceptanceStatusTest.test_pass_requires_collection_and_action_in_scoped_batch tests.test_reachops_client_acceptance_status.ReachOpsClientAcceptanceStatusTest.test_restart_after_latest_batch_requires_new_run`: passed.
+  - `/usr/bin/python3 tools/reachops_client_delivery_check.py --json`: failed as expected with `status=not_started`, `readiness=not_started`, `failed_checks=["acceptance:ready"]`, blocker `未看到 PLAN campaign，推广目标未进入任务规划。`; output `/tmp/reachops-client-next-actions-after-fix.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_client_acceptance_status`: failed with 121 tests, 5 failures, 1 error; failing tests are Web UI contract/HTTP endpoint checks outside this next-action branch; log `/tmp/reachops-next-actions-client-acceptance.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-next-actions-truth.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-next-actions-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-next-actions-delivery-audit.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 233 tests; log `/tmp/reachops-next-actions-campaign.log`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-next-actions-goal-status.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-next-actions-package.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-next-actions-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; blocking scopes are `local_mvp`, `windows_final_artifacts`, and `external_authorized_execution`; output `/tmp/reachops-next-actions-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-next-actions-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-next-actions-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - No customer data, cookies, screenshots, raw DOM, credentials, local acceptance inputs, or SQLite customer runtime data was committed.
+  - Final delivery remains blocked until fresh local client UI acceptance evidence, Windows final artifacts, Windows Credential Manager validation, and authorized live validation are produced and strict final gates pass.
 
 ## Non-blocking engineering work available
 

@@ -215,6 +215,18 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertTrue(any("Canada" in item for item in result["next_actions"]))
         self.assertTrue(any("45" in item for item in result["next_actions"]))
 
+    def test_not_started_next_actions_start_client_not_account_repair(self):
+        batch = {"id": "", "campaign_id": "", "status": "", "profile_group": "United States", "config_json": "{}"}
+        preflight = {"checked": 0, "available": 0, "errors": {}}
+
+        result = derive_acceptance(batch, preflight, [])
+
+        self.assertEqual(result["readiness"], "not_started")
+        self.assertIn("未看到 PLAN campaign", result["blockers"][0])
+        self.assertTrue(any("启动 ReachOps 本地客户端" in item for item in result["next_actions"]))
+        self.assertTrue(any("tools\\start_reachops_ui_windows.ps1" in item for item in result["next_actions"]))
+        self.assertFalse(any("手动打开 United States" in item for item in result["next_actions"]))
+
     def test_pass_requires_collection_and_action_in_scoped_batch(self):
         batch = {"id": "gb_2", "campaign_id": "acq_2", "status": "completed", "profile_group": "US", "config_json": "{}"}
         preflight = {"checked": 1, "available": 1, "errors": {}}

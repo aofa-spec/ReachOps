@@ -189,11 +189,14 @@ def derive_acceptance(batch: dict, preflight: dict, log_lines: list[str]) -> dic
         next_actions.append("已达到客户端验收：目标识别、账号跳过、采集、触达和批次收口均有证据。")
     elif readiness == "pending_new_run":
         next_actions.append("当前客户端已加载新版本，请重新点击开始获客，等待生成新批次后再验收采集和触达链路。")
+    elif readiness == "not_started":
+        next_actions.append("启动 ReachOps 本地客户端，输入推广目标并点击开始获客，等待出现 PLAN campaign 和 START campaign 后再验收。")
+        next_actions.append("如果在 Windows 验收，请先运行 tools\\start_reachops_ui_windows.ps1，再用真实 ixBrowser 分组执行一次默认 no-submit 采集。")
     elif refresh_summary.get("empty"):
         next_actions.append(f"确认 ixBrowser 本地服务已启动，并且 {profile_group} 分组至少包含 1 个配置；当前刷新结果为 groups=0/profiles=0。")
     elif headless_timeout:
         next_actions.append("先确认 ixBrowser 本地服务已启动，United States 分组可读取，至少 1 个账号能手动打开 TikTok，再运行真实执行复测。")
-    elif available <= 0:
+    elif readiness == "blocked_by_accounts" and available <= 0:
         next_actions.append(f"先在 ixBrowser 手动打开 {profile_group} 中至少 1 个账号，确认 TikTok 已登录且内核版本匹配。")
     if readiness != "pass" and errors.get("IXBROWSER_KERNEL_MISMATCH"):
         ids = profile_error_summary.get("IXBROWSER_KERNEL_MISMATCH", {}).get("profile_ids") or []
