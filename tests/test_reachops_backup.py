@@ -81,6 +81,95 @@ class ReachOpsBackupTests(unittest.TestCase):
             self.assertTrue((Path(restored_paths.config_dir) / "reachops_client_config.json").exists())
             self.assertFalse((Path(restored_paths.config_dir) / "reachops_activation_status.json").exists())
 
+    def test_full_backup_includes_only_selected_evidence_files(self) -> None:
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as output_dir:
+            paths = self._runtime_with_data(source)
+            evidence_dir = Path(paths.reports_dir) / "action_submit_evidence"
+            selected_sidecar = evidence_dir / "action-1.json"
+            selected_screenshot = evidence_dir / "action-1.png"
+            unselected_screenshot = evidence_dir / "action-2.png"
+            selected_sidecar.write_text(
+                json.dumps(
+                    {
+                        "action_id": "fixture-action-1",
+                        "submitted_text": "synthetic comment",
+                        "comment_visible_confirmed": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            selected_screenshot.write_bytes(b"synthetic selected evidence")
+            unselected_screenshot.write_bytes(b"synthetic unselected evidence")
+            backup_path = Path(output_dir) / "customer-full.reachops-backup"
+
+            write_encrypted_backup(
+                source,
+                backup_path,
+                "customer-password",
+                variant="full",
+                include_evidence_files=[selected_sidecar, selected_screenshot],
+            )
+            preview = preview_backup(backup_path, "customer-password")
+
+            exported_paths = {row["path"] for row in preview["manifest"]["files"]}
+            self.assertEqual(preview["manifest"]["variant"], "full")
+            self.assertEqual(preview["manifest"]["selected_evidence_count"], 2)
+            self.assertIn("data/growth_intelligence/reports/action_submit_evidence/action-1.json", exported_paths)
+            self.assertIn("data/growth_intelligence/reports/action_submit_evidence/action-1.png", exported_paths)
+            self.assertNotIn("data/growth_intelligence/reports/action_submit_evidence/action-2.png", exported_paths)
+            self.assertFalse(preview["manifest"]["privacy"]["raw_screenshots_excluded"])
+            self.assertTrue(preview["manifest"]["privacy"]["unselected_evidence_files_excluded"])
+
+    def test_full_backup_restore_recreates_selected_evidence_under_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as output_dir, tempfile.TemporaryDirectory() as target:
+            paths = self._runtime_with_data(source)
+            evidence_dir = Path(paths.reports_dir) / "action_submit_evidence"
+            selected_screenshot = evidence_dir / "action-restore.png"
+            selected_screenshot.write_bytes(b"synthetic selected evidence")
+            backup_path = Path(output_dir) / "customer-full.reachops-backup"
+            write_encrypted_backup(
+                source,
+                backup_path,
+                "customer-password",
+                variant="full",
+                include_evidence_files=[selected_screenshot],
+            )
+
+            result = restore_backup(backup_path, "customer-password", target)
+
+            restored_paths = RuntimePaths.build(target)
+            restored_file = Path(restored_paths.reports_dir) / "action_submit_evidence" / "action-restore.png"
+            self.assertEqual(result["status"], "restored")
+            self.assertEqual(restored_file.read_bytes(), b"synthetic selected evidence")
+
+    def test_full_backup_excludes_selected_evidence_outside_reports_and_secret_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as output_dir:
+            paths = self._runtime_with_data(source)
+            outside_file = Path(source) / "outside-evidence.png"
+            outside_file.write_bytes(b"outside")
+            secret_evidence = Path(paths.reports_dir) / "action_submit_evidence" / "session-token-sidecar.json"
+            secret_evidence.write_text("token material", encoding="utf-8")
+            backup_path = Path(output_dir) / "customer-full.reachops-backup"
+
+            write_encrypted_backup(
+                source,
+                backup_path,
+                "customer-password",
+                variant="full",
+                include_evidence_files=[outside_file, secret_evidence],
+            )
+            preview = preview_backup(backup_path, "customer-password")
+
+            exported_paths = {row["path"] for row in preview["manifest"]["files"]}
+            reasons = {row["reason"] for row in preview["manifest"]["excluded"]}
+            serialized = json.dumps(preview, ensure_ascii=False)
+            self.assertNotIn("outside-evidence.png", exported_paths)
+            self.assertNotIn(str(outside_file), serialized)
+            self.assertNotIn("session-token-sidecar.json", serialized)
+            self.assertNotIn("session-token-sidecar.json\", \"category\"", serialized)
+            self.assertIn("selected_evidence_outside_reports_dir", reasons)
+            self.assertIn("secret_or_activation_state_excluded", reasons)
+
     def test_wrong_password_and_corrupted_archive_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as output_dir:
             self._runtime_with_data(source)

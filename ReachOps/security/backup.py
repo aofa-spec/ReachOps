@@ -13,7 +13,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from ReachOps.runtime_paths import RuntimePaths
 
@@ -120,6 +120,60 @@ def _file_entry(path: Path, archive_path: str, category: str) -> dict[str, Any]:
 
 
 def discover_lightweight_backup_files(paths: RuntimePaths) -> tuple[list[BackupFile], list[dict[str, Any]]]:
+    return discover_backup_files(paths, variant="lightweight")
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _selected_evidence_backup_files(paths: RuntimePaths, include_evidence_files: Iterable[str | Path] | None) -> tuple[list[BackupFile], list[dict[str, Any]]]:
+    files: list[BackupFile] = []
+    exclusions: list[dict[str, Any]] = []
+    if not include_evidence_files:
+        return files, exclusions
+
+    reports_dir = Path(paths.reports_dir).resolve()
+    seen_archive_paths: set[str] = set()
+    for raw_path in include_evidence_files:
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = Path(paths.base_dir) / path
+        try:
+            resolved = path.resolve()
+        except OSError:
+            exclusions.append({"path": "selected_evidence/[unresolvable]", "reason": "selected_evidence_unresolvable"})
+            continue
+        if not _is_relative_to(resolved, reports_dir):
+            exclusions.append({"path": "selected_evidence/[outside_reports_dir]", "reason": "selected_evidence_outside_reports_dir"})
+            continue
+        if not resolved.exists() or not resolved.is_file():
+            exclusions.append({"path": "selected_evidence/[missing]", "reason": "selected_evidence_missing"})
+            continue
+        rel = resolved.relative_to(reports_dir).as_posix()
+        archive_path = f"data/growth_intelligence/reports/{rel}"
+        if _is_secret_relative_path(archive_path):
+            exclusions.append({"path": "data/growth_intelligence/reports/[secret-selected-evidence]", "reason": "secret_or_activation_state_excluded"})
+            continue
+        if archive_path in seen_archive_paths:
+            continue
+        seen_archive_paths.add(archive_path)
+        files.append(BackupFile(resolved, archive_path, "selected_evidence_file"))
+    return files, exclusions
+
+
+def discover_backup_files(
+    paths: RuntimePaths,
+    *,
+    variant: str = "lightweight",
+    include_evidence_files: Iterable[str | Path] | None = None,
+) -> tuple[list[BackupFile], list[dict[str, Any]]]:
+    if variant not in {"lightweight", "full"}:
+        raise BackupError(f"unsupported backup variant: {variant}")
     files: list[BackupFile] = []
     exclusions: list[dict[str, Any]] = []
     db_path = Path(paths.db_path)
@@ -138,13 +192,21 @@ def discover_lightweight_backup_files(paths: RuntimePaths) -> tuple[list[BackupF
                 continue
             files.append(BackupFile(path, archive_path, "non_secret_config"))
 
+    if variant == "full":
+        evidence_files, evidence_exclusions = _selected_evidence_backup_files(paths, include_evidence_files)
+        files.extend(evidence_files)
+        exclusions.extend(evidence_exclusions)
+
     return files, exclusions
 
 
 def build_backup_manifest(paths: RuntimePaths, files: list[BackupFile], exclusions: list[dict[str, Any]], variant: str = "lightweight") -> dict[str, Any]:
+    selected_evidence_count = sum(1 for item in files if item.category == "selected_evidence_file")
     return {
         "schema_version": BACKUP_SCHEMA_VERSION,
         "variant": variant,
+        "backup_variants": ["lightweight", "full"],
+        "selected_evidence_count": selected_evidence_count,
         "created_at": _utc_now(),
         "runtime_layout": "reachops.local_runtime.v1",
         "files": [_file_entry(item.source_path, item.archive_path, item.category) for item in files],
@@ -153,7 +215,10 @@ def build_backup_manifest(paths: RuntimePaths, files: list[BackupFile], exclusio
             {"path": "config/reachops_activation_status.json", "reason": "license_secret_reissue_required"},
             {"path": "windows_credential_manager", "reason": "credential_manager_secrets_never_exported"},
             {"path": "ixbrowser", "reason": "ixbrowser_cookies_sessions_and_login_state_never_exported"},
-            {"path": "reports/evidence_screenshots", "reason": "lightweight_backup_excludes_raw_evidence_files"},
+            {
+                "path": "reports/evidence_screenshots",
+                "reason": "lightweight_backup_excludes_raw_evidence_files" if variant == "lightweight" else "full_backup_includes_only_selected_evidence_files",
+            },
         ],
         "integrity": {
             "file_hash": "sha256",
@@ -168,14 +233,20 @@ def build_backup_manifest(paths: RuntimePaths, files: list[BackupFile], exclusio
             "customer_data_uploaded": False,
             "secrets_excluded": True,
             "cookies_excluded": True,
-            "raw_screenshots_excluded": True,
+            "raw_screenshots_excluded": variant == "lightweight",
+            "unselected_evidence_files_excluded": True,
         },
     }
 
 
-def _build_plain_archive(paths: RuntimePaths) -> tuple[bytes, dict[str, Any]]:
-    files, exclusions = discover_lightweight_backup_files(paths)
-    manifest = build_backup_manifest(paths, files, exclusions)
+def _build_plain_archive(
+    paths: RuntimePaths,
+    *,
+    variant: str = "lightweight",
+    include_evidence_files: Iterable[str | Path] | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    files, exclusions = discover_backup_files(paths, variant=variant, include_evidence_files=include_evidence_files)
+    manifest = build_backup_manifest(paths, files, exclusions, variant=variant)
     archive_buffer = io.BytesIO()
     with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -191,9 +262,16 @@ def _build_plain_archive(paths: RuntimePaths) -> tuple[bytes, dict[str, Any]]:
     return archive_buffer.getvalue(), manifest
 
 
-def write_encrypted_backup(base_dir: str | None, output_path: str | Path, password: str) -> dict[str, Any]:
+def write_encrypted_backup(
+    base_dir: str | None,
+    output_path: str | Path,
+    password: str,
+    *,
+    variant: str = "lightweight",
+    include_evidence_files: Iterable[str | Path] | None = None,
+) -> dict[str, Any]:
     paths = RuntimePaths.build(base_dir).ensure_dirs()
-    plain, manifest = _build_plain_archive(paths)
+    plain, manifest = _build_plain_archive(paths, variant=variant, include_evidence_files=include_evidence_files)
     salt = os.urandom(16)
     nonce = os.urandom(16)
     enc_key, mac_key = _derive_keys(password, salt)
