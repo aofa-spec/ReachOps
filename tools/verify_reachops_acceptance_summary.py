@@ -273,6 +273,8 @@ def verify_summary(
         readiness_status = str(live_readiness.get("status") or "")
         if readiness_status not in {"ready", "completed"} or not bool(live_readiness.get("ready")):
             failures.append("live_readiness_not_ready")
+        if not bool(live_readiness.get("no_browser_started", True)):
+            failures.append("live_readiness_started_browser")
         if not bool(live_readiness.get("no_submit", True)):
             failures.append("live_readiness_submitted_action")
         if str(live_preflight.get("status") or "") != "completed":

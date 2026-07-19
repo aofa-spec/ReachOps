@@ -1239,7 +1239,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         passed_summary["live_readiness"] = {
             "status": "ready",
             "ready": True,
-            "no_browser_started": False,
+            "no_browser_started": True,
             "no_submit": True,
         }
         passed_summary["live_acceptance_status"] = {
@@ -1579,6 +1579,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         missing_readiness = verify_reachops_acceptance_summary(missing_readiness_summary, allow_external_pending=True)
         self.assertFalse(missing_readiness["passed"])
         self.assertIn("live_readiness_not_ready", missing_readiness["failures"])
+
+        browser_started_readiness_summary = json.loads(json.dumps(passed_summary))
+        browser_started_readiness_summary["live_readiness"]["no_browser_started"] = False
+        browser_started_readiness = verify_reachops_acceptance_summary(browser_started_readiness_summary, allow_external_pending=True)
+        self.assertFalse(browser_started_readiness["passed"])
+        self.assertIn("live_readiness_started_browser", browser_started_readiness["failures"])
+        self.assertFalse(browser_started_readiness["live_readiness"]["no_browser_started"])
 
         missing_preflight_summary = json.loads(json.dumps(passed_summary))
         missing_preflight_summary["live_preflight"] = {"status": "skipped"}
