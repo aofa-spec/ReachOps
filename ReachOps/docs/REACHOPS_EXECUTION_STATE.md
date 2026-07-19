@@ -79,6 +79,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `tools/reachops_web_panel_runtime_smoke.py` now works on Python 3.9 by avoiding unsupported `TemporaryDirectory(ignore_cleanup_errors=...)`.
   - `tests/test_runtime_smoke_compatibility.py` now simulates the Python 3.9 `TemporaryDirectory` constructor and verifies the fallback path directly.
   - The same runtime smoke forces `REACHOPS_REQUIRE_ACTIVATION=1` only inside the smoke and restores the caller environment, so the unauthorized live-comment check cannot pass through development bypass.
+  - `tests/test_runtime_smoke_compatibility.py` now directly verifies both activation-gate environment restoration paths: pre-existing `REACHOPS_REQUIRE_ACTIVATION` values are preserved and originally absent values are removed after runtime smoke.
   - `ReachOps/launcher.py` now defaults `ReachOpsApp.py` to the unified Web console; Tk remains available only through `--legacy-tk` or `REACHOPS_LEGACY_TK=1` as a diagnostic path.
   - `启动ReachOps本地客户端.command` now delegates to `启动ReachOps统一WebUI.command`; `启动ReachOps原生MacUI.command` explicitly marks Tk as the legacy diagnostic entry.
   - `tests/test_launcher.py` locks the default Web-console launcher contract and the legacy diagnostic opt-in.
@@ -111,6 +112,19 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed; failed checks are `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-p4-runtime-final-acceptance-gate.json`.
   - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-p4-runtime-cleanliness.json`.
   - `git diff --check`: passed; log `/tmp/reachops-p4-runtime-diff-check.log`.
+  - Activation-gate env rerun: `/usr/bin/python3 -m py_compile tools/reachops_web_panel_runtime_smoke.py tests/test_runtime_smoke_compatibility.py`: passed; log `/tmp/reachops-pr20-activation-env-pycompile.log`.
+  - Activation-gate env rerun: `/usr/bin/python3 -m unittest -v tests.test_runtime_smoke_compatibility`: passed, 3 tests; log `/tmp/reachops-pr20-activation-env-focused.log`.
+  - Activation-gate env rerun: `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed, `status=passed`, `failed_checks=[]`; output `/tmp/reachops-pr20-activation-env-runtime-smoke.json`.
+  - Activation-gate env rerun: `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-pr20-activation-env-truth.log`.
+  - Activation-gate env rerun: `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with the same known failure/error set as `origin/main`; branch and main both ran 230 tests with 14 failures and 1 error; comparison artifact `/tmp/reachops-pr20-activation-env-baseline-comparison.json`, `new_failures=[]`, `new_errors=[]`.
+  - Activation-gate env rerun: `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-pr20-activation-env-operator-pressure.json`.
+  - Activation-gate env rerun: `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, but target check `运营 Web 面板运行时 API 冒烟可真实启动和控制执行链` passed with `failed_checks=[]`; summary `passed=47`, `pending_external_validation=3`, `failed=4`; output `/tmp/reachops-pr20-activation-env-delivery-audit.json`.
+  - Activation-gate env rerun: `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr20-activation-env-goal-delivery-runner.json`.
+  - Activation-gate env rerun: `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-pr20-activation-env-goal-status-report.json`.
+  - Activation-gate env rerun: `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr20-activation-env-package-check.json`.
+  - Activation-gate env rerun: `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr20-activation-env-final-gate.json`.
+  - Activation-gate env rerun: `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-pr20-activation-env-cleanliness.json`.
+  - Activation-gate env rerun: `git diff --check`: passed; log `/tmp/reachops-pr20-activation-env-diff-check.log`.
 - Remaining blockers:
   - Delivery audit still has local UI/runtime failures on this main-based branch: customer-visible operator controls, campaign-funnel isolation, web API acquisition-chain residual checks, and Web DOM button feedback. PR #18 and PR #19 address part of this surface separately.
   - Windows final artifacts remain missing: `dist/ReachOps/ReachOps.exe`, `dist/installer/ReachOps-Setup-0.4.0.exe`, `dist/installer/reachops-update-manifest.json`, and `reports/reachops_acceptance/acceptance_summary.json`.
