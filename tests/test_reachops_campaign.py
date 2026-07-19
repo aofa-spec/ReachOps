@@ -1275,13 +1275,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
         }
         png_sha = hashlib.sha256(b"png").hexdigest()
         def sidecar(action_type):
-            return {
+            payload = {
                 "screenshot_sha256": png_sha,
                 "action_type": action_type,
                 "profile_id": "profile-a",
                 "action_id": f"{action_type}-1",
                 "current_url": "https://www.tiktok.com/@creator/video/123",
             }
+            if action_type == "comment_reply":
+                payload["submitted_text"] = "authorized comment"
+                payload["comment_visible_confirmed"] = True
+            return payload
         passed_summary["live_submit"] = {
             "status": "completed",
             "executor_mode": "platform_selenium",
@@ -1644,6 +1648,18 @@ class ReachOpsCampaignTests(unittest.TestCase):
         stale_sidecar = verify_reachops_acceptance_summary(stale_sidecar_summary, allow_external_pending=True)
         self.assertFalse(stale_sidecar["passed"])
         self.assertIn("live_submit_evidence_file_details_invalid", stale_sidecar["failures"])
+
+        missing_submitted_text_summary = json.loads(json.dumps(passed_summary))
+        missing_submitted_text_summary["live_submit"]["evidence_file_details"]["comment_reply"][0]["sidecar"].pop("submitted_text", None)
+        missing_submitted_text = verify_reachops_acceptance_summary(missing_submitted_text_summary, allow_external_pending=True)
+        self.assertFalse(missing_submitted_text["passed"])
+        self.assertIn("live_submit_evidence_file_details_invalid", missing_submitted_text["failures"])
+
+        unconfirmed_comment_summary = json.loads(json.dumps(passed_summary))
+        unconfirmed_comment_summary["live_submit"]["evidence_file_details"]["comment_reply"][0]["sidecar"]["comment_visible_confirmed"] = False
+        unconfirmed_comment = verify_reachops_acceptance_summary(unconfirmed_comment_summary, allow_external_pending=True)
+        self.assertFalse(unconfirmed_comment["passed"])
+        self.assertIn("live_submit_evidence_file_details_invalid", unconfirmed_comment["failures"])
 
         missing_result_identity_summary = json.loads(json.dumps(passed_summary))
         for row in missing_result_identity_summary["live_submit"]["summary"]["results"]:
@@ -2099,13 +2115,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
             png_sha = hashlib.sha256(b"png").hexdigest()
 
             def sidecar(action_type):
-                return {
+                payload = {
                     "screenshot_sha256": png_sha,
                     "action_type": action_type,
                     "profile_id": "profile-a",
                     "action_id": f"{action_type}-1",
                     "current_url": "https://www.tiktok.com/@creator/video/123",
                 }
+                if action_type == "comment_reply":
+                    payload["submitted_text"] = "authorized comment"
+                    payload["comment_visible_confirmed"] = True
+                return payload
 
             summary = {
                 "status": "passed",

@@ -469,6 +469,13 @@ def verify_summary(
                     sidecar_sha = str(sidecar.get("screenshot_sha256") or "")
                     sidecar_action_id = str(sidecar.get("action_id") or "")
                     sidecar_profile_id = str(sidecar.get("profile_id") or "")
+                    comment_evidence_ok = (
+                        action_type != "comment_reply"
+                        or (
+                            bool(str(sidecar.get("submitted_text") or "").strip())
+                            and sidecar.get("comment_visible_confirmed") is True
+                        )
+                    )
                     if (
                         int(detail.get("size") or 0) > 0
                         and len(sha) == 64
@@ -478,6 +485,7 @@ def verify_summary(
                         and sidecar_profile_id
                         and sidecar_action_id
                         and str(sidecar.get("current_url") or "")
+                        and comment_evidence_ok
                         and (action_type, sidecar_action_id, sidecar_profile_id) in successful_result_keys
                     ):
                         valid_detail = True
