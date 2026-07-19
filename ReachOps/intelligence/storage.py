@@ -406,6 +406,30 @@ class GrowthStorage:
                     completed_at TEXT,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS reply_observations (
+                    id TEXT PRIMARY KEY,
+                    action_id TEXT NOT NULL,
+                    lead_id TEXT NOT NULL,
+                    reply_author TEXT DEFAULT '',
+                    reply_text TEXT DEFAULT '',
+                    reply_url TEXT DEFAULT '',
+                    evidence_path TEXT DEFAULT '',
+                    raw_payload TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(action_id, reply_author, reply_text, reply_url)
+                );
+                CREATE TABLE IF NOT EXISTS lead_qualification_decisions (
+                    id TEXT PRIMARY KEY,
+                    lead_id TEXT NOT NULL,
+                    action_id TEXT NOT NULL,
+                    reply_observation_id TEXT NOT NULL,
+                    qualified INTEGER DEFAULT 0,
+                    reason TEXT DEFAULT '',
+                    decided_by TEXT DEFAULT 'operator',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(reply_observation_id, qualified, reason)
+                );
                 CREATE TABLE IF NOT EXISTS checkpoints (
                     id TEXT PRIMARY KEY,
                     source_id TEXT NOT NULL,
@@ -1291,7 +1315,11 @@ class GrowthStorage:
             "SELECT status, execution_confirmed FROM action_queue WHERE lead_id=?",
             (lead_id,),
         ).fetchall()
-        if not rows:
+        if self._lead_has_confirmed_need_reply(conn, lead_id):
+            stage = "qualified"
+        elif self._lead_has_public_reply(conn, lead_id):
+            stage = "reply_received"
+        elif not rows:
             stage = "new"
         elif any(row["status"] in {"completed", "success"} for row in rows):
             stage = "contacted"
@@ -1309,6 +1337,181 @@ class GrowthStorage:
             "UPDATE operation_leads SET lifecycle_stage=?, status=?, updated_at=? WHERE id=?",
             (stage, stage, utc_now_iso(), lead_id),
         )
+
+    def _lead_has_public_reply(self, conn, lead_id: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM reply_observations WHERE lead_id=? LIMIT 1",
+            (lead_id,),
+        ).fetchone()
+        return bool(row)
+
+    def _lead_has_confirmed_need_reply(self, conn, lead_id: str) -> bool:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM lead_qualification_decisions
+            WHERE lead_id=? AND qualified=1
+            LIMIT 1
+            """,
+            (lead_id,),
+        ).fetchone()
+        return bool(row)
+
+    def record_reply_observation(
+        self,
+        action_id: str,
+        reply_author: str,
+        reply_text: str,
+        reply_url: str = "",
+        evidence_path: str = "",
+        observed_at: str = "",
+        raw_payload: Optional[Dict[str, Any]] = None,
+    ) -> tuple[str, bool]:
+        action = str(action_id or "").strip()
+        author = str(reply_author or "").strip().lstrip("@")
+        text = str(reply_text or "").strip()
+        url = str(reply_url or "").strip()
+        if not action:
+            raise ValueError("action_id is required")
+        if not text:
+            raise ValueError("reply_text is required")
+        now = utc_now_iso()
+        seen_at = str(observed_at or "").strip() or now
+        with self.connect() as conn:
+            action_row = conn.execute("SELECT id, lead_id FROM action_queue WHERE id=?", (action,)).fetchone()
+            if not action_row:
+                raise ValueError("action_id does not exist")
+            lead_id = str(action_row["lead_id"] or "")
+            row = conn.execute(
+                """
+                SELECT id FROM reply_observations
+                WHERE action_id=? AND reply_author=? AND reply_text=? AND reply_url=?
+                """,
+                (action, author, text, url),
+            ).fetchone()
+            if row:
+                self._refresh_lead_lifecycle(conn, lead_id)
+                return row["id"], False
+            item_id = new_id("ro")
+            conn.execute(
+                """
+                INSERT INTO reply_observations
+                (id, action_id, lead_id, reply_author, reply_text, reply_url, evidence_path,
+                 raw_payload, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    action,
+                    lead_id,
+                    author,
+                    text,
+                    url,
+                    str(evidence_path or ""),
+                    json.dumps(raw_payload or {}, ensure_ascii=False),
+                    seen_at,
+                    now,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO growth_events (id, event, entity_id, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    new_id("evt"),
+                    "public_reply_observed",
+                    item_id,
+                    json.dumps({"action_id": action, "lead_id": lead_id}, ensure_ascii=False),
+                    now,
+                ),
+            )
+            self._refresh_lead_lifecycle(conn, lead_id)
+            return item_id, True
+
+    def list_reply_observations(self, lead_id: str = "", action_id: str = "", limit: int = 100) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if lead_id:
+            filters.append("lead_id=?")
+            args.append(str(lead_id))
+        if action_id:
+            filters.append("action_id=?")
+            args.append(str(action_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM reply_observations {where} ORDER BY observed_at DESC, created_at DESC LIMIT ?",
+                tuple(args + [int(limit or 100)]),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_lead_qualification_decision(
+        self,
+        reply_observation_id: str,
+        qualified: bool,
+        reason: str,
+        decided_by: str = "operator",
+    ) -> tuple[str, bool]:
+        reply_id = str(reply_observation_id or "").strip()
+        decision_reason = str(reason or "").strip()
+        if not reply_id:
+            raise ValueError("reply_observation_id is required")
+        if bool(qualified) and not decision_reason:
+            raise ValueError("qualified lead decision requires reply-confirmed need reason")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            reply = conn.execute(
+                "SELECT id, lead_id, action_id FROM reply_observations WHERE id=?",
+                (reply_id,),
+            ).fetchone()
+            if not reply:
+                raise ValueError("reply_observation_id does not exist")
+            lead_id = str(reply["lead_id"] or "")
+            action_id = str(reply["action_id"] or "")
+            flag = 1 if qualified else 0
+            row = conn.execute(
+                """
+                SELECT id FROM lead_qualification_decisions
+                WHERE reply_observation_id=? AND qualified=? AND reason=?
+                """,
+                (reply_id, flag, decision_reason),
+            ).fetchone()
+            if row:
+                self._refresh_lead_lifecycle(conn, lead_id)
+                return row["id"], False
+            item_id = new_id("lqd")
+            conn.execute(
+                """
+                INSERT INTO lead_qualification_decisions
+                (id, lead_id, action_id, reply_observation_id, qualified, reason, decided_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (item_id, lead_id, action_id, reply_id, flag, decision_reason, str(decided_by or "operator"), now),
+            )
+            conn.execute(
+                "INSERT INTO growth_events (id, event, entity_id, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    new_id("evt"),
+                    "lead_qualification_decision_recorded",
+                    item_id,
+                    json.dumps({"lead_id": lead_id, "reply_observation_id": reply_id, "qualified": bool(qualified)}, ensure_ascii=False),
+                    now,
+                ),
+            )
+            self._refresh_lead_lifecycle(conn, lead_id)
+            return item_id, True
+
+    def list_lead_qualification_decisions(self, lead_id: str = "", limit: int = 100) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if lead_id:
+            filters.append("lead_id=?")
+            args.append(str(lead_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM lead_qualification_decisions {where} ORDER BY created_at ASC LIMIT ?",
+                tuple(args + [int(limit or 100)]),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def create_outreach_execution(
         self,
@@ -2651,6 +2854,8 @@ class GrowthStorage:
             "operation_leads",
             "action_queue",
             "outreach_executions",
+            "reply_observations",
+            "lead_qualification_decisions",
             "collection_batches",
             "collection_tasks",
             "profile_health",
