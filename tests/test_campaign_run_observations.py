@@ -7,9 +7,99 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ReachOps.intelligence.candidate_user_scorer import CandidateUserScorer
+from ReachOps.intelligence import GrowthIntelligenceService, GrowthTaskConfig
 from ReachOps.intelligence.schemas import ActionQueueItem, CandidateUser, DiscoveredContent
 from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
+
+
+class TraceableFakeDriver:
+    def __init__(self):
+        self.current_url = ""
+        self.visited = []
+        self.quit_called = False
+
+    def get(self, url):
+        self.current_url = url
+        self.visited.append(url)
+
+    def execute_script(self, script):
+        text = str(script or "")
+        if "document.readyState" in text:
+            return "complete"
+        if "return {url, text, title" in text:
+            return {
+                "url": self.current_url,
+                "text": "creator video comment grid",
+                "title": "TikTok",
+                "videoLinks": 1,
+                "profileLinks": 1,
+                "loginDialog": False,
+                "exactLoginButton": False,
+                "forcedLoginText": False,
+                "onboardingLoginGate": False,
+                "accountSetupGate": False,
+                "loginPage": False,
+                "captcha": False,
+                "proxy": False,
+                "platformTemporaryError": False,
+            }
+        if "querySelectorAll" in text:
+            return 1
+        if "document.body" in text:
+            return 32
+        return ""
+
+    def quit(self):
+        self.quit_called = True
+
+
+class TraceableProfileCollector:
+    def collect(self, driver, task, context):
+        username = driver.current_url.rstrip("/").split("/")[-1].lstrip("@") or "creator"
+        return {
+            "username": username,
+            "profile_url": driver.current_url,
+            "followers": 12000,
+            "likes_total": 560000,
+        }
+
+
+class TraceableVideoCollector:
+    def collect(self, driver, task, context):
+        username = task["creator"]["username"]
+        return [
+            {
+                "video_id": f"{username}-video-1",
+                "video_url": f"https://www.tiktok.com/@{username}/video/1",
+                "caption": "serum review where can I buy",
+                "views": 120000,
+                "likes": 3000,
+                "comments": 1000,
+                "shares": 25,
+                "collector_level": "fixture_dom",
+            }
+        ]
+
+
+class TraceableCommentCollector:
+    def collect(self, driver, task, context):
+        return [
+            {
+                "username": "buyer_trace",
+                "profile_url": "https://www.tiktok.com/@buyer_trace",
+                "comment_text": "where can I buy this serum",
+                "comment_likes": 7,
+                "reply_count": 1,
+                "collector_level": "fixture_comment",
+                "source_path": str((task.get("content") or {}).get("video_url") or ""),
+            }
+        ]
+
+
+class EmptyTraceableSearchCollector:
+    def collect(self, driver, task, context):
+        return []
 
 
 class CampaignRunObservationTests(unittest.TestCase):
@@ -343,6 +433,63 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(len(repeated_trace["comment_observations"]), 1)
         self.assertEqual(len(repeated_trace["candidate_observations"]), 1)
         self.assertEqual(len(repeated_trace["lead_decisions"]), 2)
+
+    def test_run_collection_workflow_populates_single_run_trace_end_to_end(self):
+        service = GrowthIntelligenceService(
+            base_dir=self.tmpdir.name,
+            browser_factory=lambda _profile_id: TraceableFakeDriver(),
+            collectors={
+                "profile": TraceableProfileCollector(),
+                "video": TraceableVideoCollector(),
+                "comment": TraceableCommentCollector(),
+                "search": EmptyTraceableSearchCollector(),
+                "topic_content": EmptyTraceableSearchCollector(),
+            },
+        )
+        service.router._wait_for_page = lambda *_args, **_kwargs: True
+        campaign = service.create_campaign_plan("https://www.tiktok.com/@trace_creator", max_sources=1)["campaign"]
+        result = service.run_collection(
+            [{"type": "creator_url", "value": "https://www.tiktok.com/@trace_creator"}],
+            [{"profile_id": "profile-trace", "group_name": "US"}],
+            GrowthTaskConfig(
+                campaign_id=campaign["id"],
+                max_videos_per_creator=1,
+                max_comments_per_video=10,
+                test_mode=True,
+                task_delay_min_seconds=0,
+                task_delay_max_seconds=0,
+            ),
+        )
+
+        batches = service.storage.list_collection_batches(campaign_id=campaign["id"])
+        self.assertEqual(result.processed_sources, 1)
+        self.assertEqual(len(batches), 1)
+        run_id = batches[0]["run_id"]
+        trace = service.storage.list_observations_for_run(run_id)
+        tasks = service.storage.list_collection_tasks(limit=10)
+        leads = service.storage.list_operation_leads(run_id=run_id)
+        actions = service.storage.list_action_queue(run_id=run_id)
+
+        self.assertTrue(run_id.startswith("run_"))
+        self.assertEqual([row["run_id"] for row in tasks], [run_id])
+        self.assertEqual([row["status"] for row in tasks], ["completed"])
+        self.assertEqual(len(trace["source_observations"]), 1)
+        self.assertEqual(trace["source_observations"][0]["observation_key"], "collection_task_planned")
+        self.assertEqual(len(trace["content_observations"]), 1)
+        self.assertEqual(trace["content_observations"][0]["run_id"], run_id)
+        self.assertEqual(len(trace["comment_observations"]), 1)
+        self.assertEqual(trace["comment_observations"][0]["username"], "buyer_trace")
+        self.assertEqual(len(trace["candidate_observations"]), 2)
+        self.assertTrue({row["observation_key"] for row in trace["candidate_observations"]}.issuperset({"scored"}))
+        self.assertTrue(any(row["observation_key"].startswith("score_updated:") for row in trace["candidate_observations"]))
+        self.assertGreaterEqual(len(trace["lead_decisions"]), 1)
+        self.assertEqual({row["run_id"] for row in trace["lead_decisions"]}, {run_id})
+        self.assertGreaterEqual(len(leads), 1)
+        self.assertGreaterEqual(len(actions), 1)
+        self.assertEqual({row["run_id"] for row in leads}, {run_id})
+        self.assertEqual({row["run_id"] for row in actions}, {run_id})
+        self.assertTrue(any(row["event"] == "collection_batch_created" for row in trace["growth_events"]))
+        self.assertTrue(any(row["event"] == "lead_pipeline_completed" for row in trace["growth_events"]))
 
     def test_scoring_workflow_records_run_scoped_candidate_observations(self):
         campaign = self.storage.create_campaign("keyword", "serum")
