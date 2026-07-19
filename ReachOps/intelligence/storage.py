@@ -2151,12 +2151,12 @@ class GrowthStorage:
         now = utc_now_iso()
         config = dict(config or {})
         if campaign_id:
-            config.setdefault("campaign_id", campaign_id)
+            config["campaign_id"] = campaign_id
         if initial_status not in {"pending", "running"}:
             initial_status = "running"
         batch_id = new_id("gb")
         run_id = new_id("run")
-        config.setdefault("run_id", run_id)
+        config["run_id"] = run_id
         item = CollectionBatch(
             id=batch_id,
             campaign_id=campaign_id or "",

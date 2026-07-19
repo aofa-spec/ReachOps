@@ -132,6 +132,27 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(reopened.count_table("campaign_runs"), 2)
         self.assertEqual(reopened.run_id_for_batch(first.id), first.run_id)
 
+    def test_new_campaign_run_config_uses_authoritative_generated_run_id(self):
+        campaign = self.storage.create_campaign("keyword", "anti aging serum")
+
+        batch = self.storage.create_collection_batch(
+            1,
+            profile_group="US",
+            campaign_id=campaign.id,
+            config={"run_id": "caller_supplied_run", "campaign_id": "caller_supplied_campaign"},
+        )
+
+        self.assertNotEqual(batch.run_id, "caller_supplied_run")
+        self.assertTrue(batch.run_id.startswith("run_"))
+        self.assertEqual(self.storage.run_id_for_batch(batch.id), batch.run_id)
+        run = self.storage.get_campaign_run(run_id=batch.run_id)
+        batch_config = json.loads(batch.config_json)
+        run_config = json.loads(run["config_json"])
+        self.assertEqual(batch_config["run_id"], batch.run_id)
+        self.assertEqual(run_config["run_id"], batch.run_id)
+        self.assertEqual(batch_config["campaign_id"], campaign.id)
+        self.assertEqual(run_config["campaign_id"], campaign.id)
+
     def test_campaign_isolation_for_runs_and_observations(self):
         first_campaign = self.storage.create_campaign("keyword", "serum")
         second_campaign = self.storage.create_campaign("keyword", "supplement")
