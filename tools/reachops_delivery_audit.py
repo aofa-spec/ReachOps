@@ -529,6 +529,7 @@ def run_web_local_api_architecture_fixture() -> dict:
     operator_console = (ROOT_DIR / "ReachOps" / "workbench" / "console.py").read_text(encoding="utf-8")
     ai_strategy = (ROOT_DIR / "ReachOps" / "intelligence" / "ai_strategy.py").read_text(encoding="utf-8")
     credential_store = (ROOT_DIR / "ReachOps" / "security" / "credential_store.py").read_text(encoding="utf-8")
+    backup_contract = (ROOT_DIR / "ReachOps" / "security" / "backup.py").read_text(encoding="utf-8")
     evidence_bundle = (ROOT_DIR / "ReachOps" / "evidence_bundle.py").read_text(encoding="utf-8")
     workflow_service = (ROOT_DIR / "ReachOps" / "workbench" / "workflow_service.py").read_text(encoding="utf-8")
     offline_learning = (ROOT_DIR / "ReachOps" / "workbench" / "offline_learning_ledger.py").read_text(encoding="utf-8")
@@ -563,6 +564,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_ui_renders_autonomous_preflight_forecast": "previewAutonomy" in web_ui and "previewAutonomyList" in web_ui and "状态链：" in web_ui and "自修复：" in web_ui and "证据要求：" in web_ui and "运行约束：0 token" in web_ui,
         "web_api_requires_live_comment_activation": "live_comment_activation_status" in web_ui and "LiveSubmitAuthorizationGate" in web_ui and "LIVE_SUBMIT_NOT_AUTHORIZED" in web_ui,
         "windows_credential_manager_secret_contract": "reachops.credential_storage.v1" in credential_store and "win32cred" in credential_store and "CredWrite" in credential_store and "CredRead" in credential_store and "CRED_TYPE_GENERIC" in credential_store and "BACKEND_NON_WINDOWS_UNAVAILABLE" in credential_store and "secret_persistence_allowed" in credential_store and "ReachOps persists secrets only in Windows Credential Manager" in credential_store and "get_secret_if_available(\"ai_api_key\")" in ai_strategy and "ReachOpsCredentialStore().set_secret(\"ai_api_key\", key)" in operator_console and "os.environ[\"REACHOPS_AI_API_KEY\"] = key" not in operator_console,
+        "encrypted_backup_restore_contract": "reachops.backup.v1" in backup_contract and ".reachops-backup" in backup_contract and "pbkdf2_hmac" in backup_contract and "hmac_sha256" in backup_contract and "preview_backup" in backup_contract and "restore_backup" in backup_contract and "rollback_on_failure" in backup_contract and "secret_or_activation_state_excluded" in backup_contract and "credential_manager_secrets_never_exported" in backup_contract and "ixbrowser_cookies_sessions_and_login_state_never_exported" in backup_contract and "customer_data_uploaded\": False" in backup_contract,
         "web_api_reports_already_running_pid": "already_running" in web_ui and "\"pid\": RUN_PROCESS.pid" in web_ui,
         "web_api_closes_parent_stdout_handle": "finally:" in web_ui and "out.close()" in web_ui and "RUN_PROCESS = process" in web_ui,
         "web_api_passes_runtime_dir_to_headless": "\"--base-dir\"" in web_ui and "str(DATA_DIR)" in web_ui,
