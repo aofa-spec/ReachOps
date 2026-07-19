@@ -909,6 +909,13 @@ class ActionRouter:
                 return False
             if not bool(sidecar.get("comment_visible_confirmed")):
                 return False
+        if expected_action_type == "follow_review" and sidecar.get("follow_state_confirmed") is not True:
+            return False
+        if expected_action_type == "dm_review":
+            if sidecar.get("dm_entry_confirmed") is not True:
+                return False
+            if str(expected_text or "") and str(sidecar.get("dm_submitted_text") or "") != str(expected_text or ""):
+                return False
         return True
 
     def _profile_block_reason(self, profile: dict, config: ActionRouterConfig) -> str:

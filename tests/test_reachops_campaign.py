@@ -1304,6 +1304,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
             if action_type == "comment_reply":
                 payload["submitted_text"] = "authorized comment"
                 payload["comment_visible_confirmed"] = True
+            if action_type == "follow_review":
+                payload["follow_state_confirmed"] = True
+            if action_type == "dm_review":
+                payload["dm_entry_confirmed"] = True
+                payload["dm_submitted_text"] = "authorized dm"
             return payload
         passed_summary["live_submit"] = {
             "status": "completed",
@@ -1741,6 +1746,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
         unconfirmed_comment = verify_reachops_acceptance_summary(unconfirmed_comment_summary, allow_external_pending=True)
         self.assertFalse(unconfirmed_comment["passed"])
         self.assertIn("live_submit_evidence_file_details_invalid", unconfirmed_comment["failures"])
+
+        unconfirmed_follow_summary = json.loads(json.dumps(passed_summary))
+        unconfirmed_follow_summary["live_submit"]["evidence_file_details"]["follow_review"][0]["sidecar"].pop(
+            "follow_state_confirmed",
+            None,
+        )
+        unconfirmed_follow = verify_reachops_acceptance_summary(unconfirmed_follow_summary, allow_external_pending=True)
+        self.assertFalse(unconfirmed_follow["passed"])
+        self.assertIn("live_submit_evidence_file_details_invalid", unconfirmed_follow["failures"])
+
+        unconfirmed_dm_summary = json.loads(json.dumps(passed_summary))
+        unconfirmed_dm_summary["live_submit"]["evidence_file_details"]["dm_review"][0]["sidecar"].pop(
+            "dm_entry_confirmed",
+            None,
+        )
+        unconfirmed_dm = verify_reachops_acceptance_summary(unconfirmed_dm_summary, allow_external_pending=True)
+        self.assertFalse(unconfirmed_dm["passed"])
+        self.assertIn("live_submit_evidence_file_details_invalid", unconfirmed_dm["failures"])
 
         missing_result_identity_summary = json.loads(json.dumps(passed_summary))
         for row in missing_result_identity_summary["live_submit"]["summary"]["results"]:
@@ -2207,6 +2230,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 if action_type == "comment_reply":
                     payload["submitted_text"] = "authorized comment"
                     payload["comment_visible_confirmed"] = True
+                if action_type == "follow_review":
+                    payload["follow_state_confirmed"] = True
+                if action_type == "dm_review":
+                    payload["dm_entry_confirmed"] = True
+                    payload["dm_submitted_text"] = "authorized dm"
                 return payload
 
             summary = {
@@ -4930,6 +4958,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     if action_type == "comment_reply":
                         sidecar["submitted_text"] = rendered_text
                         sidecar["comment_visible_confirmed"] = True
+                    if action_type == "follow_review":
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
                     Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
                     return {"status": "success", "evidence_path": str(path)}
 
@@ -5003,6 +5036,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     if action_type == "comment_reply":
                         sidecar["submitted_text"] = rendered_text
                         sidecar["comment_visible_confirmed"] = True
+                    if action_type == "follow_review":
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
                     Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
                     return {"status": "success", "evidence_path": str(path)}
 
@@ -5037,6 +5075,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     if action_type == "comment_reply":
                         sidecar["submitted_text"] = rendered_text
                         sidecar["comment_visible_confirmed"] = True
+                    if action_type == "follow_review":
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
                     Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
                     return {"status": "success", "error_code": "", "error_message": "", "evidence_path": str(path)}
 
@@ -5118,6 +5161,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         sidecar["comment_visible_confirmed"] = True
                     if action_type == "follow_review":
                         sidecar["profile_id"] = "99999"
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
                     Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
                     return {"status": "success", "error_code": "", "error_message": "", "evidence_path": str(path)}
 
@@ -7392,6 +7439,38 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(payload["screenshot_size"], 3)
             self.assertEqual(payload["screenshot_sha256"], hashlib.sha256(b"png").hexdigest())
 
+    def test_live_action_executor_writes_follow_and_dm_confirmation_metadata(self):
+        class ScreenshotDriver:
+            current_url = "https://www.tiktok.com/@buyer_one"
+            title = "TikTok test page"
+
+            def save_screenshot(self, path):
+                Path(path).write_bytes(b"png")
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = TikTokSeleniumActionExecutor(TikTokActionExecutorConfig(evidence_dir=tmp))
+            follow_path = executor._capture_evidence(
+                ScreenshotDriver(),
+                {"id": "follow-1", "action_type": "follow_review", "target_url": "https://www.tiktok.com/@buyer_one"},
+                "profile-1",
+                "",
+            )
+            dm_path = executor._capture_evidence(
+                ScreenshotDriver(),
+                {"id": "dm-1", "action_type": "dm_review", "target_url": "https://www.tiktok.com/@buyer_one"},
+                "profile-1",
+                "",
+                expected_text="authorized dm",
+            )
+
+            follow_payload = json.loads(Path(f"{follow_path}.json").read_text(encoding="utf-8"))
+            dm_payload = json.loads(Path(f"{dm_path}.json").read_text(encoding="utf-8"))
+            self.assertTrue(follow_payload["follow_state_confirmed"])
+            self.assertFalse(follow_payload["dm_entry_confirmed"])
+            self.assertTrue(dm_payload["dm_entry_confirmed"])
+            self.assertEqual(dm_payload["dm_submitted_text"], "authorized dm")
+
     def test_live_action_executor_preflight_sidecar_does_not_claim_comment_submission(self):
         class ScreenshotDriver:
             current_url = "https://www.tiktok.com/@creator/video/123"
@@ -7418,6 +7497,41 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(payload["preflight_only"])
             self.assertEqual(payload["submitted_text"], "")
             self.assertFalse(payload["comment_visible_confirmed"])
+
+    def test_live_action_executor_preflight_sidecar_does_not_claim_follow_or_dm_submission(self):
+        class ScreenshotDriver:
+            current_url = "https://www.tiktok.com/@buyer_one"
+            title = "TikTok test page"
+
+            def save_screenshot(self, path):
+                Path(path).write_bytes(b"png")
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = TikTokSeleniumActionExecutor(
+                TikTokActionExecutorConfig(evidence_dir=tmp, preflight_only=True)
+            )
+            follow_path = executor._capture_evidence(
+                ScreenshotDriver(),
+                {"id": "follow-1", "action_type": "follow_review", "target_url": "https://www.tiktok.com/@buyer_one"},
+                "profile-1",
+                "",
+            )
+            dm_path = executor._capture_evidence(
+                ScreenshotDriver(),
+                {"id": "dm-1", "action_type": "dm_review", "target_url": "https://www.tiktok.com/@buyer_one"},
+                "profile-1",
+                "",
+                expected_text="authorized dm",
+            )
+
+            follow_payload = json.loads(Path(f"{follow_path}.json").read_text(encoding="utf-8"))
+            dm_payload = json.loads(Path(f"{dm_path}.json").read_text(encoding="utf-8"))
+            self.assertTrue(follow_payload["preflight_only"])
+            self.assertFalse(follow_payload["follow_state_confirmed"])
+            self.assertTrue(dm_payload["preflight_only"])
+            self.assertFalse(dm_payload["dm_entry_confirmed"])
+            self.assertEqual(dm_payload["dm_submitted_text"], "")
 
     def test_live_action_executor_normalizes_rate_limit_by_action_type(self):
         class RateLimitedDriver:
@@ -8921,6 +9035,129 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(result["selected_actions"], 1)
             self.assertEqual(result["success"], 1)
             self.assertEqual(result["errors"], {})
+
+    def test_live_submit_accepts_confirmed_follow_and_dm_local_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            status_path = service.paths.activation_status_path
+            os.makedirs(os.path.dirname(status_path), exist_ok=True)
+            with open(status_path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "active": True,
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "follow_review": True, "dm_review": True},
+                    },
+                    fh,
+                )
+            plan = service.create_campaign_plan("https://www.tiktok.com/@beauty_creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+            )
+            dm_action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "dm_review")
+            service.storage.update_action_status(dm_action["id"], "approved", "authorized dm review")
+
+            class ConfirmedExecutor:
+                def execute(self, action, _profile, rendered_text: str, dry_run: bool = True):
+                    action_type = str(action.get("action_type") or "")
+                    path = Path(tmp) / f"{action_type}-confirmed.png"
+                    path.write_bytes(b"png")
+                    sidecar = {
+                        "screenshot_sha256": hashlib.sha256(b"png").hexdigest(),
+                        "action_type": action_type,
+                    }
+                    if action_type == "follow_review":
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
+                    Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
+                    return {"status": "success", "error_code": "", "error_message": "", "evidence_path": str(path)}
+
+            result = GrowthWorkflowService(service).run_action_router(
+                [{"profile_id": "exec-1", "group_name": "US"}],
+                config=ActionRouterConfig(
+                    max_workers=1,
+                    per_profile_action_limit=10,
+                    action_types=["follow_review", "dm_review"],
+                    dry_run=False,
+                    live_preflight_only=False,
+                    allow_live_submit=True,
+                    require_execution_evidence=True,
+                    auto_approve=True,
+                    auto_confirm=True,
+                ),
+                platform_executor=ConfirmedExecutor(),
+                export_report=False,
+            )
+
+            self.assertEqual(result["selected_actions"], 2)
+            self.assertEqual(result["success"], 2)
+            self.assertEqual(result["errors"], {})
+
+    def test_live_submit_rejects_unconfirmed_follow_and_dm_local_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            status_path = service.paths.activation_status_path
+            os.makedirs(os.path.dirname(status_path), exist_ok=True)
+            with open(status_path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "active": True,
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "follow_review": True, "dm_review": True},
+                    },
+                    fh,
+                )
+            plan = service.create_campaign_plan("https://www.tiktok.com/@beauty_creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+            )
+            dm_action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "dm_review")
+            service.storage.update_action_status(dm_action["id"], "approved", "authorized dm review")
+
+            class UnconfirmedExecutor:
+                def execute(self, action, _profile, _rendered_text: str, dry_run: bool = True):
+                    action_type = str(action.get("action_type") or "")
+                    path = Path(tmp) / f"{action_type}-unconfirmed.png"
+                    path.write_bytes(b"png")
+                    Path(f"{path}.json").write_text(
+                        json.dumps(
+                            {
+                                "screenshot_sha256": hashlib.sha256(b"png").hexdigest(),
+                                "action_type": action_type,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return {"status": "success", "error_code": "", "error_message": "", "evidence_path": str(path)}
+
+            result = GrowthWorkflowService(service).run_action_router(
+                [{"profile_id": "exec-1", "group_name": "US"}],
+                config=ActionRouterConfig(
+                    max_workers=1,
+                    per_profile_action_limit=10,
+                    action_types=["follow_review", "dm_review"],
+                    dry_run=False,
+                    live_preflight_only=False,
+                    allow_live_submit=True,
+                    require_execution_evidence=True,
+                    auto_approve=True,
+                    auto_confirm=True,
+                ),
+                platform_executor=UnconfirmedExecutor(),
+                export_report=False,
+            )
+
+            self.assertEqual(result["selected_actions"], 2)
+            self.assertEqual(result["failed"], 2)
+            self.assertEqual(result["errors"]["LIVE_SUBMIT_EVIDENCE_MISSING"], 2)
 
     def test_live_submit_rejects_local_comment_evidence_when_text_mismatches(self):
         with tempfile.TemporaryDirectory() as tmp:

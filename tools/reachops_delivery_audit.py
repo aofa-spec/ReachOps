@@ -60,6 +60,11 @@ def write_local_action_evidence(base_dir: str, action_type: str, profile_id: str
     if action_type == "comment_reply":
         sidecar["submitted_text"] = expected_text
         sidecar["comment_visible_confirmed"] = True
+    if action_type == "follow_review":
+        sidecar["follow_state_confirmed"] = True
+    if action_type == "dm_review":
+        sidecar["dm_entry_confirmed"] = True
+        sidecar["dm_submitted_text"] = expected_text
     Path(f"{path}.json").write_text(json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(path)
 
@@ -331,7 +336,7 @@ def run_live_submit_acceptance_fixture() -> dict:
     evidence_paths = {
         "comment_reply": write_local_action_evidence(base_dir, "comment_reply", "10001", "comment-1", args.comment_text),
         "follow_review": write_local_action_evidence(base_dir, "follow_review", "10001", "follow-1"),
-        "dm_review": write_local_action_evidence(base_dir, "dm_review", "10001", "dm-1"),
+        "dm_review": write_local_action_evidence(base_dir, "dm_review", "10001", "dm-1", args.dm_text),
     }
     return run_live_submit_acceptance(
         args,
