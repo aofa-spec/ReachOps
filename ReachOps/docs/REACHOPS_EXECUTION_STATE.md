@@ -14,7 +14,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | Priority | Milestone | Status | Verified evidence | Exit condition |
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `COMPLETE` | PR #10 squash-merged to `main` as `887f7068ad313c7d3cddf971362cdce42c555946`; live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison before merge showed `new_failures=0`, `new_errors=0` | Preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
-| P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | Draft PR #12, branch `codex/p1-immutable-campaign-run-observations`; review pass adds deterministic legacy run handling, run-scoped traceability for observations/actions/executions/events/errors, storage-layer automatic ledger writes from collection tasks/content/candidates/leads, workflow scoring observation traceability, workflow collector traceability, run-scoped campaign artifact exports, derived material signal/audience intent run isolation, and delivery-audit funnel isolation aligned with P0 truthfulness; focused coverage for campaign isolation, run isolation, observation/action/evidence traceability, migration compatibility, workflow-storage ledger writes, workflow-scoring ledger writes, workflow collector trace, export isolation, authoritative run config, derived signal/intent isolation, and idempotency; latest `tests.test_campaign_run_observations` 17/17 passed on 2026-07-19; campaign regression comparison against `main` showed `new_failures=[]`, `new_errors=[]` | Keep PR #12 Draft for review; do not expand into broader lead lifecycle semantics |
+| P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | Draft PR #12, branch `codex/p1-immutable-campaign-run-observations`; review pass adds deterministic legacy run handling, run-scoped traceability for observations/actions/executions/events/errors, storage-layer automatic ledger writes from collection tasks/content/candidates/leads, workflow scoring observation traceability, workflow collector traceability, run-scoped campaign artifact exports, scoped GrowthReporter report/export traceability, derived material signal/audience intent run isolation, and delivery-audit funnel isolation aligned with P0 truthfulness; focused coverage for campaign isolation, run isolation, observation/action/evidence traceability, migration compatibility, workflow-storage ledger writes, workflow-scoring ledger writes, workflow collector trace, export isolation, report/export traceability, authoritative run config, derived signal/intent isolation, and idempotency; latest `tests.test_campaign_run_observations` passed on 2026-07-20; campaign regression comparison against `main` showed `new_failures=[]`, `new_errors=[]` | Keep PR #12 Draft for review; do not expand into broader lead lifecycle semantics |
 | P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
 | P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
@@ -338,9 +338,44 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No real TikTok action was executed.
   - No customer data, credentials, cookies, real targets, or raw evidence were added.
 
+## Latest P1 runtime ledger report/export surfacing
+
+- Date: `2026-07-20`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Surface P1 runtime ledger traceability in existing GrowthReporter reports and exports without creating new architecture, entering Windows packaging, EXE generation, installer generation, ixBrowser execution, or TikTok live-submit.
+- Code evidence:
+  - `ReachOps/intelligence/growth_reporter.py` now accepts optional `campaign_id`, `run_id`, and `batch_id` when building a report.
+  - Reports include `runtime_traceability_schema_version=reachops.runtime_traceability_report.v1`, `runtime_scope`, and `runtime_traceability` from `GrowthStorage.runtime_traceability_summary(...)`.
+  - Scoped reports filter candidates, contents, topic contents, operation actions, operation leads, and outreach executions by the current batch/run rather than exporting a global view.
+  - JSON exports persist the runtime traceability summary; high-value-user CSV and action CSV exports now include `campaign_id`, `run_id`, and `batch_id`; Markdown daily briefs show the runtime scope and traceability counts.
+  - `GrowthTaskRouter.run()` exports the current `campaign_id/run_id/batch_id` report at the end of the lead pipeline.
+  - Storage list helpers preserve default compatibility while adding optional `run_id` filters for report use.
+  - `tools/reachops_delivery_audit.py` now checks the report/export portion of the P1 runtime observation ledger contract.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/growth_reporter.py ReachOps/intelligence/growth_task_router.py tests/test_reachops_runtime_model.py tools/reachops_delivery_audit.py`: passed.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 9 tests.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 233 tests; log `/tmp/reachops-p1-report-surfacing-campaign.log`.
+  - `origin/main` campaign baseline: failed with 230 tests, 14 failures, 1 error; log `/tmp/reachops-main-p1-report-surfacing-campaign.log`.
+  - Baseline comparison artifact `/tmp/reachops-p1-report-surfacing-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p1-report-surfacing-goal-status.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`; missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p1-report-surfacing-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; failed checks are `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p1-report-surfacing-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; blockers include external authorized execution, client delivery gate not started, and Windows final artifacts; output `/tmp/reachops-p1-report-surfacing-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p1-report-surfacing-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p1-report-surfacing-diff-check.log`.
+- Safety:
+  - No old data is assigned a fabricated `run_id`; legacy rows remain unattributed through empty `run_id`.
+  - Tests use synthetic temp SQLite data only; no customer data, screenshots, cookies, TikTok state, secrets, or customer runtime database was committed.
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - LeadDecision lifecycle expansion beyond immutable/versioned traceability remains split out of this P1 slice.
+  - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, Windows Credential Manager validation on Windows, and external authorized live validation.
+
 ## Non-blocking engineering work available
 
-- P1 observation model and migration.
 - LeadDecision versioning and unified scoring contract.
 - Follow/DM evidence validators in no-submit fixtures.
 - Windows Credential Manager abstraction and unit tests.

@@ -1423,6 +1423,67 @@ class GrowthStorage:
                 "growth_errors": [dict(row) for row in conn.execute("SELECT * FROM growth_errors WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()],
             }
 
+    def runtime_traceability_summary(self, campaign_id: str = "", run_id: str = "") -> Dict[str, Any]:
+        campaign = str(campaign_id or "").strip()
+        run = str(run_id or "").strip()
+        with self.connect() as conn:
+            run_filters = []
+            run_args: list[Any] = []
+            if campaign:
+                run_filters.append("campaign_id=?")
+                run_args.append(campaign)
+            if run:
+                run_filters.append("id=?")
+                run_args.append(run)
+            run_where = "WHERE " + " AND ".join(run_filters) if run_filters else ""
+            row = conn.execute(f"SELECT COUNT(*) AS count FROM campaign_runs {run_where}", tuple(run_args)).fetchone()
+            counts: Dict[str, int] = {"campaign_runs": int((row["count"] if row else 0) or 0)}
+            for table in [
+                "source_observations",
+                "content_observations",
+                "comment_observations",
+                "candidate_observations",
+                "material_signals",
+                "audience_intents",
+                "lead_decision_observations",
+                "action_queue",
+                "outreach_executions",
+                "growth_events",
+                "growth_errors",
+            ]:
+                columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+                filters = []
+                args: list[Any] = []
+                if campaign and "campaign_id" in columns:
+                    filters.append("campaign_id=?")
+                    args.append(campaign)
+                if run and "run_id" in columns:
+                    filters.append("run_id=?")
+                    args.append(run)
+                where = "WHERE " + " AND ".join(filters) if filters else ""
+                row = conn.execute(f"SELECT COUNT(*) AS count FROM {table} {where}", tuple(args)).fetchone()
+                counts[table] = int((row["count"] if row else 0) or 0)
+            legacy_empty = {}
+            for table in [
+                "candidate_users",
+                "operation_leads",
+                "action_queue",
+                "outreach_executions",
+                "growth_errors",
+            ]:
+                columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+                if "run_id" in columns:
+                    row = conn.execute(f"SELECT COUNT(*) AS count FROM {table} WHERE COALESCE(run_id, '')=''", ()).fetchone()
+                    legacy_empty[table] = int((row["count"] if row else 0) or 0)
+        return {
+            "campaign_id": campaign,
+            "run_id": run,
+            "counts": counts,
+            "legacy_rows_with_empty_run_id": legacy_empty,
+            "legacy_run_id_fabricated": False,
+            "legacy_handling_strategy": "deterministic_legacy_run_id_for_existing_batch_only",
+        }
+
     def upsert_campaign_strategy_overrides(self, campaign_id: str, overrides: Dict[str, Any], updated_by: str = "") -> Dict[str, Any]:
         campaign_id = str(campaign_id or "").strip()
         if not campaign_id:
@@ -2601,12 +2662,26 @@ class GrowthStorage:
                 )
             return self._row_to_checkpoint(conn.execute("SELECT * FROM checkpoints WHERE id=?", (cp_id,)).fetchone())
 
-    def list_contents(self, creator_id: Optional[str] = None) -> List[DiscoveredContent]:
+    def list_contents(
+        self,
+        creator_id: Optional[str] = None,
+        batch_id: str = "",
+        run_id: str = "",
+    ) -> List[DiscoveredContent]:
         query = "SELECT * FROM discovered_contents"
-        args: Iterable[Any] = ()
+        filters = []
+        args: list[Any] = []
         if creator_id:
-            query += " WHERE creator_id=?"
-            args = (creator_id,)
+            filters.append("creator_id=?")
+            args.append(creator_id)
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(str(batch_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
         query += " ORDER BY collected_at DESC"
         with self.connect() as conn:
             return [self._row_to_content(row) for row in conn.execute(query, tuple(args)).fetchall()]
@@ -2692,20 +2767,30 @@ class GrowthStorage:
                 result.append(item)
             return result
 
-    def list_top_topic_contents(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def list_top_topic_contents(self, limit: int = 20, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if batch_id:
+            filters.append("sc.batch_id=?")
+            args.append(str(batch_id))
+        if run_id:
+            filters.append("sc.run_id=?")
+            args.append(str(run_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT sc.*, sp.title AS product_title, sp.shop_name, sp.price,
                        COALESCE(ms.signal_score, 0) AS signal_score,
                        COALESCE(ms.signal_tags, '[]') AS signal_tags
                 FROM shop_contents sc
                 LEFT JOIN shop_products sp ON sp.product_id = sc.product_id AND sp.source_id = sc.source_id
                 LEFT JOIN material_signals ms ON ms.content_id = sc.id
+                {where}
                 ORDER BY signal_score DESC, sc.views DESC, sc.comments DESC
                 LIMIT ?
                 """,
-                (limit,),
+                tuple(args + [limit]),
             ).fetchall()
             rows = [dict(row) for row in rows]
         for row in rows:

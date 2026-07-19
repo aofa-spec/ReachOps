@@ -525,6 +525,10 @@ def run_web_local_api_architecture_fixture() -> dict:
     repair_policy_engine = (ROOT_DIR / "ReachOps" / "workbench" / "repair_policy_engine.py").read_text(encoding="utf-8")
     risk_gate = (ROOT_DIR / "ReachOps" / "workbench" / "risk_gate.py").read_text(encoding="utf-8")
     ai_console = (ROOT_DIR / "ReachOps" / "ai_console.py").read_text(encoding="utf-8")
+    growth_storage = (ROOT_DIR / "ReachOps" / "intelligence" / "storage.py").read_text(encoding="utf-8")
+    growth_reporter = (ROOT_DIR / "ReachOps" / "intelligence" / "growth_reporter.py").read_text(encoding="utf-8")
+    growth_task_router = (ROOT_DIR / "ReachOps" / "intelligence" / "growth_task_router.py").read_text(encoding="utf-8")
+    operation_lead_manager = (ROOT_DIR / "ReachOps" / "intelligence" / "operation_lead_manager.py").read_text(encoding="utf-8")
     evidence_bundle = (ROOT_DIR / "ReachOps" / "evidence_bundle.py").read_text(encoding="utf-8")
     workflow_service = (ROOT_DIR / "ReachOps" / "workbench" / "workflow_service.py").read_text(encoding="utf-8")
     offline_learning = (ROOT_DIR / "ReachOps" / "workbench" / "offline_learning_ledger.py").read_text(encoding="utf-8")
@@ -557,6 +561,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_start_preview_exposes_autonomous_preflight_forecast": "attach_autonomous_preflight_forecast" in web_ui and "build_autonomous_preflight_forecast" in web_ui and "autonomous_preflight_forecast" in web_ui and "reachops.autonomous_preflight_forecast.v1" in execution_plan and "predicted_state_sequence" in execution_plan and "repair_routes" in execution_plan and "risk_gates" in execution_plan and "runtime_invariants" in execution_plan,
         "web_ui_renders_autonomous_preflight_forecast": "previewAutonomy" in web_ui and "previewAutonomyList" in web_ui and "状态链：" in web_ui and "自修复：" in web_ui and "证据要求：" in web_ui and "运行约束：0 token" in web_ui,
         "web_api_requires_live_comment_activation": "live_comment_activation_status" in web_ui and "LiveSubmitAuthorizationGate" in web_ui and "LIVE_SUBMIT_NOT_AUTHORIZED" in web_ui,
+        "p1_runtime_observation_ledger_contract": "CREATE TABLE IF NOT EXISTS campaign_runs" in growth_storage and "CREATE TABLE IF NOT EXISTS candidate_observations" in growth_storage and "CREATE TABLE IF NOT EXISTS lead_decision_observations" in growth_storage and "legacy_run_id_for_batch" in growth_storage and "runtime_traceability_summary" in growth_storage and "legacy_run_id_fabricated\": False" in growth_storage and "record_candidate_observation" in growth_storage and "record_lead_decision" in growth_storage and "create_collection_batch" in growth_task_router and "active_run_id" in growth_task_router and "build_report(campaign_id=campaign_id, run_id=active_run_id, batch_id=batch_id)" in growth_task_router and "record_candidate_observation" in operation_lead_manager and "record_lead_decision" in operation_lead_manager and "reachops.runtime_traceability_report.v1" in growth_reporter and "_resolve_runtime_scope" in growth_reporter and "runtime_traceability" in growth_reporter and "legacy_rows_preserved" in growth_reporter and "\"run_id\"" in growth_reporter and "\"campaign_id\"" in growth_reporter and "start_contract_current_evidence_complete" in (ROOT_DIR / "tools" / "reachops_goal_delivery_runner.py").read_text(encoding="utf-8"),
         "web_api_reports_already_running_pid": "already_running" in web_ui and "\"pid\": RUN_PROCESS.pid" in web_ui,
         "web_api_closes_parent_stdout_handle": "finally:" in web_ui and "out.close()" in web_ui and "RUN_PROCESS = process" in web_ui,
         "web_api_passes_runtime_dir_to_headless": "\"--base-dir\"" in web_ui and "str(DATA_DIR)" in web_ui,

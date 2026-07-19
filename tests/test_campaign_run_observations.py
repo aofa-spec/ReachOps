@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from ReachOps.intelligence.candidate_user_scorer import CandidateUserScorer
 from ReachOps.intelligence import GrowthIntelligenceService, GrowthTaskConfig
+from ReachOps.intelligence.growth_reporter import GrowthReporter
 from ReachOps.intelligence.schemas import ActionQueueItem, CandidateUser, DiscoveredContent
 from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
@@ -336,6 +337,113 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(first_trace["lead_decision_observations"][0]["batch_id"], first.id)
         self.assertEqual(second_trace["lead_decision_observations"][0]["batch_id"], second.id)
         self.assertEqual(first_trace["outreach_executions"][0]["evidence_path"], "/tmp/reachops/redacted/evidence.png")
+
+    def test_growth_report_exports_runtime_traceability_by_run(self):
+        first_campaign = self.storage.create_campaign("keyword", "shopify app")
+        second_campaign = self.storage.create_campaign("keyword", "fitness app")
+        first = self.storage.create_collection_batch(1, profile_group="US", campaign_id=first_campaign.id)
+        second = self.storage.create_collection_batch(1, profile_group="CA", campaign_id=second_campaign.id)
+
+        def add_candidate(batch, campaign_id: str, username: str, video_id: str, score: int):
+            self.storage.set_active_collection_batch(batch.id)
+            content, _ = self.storage.upsert_content(
+                DiscoveredContent(
+                    id=f"dc_{video_id}",
+                    creator_id=f"creator_{video_id}",
+                    video_id=video_id,
+                    video_url=f"https://www.tiktok.com/@creator/video/{video_id}",
+                    caption="Demo",
+                    views=10000,
+                    comments=100,
+                    source_path=f"https://www.tiktok.com/@creator/video/{video_id}",
+                )
+            )
+            candidate, _ = self.storage.upsert_candidate(
+                CandidateUser(
+                    id=f"cu_{username}",
+                    content_id=content.id,
+                    username=username,
+                    profile_url=f"https://www.tiktok.com/@{username}",
+                    comment_text="where can I buy this",
+                    qualify_score=score,
+                    intent_tags=["intent:purchase_need"],
+                    source_path=content.source_path,
+                )
+            )
+            comment_observation_id = self.storage.record_comment_observation(
+                batch.run_id,
+                content_id=content.id,
+                candidate_user_id=candidate.id,
+                username=username,
+                comment_text="where can I buy this",
+                observation_key="comment_seen",
+            )
+            self.storage.record_candidate_observation(
+                batch.run_id,
+                candidate_user_id=candidate.id,
+                username=username,
+                score=score,
+                intent_tags=["purchase_need"],
+                observation_key="scored",
+                comment_observation_id=comment_observation_id,
+            )
+            self.storage.record_lead_decision(
+                batch.run_id,
+                candidate_user_id=candidate.id,
+                decision_type="high_intent",
+                score=score,
+                reason="need signal",
+            )
+            lead_id, _ = self.storage.upsert_operation_lead(candidate.id, "purchase_need", "high", score, "need signal")
+            self.storage.upsert_action_queue_item(
+                ActionQueueItem(
+                    id=f"aq_{username}",
+                    lead_id=lead_id,
+                    action_type="comment_reply",
+                    target_username=username,
+                    target_url=content.video_url,
+                )
+            )
+            self.assertEqual(self.storage.run_id_for_batch(batch.id), batch.run_id)
+            self.assertEqual(self.storage.get_campaign_run(run_id=batch.run_id)["campaign_id"], campaign_id)
+
+        add_candidate(first, first_campaign.id, "redacted_a", "video_a", 88)
+        add_candidate(second, second_campaign.id, "redacted_b", "video_b", 92)
+
+        with tempfile.TemporaryDirectory() as report_dir:
+            reporter = GrowthReporter(self.storage, report_dir)
+            report = reporter.build_report(campaign_id=first_campaign.id, run_id=first.run_id, batch_id=first.id)
+            json_path, csv_path, markdown_path = reporter.export(report)
+            action_csv_path = next(Path(report_dir).glob("*_action_queue.csv"))
+
+            self.assertEqual(report.summary["runtime_scope"]["campaign_id"], first_campaign.id)
+            self.assertEqual(report.summary["runtime_scope"]["run_id"], first.run_id)
+            self.assertEqual(report.summary["candidate_user_count"], 1)
+            self.assertEqual(report.summary["operation_lead_count"], 1)
+            self.assertEqual(report.summary["action_queue_count"], 1)
+            traceability = report.summary["runtime_traceability"]
+            self.assertEqual(traceability["counts"]["campaign_runs"], 1)
+            self.assertEqual(traceability["counts"]["comment_observations"], 1)
+            self.assertEqual(traceability["counts"]["candidate_observations"], 1)
+            self.assertEqual(traceability["counts"]["lead_decision_observations"], 2)
+            self.assertFalse(traceability["legacy_run_id_fabricated"])
+            self.assertEqual([row["username"] for row in report.high_value_users], ["redacted_a"])
+            self.assertEqual([row["target_username"] for row in report.operation_actions], ["redacted_a"])
+
+            with open(json_path, "r", encoding="utf-8") as fh:
+                exported_json = json.load(fh)
+            self.assertEqual(exported_json["summary"]["runtime_scope"]["run_id"], first.run_id)
+            self.assertEqual(exported_json["summary"]["runtime_traceability"]["counts"]["candidate_observations"], 1)
+            markdown = Path(markdown_path).read_text(encoding="utf-8")
+            self.assertIn(f"campaign={first_campaign.id}", markdown)
+            self.assertIn("observations=1", markdown)
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
+                high_value_rows = list(csv.DictReader(fh))
+            with open(action_csv_path, "r", encoding="utf-8-sig", newline="") as fh:
+                action_rows = list(csv.DictReader(fh))
+            self.assertEqual(high_value_rows[0]["run_id"], first.run_id)
+            self.assertEqual(action_rows[0]["run_id"], first.run_id)
+            self.assertNotIn("redacted_b", json.dumps(exported_json, ensure_ascii=False))
 
     def test_run_scoped_material_signals_and_audience_intents_do_not_overwrite(self):
         campaign = self.storage.create_campaign("keyword", "serum")
