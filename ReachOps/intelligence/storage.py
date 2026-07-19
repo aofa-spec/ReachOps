@@ -813,7 +813,8 @@ class GrowthStorage:
                     updated_at,
                 ),
             )
-            conn.execute("UPDATE collection_batches SET run_id=? WHERE id=? AND COALESCE(run_id, '')=''", (run_id, batch_id))
+            if not is_legacy_backfill:
+                conn.execute("UPDATE collection_batches SET run_id=? WHERE id=? AND COALESCE(run_id, '')=''", (run_id, batch_id))
 
     def _seed_default_action_templates(self, conn):
         now = utc_now_iso()

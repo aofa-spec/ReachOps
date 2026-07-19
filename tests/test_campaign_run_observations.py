@@ -1184,12 +1184,16 @@ class CampaignRunObservationTests(unittest.TestCase):
         with sqlite3.connect(old_db) as conn:
             conn.row_factory = sqlite3.Row
             legacy_rows = {
+                "collection_batches": conn.execute("SELECT run_id FROM collection_batches WHERE id='gb_legacy1'").fetchone(),
                 "operation_leads": conn.execute("SELECT batch_id, run_id FROM operation_leads WHERE id='lead_legacy1'").fetchone(),
                 "action_queue": conn.execute("SELECT batch_id, run_id FROM action_queue WHERE id='action_legacy1'").fetchone(),
                 "outreach_executions": conn.execute("SELECT batch_id, run_id, evidence_path FROM outreach_executions WHERE id='exec_legacy1'").fetchone(),
                 "growth_errors": conn.execute("SELECT batch_id, run_id FROM growth_errors WHERE id='err_legacy1'").fetchone(),
             }
-        for row in legacy_rows.values():
+        self.assertEqual(legacy_rows["collection_batches"]["run_id"], "")
+        for key, row in legacy_rows.items():
+            if key == "collection_batches":
+                continue
             self.assertEqual(row["batch_id"], "gb_legacy1")
             self.assertEqual(row["run_id"], "")
         self.assertEqual(legacy_rows["outreach_executions"]["evidence_path"], "/tmp/reachops/legacy/evidence.png")
