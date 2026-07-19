@@ -2189,7 +2189,17 @@ class GrowthStorage:
                     item.updated_at,
                 ),
             )
-        self.log_event("collection_batch_created", item.id, {"total_sources": item.total_sources, "profile_group": item.profile_group})
+            conn.execute(
+                "INSERT INTO growth_events (id, event, entity_id, run_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    new_id("evt"),
+                    "collection_batch_created",
+                    item.id,
+                    run_id,
+                    json.dumps({"total_sources": item.total_sources, "profile_group": item.profile_group}, ensure_ascii=False),
+                    now,
+                ),
+            )
         return item
 
     def update_collection_batch(self, batch_id: str, status: str, processed_delta: int = 0, failed_delta: int = 0):

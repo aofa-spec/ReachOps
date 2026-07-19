@@ -75,6 +75,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - Added `run_id` compatibility columns to collection tasks, discovered creators/content, shop content, candidates, leads, actions, outreach executions, events, and errors.
   - Added storage APIs to record run-scoped observations and append lead decisions without mutating prior decisions.
   - Existing workflow storage writes now automatically populate the run ledger when an active collection batch is set: `create_collection_task(...)` records `source_observations`, `upsert_content(...)` records `content_observations`, `upsert_candidate(...)` records `comment_observations` and `candidate_observations`, and `upsert_operation_lead(...)` appends changed versioned `lead_decisions`.
+  - `create_collection_batch(...)` now records the `collection_batch_created` growth event directly with the newly-created `run_id`, so the run trace includes the batch creation event before any active-batch context exists.
   - `comment_observations` now preserve distinct same-user comments in the same content/run by including `comment_text` in the idempotency key, while duplicate identical comments remain idempotent.
   - Added optional `run_id` filters for candidates, leads, actions, outreach executions, and execution counts.
   - Legacy migration now uses deterministic `legacy_run_<batch_id>` identifiers plus `legacy_backfill` metadata instead of random `run_*` IDs, and does not rewrite old candidate, lead, action, outreach execution, evidence-path, or error rows to claim a real run.
@@ -87,7 +88,9 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - LeadDecision remains scoped to immutable versioned decisions in this PR; broader lead lifecycle semantics remain outside this storage-contract PR.
 - Tests and checks:
   - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/candidate_user_scorer.py tests/test_campaign_run_observations.py`: passed, exit `0`.
+  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py ReachOps/intelligence/candidate_user_scorer.py ReachOps/intelligence/schemas.py ReachOps/workbench/workflow_service.py tests/test_campaign_run_observations.py`: passed, exit `0`; log `/tmp/reachops-pr12-event-trace-pycompile.log`.
   - `/usr/bin/python3 -m unittest -v tests.test_campaign_run_observations`: passed, 9 tests, exit `0`.
+  - `/usr/bin/python3 -m unittest -v tests.test_campaign_run_observations`: passed, 9 tests, exit `0`; log `/tmp/reachops-pr12-event-trace-focused.log`.
   - `/usr/bin/python3 -m py_compile ReachOps/workbench/workflow_service.py ReachOps/intelligence/storage.py ReachOps/intelligence/schemas.py tests/test_campaign_run_observations.py`: passed, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_campaign_run_observations`: passed, 8 tests, exit `0`.
   - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_campaign_report_exports_current_customers_and_actions tests.test_reachops_campaign.ReachOpsCampaignTests.test_campaign_report_export_paths_do_not_overwrite_same_second_runs`: passed, 2 tests, exit `0`.
@@ -102,6 +105,16 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - Baseline comparison artifact: `/tmp/reachops-pr12-run-scoped-unique-baseline-comparison.json`; `new_failures=[]`, `new_errors=[]`.
   - Baseline comparison artifact: `/tmp/reachops-pr12-run-export-baseline-comparison.json`.
   - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-pr12-scoring-trace-truth.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-pr12-event-trace-truth.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-pr12-event-trace-campaign.log`.
+  - Baseline comparison artifact: `/tmp/reachops-pr12-event-trace-baseline-comparison.json`; `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-pr12-event-trace-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; output `/tmp/reachops-pr12-event-trace-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr12-event-trace-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`, summary `stages_passed=2`, `stages_pending_external_validation=2`, `stages_failed=1`, `final_passed=27`, `final_pending_external_validation=3`, `final_failed=3`; output `/tmp/reachops-pr12-event-trace-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr12-event-trace-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr12-event-trace-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`, `forbidden_count=0`; output `/tmp/reachops-pr12-event-trace-cleanliness.json`.
   - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-pr12-run-export-operator-pressure.json`.
   - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-pr12-run-scoped-unique-operator-pressure.json`.
   - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-pr12-scoring-trace-operator-pressure.json`.
@@ -126,6 +139,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `git diff --check`: passed, exit `0`.
   - `git diff --check`: passed, exit `0`; log `/tmp/reachops-pr12-run-scoped-unique-diff-check.log`.
   - `git diff --check`: passed, exit `0`; log `/tmp/reachops-pr12-scoring-trace-diff-check.log`.
+  - `git diff --check`: passed, exit `0`; log `/tmp/reachops-pr12-event-trace-diff-check.log`.
 - Safety:
   - No real TikTok action was executed.
   - No customer data, credentials, cookies, real targets, or raw evidence were added.

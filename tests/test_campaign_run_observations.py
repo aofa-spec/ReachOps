@@ -33,6 +33,10 @@ class CampaignRunObservationTests(unittest.TestCase):
         self.assertEqual(self.storage.run_id_for_batch(first.id), first.run_id)
         self.assertEqual(self.storage.run_id_for_batch(second.id), second.run_id)
         self.assertEqual(self.storage.count_table("campaign_runs"), 2)
+        first_trace = self.storage.list_observations_for_run(first.run_id)
+        self.assertEqual(first_trace["growth_events"][0]["event"], "collection_batch_created")
+        self.assertEqual(first_trace["growth_events"][0]["entity_id"], first.id)
+        self.assertEqual(first_trace["growth_events"][0]["run_id"], first.run_id)
 
         reopened = GrowthStorage(str(self.db_path))
         self.assertEqual(reopened.count_table("campaign_runs"), 2)
