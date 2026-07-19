@@ -20,7 +20,8 @@ class CandidateUserScorer:
         custom_intent_keywords = self._normalize_keywords(getattr(config, "intent_keywords", []) if config else [])
         exclude_keywords = self._normalize_keywords(getattr(config, "exclude_keywords", []) if config else [])
         persisted_repeat_counts = self.storage.refresh_candidate_repeat_counts()
-        rows = self.storage.list_candidates_with_content()
+        active_batch_id = str(getattr(config, "active_batch_id", "") or "") if config else ""
+        rows = self.storage.list_candidates_with_content(batch_id=active_batch_id)
         repeat_counts = Counter(str(row.get("username") or "").lower() for row in rows)
         updated = 0
         for row in rows:

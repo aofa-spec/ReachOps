@@ -142,6 +142,7 @@ class DiscoveredCreator:
     source_path: str = ""
     raw_meta: Dict[str, Any] = field(default_factory=dict)
     batch_id: str = ""
+    run_id: str = ""
     status: str = "active"
     last_checked_at: Optional[str] = None
     created_at: str = field(default_factory=utc_now_iso)
@@ -165,6 +166,7 @@ class DiscoveredContent:
     source_path: str = ""
     raw_meta: Dict[str, Any] = field(default_factory=dict)
     batch_id: str = ""
+    run_id: str = ""
     published_at: Optional[str] = None
     collected_at: str = field(default_factory=utc_now_iso)
 
@@ -187,6 +189,7 @@ class CandidateUser:
     repeat_seen_count: int = 1
     raw_meta: Dict[str, Any] = field(default_factory=dict)
     batch_id: str = ""
+    run_id: str = ""
     status: str = "new"
     created_at: str = field(default_factory=utc_now_iso)
 
@@ -262,6 +265,7 @@ class OperationLead:
     lifecycle_stage: str = "new"
     source_path: str = ""
     batch_id: str = ""
+    run_id: str = ""
     status: str = "new"
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
@@ -348,6 +352,7 @@ class CollectionBatch:
     failed_sources: int = 0
     profile_group: str = ""
     config_json: str = "{}"
+    run_id: str = ""
     started_at: str = field(default_factory=utc_now_iso)
     completed_at: Optional[str] = None
     created_at: str = field(default_factory=utc_now_iso)
@@ -361,6 +366,7 @@ class CollectionTask:
     source_id: str
     source_type: str
     source_value: str
+    run_id: str = ""
     profile_id: str = ""
     status: str = "pending"
     error_code: str = ""
@@ -507,6 +513,7 @@ class GrowthReport:
     operation_actions: List[Dict[str, Any]]
     errors: Dict[str, int]
     recommendations: List[str]
+    lead_decision_observations: List[Dict[str, Any]] = field(default_factory=list)
     content_insights: List[Dict[str, Any]] = field(default_factory=list)
     comment_intents: List[Dict[str, Any]] = field(default_factory=list)
     comment_languages: List[Dict[str, Any]] = field(default_factory=list)
