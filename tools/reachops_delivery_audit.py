@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -885,6 +886,7 @@ def run_authorization_gate_matrix_fixture() -> dict:
             "allowed": decision.allowed,
             "error_code": decision.error_code,
             "error_message": decision.error_message,
+            "license_state": (decision.evidence or {}).get("license_state") or {},
         }
 
     active_payload = {
@@ -897,6 +899,8 @@ def run_authorization_gate_matrix_fixture() -> dict:
     allowed = decide(active_payload)
     device_mismatch = decide({**active_payload, "device_id": "another-device"})
     expired = decide({**active_payload, "expires_at": "2000-01-01T00:00:00Z"})
+    revoked = decide({**active_payload, "revoked": True, "subscription_status": "revoked"})
+    grace = decide({**active_payload, "subscription_status": "past_due", "last_verified_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")})
     disabled_action = decide(
         {
             **active_payload,
@@ -908,6 +912,8 @@ def run_authorization_gate_matrix_fixture() -> dict:
         "allowed": allowed,
         "device_mismatch": device_mismatch,
         "expired": expired,
+        "revoked": revoked,
+        "grace": grace,
         "disabled_action": disabled_action,
     }
 
@@ -2078,6 +2084,10 @@ def run_audit(args) -> dict:
                 and (authorization_gate_matrix.get("device_mismatch") or {}).get("error_code") == "LIVE_SUBMIT_DEVICE_MISMATCH"
                 and not (authorization_gate_matrix.get("expired") or {}).get("allowed")
                 and (authorization_gate_matrix.get("expired") or {}).get("error_code") == "LIVE_SUBMIT_LICENSE_EXPIRED"
+                and not (authorization_gate_matrix.get("revoked") or {}).get("allowed")
+                and (authorization_gate_matrix.get("revoked") or {}).get("error_code") == "LIVE_SUBMIT_LICENSE_REVOKED"
+                and not (authorization_gate_matrix.get("grace") or {}).get("allowed")
+                and ((authorization_gate_matrix.get("grace") or {}).get("license_state") or {}).get("state") == "grace"
                 and not (authorization_gate_matrix.get("disabled_action") or {}).get("allowed")
                 and (authorization_gate_matrix.get("disabled_action") or {}).get("error_code") == "LIVE_SUBMIT_NOT_AUTHORIZED"
             ),

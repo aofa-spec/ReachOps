@@ -10,6 +10,7 @@ import zipfile
 from collections import Counter
 from contextlib import redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -36,6 +37,7 @@ from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp, g
 from ReachOps.workbench.tiktok_action_executor import TikTokActionExecutorConfig, TikTokSeleniumActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from ReachOps.workbench.risk_gate import RiskGate
+from ReachOps.workbench.license_state import evaluate_license_state
 from tools.reachops_action_preflight_existing_batch import run_preflight as run_reachops_action_preflight_existing_batch
 from ReachOps.collectors.normalizer import is_comment_noise_text
 from ReachOps.collectors.collector_runtime import CollectorRuntime
@@ -3661,6 +3663,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     {
                         "active": True,
                         "expires_at": "2999-01-01T00:00:00Z",
+                        "subscription_status": "current",
                         "license_tier": "enterprise",
                         "capabilities": {"live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},
                     }
@@ -3677,8 +3680,82 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["current_device_id"])
             checks = {item["name"]: item for item in result["checks"]}
             self.assertTrue(checks["activation_active"]["passed"])
+            self.assertTrue(checks["license_state_live_submit_ready"]["passed"])
+            self.assertEqual(result["license_state"]["schema_version"], "reachops.license_state.v1")
+            self.assertEqual(result["license_state"]["state"], "active_current")
             self.assertTrue(checks["device_binding_matches"]["passed"])
             self.assertTrue(checks["authorization_allows_live_actions"]["passed"])
+
+    def test_reachops_license_state_grace_does_not_authorize_live_submit(self):
+        state = evaluate_license_state(
+            {
+                "active": True,
+                "subscription_status": "past_due",
+                "last_verified_at": "2026-07-15T00:00:00Z",
+                "expires_at": "2999-01-01T00:00:00Z",
+            },
+            now=datetime(2026, 7, 19, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(state["schema_version"], "reachops.license_state.v1")
+        self.assertEqual(state["state"], "grace")
+        self.assertTrue(state["license_ready"])
+        self.assertTrue(state["grace_active"])
+        self.assertFalse(state["live_submit_ready"])
+        self.assertFalse(state["customer_data_uploaded"])
+        self.assertTrue(state["no_browser_started"])
+        self.assertTrue(state["no_submit"])
+
+    def test_reachops_activation_status_check_reports_grace_as_not_live_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            activation_path = Path(tmp) / "reachops_activation_status.json"
+            activation_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "subscription_status": "past_due",
+                        "last_verified_at": "2026-07-15T00:00:00Z",
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = check_reachops_activation_status(activation_path)
+
+            self.assertFalse(result["ready"])
+            checks = {item["name"]: item for item in result["checks"]}
+            self.assertFalse(checks["license_state_live_submit_ready"]["passed"])
+            self.assertEqual(result["license_state"]["state"], "grace")
+            decisions = checks["authorization_allows_live_actions"]["evidence"]["decisions"]
+            self.assertTrue(all(item["error_code"] == "LIVE_SUBMIT_NOT_AUTHORIZED" for item in decisions))
+
+    def test_reachops_activation_status_check_blocks_revoked_license(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            activation_path = Path(tmp) / "reachops_activation_status.json"
+            activation_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "revoked": True,
+                        "subscription_status": "revoked",
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = check_reachops_activation_status(activation_path)
+
+            self.assertFalse(result["ready"])
+            self.assertEqual(result["license_state"]["state"], "revoked")
+            checks = {item["name"]: item for item in result["checks"]}
+            decisions = checks["authorization_allows_live_actions"]["evidence"]["decisions"]
+            self.assertTrue(all(item["error_code"] == "LIVE_SUBMIT_LICENSE_REVOKED" for item in decisions))
 
     def test_reachops_activation_status_check_blocks_device_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
