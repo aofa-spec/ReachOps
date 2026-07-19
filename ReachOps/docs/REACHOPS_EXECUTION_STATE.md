@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-17`
+- Last manually reconciled: `2026-07-19`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -16,25 +16,24 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
 | P1 | Immutable Campaign Run / Observation model | `READY` | Architecture audit identified campaign/batch attribution overwrite risk | Idempotent migrations; run-scoped observations; historical decisions immutable; tests pass |
 | P2 | Windows local security, licensing, backup, device seats | `PLANNED` | Product contract locked | Windows Credential Manager, minimal license client, 7-day grace, encrypted backup/restore, tests |
-| P3 | Public comment-reply monitoring and lead lifecycle | `PLANNED` | Product contract locked | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture |
+| P3 | Public comment-reply monitoring and lead lifecycle | `IN_REVIEW` | Branch `codex/p3-lead-lifecycle-truthfulness`; storage lifecycle now requires a verified live outreach execution before a lead can become `contacted`; preflight completion and unverified live submission are covered by `tests.test_truthful_execution_semantics` | Automatic public reply detection; action linkage; qualified-lead state; manual conversion/revenue capture; only evidence-verified live success may contact a lead |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `PLANNED` | Existing packaging/runbook exists but final external acceptance is incomplete | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
 
 ## Next autonomous action
 
-1. Review PR #10 evidence-truthfulness correction and merge only after accepting the known non-P0 baseline failures separately.
-2. Do not expand PR #10 with P1.
-3. After P0 merges, start P1 on a separate branch/PR:
-   - add `campaign_runs`
-   - add `source_observations`
-   - add `content_observations`
-   - add `comment_observations`
-   - add `candidate_observations`
-   - add versioned `lead_decisions`
-   - keep existing global entities for compatibility
-   - scope scoring and lead creation to run/batch observations
-   - add idempotent migration and rollback evidence
-   - add cross-campaign isolation tests
+1. Review `codex/p3-lead-lifecycle-truthfulness` as a narrow truthfulness hardening PR; do not expand it into Windows, installer, TikTok live-submit, or full reply monitoring.
+2. Continue P1 immutable campaign-run observation review as a separate PR:
+   - preserve `campaign_runs`
+   - preserve run-scoped source/content/comment/candidate observations
+   - preserve legacy handling without fake `run_id`
+   - keep LeadDecision versioning separate if it expands beyond the P1 runtime data model
+   - keep cross-campaign/run isolation and traceability tests
+3. After P1/P3 truth foundations are accepted, continue the highest-priority non-blocked final-delivery items:
+   - Windows Credential Manager abstraction and tests
+   - encrypted local backup/restore
+   - Windows package and update manifest verification
+   - authorized Windows + ixBrowser + TikTok acceptance handoff
 
 ## Known external blockers
 
@@ -69,6 +68,33 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Safety:
   - No real TikTok action was executed.
   - Fixture live execution remains blocked by default and is only enabled in explicit test fixture paths through `REACHOPS_ALLOW_TEST_FIXTURE_LIVE=1`.
+
+## Latest P3 lead lifecycle truthfulness snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p3-lead-lifecycle-truthfulness`
+- Scope: storage-layer lead lifecycle hardening only.
+- Code evidence:
+  - `_refresh_lead_lifecycle(...)` no longer treats action `completed` or `success` as sufficient to mark a lead `contacted`.
+  - A lead can become `contacted` only when a linked outreach execution has `execution_mode='live'`, `status='success'`, `submission_state='verified_success'`, `verification_state='verified'`, and `evidence_verified=1`.
+  - Added truthfulness regression coverage proving preflight completion and unverified live submission do not contact the lead, while verified live success does.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py tests/test_truthful_execution_semantics.py`: passed; log `/tmp/reachops-lead-lifecycle-truth-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 8 tests; log `/tmp/reachops-lead-lifecycle-truth-truth.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: ran 230 tests, failed with 14 failures and 1 error matching `origin/main`; log `/tmp/reachops-lead-lifecycle-truth-campaign.log`.
+  - Baseline comparison artifact `/tmp/reachops-lead-lifecycle-truth-baseline-comparison.json`: `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-lead-lifecycle-truth-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, `status=failed`, summary `passed=46`, `pending_external_validation=3`, `failed=5`; failures remain final-delivery/UI/funnel baseline blockers outside this storage hardening slice.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-lead-lifecycle-truth-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed as final delivery is not ready; output `/tmp/reachops-lead-lifecycle-truth-goal-status-report.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed because final Windows artifacts are missing; output `/tmp/reachops-lead-lifecycle-truth-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed because final delivery gates are not ready; output `/tmp/reachops-lead-lifecycle-truth-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-lead-lifecycle-truth-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-lead-lifecycle-truth-diff-check.log`.
+- Safety:
+  - No Windows build, EXE, installer, or update manifest work was performed in this PR.
+  - No real TikTok live-submit was attempted.
+  - No customer data, credentials, cookies, browser sessions, local acceptance inputs, or raw platform evidence were added.
 
 ## Non-blocking engineering work available
 
