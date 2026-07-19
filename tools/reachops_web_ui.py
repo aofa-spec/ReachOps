@@ -919,11 +919,15 @@ def live_comment_activation_status() -> dict:
             {"profile_id": "web-live-comment-check", "group_name": "WEB"},
             feature="live_submit",
         )
-        activation_payload = build_activation_payload()
+        activation_payload = build_web_activation_payload()
+        activation_ready = bool(activation_payload.get("ready")) and bool(
+            activation_payload.get("activation_status_exists")
+        )
         return {
-            "allowed": bool(decision.allowed),
-            "error_code": decision.error_code,
-            "error_message": decision.error_message,
+            "allowed": bool(decision.allowed) and activation_ready,
+            "error_code": decision.error_code or ("" if activation_ready else "LIVE_SUBMIT_NOT_AUTHORIZED"),
+            "error_message": decision.error_message
+            or ("" if activation_ready else "真实评论需要本地激活状态文件且 activation ready。"),
             "activation_status_path": str(activation_path),
             "evidence": decision.evidence,
             "next_actions": activation_payload.get("next_actions") or [],
@@ -939,6 +943,26 @@ def live_comment_activation_status() -> dict:
             "next_actions": ["生成或放置真实激活状态文件，并设置 ActivationStatusPath。"],
             "failed_checks": ["activation_status_read_failed"],
         }
+
+
+def build_web_activation_payload() -> dict:
+    payload = dict(build_activation_payload())
+    failed_checks = list(payload.get("failed_checks") or [])
+    next_actions = list(payload.get("next_actions") or [])
+    if not bool(payload.get("activation_status_exists")):
+        if "activation_status_file_exists" not in failed_checks:
+            failed_checks.append("activation_status_file_exists")
+        if not next_actions:
+            next_actions.append("生成或放置真实激活状态文件，并设置 ActivationStatusPath。")
+        payload["status"] = "blocked"
+        payload["ready"] = False
+        payload["development_bypass"] = False
+        payload["web_live_activation_requires_status_file"] = True
+    payload["failed_checks"] = failed_checks
+    payload["next_actions"] = next_actions
+    payload["no_browser_started"] = True
+    payload["no_submit"] = True
+    return payload
 
 
 def build_activation_payload() -> dict:
@@ -2467,7 +2491,7 @@ def html_page() -> bytes:
     .taskForm {{ display:grid; gap:12px; min-width:0; }}
     .taskForm label {{ min-width:0; }}
     .taskParams {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(176px,1fr)); gap:10px; align-items:end; min-width:0; }}
-    .taskActions {{ display:grid; grid-template-columns:minmax(180px,1fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
+    .taskActions {{ display:grid; grid-template-columns:minmax(140px,.9fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
     .secondaryActions {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding-top:2px; }}
     .secondaryActions button {{ height:32px; padding:0 10px; font-size:12px; color:var(--muted); background:#20262b; }}
     label {{ display:grid; gap:6px; color:var(--muted); font-size:12px; }}
@@ -3071,7 +3095,7 @@ def html_page() -> bytes:
           ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；点击后会重新读取分组并自动预检筛选有效账号。`
           : '开始获客';
       if ($('start')) {{
-        $('start').disabled = !groupListReady;
+        $('start').disabled = !groupListReady || blockedByAccountGate;
         $('start').title = startBlockedReason;
       }}
       if ($('accountGateState')) {{
@@ -4013,8 +4037,20 @@ def html_page() -> bytes:
 	    function renderGroupDetails(groups, selectedName='') {{
 	      const box = $('groupDetails');
 	      if (!box) return;
-	      box.classList.remove('hasContent');
-	      box.innerHTML = '';
+	      const rows = (groups || []).map(group => {{
+	        const selected = String(group.name || '').toLowerCase() === String(selectedName || '').toLowerCase();
+	        const countLabel = String(group.count_label || (group.count_known ? `${{Number(group.count || 0)}}账号` : '数量未返回'));
+	        const source = String(group.count_source || group.source || '');
+	        const status = String(group.count_status || (group.count_known ? 'known' : 'unknown'));
+	        return `<div class="groupDetailRow${{selected ? ' selected' : ''}}"><strong>${{esc(groupOptionLabel(group))}}</strong><span>${{esc(status)}}${{source ? ` / ${{esc(source)}}` : ''}}</span></div>`;
+	      }});
+	      if (!rows.length) {{
+	        box.classList.remove('hasContent');
+	        box.innerHTML = '';
+	        return;
+	      }}
+	      box.classList.add('hasContent');
+	      box.innerHTML = rows.join('');
 	    }}
     function leadIntentChips(row) {{
       const labels = [];
@@ -4745,19 +4781,25 @@ def html_page() -> bytes:
 	        );
 	        return;
       }}
-      if (accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed()) {{
-        showApiNotice(
-          '重新预检账号',
-          {{
-            status:'ready_for_account_recheck',
-            message:'当前分组上次账号预检未通过；本次会重新读取 ixBrowser 分组并自动筛选有效登录账号。',
-            account_repair_apply: accountRepairApplyState || {{}},
-            next_actions:['系统会跳过未登录、内核不匹配、代理异常账号。','如果仍无可用账号，本轮会生成新的阻断证据。']
-          }},
-          'warning',
-          12000
-        );
-      }}
+	      if (accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed()) {{
+	        const staleAccountRepair = accountRepairApplyState && accountRepairApplyState.stale === true;
+	        showApiNotice(
+	          staleAccountRepair ? '账号修复后再启动' : '账号池无可执行账号，已禁止重复启动',
+	          {{
+	            status:'blocked_by_accounts',
+	            error:'account_gate_requires_repair_confirmation',
+	            message: staleAccountRepair
+	              ? '旧账号修复结果已失效；请按最新账号修复计划处理当前失败账号后再启动。'
+	              : '当前分组最近一次账号预检没有可用账号；请先隔离坏账号或确认已完成账号修复后再重新预检。',
+	            account_repair_apply: accountRepairApplyState || {{}},
+	            account_repair_summary: accountRepairSummary || {{}},
+	            next_actions:[...accountRepairApplyItems(accountRepairApplyState || {{}}), '先处理账号阻断，再勾选“已修复账号，允许重新预检”。']
+	          }},
+	          'blocked',
+	          12000
+	        );
+	        return;
+	      }}
 	      if ($('liveConfirm').checked && $('mode').value !== 'live_comment') {{
 	        $('mode').value = 'live_comment';
 	        $('currentMode').textContent = $('mode').selectedOptions[0].textContent;
@@ -6655,7 +6697,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(build_acceptance_payload())
             return
         if parsed.path == "/api/activation":
-            self._send_json(build_activation_payload())
+            self._send_json(build_web_activation_payload())
             return
         if parsed.path == "/api/ixbrowser-status":
             self._send_json(build_ixbrowser_status_payload())

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import signal
+import shutil
 import sys
 import tempfile
 import threading
@@ -109,6 +111,15 @@ def _raw_request(url: str) -> tuple[int, bytes, dict[str, str]]:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(url, timeout=5) as response:
         return response.status, response.read(), dict(response.headers.items())
+
+
+@contextlib.contextmanager
+def _temporary_directory_ignore_cleanup_errors(prefix: str):
+    tmpdir = tempfile.mkdtemp(prefix=prefix)
+    try:
+        yield tmpdir
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def seed_snapshot_risk_gate_execution(data_dir: Path) -> dict:
@@ -221,7 +232,7 @@ def run_runtime_smoke() -> dict:
     checks: dict[str, bool] = {}
     diagnostics: dict[str, object] = {}
 
-    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-", ignore_cleanup_errors=True) as tmpdir:
+    with _temporary_directory_ignore_cleanup_errors(prefix="reachops-web-panel-smoke-") as tmpdir:
         try:
             reachops_web_ui.DATA_DIR = Path(tmpdir)
             reachops_web_ui.WEB_SETTINGS_PATH = Path(tmpdir) / "config" / "reachops_web_settings.json"
