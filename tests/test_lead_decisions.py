@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ReachOps.intelligence.schemas import CandidateUser
+from ReachOps.intelligence.schemas import ActionQueueItem, CandidateUser
 from ReachOps.intelligence.storage import GrowthStorage, LEAD_DECISION_SCHEMA_VERSION
 
 
@@ -198,6 +198,77 @@ class LeadDecisionTests(unittest.TestCase):
         self.assertEqual(storage.list_lead_decisions(lead_id=lead_id)[0]["batch_id"], "batch-original")
         self.assertEqual(storage.list_operation_leads(batch_id="batch-original")[0]["id"], lead_id)
         self.assertEqual(storage.list_operation_leads(batch_id="batch-later"), [])
+
+    def test_action_human_review_appends_lead_decision_without_erasing_model_decision(self) -> None:
+        storage = self.temp_storage()
+        storage.set_active_collection_batch("batch-review")
+        candidate = add_candidate(storage, "candidate-review", "content-review")
+        lead_id, _created = storage.upsert_operation_lead(
+            candidate.id,
+            "purchase_question",
+            "high",
+            84,
+            "model decision",
+            decision_context={"confidence": 80, "evidence": "model evidence"},
+        )
+        action_id, _created = storage.upsert_action_queue_item(
+            ActionQueueItem(
+                id="action-review",
+                lead_id=lead_id,
+                action_type="comment_reply",
+                target_username="user-candidate-review",
+                target_url="https://www.tiktok.com/@creator/video/review",
+                suggested_text="Thanks for asking.",
+            )
+        )
+
+        storage.update_action_status(action_id, "approved", "operator approved after reading comment")
+        storage.update_action_status(action_id, "approved", "operator approved after reading comment")
+
+        decisions = storage.list_lead_decisions(lead_id=lead_id)
+        self.assertEqual([row["decision_version"] for row in decisions], [1, 2])
+        self.assertEqual(decisions[0]["decision_type"], "created")
+        self.assertEqual(decisions[0]["human_review_status"], "unreviewed")
+        self.assertEqual(decisions[0]["reason"], "model decision")
+        self.assertEqual(decisions[1]["decision_type"], "human_review")
+        self.assertEqual(decisions[1]["human_review_status"], "approved")
+        self.assertEqual(decisions[1]["decision_source"], "operator_human_review")
+        self.assertEqual(decisions[1]["reason"], "operator approved after reading comment")
+        self.assertEqual(decisions[1]["decision"]["feature_snapshot"]["reviewed_by"], "operator")
+
+    def test_lead_decisions_can_be_filtered_by_campaign_and_run(self) -> None:
+        storage = self.temp_storage()
+        first_campaign = storage.create_campaign("keyword", "serum")
+        second_campaign = storage.create_campaign("keyword", "supplement")
+        first_batch = storage.create_collection_batch(1, campaign_id=first_campaign.id)
+        second_batch = storage.create_collection_batch(1, campaign_id=second_campaign.id)
+
+        storage.set_active_collection_batch(first_batch.id)
+        first_candidate = add_candidate(storage, "candidate-campaign-a", "content-campaign-a")
+        first_lead_id, _created = storage.upsert_operation_lead(
+            first_candidate.id,
+            "purchase_question",
+            "high",
+            88,
+            "first campaign",
+            decision_context={"run_id": "run-a"},
+        )
+
+        storage.set_active_collection_batch(second_batch.id)
+        second_candidate = add_candidate(storage, "candidate-campaign-b", "content-campaign-b")
+        second_lead_id, _created = storage.upsert_operation_lead(
+            second_candidate.id,
+            "purchase_question",
+            "high",
+            89,
+            "second campaign",
+            decision_context={"run_id": "run-b"},
+        )
+
+        self.assertEqual([row["lead_id"] for row in storage.list_lead_decisions(campaign_id=first_campaign.id)], [first_lead_id])
+        self.assertEqual([row["lead_id"] for row in storage.list_lead_decisions(campaign_id=second_campaign.id)], [second_lead_id])
+        self.assertEqual([row["lead_id"] for row in storage.list_lead_decisions(run_id="run-a")], [first_lead_id])
+        self.assertEqual([row["lead_id"] for row in storage.list_lead_decisions(run_id="run-b")], [second_lead_id])
 
     def test_legacy_database_migration_does_not_fabricate_historical_decisions(self) -> None:
         with tempfile.TemporaryDirectory() as td:

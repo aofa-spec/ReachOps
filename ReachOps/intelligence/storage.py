@@ -573,6 +573,8 @@ class GrowthStorage:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_lead_decisions_lead_id ON lead_decisions(lead_id, decision_version)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_lead_decisions_batch_id ON lead_decisions(batch_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_lead_decisions_campaign_id ON lead_decisions(campaign_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_lead_decisions_run_id ON lead_decisions(run_id)")
             self._ensure_columns(
                 conn,
                 "outreach_executions",
@@ -1354,6 +1356,7 @@ class GrowthStorage:
             "candidate_user_id": str(candidate_id or ""),
             "candidate_observation_id": candidate_observation_id,
             "content_id": content_id,
+            "decision_type": str(decision_type or "updated"),
             "intent_type": intent_type,
             "lead_type": str(lead_type or ""),
             "priority": str(priority or "normal"),
@@ -1468,11 +1471,73 @@ class GrowthStorage:
         )
         return item_id, True
 
+    def _record_lead_human_review(
+        self,
+        conn,
+        lead_id: str,
+        human_review_status: str,
+        reviewed_by: str,
+        note: str,
+        created_at: str,
+    ) -> str:
+        lead = str(lead_id or "").strip()
+        status = str(human_review_status or "").strip()
+        if not lead or status not in {"approved", "rejected", "pending_review"}:
+            return ""
+        row = conn.execute(
+            """
+            SELECT id, candidate_user_id, lead_type, priority, score, reason, batch_id
+            FROM operation_leads
+            WHERE id=?
+            """,
+            (lead,),
+        ).fetchone()
+        if not row:
+            return ""
+        decision_id, _created = self._record_lead_decision(
+            conn,
+            row["id"],
+            row["candidate_user_id"],
+            row["lead_type"],
+            row["priority"],
+            int(row["score"] or 0),
+            note or f"human review {status}",
+            "human_review",
+            {
+                "batch_id": row["batch_id"],
+                "human_review_status": status,
+                "decision_source": "operator_human_review",
+                "rule_version": "reachops.operator_human_review.v1",
+                "classifier_version": "operator_human_review.v1",
+                "provider_version": str(reviewed_by or "operator"),
+                "evidence": note or status,
+                "feature_snapshot": {
+                    "reviewed_by": str(reviewed_by or "operator"),
+                    "review_note_present": bool(str(note or "").strip()),
+                },
+            },
+            created_at,
+        )
+        return decision_id
+
+    def record_lead_human_review(
+        self,
+        lead_id: str,
+        human_review_status: str,
+        reviewed_by: str = "operator",
+        note: str = "",
+    ) -> str:
+        now = utc_now_iso()
+        with self.connect() as conn:
+            return self._record_lead_human_review(conn, lead_id, human_review_status, reviewed_by, note, now)
+
     def list_lead_decisions(
         self,
         lead_id: str = "",
         candidate_id: str = "",
         batch_id: str = "",
+        campaign_id: str = "",
+        run_id: str = "",
         limit: int = 200,
     ) -> List[Dict[str, Any]]:
         filters = []
@@ -1486,6 +1551,12 @@ class GrowthStorage:
         if batch_id:
             filters.append("batch_id=?")
             args.append(str(batch_id))
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -2150,6 +2221,8 @@ class GrowthStorage:
                 (new_id("alog"), action_id, status, note, now),
             )
             if action_row:
+                if status in {"approved", "rejected"}:
+                    self._record_lead_human_review(conn, action_row["lead_id"], status, "operator", note or status, now)
                 self._refresh_lead_lifecycle(conn, action_row["lead_id"])
 
     def record_action_execution_result(
