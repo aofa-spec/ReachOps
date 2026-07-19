@@ -270,6 +270,33 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
   - Final delivery remains blocked until Windows artifacts, current client-delivery evidence, and authorized live validation are produced and strict final gates pass.
 
+## Latest P4 ixBrowser group display compatibility snapshot
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Restore count-prefix compatibility for ixBrowser group display labels while preserving customer-readable localized group names.
+- Code evidence:
+  - `group_display_name(...)` now preserves the existing localized operator label for non-ASCII customer group names, such as `加拿大获客组 · 12 个账号 · ID: 281726`.
+  - ASCII ixBrowser group names and the `全部配置` aggregate row also include the stable `[count]` prefix required by registry refresh and audit evidence, such as `[    2] Canada · 2 个账号 · ID: 281726`.
+  - Existing `group_name_from_display(...)` parsing continues to strip the prefix before resolving the selected ixBrowser group name.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/workbench/standalone_app.py tests/test_reachops_campaign.py`: passed; log `/tmp/reachops-p4-group-display-pycompile.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign.ReachOpsCampaignTests.test_profile_group_display_keeps_operator_readable_group_name tests.test_reachops_campaign.ReachOpsCampaignTests.test_profile_registry_refresh_resolves_group_counts tests.test_reachops_campaign.ReachOpsCampaignTests.test_profile_registry_refresh_builds_groups_from_full_profile_list`: passed; log `/tmp/reachops-p4-group-display-focused.log`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-group-display-truth.log`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p4-group-display-delivery-audit.json`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p4-group-display-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p4-group-display-goal-status.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with known current-environment PM boundary blocker only, 230 tests, 1 failure, 0 errors; branch log `/tmp/reachops-p4-group-display-campaign.log`; main baseline at `887f706` failed with 230 tests, 14 failures, 1 error; comparison artifact `/tmp/reachops-p4-group-display-baseline-comparison.json`, `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-group-display-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-group-display-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; current blockers include `external_authorized_execution`, `client_delivery_gate`, and `windows_final_artifacts`; output `/tmp/reachops-p4-group-display-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p4-group-display-cleanliness.json`.
+  - `git diff --check`: passed after documentation update; log `/tmp/reachops-p4-group-display-diff-check-final.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - Final delivery remains blocked until Windows artifacts, current client-delivery evidence, and authorized live validation are produced and strict final gates pass.
+
 ## Latest P4 bilingual UI resource slice
 
 - Date: `2026-07-19`

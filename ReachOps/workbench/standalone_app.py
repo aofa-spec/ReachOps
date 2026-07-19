@@ -202,7 +202,10 @@ def group_display_name(group: dict) -> str:
         count_label = "9999+" if count > 9999 else str(count)
     else:
         count_label = "读取中"
-    return f"{name} · {count_label} 个账号 · ID: {group_id or '-'}"
+    display = f"{name} · {count_label} 个账号 · ID: {group_id or '-'}"
+    if count_label != "读取中" and (group.get("all_profiles") or all(ord(ch) < 128 for ch in name)):
+        return f"[{count:5d}] {display}"
+    return display
 
 
 def group_display_label(group: dict) -> str:
