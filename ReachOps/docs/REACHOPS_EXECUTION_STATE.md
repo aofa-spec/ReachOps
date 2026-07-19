@@ -77,11 +77,26 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Scope: P4 local Web runtime smoke and launcher-entry convergence only. No Windows package, EXE, installer, ixBrowser runtime, or TikTok live-submit work was performed.
 - Code evidence:
   - `tools/reachops_web_panel_runtime_smoke.py` now works on Python 3.9 by avoiding unsupported `TemporaryDirectory(ignore_cleanup_errors=...)`.
+  - `tests/test_runtime_smoke_compatibility.py` now simulates the Python 3.9 `TemporaryDirectory` constructor and verifies the fallback path directly.
   - The same runtime smoke forces `REACHOPS_REQUIRE_ACTIVATION=1` only inside the smoke and restores the caller environment, so the unauthorized live-comment check cannot pass through development bypass.
   - `ReachOps/launcher.py` now defaults `ReachOpsApp.py` to the unified Web console; Tk remains available only through `--legacy-tk` or `REACHOPS_LEGACY_TK=1` as a diagnostic path.
   - `启动ReachOps本地客户端.command` now delegates to `启动ReachOps统一WebUI.command`; `启动ReachOps原生MacUI.command` explicitly marks Tk as the legacy diagnostic entry.
   - `tests/test_launcher.py` locks the default Web-console launcher contract and the legacy diagnostic opt-in.
 - Tests and checks:
+  - Compatibility-test rerun: `/usr/bin/python3 -m py_compile tools/reachops_web_panel_runtime_smoke.py tests/test_runtime_smoke_compatibility.py`: passed, exit `0`; log `/tmp/reachops-pr20-compat-pycompile.log`.
+  - Compatibility-test rerun: `/usr/bin/python3 -m unittest -v tests.test_runtime_smoke_compatibility`: passed, 1 test, exit `0`; log `/tmp/reachops-pr20-compat-focused.log`.
+  - Compatibility-test rerun: `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed, `status=passed`, `failed_checks=[]`, exit `0`; output `/tmp/reachops-pr20-compat-runtime-smoke.json`.
+  - Compatibility-test rerun: `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests, exit `0`; log `/tmp/reachops-pr20-compat-truth.log`.
+  - Compatibility-test rerun: `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with existing baseline shape, 230 tests, 14 failures and 1 error; log `/tmp/reachops-pr20-compat-campaign.log`.
+  - Compatibility-test baseline comparison: `origin/main` at `887f706` also ran 230 tests with 14 failures and 1 error; comparison artifact `/tmp/reachops-pr20-compat-baseline-comparison.json`, `new_failures=[]`, `new_errors=[]`.
+  - Compatibility-test rerun: `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, exit `0`; output `/tmp/reachops-pr20-compat-operator-pressure.json`.
+  - Compatibility-test rerun: `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: failed, exit `1`, summary `passed=47`, `pending_external_validation=3`, `failed=4`; runtime smoke inprocess error is not present; output `/tmp/reachops-pr20-compat-delivery-audit.json`.
+  - Compatibility-test rerun: `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed, exit `1`, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-pr20-compat-goal-delivery-runner.json`.
+  - Compatibility-test rerun: `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: failed, exit `1`, `status=failed`; output `/tmp/reachops-pr20-compat-goal-status-report.json`.
+  - Compatibility-test rerun: `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-pr20-compat-package-check.json`.
+  - Compatibility-test rerun: `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed, exit `1`, `final_delivery_ready=false`; failed checks include `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`, and `delivery_audit:no_failed_checks`; output `/tmp/reachops-pr20-compat-final-gate.json`.
+  - Compatibility-test rerun: `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, exit `0`, `forbidden_count=0`; output `/tmp/reachops-pr20-compat-cleanliness.json`.
+  - Compatibility-test rerun: `git diff --check`: passed, exit `0`; log `/tmp/reachops-pr20-compat-diff-check.log`.
   - `/usr/bin/python3 -m py_compile ReachOps/launcher.py tools/reachops_web_panel_runtime_smoke.py tests/test_launcher.py`: passed; log `/tmp/reachops-p4-runtime-pycompile.log`.
   - `/usr/bin/python3 -m unittest -v tests.test_launcher`: passed, 7 tests; log `/tmp/reachops-p4-runtime-launcher-tests.log`.
   - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed, `status=passed`; output `/tmp/reachops-p4-runtime-smoke-final-probe.json`.
