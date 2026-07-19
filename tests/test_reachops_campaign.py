@@ -23,7 +23,7 @@ from ReachOps.intelligence.comment_intent import CommentIntentResult, RuleBasedC
 from ReachOps.intelligence.growth_task_router import GrowthTaskRouter
 from ReachOps.intelligence.operation_lead_manager import OperationLeadManager
 from ReachOps.intelligence.outreach_copy import OutreachCopySuggestion
-from ReachOps.intelligence.schemas import ActionQueueItem, CampaignFunnel, CandidateUser, DiscoveredContent, DiscoveredCreator
+from ReachOps.intelligence.schemas import AcquisitionSource, ActionQueueItem, CampaignFunnel, CandidateUser, DiscoveredContent, DiscoveredCreator
 from ReachOps.intelligence.source_planner import CampaignAnalyzer
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.action_router import ActionRouterConfig
@@ -942,11 +942,20 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(checks["客户端文案面向运营用户"]["status"], "passed")
         self.assertEqual(checks["客户端文案面向运营用户"]["evidence"]["start_page_technical_hits"], [])
         self.assertEqual(checks["漏斗只显示本轮 Campaign"]["status"], "passed")
+        funnel_isolation = checks["漏斗只显示本轮 Campaign"]["evidence"]
         self.assertNotEqual(
-            checks["漏斗只显示本轮 Campaign"]["evidence"]["old_funnel"]["campaign_id"],
-            checks["漏斗只显示本轮 Campaign"]["evidence"]["new_funnel"]["campaign_id"],
+            funnel_isolation["old_funnel"]["campaign_id"],
+            funnel_isolation["new_funnel"]["campaign_id"],
         )
-        self.assertEqual(checks["漏斗只显示本轮 Campaign"]["evidence"]["new_execution_success"], 0)
+        self.assertEqual(funnel_isolation["old_execution_success"], 0)
+        self.assertEqual(funnel_isolation["new_execution_success"], 0)
+        self.assertGreater(funnel_isolation["old_truth_counts"]["simulated_success"], 0)
+        self.assertEqual(funnel_isolation["old_truth_counts"]["live_verified"], 0)
+        self.assertEqual(funnel_isolation["new_truth_counts"]["live_verified"], 0)
+        self.assertEqual(funnel_isolation["old_funnel"]["customer_leads"], funnel_isolation["old_batch_metrics"]["operation_leads"])
+        self.assertEqual(funnel_isolation["new_funnel"]["customer_leads"], funnel_isolation["new_batch_metrics"]["operation_leads"])
+        self.assertEqual(funnel_isolation["old_funnel"]["outreach_actions"], funnel_isolation["old_batch_metrics"]["action_queue"])
+        self.assertEqual(funnel_isolation["new_funnel"]["outreach_actions"], funnel_isolation["new_batch_metrics"]["action_queue"])
         self.assertEqual(checks["能识别页面打不开和无评论"]["status"], "passed")
         self.assertGreaterEqual(checks["能识别页面打不开和无评论"]["evidence"]["page_open_failed"]["errors"]["CREATOR_PAGE_OPEN_FAILED"], 1)
         self.assertGreaterEqual(checks["能识别页面打不开和无评论"]["evidence"]["empty_comments"]["errors"]["COMMENT_SCAN_EMPTY"], 1)
@@ -8213,6 +8222,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 export_report=False,
             )
             old_funnel = workflow.build_campaign_funnel(campaign_id=old_plan["campaign"]["id"], batch_id=old_batch["id"])
+            old_batch_metrics = service.storage.collection_batch_entity_metrics(old_batch["id"])
+            self.assertEqual(old_funnel["customer_leads"], old_batch_metrics["operation_leads"])
+            self.assertEqual(old_funnel["outreach_actions"], old_batch_metrics["action_queue"])
             self.assertEqual(old_funnel["execution_success"], 0)
             self.assertEqual(old_funnel["preflight_ok"], 0)
             truth = service.storage.outreach_execution_truth_counts(old_batch["id"])
@@ -8230,9 +8242,37 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
             self.assertEqual(new_funnel["campaign_id"], new_plan["campaign"]["id"])
             self.assertEqual(new_funnel["batch_id"], new_batch["id"])
+            new_batch_metrics = service.storage.collection_batch_entity_metrics(new_batch["id"])
+            self.assertEqual(new_funnel["customer_leads"], new_batch_metrics["operation_leads"])
+            self.assertEqual(new_funnel["outreach_actions"], new_batch_metrics["action_queue"])
             self.assertEqual(new_funnel["execution_success"], 0)
             self.assertEqual(new_funnel["preflight_ok"], 0)
             self.assertEqual(new_funnel["account_switches"], 0)
+
+    def test_campaign_funnel_target_sources_prefers_current_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            campaign = service.storage.create_campaign("keyword", "serum")
+            for index in range(3):
+                service.storage.upsert_acquisition_source(
+                    AcquisitionSource(
+                        id=f"as_target_{index}",
+                        campaign_id=campaign.id,
+                        source_type="keyword",
+                        source_value=f"serum source {index}",
+                    )
+                )
+            service.storage.create_collection_batch(2, campaign_id=campaign.id, initial_status="completed")
+            latest_batch = service.storage.create_collection_batch(1, campaign_id=campaign.id, initial_status="completed")
+
+            funnel = GrowthWorkflowService(service).build_campaign_funnel(campaign_id=campaign.id)
+
+            self.assertEqual(funnel["batch_id"], latest_batch.id)
+            self.assertEqual(funnel["target_sources"], 1)
+            empty_batch = service.storage.create_collection_batch(0, campaign_id=campaign.id, initial_status="completed")
+            empty_funnel = GrowthWorkflowService(service).build_campaign_funnel(campaign_id=campaign.id, batch_id=empty_batch.id)
+            self.assertEqual(empty_funnel["batch_id"], empty_batch.id)
+            self.assertEqual(empty_funnel["target_sources"], 0)
 
     def test_workbench_snapshot_can_stay_on_active_campaign(self):
         with tempfile.TemporaryDirectory() as tmp:

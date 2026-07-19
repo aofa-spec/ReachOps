@@ -1304,14 +1304,24 @@ def run_campaign_funnel_isolation_fixture(target: str) -> dict:
     new_funnel = workflow.build_campaign_funnel(campaign_id=new_plan["campaign"]["id"], batch_id=str(new_batch.get("id") or ""))
     old_snapshot = workflow.build_snapshot(campaign_id=old_plan["campaign"]["id"], batch_id=str(old_batch.get("id") or ""))
     new_snapshot = workflow.build_snapshot(campaign_id=new_plan["campaign"]["id"], batch_id=str(new_batch.get("id") or ""))
+    old_batch_id = str(old_batch.get("id") or "")
+    new_batch_id = str(new_batch.get("id") or "")
+    old_truth_counts = service.storage.outreach_execution_truth_counts(old_batch_id) if old_batch_id else {}
+    new_truth_counts = service.storage.outreach_execution_truth_counts(new_batch_id) if new_batch_id else {}
+    old_batch_metrics = service.storage.collection_batch_entity_metrics(old_batch_id) if old_batch_id else {}
+    new_batch_metrics = service.storage.collection_batch_entity_metrics(new_batch_id) if new_batch_id else {}
 
     return {
         "old_campaign_id": old_plan["campaign"]["id"],
         "new_campaign_id": new_plan["campaign"]["id"],
-        "old_batch_id": str(old_batch.get("id") or ""),
-        "new_batch_id": str(new_batch.get("id") or ""),
+        "old_batch_id": old_batch_id,
+        "new_batch_id": new_batch_id,
         "old_funnel": old_funnel,
         "new_funnel": new_funnel,
+        "old_batch_metrics": old_batch_metrics,
+        "new_batch_metrics": new_batch_metrics,
+        "old_truth_counts": old_truth_counts,
+        "new_truth_counts": new_truth_counts,
         "old_candidate_batch_ids": sorted({str(row.get("batch_id") or "") for row in old_snapshot.candidate_users}),
         "new_candidate_batch_ids": sorted({str(row.get("batch_id") or "") for row in new_snapshot.candidate_users}),
         "old_action_batch_ids": sorted({str(row.get("batch_id") or "") for row in old_snapshot.action_queue}),
@@ -1933,8 +1943,19 @@ def run_audit(args) -> dict:
                 and campaign_funnel_isolation.get("new_candidate_batch_ids") == [campaign_funnel_isolation.get("new_batch_id")]
                 and campaign_funnel_isolation.get("old_action_batch_ids") == [campaign_funnel_isolation.get("old_batch_id")]
                 and campaign_funnel_isolation.get("new_action_batch_ids") == [campaign_funnel_isolation.get("new_batch_id")]
-                and int(campaign_funnel_isolation.get("old_execution_success") or 0) > 0
+                and int(campaign_funnel_isolation.get("old_execution_success") or 0) == 0
                 and int(campaign_funnel_isolation.get("new_execution_success") or 0) == 0
+                and int((campaign_funnel_isolation.get("old_truth_counts") or {}).get("simulated_success") or 0) > 0
+                and int((campaign_funnel_isolation.get("old_truth_counts") or {}).get("live_verified") or 0) == 0
+                and int((campaign_funnel_isolation.get("new_truth_counts") or {}).get("live_verified") or 0) == 0
+                and int((campaign_funnel_isolation.get("old_funnel") or {}).get("customer_leads") or 0)
+                == int((campaign_funnel_isolation.get("old_batch_metrics") or {}).get("operation_leads") or 0)
+                and int((campaign_funnel_isolation.get("new_funnel") or {}).get("customer_leads") or 0)
+                == int((campaign_funnel_isolation.get("new_batch_metrics") or {}).get("operation_leads") or 0)
+                and int((campaign_funnel_isolation.get("old_funnel") or {}).get("outreach_actions") or 0)
+                == int((campaign_funnel_isolation.get("old_batch_metrics") or {}).get("action_queue") or 0)
+                and int((campaign_funnel_isolation.get("new_funnel") or {}).get("outreach_actions") or 0)
+                == int((campaign_funnel_isolation.get("new_batch_metrics") or {}).get("action_queue") or 0)
             ),
             campaign_funnel_isolation,
         ),
