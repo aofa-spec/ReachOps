@@ -62,45 +62,113 @@ SUPPORTED_UI_LOCALES = ("zh-CN", "en-US")
 UI_TEXT_RESOURCES = {
     "zh-CN": {
         "app.title": "ReachOps 本地客户端控制台",
+        "app.client_shell": "客户端外壳",
         "app.subtitle": "Mac / Windows 同一客户端，后端走本地真实执行链路",
-        "nav.execution": "执行台",
+        "nav.task": "获客任务",
+        "nav.leads": "线索分析",
+        "nav.outreach": "触达执行",
+        "nav.accounts": "账号诊断",
         "nav.reports": "报告中心",
+        "action.refresh": "刷新",
         "action.refresh_groups": "刷新账号分组",
         "action.start": "开始获客",
         "action.pause": "暂停",
         "action.resume": "继续",
         "action.stop": "停止",
+        "status.account_gate_enabled": "账号门禁已启用",
         "status.final_gate": "最终交付门禁",
         "status.acceptance": "验收状态",
         "status.no_submit": "默认 no-submit",
         "field.target": "推广目标",
         "field.source_type": "目标类型",
         "field.group": "账号分组",
+        "field.current_group": "当前账号分组",
+        "field.readable_accounts": "可读取账号数",
+        "field.mode": "执行模式",
+        "field.profile_count": "账号数",
+        "field.volume": "目标数量",
+        "field.live_confirm": "真实评论确认",
+        "field.account_repair_confirm": "账号修复确认",
+        "field.comment_text": "评论内容",
+        "option.auto_detect": "自动识别",
+        "option.creator_url": "达人主页",
+        "option.content_url": "视频链接",
+        "option.live_room_url": "直播间活跃用户",
+        "option.keyword": "关键词搜索",
+        "option.topic": "话题/趋势",
+        "option.hashtag": "标签",
+        "option.product_url": "商品页",
+        "option.shop_url": "店铺页",
         "mode.preflight": "采集 + 触达预检",
         "mode.collect": "只采集",
         "mode.live_comment": "授权真实评论",
+        "volume.quick": "快速",
+        "volume.standard": "标准",
+        "volume.stress": "压测",
+        "preview.mode": "后端模式",
+        "preview.range": "采集范围",
+        "preview.profiles": "账号上限",
+        "preview.timeout": "预计超时",
+        "preview.submit": "提交策略",
+        "preview.gate": "启动门禁",
+        "preview.plan": "执行计划",
+        "preview.autonomy": "自治预判",
         "report.acceptance_inputs": "本地验收输入模板",
         "report.final_commands": "最终复核命令",
     },
     "en-US": {
         "app.title": "ReachOps Local Client Console",
+        "app.client_shell": "Client shell",
         "app.subtitle": "One local client for Mac and Windows with the same local execution chain",
-        "nav.execution": "Execution",
+        "nav.task": "Acquisition",
+        "nav.leads": "Leads",
+        "nav.outreach": "Outreach",
+        "nav.accounts": "Accounts",
         "nav.reports": "Reports",
+        "action.refresh": "Refresh",
         "action.refresh_groups": "Refresh account groups",
         "action.start": "Start acquisition",
         "action.pause": "Pause",
         "action.resume": "Resume",
         "action.stop": "Stop",
+        "status.account_gate_enabled": "Account gate enabled",
         "status.final_gate": "Final delivery gate",
         "status.acceptance": "Acceptance status",
         "status.no_submit": "Default no-submit",
         "field.target": "Promotion target",
         "field.source_type": "Target type",
         "field.group": "Account group",
+        "field.current_group": "Current account group",
+        "field.readable_accounts": "Readable accounts",
+        "field.mode": "Execution mode",
+        "field.profile_count": "Profile count",
+        "field.volume": "Target volume",
+        "field.live_confirm": "Live comment confirmation",
+        "field.account_repair_confirm": "Account repair confirmation",
+        "field.comment_text": "Comment text",
+        "option.auto_detect": "Auto detect",
+        "option.creator_url": "Creator profile",
+        "option.content_url": "Video URL",
+        "option.live_room_url": "Live-room active users",
+        "option.keyword": "Keyword search",
+        "option.topic": "Topic / trend",
+        "option.hashtag": "Hashtag",
+        "option.product_url": "Product page",
+        "option.shop_url": "Shop page",
         "mode.preflight": "Collect + outreach preflight",
         "mode.collect": "Collect only",
         "mode.live_comment": "Authorized live comment",
+        "volume.quick": "Quick",
+        "volume.standard": "Standard",
+        "volume.stress": "Stress",
+        "preview.mode": "Backend mode",
+        "preview.range": "Collection range",
+        "preview.profiles": "Profile limit",
+        "preview.timeout": "Estimated timeout",
+        "preview.submit": "Submit policy",
+        "preview.gate": "Start gate",
+        "preview.plan": "Execution plan",
+        "preview.autonomy": "Autonomy forecast",
         "report.acceptance_inputs": "Local acceptance input template",
         "report.final_commands": "Final verification commands",
     },
@@ -2560,6 +2628,7 @@ def html_page() -> bytes:
     .secondaryActions button {{ height:32px; padding:0 10px; font-size:12px; color:var(--muted); background:#20262b; }}
     label {{ display:grid; gap:6px; color:var(--muted); font-size:12px; }}
     input, select {{ height:38px; border:1px solid var(--line); border-radius:7px; background:#2a3036; color:var(--text); padding:0 11px; font-size:14px; min-width:0; }}
+    .localeSelect {{ height:28px; border-radius:999px; padding:0 9px; font-size:12px; color:var(--text); background:#252b31; }}
     .groupControl {{ display:grid; grid-template-columns:minmax(0,1fr) 96px; gap:8px; align-items:center; }}
     .groupControl select {{ width:100%; }}
     .groupControl button {{ padding:0 9px; white-space:nowrap; }}
@@ -2787,23 +2856,27 @@ def html_page() -> bytes:
     <div class="brandBlock">
       <div class="brandMark">R</div>
       <div class="brandText">
-        <h1>ReachOps 本地客户端控制台 <span class="clientType">客户端外壳</span></h1>
-        <div class="sub">桌面入口 ReachOpsApp.py 启动本机 127.0.0.1 控制台；Mac / Windows 同一客户端，后端走本地真实执行链路</div>
+        <h1><span data-i18n="app.title">ReachOps 本地客户端控制台</span> <span class="clientType" data-i18n="app.client_shell">客户端外壳</span></h1>
+        <div class="sub" data-i18n="app.subtitle">Mac / Windows 同一客户端，后端走本地真实执行链路</div>
       </div>
     </div>
     <div class="headerStatus">
-      <div class="pill ok" id="accountGateState">账号门禁已启用</div>
+      <select class="localeSelect" id="localeSelect" aria-label="UI language">
+        <option value="zh-CN">中文</option>
+        <option value="en-US">English</option>
+      </select>
+      <div class="pill ok" id="accountGateState" data-i18n="status.account_gate_enabled">账号门禁已启用</div>
       <div class="pill versionPill" id="uiVersion" title="{WEB_UI_VERSION}">{CLIENT_DISPLAY_VERSION}</div>
       <div class="pill" id="runState">READY</div>
     </div>
   </header>
   <main>
     <nav>
-      <button class="tab active" data-page="task">获客任务</button>
-      <button class="tab" data-page="leads">线索分析</button>
-      <button class="tab" data-page="outreach">触达执行</button>
-      <button class="tab" data-page="accounts">账号诊断</button>
-      <button class="tab" data-page="reports">报告中心</button>
+      <button class="tab active" data-page="task" data-i18n="nav.task">获客任务</button>
+      <button class="tab" data-page="leads" data-i18n="nav.leads">线索分析</button>
+      <button class="tab" data-page="outreach" data-i18n="nav.outreach">触达执行</button>
+      <button class="tab" data-page="accounts" data-i18n="nav.accounts">账号诊断</button>
+      <button class="tab" data-page="reports" data-i18n="nav.reports">报告中心</button>
     </nav>
     <section class="work">
       <div class="clientRuntimeStrip" aria-label="客户端运行合同">
@@ -2814,81 +2887,81 @@ def html_page() -> bytes:
       </div>
       <div class="controlPanel">
         <div class="taskForm">
-          <label>推广目标
+          <label><span data-i18n="field.target">推广目标</span>
             <input id="target" value="{DEFAULT_TARGET}" placeholder="输入产品链接、关键词、达人主页、视频链接、话题或直播间" />
           </label>
-	          <label class="groupField">账号分组
+	          <label class="groupField"><span data-i18n="field.group">账号分组</span>
 	            <span class="groupControl">
 	              <select id="group"><option>United States</option></select>
-	              <button id="refreshGroupsInline">刷新</button>
+	              <button id="refreshGroupsInline" data-i18n="action.refresh">刷新</button>
 	            </span>
 	          </label>
 	          <div class="selectedGroupBar" id="selectedGroupBar">
-	            <div><div class="barLabel">当前账号分组</div><b id="selectedGroupName">United States</b></div>
-	            <div><div class="barLabel">可读取账号数</div><b class="count unknown" id="selectedGroupCount">未刷新</b></div>
+	            <div><div class="barLabel" data-i18n="field.current_group">当前账号分组</div><b id="selectedGroupName">United States</b></div>
+	            <div><div class="barLabel" data-i18n="field.readable_accounts">可读取账号数</div><b class="count unknown" id="selectedGroupCount">未刷新</b></div>
 	            <div><div class="barLabel">Group ID</div><b id="selectedGroupId">-</b></div>
 	          </div>
 	          <div class="groupDetails compact" id="groupDetails"></div>
           <div class="taskParams">
-            <label>目标类型
+            <label><span data-i18n="field.source_type">目标类型</span>
               <select id="sourceType">
-                <option value="auto" selected>自动识别</option>
-                <option value="creator_url">达人主页</option>
-                <option value="content_url">视频链接</option>
-                <option value="live_room_url">直播间活跃用户</option>
-                <option value="keyword">关键词搜索</option>
-                <option value="topic">话题/趋势</option>
-                <option value="hashtag">标签</option>
-                <option value="product_url">商品页</option>
-                <option value="shop_url">店铺页</option>
+                <option value="auto" selected data-i18n="option.auto_detect">自动识别</option>
+                <option value="creator_url" data-i18n="option.creator_url">达人主页</option>
+                <option value="content_url" data-i18n="option.content_url">视频链接</option>
+                <option value="live_room_url" data-i18n="option.live_room_url">直播间活跃用户</option>
+                <option value="keyword" data-i18n="option.keyword">关键词搜索</option>
+                <option value="topic" data-i18n="option.topic">话题/趋势</option>
+                <option value="hashtag" data-i18n="option.hashtag">标签</option>
+                <option value="product_url" data-i18n="option.product_url">商品页</option>
+                <option value="shop_url" data-i18n="option.shop_url">店铺页</option>
               </select>
             </label>
-            <label>执行模式
+            <label><span data-i18n="field.mode">执行模式</span>
               <select id="mode">
-                <option value="preflight">采集 + 触达预检</option>
-                <option value="collect">只采集</option>
-                <option value="live_comment">采集 + 真实评论</option>
+                <option value="preflight" data-i18n="mode.preflight">采集 + 触达预检</option>
+                <option value="collect" data-i18n="mode.collect">只采集</option>
+                <option value="live_comment" data-i18n="mode.live_comment">授权真实评论</option>
               </select>
             </label>
-            <label>账号数
+            <label><span data-i18n="field.profile_count">账号数</span>
               <input id="profiles" value="3" />
             </label>
-            <label>目标数量
+            <label><span data-i18n="field.volume">目标数量</span>
               <select id="volume">
-                <option value="quick" selected>快速</option>
-                <option value="standard">标准</option>
-                <option value="stress">压测</option>
+                <option value="quick" selected data-i18n="volume.quick">快速</option>
+                <option value="standard" data-i18n="volume.standard">标准</option>
+                <option value="stress" data-i18n="volume.stress">压测</option>
               </select>
             </label>
-            <label class="checkLabel">真实评论确认
+            <label class="checkLabel"><span data-i18n="field.live_confirm">真实评论确认</span>
               <span><input id="liveConfirm" type="checkbox" />确认真实评论</span>
             </label>
-            <label class="checkLabel">账号修复确认
+            <label class="checkLabel"><span data-i18n="field.account_repair_confirm">账号修复确认</span>
               <span><input id="accountRepairConfirmed" type="checkbox" />已修复账号，允许重新预检</span>
             </label>
           </div>
-          <label>评论内容
+          <label><span data-i18n="field.comment_text">评论内容</span>
             <input id="commentText" value="" placeholder="留空自动生成；可填固定评论文案" />
           </label>
           <div class="runtimePreview" id="runtimePreview">
-            <div class="previewItem"><span>后端模式</span><b id="previewMode">采集 + 触达预检</b></div>
-            <div class="previewItem"><span>采集范围</span><b id="previewRange">3 视频 / 20 评论</b></div>
-            <div class="previewItem"><span>账号上限</span><b id="previewProfiles">3</b></div>
-            <div class="previewItem"><span>预计超时</span><b id="previewTimeout">900 秒</b></div>
-            <div class="previewItem"><span>提交策略</span><b id="previewSubmit">预检，不提交</b></div>
-            <div class="previewItem"><span>启动门禁</span><b id="previewGate">等待刷新</b></div>
-            <div class="previewItem"><span>执行计划</span><b id="previewPlan">等待生成</b></div>
+            <div class="previewItem"><span data-i18n="preview.mode">后端模式</span><b id="previewMode">采集 + 触达预检</b></div>
+            <div class="previewItem"><span data-i18n="preview.range">采集范围</span><b id="previewRange">3 视频 / 20 评论</b></div>
+            <div class="previewItem"><span data-i18n="preview.profiles">账号上限</span><b id="previewProfiles">3</b></div>
+            <div class="previewItem"><span data-i18n="preview.timeout">预计超时</span><b id="previewTimeout">900 秒</b></div>
+            <div class="previewItem"><span data-i18n="preview.submit">提交策略</span><b id="previewSubmit">预检，不提交</b></div>
+            <div class="previewItem"><span data-i18n="preview.gate">启动门禁</span><b id="previewGate">等待刷新</b></div>
+            <div class="previewItem"><span data-i18n="preview.plan">执行计划</span><b id="previewPlan">等待生成</b></div>
             <div class="previewItem wide" id="previewAutonomyBox">
-              <span>自治预判</span>
+              <span data-i18n="preview.autonomy">自治预判</span>
               <b id="previewAutonomy">等待 start-preview</b>
               <ul id="previewAutonomyList"><li>等待结构化预判合同。</li></ul>
             </div>
           </div>
 	          <div class="taskActions">
-	            <button class="primary" id="start" disabled>开始获客</button>
-	            <button class="warn" id="pause">暂停</button>
-	            <button class="okBtn" id="resume">继续</button>
-	            <button id="stop">停止</button>
+	            <button class="primary" id="start" disabled data-i18n="action.start">开始获客</button>
+	            <button class="warn" id="pause" data-i18n="action.pause">暂停</button>
+	            <button class="okBtn" id="resume" data-i18n="action.resume">继续</button>
+	            <button id="stop" data-i18n="action.stop">停止</button>
 	          </div>
 	          <div class="secondaryActions" aria-label="次级操作">
 	            <button id="previewPlanReplay">预检重放计划</button>
@@ -3127,6 +3200,56 @@ def html_page() -> bytes:
 	    let groupRefreshPollCount = 0;
 	    let hourglassData = {{}};
 	    let currentOfflinePolicyCandidate = null;
+    const DEFAULT_UI_LOCALE = {json.dumps(DEFAULT_UI_LOCALE, ensure_ascii=False)};
+    const SUPPORTED_UI_LOCALES = {json.dumps(list(SUPPORTED_UI_LOCALES), ensure_ascii=False)};
+    const FALLBACK_UI_TEXT_RESOURCES = {json.dumps(UI_TEXT_RESOURCES, ensure_ascii=False)};
+    const UI_LOCALE_STORAGE_KEY = 'reachops.ui.locale';
+    let uiTextResources = FALLBACK_UI_TEXT_RESOURCES;
+    let currentUiLocale = DEFAULT_UI_LOCALE;
+    function normalizeLocale(locale) {{
+      return SUPPORTED_UI_LOCALES.includes(locale) ? locale : DEFAULT_UI_LOCALE;
+    }}
+    function t(key) {{
+      const bundle = uiTextResources[currentUiLocale] || uiTextResources[DEFAULT_UI_LOCALE] || {{}};
+      const fallback = uiTextResources[DEFAULT_UI_LOCALE] || {{}};
+      return bundle[key] || fallback[key] || key;
+    }}
+    function applyLocale(locale) {{
+      currentUiLocale = normalizeLocale(locale);
+      if (document.documentElement) document.documentElement.lang = currentUiLocale;
+      (document.querySelectorAll ? document.querySelectorAll('[data-i18n]') : []).forEach(el => {{
+        const key = el.dataset.i18n;
+        const value = t(key);
+        if (value) el.textContent = value;
+      }});
+      if ($('localeSelect')) $('localeSelect').value = currentUiLocale;
+      if ($('mode') && $('currentMode')) $('currentMode').textContent = $('mode').selectedOptions[0] ? $('mode').selectedOptions[0].textContent : t('mode.preflight');
+      if ($('mode') && $('previewMode')) $('previewMode').textContent = $('mode').selectedOptions[0] ? $('mode').selectedOptions[0].textContent : t('mode.preflight');
+      if ($('volume') && $('currentVolume')) $('currentVolume').textContent = $('volume').selectedOptions[0] ? $('volume').selectedOptions[0].textContent : t('volume.quick');
+      updateStartAvailability();
+      refreshStartPreview();
+    }}
+    async function loadLocales() {{
+      try {{
+        const res = await fetch('/api/locales');
+        const data = await res.json();
+        if (data && data.resources && typeof data.resources === 'object') uiTextResources = data.resources;
+      }} catch (_err) {{
+        uiTextResources = FALLBACK_UI_TEXT_RESOURCES;
+      }}
+      let saved = '';
+      try {{
+        saved = localStorage.getItem(UI_LOCALE_STORAGE_KEY) || '';
+      }} catch (_err) {{}}
+      applyLocale(saved || DEFAULT_UI_LOCALE);
+    }}
+    function setLocale(locale) {{
+      const normalized = normalizeLocale(locale);
+      try {{
+        localStorage.setItem(UI_LOCALE_STORAGE_KEY, normalized);
+      }} catch (_err) {{}}
+      applyLocale(normalized);
+    }}
     function classify(line) {{ return /ERROR|WARN|BLOCK|failed|失败|不可用/.test(line) ? 'bad' : (/DONE|READY|success|healthy/.test(line) ? 'ok' : ''); }}
     function apiNoticeActive() {{ return Date.now() < apiNoticeUntil; }}
     function isAccountRepairConfirmed() {{
@@ -3157,13 +3280,13 @@ def html_page() -> bytes:
         ? '请先刷新 ixBrowser 配置分组，并等待分组数量实时读取完成。'
         : blockedByAccountGate
           ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；点击后会重新读取分组并自动预检筛选有效账号。`
-          : '开始获客';
+          : t('action.start');
       if ($('start')) {{
         $('start').disabled = !groupListReady || blockedByAccountGate;
         $('start').title = startBlockedReason;
       }}
       if ($('accountGateState')) {{
-        $('accountGateState').textContent = blockedByAccountGate ? `${{blockedGroupLabel}} 账号阻断` : (pendingAccountRecheck ? `${{pendingGroupLabel}} 等待重新预检` : '账号门禁已启用');
+        $('accountGateState').textContent = blockedByAccountGate ? `${{blockedGroupLabel}} 账号阻断` : (pendingAccountRecheck ? `${{pendingGroupLabel}} 等待重新预检` : t('status.account_gate_enabled'));
         $('accountGateState').className = blockedByAccountGate ? 'pill danger' : (pendingAccountRecheck ? 'pill warn' : 'pill ok');
         $('accountGateState').title = blockedByAccountGate
           ? `${{blockedGroupLabel}} 最近一次预检没有可用账号；再次开始获客会重新读取分组并重新预检账号。`
@@ -5032,6 +5155,7 @@ def html_page() -> bytes:
 	    $('aiConsoleProductCapability').onclick = () => sendAiConsoleMessage('产品能力矩阵现在做到哪了');
 	    $('approveOfflinePolicyCandidate').onclick = () => reviewOfflinePolicyCandidate('approved');
 	    $('rejectOfflinePolicyCandidate').onclick = () => reviewOfflinePolicyCandidate('rejected');
+	    $('localeSelect').onchange = () => setLocale($('localeSelect').value);
 	    $('aiConsoleInput').onkeydown = event => {{
 	      if (event.key === 'Enter' && !event.shiftKey) {{
 	        event.preventDefault();
@@ -5096,7 +5220,7 @@ def html_page() -> bytes:
 	    }});
 	    $('sourceType').onchange = () => {{ $('targetType').textContent = $('sourceType').selectedOptions[0].textContent; refreshStartPreview(); }};
     setInterval(refreshLogs, 2000); setInterval(refreshSnapshot, 5000); setInterval(refreshAcceptance, 5000); setInterval(refreshProductCapability, 10000); setInterval(refreshIxBrowserStatus, 10000); setInterval(refreshActivation, 10000); setInterval(refreshFinalStatus, 10000);
-	    updateCopyModeNotice(); refreshStartPreview(); refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshProductCapability(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus(); refreshGroups();
+	    loadLocales(); updateCopyModeNotice(); refreshStartPreview(); refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshProductCapability(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus(); refreshGroups();
   </script>
 </body>
 </html>""".encode("utf-8")

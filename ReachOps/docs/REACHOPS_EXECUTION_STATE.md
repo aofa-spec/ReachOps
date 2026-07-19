@@ -271,6 +271,36 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
   - This is a resource-contract slice only; full first-viewport UI language switching still remains future P4 work.
 
+## Latest P4 first-viewport locale switching slice
+
+- Date: `2026-07-19`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Make the first-viewport local client console controls switchable between `zh-CN` and `en-US` without changing runtime architecture or claiming full UI localization completion.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now exposes a header language selector `localeSelect`, first-viewport `data-i18n` bindings, localStorage-backed locale persistence, and `applyLocale()` / `loadLocales()` client logic that reads `/api/locales`.
+  - First-viewport bindings cover the app title/subtitle, navigation tabs, target/group/source/mode/volume controls, core mode and source options, runtime preview labels, and start/pause/resume/stop controls.
+  - The locale switch remains local UI behavior only: it reads the local `/api/locales` endpoint and does not open browser profiles or submit platform actions.
+  - `tools/reachops_web_panel_runtime_smoke.py` now verifies both the locale resource endpoint and the first-viewport switching wiring.
+  - `tools/reachops_delivery_audit.py` now includes the first-viewport locale switching contract in the Web-to-local-API evidence check.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile tools/reachops_web_ui.py tools/reachops_web_panel_runtime_smoke.py tools/reachops_delivery_audit.py tests/test_reachops_campaign.py`: passed.
+  - `/usr/bin/python3 tools/reachops_web_panel_runtime_smoke.py --json`: passed; `first_viewport_locale_switching_is_wired_without_submit_side_effects=true`; output `/tmp/reachops-p4-first-viewport-locale-runtime-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-p4-first-viewport-locale-dom-smoke.json`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=51,pending_external_validation=3,failed=0`; output `/tmp/reachops-p4-first-viewport-locale-delivery-audit.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-p4-first-viewport-locale-truth.log`.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-p4-first-viewport-locale-operator-pressure.json`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-p4-first-viewport-locale-goal-status.json`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: failed with known baseline shape, 230 tests, 11 failures, 1 error; branch log `/tmp/reachops-p4-first-viewport-locale-campaign.log`; `origin/main` baseline log `/tmp/reachops-main-first-viewport-locale-campaign.log`; comparison artifact `/tmp/reachops-p4-first-viewport-locale-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-p4-first-viewport-locale-package-check.json`.
+  - `/usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-p4-first-viewport-locale-final-gate.json`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-p4-first-viewport-locale-goal-delivery-runner.json`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-p4-first-viewport-locale-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-p4-first-viewport-locale-diff-check.log`.
+- Safety:
+  - No real TikTok action was executed.
+  - No Windows build, EXE, installer, update manifest, or live-submit was attempted on macOS.
+  - Final delivery remains blocked by missing Windows final artifacts, incomplete current client-delivery evidence, and external authorized live validation.
+
 ## Non-blocking engineering work available
 
 - P1 observation model and migration.

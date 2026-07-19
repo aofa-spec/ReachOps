@@ -633,12 +633,18 @@ def run_runtime_smoke() -> dict:
             en_resources = resources.get("en-US") if isinstance(resources.get("en-US"), dict) else {}
             required_locale_keys = {
                 "app.title",
+                "app.client_shell",
+                "nav.task",
                 "action.refresh_groups",
                 "action.start",
+                "field.target",
+                "field.group",
+                "field.mode",
                 "status.final_gate",
                 "status.no_submit",
                 "mode.preflight",
                 "mode.live_comment",
+                "preview.gate",
             }
             checks["locales_endpoint_exposes_zh_cn_and_en_us_without_side_effects"] = (
                 status == 200
@@ -652,6 +658,19 @@ def run_runtime_smoke() -> dict:
                 and en_resources.get("app.title") == "ReachOps Local Client Console"
                 and locales.get("no_browser_started") is True
                 and locales.get("no_submit") is True
+            )
+            checks["first_viewport_locale_switching_is_wired_without_submit_side_effects"] = (
+                "id=\"localeSelect\"" in html
+                and "data-i18n=\"app.title\"" in html
+                and "data-i18n=\"field.target\"" in html
+                and "data-i18n=\"action.start\"" in html
+                and "function applyLocale(locale)" in html
+                and "async function loadLocales()" in html
+                and "localStorage.setItem(UI_LOCALE_STORAGE_KEY" in html
+                and "fetch('/api/locales')" in html
+                and "Start acquisition" in html
+                and "Authorized live comment" in html
+                and "no_submit" in html
             )
             app_entry = (ROOT_DIR / "ReachOpsApp.py").read_text(encoding="utf-8")
             launcher_source = (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8")
