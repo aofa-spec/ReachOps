@@ -221,7 +221,7 @@ def run_runtime_smoke() -> dict:
     checks: dict[str, bool] = {}
     diagnostics: dict[str, object] = {}
 
-    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-", ignore_cleanup_errors=True) as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-") as tmpdir:
         try:
             reachops_web_ui.DATA_DIR = Path(tmpdir)
             reachops_web_ui.WEB_SETTINGS_PATH = Path(tmpdir) / "config" / "reachops_web_settings.json"
@@ -595,7 +595,6 @@ def run_runtime_smoke() -> dict:
                     "taskParams",
                     "taskActions",
                     "grid-template-columns:repeat(auto-fit,minmax(176px,1fr))",
-                    "grid-template-columns:minmax(140px,.9fr)",
                     "grid-template-columns:repeat(auto-fit,minmax(106px,1fr))",
                     "本地服务连接失败",
                     "$('runState').textContent = 'OFFLINE'",
@@ -625,14 +624,17 @@ def run_runtime_smoke() -> dict:
             checks["client_launch_entrypoints_are_unified_local_console"] = (
                 "from ReachOps.launcher import main" in app_entry
                 and "return _launch_web_client()" in launcher_source
-                and "legacy_requested = \"--legacy-tk\" in args or os.environ.get(\"REACHOPS_LEGACY_TK\") == \"1\""
+                and "web_requested = \"--web\" in args or os.environ.get(\"REACHOPS_WEB_CLIENT\") == \"1\""
                 in launcher_source
+                and "return _launch_legacy_tk_client()" in launcher_source
                 and "回退到原生 Tk 客户端" not in launcher_source
-                and "exec ./启动ReachOps统一WebUI.command" in local_client_command
+                and "exec \"$PYTHON_BIN\" ReachOpsApp.py" in local_client_command
+                and "原生客户端 UI" in local_client_command
                 and "tools/reachops_mac_self_check.py --start-web" in unified_web_command
-                and "ReachOps 客户端入口已统一到本地客户端控制台" in native_mac_command
-                and "ReachOpsApp.py --legacy-tk" in native_mac_command
-                and "test_default_entry_starts_unified_web_client" in launcher_tests
+                and "该入口不会打开 Web 控制台" in native_mac_command
+                and "ReachOpsApp.py" in native_mac_command
+                and "test_default_entry_starts_native_tk_client" in launcher_tests
+                and "test_web_client_requires_explicit_flag" in launcher_tests
                 and "test_missing_web_launcher_does_not_silently_fallback_to_legacy_tk" in launcher_tests
             )
 
