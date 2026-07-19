@@ -946,6 +946,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             checks["漏斗只显示本轮 Campaign"]["evidence"]["old_funnel"]["campaign_id"],
             checks["漏斗只显示本轮 Campaign"]["evidence"]["new_funnel"]["campaign_id"],
         )
+        self.assertGreater(checks["漏斗只显示本轮 Campaign"]["evidence"]["old_simulated_success"], 0)
+        self.assertEqual(checks["漏斗只显示本轮 Campaign"]["evidence"]["old_execution_success"], 0)
         self.assertEqual(checks["漏斗只显示本轮 Campaign"]["evidence"]["new_execution_success"], 0)
         self.assertEqual(checks["能识别页面打不开和无评论"]["status"], "passed")
         self.assertGreaterEqual(checks["能识别页面打不开和无评论"]["evidence"]["page_open_failed"]["errors"]["CREATOR_PAGE_OPEN_FAILED"], 1)

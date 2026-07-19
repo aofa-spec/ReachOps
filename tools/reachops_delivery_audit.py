@@ -1304,6 +1304,8 @@ def run_campaign_funnel_isolation_fixture(target: str) -> dict:
     new_funnel = workflow.build_campaign_funnel(campaign_id=new_plan["campaign"]["id"], batch_id=str(new_batch.get("id") or ""))
     old_snapshot = workflow.build_snapshot(campaign_id=old_plan["campaign"]["id"], batch_id=str(old_batch.get("id") or ""))
     new_snapshot = workflow.build_snapshot(campaign_id=new_plan["campaign"]["id"], batch_id=str(new_batch.get("id") or ""))
+    old_truth_counts = service.storage.outreach_execution_truth_counts(str(old_batch.get("id") or ""))
+    new_truth_counts = service.storage.outreach_execution_truth_counts(str(new_batch.get("id") or ""))
 
     return {
         "old_campaign_id": old_plan["campaign"]["id"],
@@ -1318,6 +1320,8 @@ def run_campaign_funnel_isolation_fixture(target: str) -> dict:
         "new_action_batch_ids": sorted({str(row.get("batch_id") or "") for row in new_snapshot.action_queue}),
         "old_execution_success": old_funnel.get("execution_success"),
         "new_execution_success": new_funnel.get("execution_success"),
+        "old_simulated_success": old_truth_counts.get("simulated_success"),
+        "new_simulated_success": new_truth_counts.get("simulated_success"),
     }
 
 
@@ -1933,7 +1937,9 @@ def run_audit(args) -> dict:
                 and campaign_funnel_isolation.get("new_candidate_batch_ids") == [campaign_funnel_isolation.get("new_batch_id")]
                 and campaign_funnel_isolation.get("old_action_batch_ids") == [campaign_funnel_isolation.get("old_batch_id")]
                 and campaign_funnel_isolation.get("new_action_batch_ids") == [campaign_funnel_isolation.get("new_batch_id")]
-                and int(campaign_funnel_isolation.get("old_execution_success") or 0) > 0
+                and int(campaign_funnel_isolation.get("old_simulated_success") or 0) > 0
+                and int(campaign_funnel_isolation.get("new_simulated_success") or 0) == 0
+                and int(campaign_funnel_isolation.get("old_execution_success") or 0) == 0
                 and int(campaign_funnel_isolation.get("new_execution_success") or 0) == 0
             ),
             campaign_funnel_isolation,
