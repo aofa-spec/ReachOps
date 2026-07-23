@@ -123,6 +123,11 @@ def verify_summary(
         else []
     )
     goal_summary = goal_status.get("summary") if isinstance(goal_status.get("summary"), dict) else {}
+    goal_status_json = report_path_status(
+        summary_path,
+        str(goal_status.get("json_path") or ""),
+    )
+    goal_status_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     if status not in {STATUS_PASSED, STATUS_READY_FOR_EXTERNAL_VALIDATION, STATUS_FAILED}:
         failures.append(f"unknown_status:{status or 'empty'}")
@@ -1082,6 +1087,44 @@ def verify_summary(
         if effective_pending_external == 0 and goal_pending:
             failures.append("goal_status_has_stale_pending")
             passed = False
+        if status == STATUS_PASSED and not str(goal_status.get("json_path") or "").strip():
+            failures.append("goal_status_json_path_missing")
+            passed = False
+        if status == STATUS_PASSED and summary_path and str(goal_status.get("json_path") or "").strip():
+            if not goal_status_json["exists"]:
+                failures.append("goal_status_json_missing")
+                passed = False
+            elif int(goal_status_json.get("size") or 0) <= 0:
+                failures.append("goal_status_json_empty")
+                passed = False
+            elif not bool(goal_status_json.get("inside_summary_dir")):
+                failures.append("goal_status_json_outside_summary_dir")
+                passed = False
+            else:
+                goal_status_payload_detail = load_report_payload(goal_status_json)
+                goal_status_payload = goal_status_payload_detail.get("payload") or {}
+                if not bool(goal_status_payload_detail.get("loaded")):
+                    failures.append("goal_status_json_invalid")
+                    passed = False
+                else:
+                    if str(goal_status_payload.get("status") or "") != goal_status_value:
+                        failures.append("goal_status_json_mismatch:status")
+                        passed = False
+                    payload_pending = as_list(goal_status_payload.get("pending_external_validation"))
+                    if [str(item) for item in payload_pending] != [str(item) for item in goal_pending]:
+                        failures.append("goal_status_json_mismatch:pending_external_validation")
+                        passed = False
+                    payload_summary = (
+                        goal_status_payload.get("summary")
+                        if isinstance(goal_status_payload.get("summary"), dict)
+                        else {}
+                    )
+                    for key in ("stages_passed", "stages_pending_external_validation", "stages_failed"):
+                        if int(payload_summary.get(key) or 0) != int(goal_summary.get(key) or 0):
+                            failures.append(f"goal_status_json_mismatch:summary.{key}")
+                            passed = False
+    else:
+        goal_status_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     if status == STATUS_PASSED and not final_acceptance_gate:
         failures.append("final_acceptance_gate_missing")
@@ -1414,6 +1457,12 @@ def verify_summary(
             "stages_pending_external_validation": int(goal_summary.get("stages_pending_external_validation") or 0),
             "stages_failed": int(goal_summary.get("stages_failed") or 0),
             "pending_external_validation": as_list(goal_pending),
+            "json_path": str(goal_status.get("json_path") or ""),
+            "json_exists": bool(goal_status_json.get("exists")),
+            "json_size": int(goal_status_json.get("size") or 0),
+            "json_inside_summary_dir": bool(goal_status_json.get("inside_summary_dir")),
+            "json_loaded": bool(goal_status_payload_detail.get("loaded")),
+            "json_error": str(goal_status_payload_detail.get("error") or ""),
         },
         "final_acceptance_gate": {
             "status": str(final_acceptance_gate.get("status") or ""),
