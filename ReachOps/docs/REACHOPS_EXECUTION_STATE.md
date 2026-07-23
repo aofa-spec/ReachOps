@@ -2087,6 +2087,10 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - `GET http://127.0.0.1:8769/api/groups?refresh=1` returned `group_count=16`, `known_group_count=16`, `live_all_group_counts_known=true`, `profile_count=2910`, and `United States` group `257999` with `397` known accounts. Count source is still reported as `cached_known_count_after_live_group_list`, so it is display/supporting evidence and not sufficient by itself to prove an executable READY profile.
   - `tools/reachops_client_delivery_check.py --json` failed as expected with `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `acceptance_ready=false`, `final_delivery_ready=false`, `profile_available=0`, and `failed_checks=["acceptance:ready"]`; output `/tmp/reachops-current-client-delivery.json`.
   - `tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json` failed as expected with `status=failed`, `mac_loop_ready=false`, `client_delivery.status=blocked_by_accounts`, `client_delivery.readiness=blocked_by_accounts`, `final_delivery_ready=false`, and `failed_checks=["acceptance:ready"]`; output `/tmp/reachops-current-mac-loop.json`.
+  - Continuation re-checks kept the same result: `/tmp/reachops-cont-ixbrowser-status.json` reports ixBrowser API `ready=true`; `/tmp/reachops-cont-groups.json` reports `United States` group `257999`, `397` known accounts, and `us_count_source=cached_known_count_after_live_group_list`; `/tmp/reachops-cont-client-delivery.json` reports `status=blocked_by_accounts`, `acceptance_ready=false`, and `profile_available=0`.
+  - Windows package input preflight is ready for a Windows build: `/tmp/reachops-cont-windows-package-preflight.json` reports `status=ready_for_windows_build`, `ready_for_windows_build=true`, and no build-contract failures.
+  - Windows final artifacts are still absent: `/tmp/reachops-cont-package-check.json` reports `status=failed`, `final_delivery_ready=false`, and missing `exe`, `installer`, `manifest`, and `acceptance_summary`.
+  - Strict final gate remains not ready: `/tmp/reachops-cont-final-gate.json` reports `status=not_ready`, `final_delivery_ready=false`, and failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`.
 - Blocker classification:
   - Current blocker is external account/environment readiness, not a new software defect: `profile_available=0` in the `United States` execution group.
   - Existing remediation evidence continues to show hard account blockers: `IXBROWSER_KERNEL_MISMATCH`, `LOGIN_REQUIRED`, `PROFILE_PREFLIGHT_TIMEOUT`, and `PAGE_OPEN_FAILED`.
@@ -2094,6 +2098,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Windows boundary:
   - Windows 11 VM, Windows ixBrowser, installed `ReachOps.exe`, installer, manifest, and Windows acceptance summary were not accessed or validated in this calibration.
   - Mac ixBrowser Local API readiness does not prove Windows client readiness.
+  - Current Mac-side package checks prove that Windows build inputs exist, but they do not generate or validate the installed Windows client; the next Windows step must run `tools\build_reachops_windows.ps1` and `tools\run_reachops_acceptance_windows.ps1` inside Windows.
 - Safety:
   - No TikTok live-submit, follow, DM, or comment was authorized or attempted.
   - No ixBrowser profile was opened by this calibration beyond read-only Local API status/group checks.
