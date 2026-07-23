@@ -2153,6 +2153,43 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - On Mac, repair or supply at least one `United States` profile that is TikTok logged-in, ixBrowser-kernel compatible, proxy/page-open stable, and eligible for automatic selection; then rerun the same customer-visible no-submit client calibration until five consecutive runs pass.
   - For final Windows delivery, enter the Windows 11 environment and validate installed `ReachOps.exe` with Windows ixBrowser; Mac-side verification remains insufficient for Windows acceptance.
 
+## Latest client plan-replay account-gate snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Close a customer-visible Web client interaction gap discovered during minimum-MVP calibration: the backend already rejected `/api/start-from-plan` when the account gate was blocked, but the UI still presented `重放计划执行` as enabled. This slice aligns the customer-visible plan replay entrypoint with the same account gate as `开始获客`.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now disables `startFromPlan` when the current selected group is account-gate blocked and account repair has not been confirmed for that group.
+  - `previewPlanReplay` remains enabled and its title explicitly states that, under account blocking, preview only explains the gate and does not start a browser.
+  - `startFromPlan()` now has a client-side guard that returns a structured `account_repair_required` notice with `no_browser_started=true` and `no_submit=true` if a disabled replay button is invoked.
+  - `tests/test_reachops_client_acceptance_status.py` now verifies that `/api/start-from-plan` rejects `account_repair_required` without launching `subprocess.Popen`, and that the rendered Web UI disables plan replay execution under an account gate.
+- Client-visible verification:
+  - The ReachOps local Web client was restarted from the current workspace on `http://127.0.0.1:8769/`.
+  - Browser DOM verification returned `acceptanceState="验收状态：账号阻断 / blocked_by_accounts / 目标：not_ready / 客户端门禁：blocked_by_accounts"`.
+  - Browser DOM verification returned `accountGateState="United States 账号阻断"`, `startDisabled=true`, `startFromPlanDisabled=true`, `previewPlanReplayDisabled=false`, and `previewPlanReplayTitle="United States 账号阻断；预检只会解释阻断原因，不会启动浏览器。"`
+  - No start button, plan replay execution button, ixBrowser profile launch, or TikTok page action was clicked during this verification.
+- Tests and checks:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m py_compile tools/reachops_web_ui.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Targeted plan-replay/account-gate tests: passed, 3 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 123 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`; output `/tmp/reachops-client-plan-replay-gate-operator-pressure.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-client-plan-replay-gate-delivery-audit.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-client-plan-replay-gate-goal-status-report.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 259 tests; log `/tmp/reachops-client-plan-replay-gate-campaign.log`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-client-plan-replay-gate-cleanliness.json`.
+  - `git diff --check`: passed.
+- Expected blockers:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_client_delivery_check.py --json` failed as expected with `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `acceptance_ready=false`, `final_delivery_ready=false`, `profile_available=0`, and `failed_checks=["acceptance:ready"]`; output `/tmp/reachops-client-plan-replay-gate-client-delivery.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json` failed as expected with `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, and failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-client-plan-replay-gate-goal-delivery-runner.json`.
+- Safety:
+  - No TikTok live-submit, follow, DM, or comment was authorized or attempted.
+  - No account repair plan was applied and no ixBrowser profile was launched by this slice.
+  - Current Mac and Windows ixBrowser installations are visible, but effective real validation still requires at least one READY, logged-in, kernel-compatible, page-openable profile selected automatically from the customer-visible client flow.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Next action:
+  - Repair or provide at least one usable `United States` profile, then rerun the same customer-visible no-submit client path. Only after five consecutive real client no-submit runs pass can the minimum-MVP readiness gate be considered for `minimum_mvp_ready=true`.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.

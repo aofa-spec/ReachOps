@@ -3436,6 +3436,17 @@ def html_page() -> bytes:
         $('start').disabled = !groupListReady || blockedByAccountGate;
         $('start').title = startBlockedReason;
       }}
+      if ($('startFromPlan')) {{
+        $('startFromPlan').disabled = blockedByAccountGate;
+        $('startFromPlan').title = blockedByAccountGate
+          ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；先执行账号修复或勾选已修复账号后再重放计划。`
+          : '使用最近一次 ExecutionPlan 重新启动本地执行。';
+      }}
+      if ($('previewPlanReplay')) {{
+        $('previewPlanReplay').title = blockedByAccountGate
+          ? `${{blockedGroupLabel}} 账号阻断；预检只会解释阻断原因，不会启动浏览器。`
+          : '预检最近一次 ExecutionPlan 的启动门禁。';
+      }}
       if ($('accountGateState')) {{
         $('accountGateState').textContent = blockedByAccountGate ? `${{blockedGroupLabel}} 账号阻断` : (pendingAccountRecheck ? `${{pendingGroupLabel}} 等待重新预检` : t('status.account_gate_enabled'));
         $('accountGateState').className = blockedByAccountGate ? 'pill danger' : (pendingAccountRecheck ? 'pill warn' : 'pill ok');
@@ -3552,6 +3563,15 @@ def html_page() -> bytes:
       return result;
     }}
     async function startFromPlan() {{
+      if ($('startFromPlan') && $('startFromPlan').disabled) {{
+        showApiNotice(
+          '计划重放被门禁拦截',
+          {{status:'rejected', error:'account_repair_required', next_actions:['先执行账号修复计划，或勾选已修复账号后重新预检。'], no_browser_started:true, no_submit:true}},
+          'blocked',
+          12000
+        );
+        return;
+      }}
       const preview = await previewPlanReplay();
       const decision = preview.preflight_decision || {{}};
       if (decision.start_allowed !== true) return;

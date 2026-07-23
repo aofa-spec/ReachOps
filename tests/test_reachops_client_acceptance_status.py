@@ -1594,6 +1594,73 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         account_gate.assert_called_once_with("United States", False)
         popen.assert_not_called()
 
+    def test_start_from_plan_handler_rejects_account_gate_without_launching_process(self):
+        body = json.dumps({}).encode("utf-8")
+        headers = Message()
+        headers["Host"] = "127.0.0.1:8769"
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(body))
+        handler = object.__new__(reachops_web_ui.Handler)
+        handler.path = "/api/start-from-plan"
+        handler.headers = headers
+        handler.rfile = BytesIO(body)
+        captured = {}
+
+        def capture_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        plan = {
+            "schema_version": "reachops.execution_plan.v1",
+            "plan_id": "plan_blocked_accounts",
+            "target": "anti aging serum",
+            "source_type": "auto",
+            "profile_group": "United States",
+            "mode": "preflight",
+            "volume": "quick",
+            "limits": {"profile_limit": 3},
+            "authorization": {"live_confirmed": False, "account_repair_confirmed": False},
+            "ui": {},
+        }
+        handler._send_json = capture_json
+        old_process = reachops_web_ui.RUN_PROCESS
+        try:
+            reachops_web_ui.RUN_PROCESS = None
+            with patch("tools.reachops_web_ui.read_execution_plan", return_value=plan):
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch(
+                        "tools.reachops_web_ui.validate_account_repair_for_start",
+                        return_value=(
+                            False,
+                            {
+                                "status": "rejected",
+                                "error": "account_repair_required",
+                                "message": "账号未修复",
+                                "no_browser_started": True,
+                                "no_submit": True,
+                            },
+                        ),
+                    ) as account_gate:
+                        with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
+                            reachops_web_ui.Handler.do_POST(handler)
+        finally:
+            reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(captured["status"], 409)
+        self.assertEqual(captured["payload"]["status"], "rejected")
+        self.assertEqual(captured["payload"]["error"], "account_repair_required")
+        self.assertTrue(captured["payload"]["no_browser_started"])
+        self.assertTrue(captured["payload"]["no_submit"])
+        account_gate.assert_called_once_with("United States", False)
+        popen.assert_not_called()
+
+    def test_web_ui_disables_start_from_plan_when_account_gate_is_blocked(self):
+        html = html_page().decode("utf-8")
+
+        self.assertIn("$('startFromPlan').disabled = blockedByAccountGate", html)
+        self.assertIn("计划重放被门禁拦截", html)
+        self.assertIn("账号阻断；预检只会解释阻断原因，不会启动浏览器。", html)
+
     def test_account_repair_gate_blocks_only_matching_group(self):
         delivery = {
             "status": "blocked_by_accounts",
