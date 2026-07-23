@@ -1356,6 +1356,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "dm_review": [{"status": "success"}],
             },
             "missing_preflight_action_types": [],
+            "no_submit": True,
+            "json_path": "reports/reachops_acceptance/current/live_preflight_payload.json",
         }
         png_sha = hashlib.sha256(b"png").hexdigest()
         def sidecar(action_type):
@@ -1407,6 +1409,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             },
             "missing_evidence_action_types": [],
             "missing_local_evidence_file_action_types": [],
+            "json_path": "reports/reachops_acceptance/current/live_submit_payload.json",
         }
         passed = verify_reachops_acceptance_summary(passed_summary)
         self.assertTrue(passed["passed"])
@@ -1645,6 +1648,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             path_checked_summary["client_delivery"]["json_path"] = "client_delivery.json"
             path_checked_summary["live_readiness"]["json_path"] = "live_readiness_payload.json"
             path_checked_summary["live_acceptance_status"]["json_path"] = "live_acceptance_status_payload.json"
+            path_checked_summary["live_preflight"]["json_path"] = "live_preflight_payload.json"
+            path_checked_summary["live_submit"]["json_path"] = "live_submit_payload.json"
             path_checked_summary["final_acceptance_gate"]["json_path"] = "final_acceptance_gate.json"
             path_checked_summary["authorization_handoff"]["json_path"] = "authorization_handoff_payload.json"
             path_checked_summary["final_acceptance_gate"]["checks"] = final_acceptance_gate_payload()["checks"]
@@ -1720,6 +1725,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(path_checked_summary["live_acceptance_status"]),
                 encoding="utf-8",
             )
+            (report_dir / "live_preflight_payload.json").write_text(
+                json.dumps(path_checked_summary["live_preflight"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_submit_payload.json").write_text(
+                json.dumps(path_checked_summary["live_submit"]),
+                encoding="utf-8",
+            )
             (report_dir / "final_acceptance_gate.json").write_text(
                 json.dumps(path_checked_summary["final_acceptance_gate"]),
                 encoding="utf-8",
@@ -1750,6 +1763,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["live_readiness"]["json_loaded"])
             self.assertTrue(path_checked["live_acceptance_status"]["json_exists"])
             self.assertTrue(path_checked["live_acceptance_status"]["json_loaded"])
+            self.assertTrue(path_checked["live_preflight"]["json_exists"])
+            self.assertTrue(path_checked["live_preflight"]["json_loaded"])
+            self.assertTrue(path_checked["live_submit"]["json_exists"])
+            self.assertTrue(path_checked["live_submit"]["json_loaded"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_exists"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_loaded"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
@@ -1764,6 +1781,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["client_delivery"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["live_readiness"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["live_acceptance_status"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["live_preflight"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["live_submit"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["authorization_handoff"]["json_inside_summary_dir"])
 
@@ -2083,6 +2102,67 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(path_checked_summary["live_acceptance_status"]),
                 encoding="utf-8",
             )
+            (report_dir / "live_preflight_payload.json").unlink()
+            missing_live_preflight_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_live_preflight_file["passed"])
+            self.assertIn("live_preflight_json_missing", missing_live_preflight_file["failures"])
+
+            (report_dir / "live_preflight_payload.json").write_text("", encoding="utf-8")
+            empty_live_preflight_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_live_preflight_file["passed"])
+            self.assertIn("live_preflight_json_empty", empty_live_preflight_file["failures"])
+
+            (report_dir / "live_preflight_payload.json").write_text("{", encoding="utf-8")
+            invalid_live_preflight_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_live_preflight_file["passed"])
+            self.assertIn("live_preflight_json_invalid", invalid_live_preflight_file["failures"])
+
+            mismatched_live_preflight_payload = json.loads(json.dumps(path_checked_summary["live_preflight"]))
+            mismatched_live_preflight_payload["missing_preflight_action_types"] = ["comment_reply"]
+            (report_dir / "live_preflight_payload.json").write_text(
+                json.dumps(mismatched_live_preflight_payload),
+                encoding="utf-8",
+            )
+            mismatched_live_preflight_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_live_preflight_file["passed"])
+            self.assertIn(
+                "live_preflight_json_mismatch:missing_preflight_action_types",
+                mismatched_live_preflight_file["failures"],
+            )
+
+            (report_dir / "live_preflight_payload.json").write_text(
+                json.dumps(path_checked_summary["live_preflight"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_submit_payload.json").unlink()
+            missing_live_submit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_live_submit_file["passed"])
+            self.assertIn("live_submit_json_missing", missing_live_submit_file["failures"])
+
+            (report_dir / "live_submit_payload.json").write_text("", encoding="utf-8")
+            empty_live_submit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_live_submit_file["passed"])
+            self.assertIn("live_submit_json_empty", empty_live_submit_file["failures"])
+
+            (report_dir / "live_submit_payload.json").write_text("{", encoding="utf-8")
+            invalid_live_submit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_live_submit_file["passed"])
+            self.assertIn("live_submit_json_invalid", invalid_live_submit_file["failures"])
+
+            mismatched_live_submit_payload = json.loads(json.dumps(path_checked_summary["live_submit"]))
+            mismatched_live_submit_payload["summary"]["success"] = 2
+            (report_dir / "live_submit_payload.json").write_text(
+                json.dumps(mismatched_live_submit_payload),
+                encoding="utf-8",
+            )
+            mismatched_live_submit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_live_submit_file["passed"])
+            self.assertIn("live_submit_json_mismatch:summary.success", mismatched_live_submit_file["failures"])
+
+            (report_dir / "live_submit_payload.json").write_text(
+                json.dumps(path_checked_summary["live_submit"]),
+                encoding="utf-8",
+            )
             (report_dir / "final_acceptance_gate.json").write_text("", encoding="utf-8")
             empty_final_gate_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(empty_final_gate_file["passed"])
@@ -2168,6 +2248,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (outside_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (outside_dir / "live_readiness_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "live_acceptance_status_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "live_preflight_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "live_submit_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (outside_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             outside_summary = json.loads(json.dumps(path_checked_summary))
@@ -2180,6 +2262,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             outside_summary["client_delivery"]["json_path"] = "../outside/client_delivery.json"
             outside_summary["live_readiness"]["json_path"] = "../outside/live_readiness_payload.json"
             outside_summary["live_acceptance_status"]["json_path"] = "../outside/live_acceptance_status_payload.json"
+            outside_summary["live_preflight"]["json_path"] = "../outside/live_preflight_payload.json"
+            outside_summary["live_submit"]["json_path"] = "../outside/live_submit_payload.json"
             outside_summary["final_acceptance_gate"]["json_path"] = "../outside/final_acceptance_gate.json"
             outside_summary["authorization_handoff"]["json_path"] = "../outside/authorization_handoff_payload.json"
             outside_report_file = verify_reachops_acceptance_summary(outside_summary, summary_path=summary_path)
@@ -2193,6 +2277,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("client_delivery_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("live_readiness_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("live_acceptance_status_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("live_preflight_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("live_submit_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("final_acceptance_gate_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("authorization_handoff_json_outside_summary_dir", outside_report_file["failures"])
             self.assertFalse(outside_report_file["delivery_audit"]["json_inside_summary_dir"])
@@ -2204,6 +2290,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(outside_report_file["client_delivery"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["live_readiness"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["live_acceptance_status"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["live_preflight"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["live_submit"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["final_acceptance_gate"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["authorization_handoff"]["json_inside_summary_dir"])
 
@@ -2929,6 +3017,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         "dm_review": [{"status": "success"}],
                     },
                     "missing_preflight_action_types": [],
+                    "no_submit": True,
                     "json_path": str(report_dir / "live_preflight_payload.json"),
                 },
                 "live_submit": {
@@ -3049,6 +3138,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             )
             (report_dir / "authorization_handoff_payload.json").write_text(
                 json.dumps(summary["authorization_handoff"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_preflight_payload.json").write_text(
+                json.dumps(summary["live_preflight"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_submit_payload.json").write_text(
+                json.dumps(summary["live_submit"]),
                 encoding="utf-8",
             )
             (report_dir / "final_acceptance_gate.json").write_text(json.dumps(summary["final_acceptance_gate"]), encoding="utf-8")

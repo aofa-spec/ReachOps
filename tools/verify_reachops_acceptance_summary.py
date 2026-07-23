@@ -613,6 +613,11 @@ def verify_summary(
         str(live_readiness.get("json_path") or ""),
     )
     live_readiness_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    live_preflight_json = report_path_status(
+        summary_path,
+        str(live_preflight.get("json_path") or ""),
+    )
+    live_preflight_payload_detail = {"loaded": False, "error": "", "payload": {}}
     if final_external_resolved:
         readiness_status = str(live_readiness.get("status") or "")
         if readiness_status not in {"ready", "completed"} or not bool(live_readiness.get("ready")):
@@ -652,6 +657,37 @@ def verify_summary(
                             failures.append(f"live_readiness_json_mismatch:{key}")
         if str(live_preflight.get("status") or "") != "completed":
             failures.append("live_preflight_not_completed")
+        if status == STATUS_PASSED and not str(live_preflight.get("json_path") or "").strip():
+            failures.append("live_preflight_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(live_preflight.get("json_path") or "").strip():
+            if not live_preflight_json["exists"]:
+                failures.append("live_preflight_json_missing")
+            elif int(live_preflight_json.get("size") or 0) <= 0:
+                failures.append("live_preflight_json_empty")
+            elif not bool(live_preflight_json.get("inside_summary_dir")):
+                failures.append("live_preflight_json_outside_summary_dir")
+            else:
+                live_preflight_payload_detail = load_report_payload(live_preflight_json)
+                live_preflight_payload = live_preflight_payload_detail.get("payload") or {}
+                if not bool(live_preflight_payload_detail.get("loaded")):
+                    failures.append("live_preflight_json_invalid")
+                else:
+                    expected_preflight_fields = {
+                        "status": str(live_preflight.get("status") or ""),
+                        "no_submit": bool(live_preflight.get("no_submit", True)),
+                    }
+                    for key, expected in expected_preflight_fields.items():
+                        actual = live_preflight_payload.get(key)
+                        if isinstance(expected, bool):
+                            matches = bool(actual) == expected
+                        else:
+                            matches = str(actual or "") == expected
+                        if not matches:
+                            failures.append(f"live_preflight_json_mismatch:{key}")
+                    payload_missing_preflight = as_list(live_preflight_payload.get("missing_preflight_action_types"))
+                    expected_missing_preflight = as_list(live_preflight.get("missing_preflight_action_types"))
+                    if [str(item) for item in payload_missing_preflight] != [str(item) for item in expected_missing_preflight]:
+                        failures.append("live_preflight_json_mismatch:missing_preflight_action_types")
 
     if status == STATUS_PASSED and not live_acceptance_status:
         failures.append("live_acceptance_status_missing")
@@ -881,6 +917,57 @@ def verify_summary(
         if isinstance(live_submit.get("missing_local_evidence_file_action_types"), list)
         else []
     )
+    live_submit_json = report_path_status(
+        summary_path,
+        str(live_submit.get("json_path") or ""),
+    )
+    live_submit_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not str(live_submit.get("json_path") or "").strip():
+        failures.append("live_submit_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(live_submit.get("json_path") or "").strip():
+        if not live_submit_json["exists"]:
+            failures.append("live_submit_json_missing")
+        elif int(live_submit_json.get("size") or 0) <= 0:
+            failures.append("live_submit_json_empty")
+        elif not bool(live_submit_json.get("inside_summary_dir")):
+            failures.append("live_submit_json_outside_summary_dir")
+        else:
+            live_submit_payload_detail = load_report_payload(live_submit_json)
+            live_submit_payload = live_submit_payload_detail.get("payload") or {}
+            if not bool(live_submit_payload_detail.get("loaded")):
+                failures.append("live_submit_json_invalid")
+            else:
+                expected_live_submit_fields = {
+                    "status": str(live_submit.get("status") or ""),
+                    "executor_mode": str(live_submit.get("executor_mode") or ""),
+                    "platform_validation": bool(live_submit.get("platform_validation")),
+                    "passed": bool(live_submit.get("passed")),
+                    "live_submit": bool(live_submit.get("live_submit")),
+                    "activation_status_loaded": bool(live_submit.get("activation_status_loaded")),
+                }
+                for key, expected in expected_live_submit_fields.items():
+                    actual = live_submit_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"live_submit_json_mismatch:{key}")
+                live_submit_summary = live_submit.get("summary") if isinstance(live_submit.get("summary"), dict) else {}
+                payload_summary = (
+                    live_submit_payload.get("summary")
+                    if isinstance(live_submit_payload.get("summary"), dict)
+                    else {}
+                )
+                for key in ("selected_actions", "success", "failed", "skipped"):
+                    if int(payload_summary.get(key) or 0) != int(live_submit_summary.get(key) or 0):
+                        failures.append(f"live_submit_json_mismatch:summary.{key}")
+                payload_missing_evidence = as_list(live_submit_payload.get("missing_evidence_action_types"))
+                if [str(item) for item in payload_missing_evidence] != [str(item) for item in missing_evidence_action_types]:
+                    failures.append("live_submit_json_mismatch:missing_evidence_action_types")
+                payload_missing_local = as_list(live_submit_payload.get("missing_local_evidence_file_action_types"))
+                if [str(item) for item in payload_missing_local] != [str(item) for item in missing_local_evidence_file_action_types]:
+                    failures.append("live_submit_json_mismatch:missing_local_evidence_file_action_types")
     if str(live_submit.get("status") or "") == "completed" and bool(live_submit.get("platform_validation")):
         live_submit_summary = live_submit.get("summary") if isinstance(live_submit.get("summary"), dict) else {}
         live_submit_required_types = {"comment_reply", "follow_review", "dm_review"}
@@ -1168,6 +1255,12 @@ def verify_summary(
             "status": str(live_preflight.get("status") or ""),
             "missing_preflight_action_types": list(live_preflight.get("missing_preflight_action_types") or []),
             "no_submit": bool(live_preflight.get("no_submit", True)),
+            "json_path": str(live_preflight.get("json_path") or ""),
+            "json_exists": bool(live_preflight_json.get("exists")),
+            "json_size": int(live_preflight_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_preflight_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_preflight_payload_detail.get("loaded")),
+            "json_error": str(live_preflight_payload_detail.get("error") or ""),
             "evidence_file_detail_action_types": sorted(
                 key
                 for key, value in (
@@ -1308,6 +1401,12 @@ def verify_summary(
             "missing_evidence_action_types": as_list(missing_evidence_action_types),
             "missing_local_evidence_file_action_types": as_list(missing_local_evidence_file_action_types),
             "evidence_file_detail_action_types": sorted(evidence_file_details.keys()),
+            "json_path": str(live_submit.get("json_path") or ""),
+            "json_exists": bool(live_submit_json.get("exists")),
+            "json_size": int(live_submit_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_submit_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_submit_payload_detail.get("loaded")),
+            "json_error": str(live_submit_payload_detail.get("error") or ""),
         },
         "goal_status": {
             "status": goal_status_value,
