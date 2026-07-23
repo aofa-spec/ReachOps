@@ -2591,6 +2591,8 @@ def external_headless_process_running() -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=1,
         )
         return result.returncode == 0 and bool(result.stdout.strip())
@@ -5878,38 +5880,39 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "revenue_cents": 0,
     }
     if db_path.exists() and batch_id:
+        conn = None
         try:
-            with sqlite3.connect(str(db_path)) as conn:
-                conn.row_factory = sqlite3.Row
-                public_reply_table_exists = sqlite_table_exists(conn, "public_reply_events")
-                conversion_table_exists = sqlite_table_exists(conn, "conversion_events")
-                count_row = conn.execute(
-                    "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=?",
-                    (batch_id,),
-                ).fetchone()
-                counts["candidates"] = safe_int(count_row["count"] if count_row else 0, 0)
-                high_row = conn.execute(
-                    "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=? AND qualify_score>=50",
-                    (batch_id,),
-                ).fetchone()
-                counts["high_intent"] = safe_int(high_row["count"] if high_row else 0, 0)
-                rows["collection_tasks"] = [
-                    dict(row)
-                    for row in conn.execute(
-                        """
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            public_reply_table_exists = sqlite_table_exists(conn, "public_reply_events")
+            conversion_table_exists = sqlite_table_exists(conn, "conversion_events")
+            count_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=?",
+                (batch_id,),
+            ).fetchone()
+            counts["candidates"] = safe_int(count_row["count"] if count_row else 0, 0)
+            high_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=? AND qualify_score>=50",
+                (batch_id,),
+            ).fetchone()
+            counts["high_intent"] = safe_int(high_row["count"] if high_row else 0, 0)
+            rows["collection_tasks"] = [
+                dict(row)
+                for row in conn.execute(
+                    """
                         SELECT source_type, source_value, profile_id, status, error_code, error_message, updated_at
                         FROM collection_tasks
                         WHERE batch_id=?
                         ORDER BY created_at ASC, rowid ASC
                         LIMIT 80
                         """,
-                        (batch_id,),
-                    ).fetchall()
-                ]
-                rows["action_queue"] = [
-                    dict(row)
-                    for row in conn.execute(
-                        """
+                    (batch_id,),
+                ).fetchall()
+            ]
+            rows["action_queue"] = [
+                dict(row)
+                for row in conn.execute(
+                    """
                         SELECT aq.id, aq.lead_id, aq.target_username, aq.action_type, aq.target_url,
                                aq.suggested_text, aq.reason, aq.status, aq.risk_level,
                                aq.last_error_code, aq.last_error_message, aq.last_executed_at,
@@ -5920,13 +5923,13 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                         ORDER BY aq.created_at DESC, aq.rowid DESC
                         LIMIT 80
                         """,
-                        (batch_id,),
-                    ).fetchall()
-                ]
-                rows["outreach_executions"] = [
-                    dict(row)
-                    for row in conn.execute(
-                        """
+                    (batch_id,),
+                ).fetchall()
+            ]
+            rows["outreach_executions"] = [
+                dict(row)
+                for row in conn.execute(
+                    """
                         SELECT oe.id, oe.action_id, oe.target_username, oe.action_type, oe.profile_id,
                                oe.status, oe.evidence_path, oe.error_code, oe.error_message,
                                oe.risk_gate_json, oe.completed_at, oe.created_at,
@@ -5940,23 +5943,23 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                         ORDER BY oe.created_at DESC, oe.rowid DESC
                         LIMIT 80
                         """,
-                        (batch_id,),
-                    ).fetchall()
-                ]
-                rows["lead_view"] = load_operator_lead_rows(
-                    conn,
-                    batch_id,
-                    include_public_replies=public_reply_table_exists,
-                    include_conversions=conversion_table_exists,
-                )
-                if not rows["lead_view"]:
-                    rows["lead_view"] = load_candidate_lead_rows(conn, batch_id)
-                rows["outreach_view"] = build_operator_outreach_rows(rows["action_queue"], rows["outreach_executions"], config)
-                if public_reply_table_exists:
-                    rows["public_reply_events"] = [
-                        dict(row)
-                        for row in conn.execute(
-                            """
+                    (batch_id,),
+                ).fetchall()
+            ]
+            rows["lead_view"] = load_operator_lead_rows(
+                conn,
+                batch_id,
+                include_public_replies=public_reply_table_exists,
+                include_conversions=conversion_table_exists,
+            )
+            if not rows["lead_view"]:
+                rows["lead_view"] = load_candidate_lead_rows(conn, batch_id)
+            rows["outreach_view"] = build_operator_outreach_rows(rows["action_queue"], rows["outreach_executions"], config)
+            if public_reply_table_exists:
+                rows["public_reply_events"] = [
+                    dict(row)
+                    for row in conn.execute(
+                        """
                             SELECT id, campaign_id, run_id, batch_id, lead_id, action_id, execution_id,
                                    target_username, reply_author_username, reply_text, reply_language,
                                    source_url, replied_at, intent_confirmed, qualification_state,
@@ -5966,14 +5969,14 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                             ORDER BY created_at DESC, rowid DESC
                             LIMIT 80
                             """,
-                            (batch_id,),
-                        ).fetchall()
-                    ]
-                if conversion_table_exists:
-                    rows["conversion_events"] = [
-                        dict(row)
-                        for row in conn.execute(
-                            """
+                        (batch_id,),
+                    ).fetchall()
+                ]
+            if conversion_table_exists:
+                rows["conversion_events"] = [
+                    dict(row)
+                    for row in conn.execute(
+                        """
                             SELECT id, campaign_id, run_id, batch_id, lead_id, action_id, public_reply_event_id,
                                    conversion_type, conversion_state, amount_cents, currency, source,
                                    notes, idempotency_key, recorded_at, created_by, created_at
@@ -5982,12 +5985,15 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                             ORDER BY recorded_at DESC, created_at DESC, rowid DESC
                             LIMIT 80
                             """,
-                            (batch_id,),
-                        ).fetchall()
-                    ]
-                rows["profile_queue"] = load_profile_queue_rows(conn, batch_id)
+                        (batch_id,),
+                    ).fetchall()
+                ]
+            rows["profile_queue"] = load_profile_queue_rows(conn, batch_id)
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
     counts["qualified_leads"] = len([row for row in rows["lead_view"] if safe_int(row.get("score") or row.get("qualify_score"), 0) >= 50])
     counts["public_replies"] = len(rows["public_reply_events"])
     counts["qualified_replies"] = len(

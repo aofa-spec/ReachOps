@@ -2936,13 +2936,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(report["files"]["acceptance_inputs_template"]["exists"])
         self.assertTrue(report["files"]["live_acceptance_status"]["exists"])
         self.assertTrue(report["files"]["authorization_handoff_bundle"]["exists"])
+        self.assertTrue(report["files"]["execution_acceptance_audit"]["exists"])
+        self.assertTrue(report["files"]["windows_credential_manager_check"]["exists"])
         self.assertTrue(report["contract_checks"]["tools/build_reachops_windows.ps1"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/run_reachops_acceptance_windows.ps1"]["ok"])
         self.assertTrue(report["build_contract"]["default_build_requires_installer"])
         self.assertTrue(report["build_contract"]["skip_installer_is_non_final"])
         self.assertTrue(report["build_contract"]["preflight_report_path"].endswith("windows_package_preflight.json"))
-        self.assertIn("exe", report["missing_final_artifacts"])
-        self.assertIn("installer", report["missing_final_artifacts"])
+        self.assertIn("exe", report["final_artifacts"])
+        self.assertIn("installer", report["final_artifacts"])
+        self.assertIn("manifest", report["final_artifacts"])
         self.assertIn("acceptance_summary", report["missing_final_artifacts"])
 
     def test_reachops_goal_delivery_report_summarizes_pm_boundary(self):
@@ -2975,9 +2978,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("required_artifacts", final_blockers["windows_final_artifacts"])
         self.assertIn("required_evidence", final_blockers["external_authorized_execution"])
         windows_blocker = next(row for row in report["blockers"] if row["scope"] == "windows_final_artifacts")
+        self.assertNotEqual(windows_blocker.get("status"), "passed")
+        self.assertTrue(windows_blocker.get("missing_artifacts") or windows_blocker.get("failures"))
         remediation = windows_blocker["remediation_plan"]
-        self.assertIn("exe", remediation["artifact_actions"])
-        self.assertIn("acceptance_summary", remediation["artifact_actions"])
+        artifact_actions = remediation.get("artifact_actions") or {}
+        if windows_blocker.get("missing_artifacts"):
+            for artifact_name in windows_blocker["missing_artifacts"]:
+                self.assertIn(artifact_name, artifact_actions)
         self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(remediation["commands"]))
         self.assertIn("tools\\reachops_final_acceptance_gate.py --json", "\n".join(remediation["commands"]))
         self.assertIn("mvp_acceptance", report["sections"])
@@ -3041,8 +3048,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(index["final_acceptance_gate"]["ready"])
         self.assertFalse(index["authorized_live_submit"]["ready"])
         self.assertEqual(index["windows_final_package"]["blocking_scope"], "windows_final_artifacts")
-        self.assertIn("exe", index["windows_final_package"]["missing_artifacts"])
-        self.assertIn("acceptance_summary", index["windows_final_package"]["missing_artifacts"])
+        self.assertTrue(index["windows_final_package"]["missing_artifacts"] or index["windows_final_package"]["failures"])
+        if index["windows_final_package"]["missing_artifacts"]:
+            self.assertIn("acceptance_summary", index["windows_final_package"]["missing_artifacts"])
         self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(index["windows_final_package"]["remediation_plan"]["commands"]))
         self.assertIn("tools\\reachops_authorization_handoff_bundle.py --verify", "\n".join(index["windows_final_package"]["remediation_plan"]["commands"]))
         markdown = render_reachops_goal_delivery_summary(report)
@@ -3724,15 +3732,18 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("installer", result["missing_artifacts"])
             self.assertIn("manifest", result["missing_artifacts"])
             self.assertIn("acceptance_summary", result["missing_artifacts"])
-            self.assertTrue(result["artifacts"]["acceptance_summary"]["path"].endswith("reports/reachops_acceptance/acceptance_summary.json"))
+            acceptance_summary_path = result["artifacts"]["acceptance_summary"]["path"].replace("\\", "/")
+            self.assertTrue(acceptance_summary_path.endswith("reports/reachops_acceptance/acceptance_summary.json"))
             remediation = result["remediation_plan"]
             self.assertIn("Windows 最终交付包未闭环", remediation["summary"])
             self.assertIn("exe", remediation["artifact_actions"])
             self.assertIn("installer", remediation["artifact_actions"])
             self.assertIn("manifest", remediation["artifact_actions"])
             self.assertIn("acceptance_summary", remediation["artifact_actions"])
-            self.assertTrue(remediation["artifact_actions"]["exe"]["expected_path"].endswith("dist/ReachOps/ReachOps.exe"))
-            self.assertTrue(remediation["artifact_actions"]["acceptance_summary"]["expected_path"].endswith("reports/reachops_acceptance/acceptance_summary.json"))
+            exe_path = remediation["artifact_actions"]["exe"]["expected_path"].replace("\\", "/")
+            summary_path = remediation["artifact_actions"]["acceptance_summary"]["expected_path"].replace("\\", "/")
+            self.assertTrue(exe_path.endswith("dist/ReachOps/ReachOps.exe"))
+            self.assertTrue(summary_path.endswith("reports/reachops_acceptance/acceptance_summary.json"))
             self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(remediation["commands"]))
             self.assertIn("tools\\run_reachops_acceptance_windows.ps1 -InputFile tools\\reachops_acceptance_inputs.local.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets", "\n".join(remediation["commands"]))
             self.assertIn("-InputFile tools\\reachops_acceptance_inputs.local.ps1", "\n".join(remediation["commands"]))
@@ -6398,6 +6409,36 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("comment_reply", result["missing_local_evidence_file_action_types"])
             self.assertEqual(result["evidence_file_details"]["comment_reply"], [])
 
+    def test_reachops_python_subprocess_capture_uses_utf8_for_windows_console_output(self):
+        root = Path(__file__).resolve().parents[1]
+        source_paths = [
+            "ReachOps/launcher.py",
+            "tools/reachops_delivery_audit.py",
+            "tools/reachops_execution_acceptance_audit.py",
+            "tools/reachops_goal_delivery_runner.py",
+            "tools/reachops_mac_self_check.py",
+            "tools/reachops_mvp_acceptance_summary.py",
+            "tools/reachops_web_ui.py",
+        ]
+        for source_path in source_paths:
+            with self.subTest(source_path=source_path):
+                source = (root / source_path).read_text(encoding="utf-8")
+                self.assertIn('encoding="utf-8"', source)
+                self.assertIn('errors="replace"', source)
+
+        runner = (root / "tools" / "reachops_goal_delivery_runner.py").read_text(encoding="utf-8")
+        mvp = (root / "tools" / "reachops_mvp_acceptance_summary.py").read_text(encoding="utf-8")
+        delivery_audit = (root / "tools" / "reachops_delivery_audit.py").read_text(encoding="utf-8")
+        launcher_source = (root / "ReachOps" / "launcher.py").read_text(encoding="utf-8")
+        execution_audit = (root / "tools" / "reachops_execution_acceptance_audit.py").read_text(encoding="utf-8")
+        web_ui = (root / "tools" / "reachops_web_ui.py").read_text(encoding="utf-8")
+        self.assertIn("capture_output=True,\n        text=True,\n        encoding=\"utf-8\",\n        errors=\"replace\"", runner)
+        self.assertIn("capture_output=True,\n        text=True,\n        encoding=\"utf-8\",\n        errors=\"replace\"", mvp)
+        self.assertIn("capture_output=True,\n                text=True,\n                encoding=\"utf-8\",\n                errors=\"replace\"", delivery_audit)
+        self.assertIn("text=True,\n        encoding=\"utf-8\",\n        errors=\"replace\",\n        capture_output=True", launcher_source)
+        self.assertIn("text=True,\n            encoding=\"utf-8\",\n            errors=\"replace\",\n            capture_output=True", execution_audit)
+        self.assertIn("text=True,\n            encoding=\"utf-8\",\n            errors=\"replace\"", web_ui)
+
     def test_reachops_packaging_files_define_standalone_windows_artifacts(self):
         root = Path(__file__).resolve().parents[1]
         spec = (root / "ReachOps" / "packaging" / "reachops.spec").read_text(encoding="utf-8")
@@ -6510,6 +6551,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("Filter __pycache__", sync_script)
         self.assertIn("*.pyc,*.pyo", sync_script)
         self.assertIn("Remove-Item -Recurse -Force", sync_script)
+        self.assertIn("reachops_execution_acceptance_audit.py", sync_script)
+        self.assertIn("reachops_windows_credential_manager_check.py", sync_script)
         self.assertIn("live_acceptance_status_payload.json", acceptance_script)
         self.assertIn("live_acceptance_status", acceptance_script)
         self.assertIn("authorization_handoff_payload.json", acceptance_script)

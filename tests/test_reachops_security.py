@@ -185,6 +185,49 @@ class ReachOpsSecurityTests(unittest.TestCase):
         self.assertNotIn("reachops-validation-known-secret-token", serialized)
         self.assertEqual(stored, {})
 
+    def test_windows_credential_manager_check_reports_session_failure_without_traceback(self) -> None:
+        class FailingCredentialStore:
+            def __init__(self, namespace: str = "ReachOpsValidation"):
+                self.namespace = namespace
+
+            def set_secret(self, name: str, value: str) -> dict:
+                raise RuntimeError("CredWrite session unavailable")
+
+            def get_secret(self, name: str) -> str:
+                raise AssertionError("readback must not run after write failure")
+
+            def delete_secret(self, name: str) -> dict:
+                return {"deleted": False, "backend": BACKEND_WINDOWS_CREDENTIAL_MANAGER}
+
+        with patch.object(
+            reachops_windows_credential_manager_check,
+            "credential_storage_status",
+            return_value={
+                "schema_version": CREDENTIAL_STORAGE_SCHEMA_VERSION,
+                "platform": "win32",
+                "backend": BACKEND_WINDOWS_CREDENTIAL_MANAGER,
+                "available": True,
+                "secret_persistence_allowed": True,
+                "windows_credential_manager_required": True,
+                "status_includes_secret_values": False,
+            },
+        ), patch.object(
+            reachops_windows_credential_manager_check,
+            "ReachOpsCredentialStore",
+            FailingCredentialStore,
+        ), patch.object(reachops_windows_credential_manager_check.secrets, "token_urlsafe", return_value="known-secret-token"):
+            result = reachops_windows_credential_manager_check.run_validation(credential_name="unit_test")
+
+        serialized = json.dumps(result, ensure_ascii=False)
+        self.assertEqual(result["status"], "blocked_external_validation")
+        self.assertFalse(result["passed"])
+        self.assertTrue(result["checks"]["windows_credential_manager_available"])
+        self.assertFalse(result["checks"]["secret_write_succeeded"])
+        self.assertFalse(result["checks"]["secret_readback_matched"])
+        self.assertTrue(result["checks"]["output_excludes_secret_value"])
+        self.assertEqual(result["error_code"], "RuntimeError")
+        self.assertNotIn("known-secret-token", serialized)
+
     def test_legacy_tk_ai_settings_do_not_persist_key_to_environment(self) -> None:
         source = Path("ReachOps/workbench/console.py").read_text(encoding="utf-8")
         self.assertIn("ReachOpsCredentialStore().set_secret(\"ai_api_key\", key)", source)

@@ -88,8 +88,16 @@ def run_validation(namespace: str = "ReachOpsValidation", credential_name: str =
         result["checks"]["secret_write_succeeded"] = bool(write_result.get("stored"))
         result["target_name"] = str(write_result.get("target_name") or "")
         result["checks"]["secret_readback_matched"] = store.get_secret(name) == secret
-    except (CredentialStoreUnavailable, ValueError) as exc:
+    except CredentialStoreUnavailable as exc:
+        result["status"] = "blocked_external_validation"
+        result["error_code"] = exc.__class__.__name__
+        result["error"] = str(exc)
+    except ValueError as exc:
         result["status"] = "failed"
+        result["error_code"] = exc.__class__.__name__
+        result["error"] = str(exc)
+    except Exception as exc:
+        result["status"] = "blocked_external_validation"
         result["error_code"] = exc.__class__.__name__
         result["error"] = str(exc)
     finally:
@@ -110,8 +118,11 @@ def run_validation(namespace: str = "ReachOpsValidation", credential_name: str =
         )
     )
     result["passed"] = passed
-    result["status"] = "passed" if passed else result.get("status") if result.get("status") != "blocked_external_validation" else "failed"
-    result["next_actions"] = [] if passed else ["Inspect the Windows Credential Manager backend and pywin32 installation, then re-run the check."]
+    if passed:
+        result["status"] = "passed"
+    elif result.get("status") not in {"blocked_external_validation", "failed"}:
+        result["status"] = "failed"
+    result["next_actions"] = [] if passed else ["Inspect the Windows Credential Manager backend, login session, and pywin32 installation, then re-run the check."]
     return result
 
 

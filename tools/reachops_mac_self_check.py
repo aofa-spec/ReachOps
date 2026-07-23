@@ -107,6 +107,8 @@ def check_tk() -> dict:
             cwd=str(ROOT_DIR),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=8,
             check=False,
         )

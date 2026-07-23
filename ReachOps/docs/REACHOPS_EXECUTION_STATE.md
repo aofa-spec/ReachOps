@@ -46,6 +46,51 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Frozen / POST_MVP for minimum readiness: real comments, Follow, DM, public reply monitoring, qualified lead, conversion, revenue, CRM, Workspace, RBAC, multi-device seats, telemetry, encrypted backup, and formal multilingual acceptance.
 - Important boundary: `minimum_mvp_ready=true` will represent only the minimum MVP; it must not be equated with `final_delivery_ready=true`, which remains false until full commercial and external platform acceptance is complete.
 
+## Latest Windows VM client-gate convergence snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Use the available Windows 11 VM as a real engineering validation surface for the customer-client delivery path without claiming final Windows/TikTok acceptance. This slice fixes Windows-only test/build blockers that hid real package and Credential Manager state.
+- Verified environment:
+  - Mac ixBrowser app exists at `/Applications/ixBrowser.app`; local status endpoint returned `ready=true`, `base_url=http://127.0.0.1:53200/api/v2/`, `no_browser_started=true`, `no_submit=true`.
+  - Windows 11 VM is reachable through `windows-vm`; Windows ixBrowser install directory exists at `C:\Program Files\ixBrowser`.
+  - Windows Python is `C:\Python311-x64\python.exe`; Inno Setup is installed; ReachOps source is synced to `C:\Users\aofa\ReachOps_client`.
+- Code evidence:
+  - Windows sync/package preflight now include `tools/reachops_windows_credential_manager_check.py` and `tools/reachops_execution_acceptance_audit.py`, so Windows build input validation catches missing acceptance helpers before the build/test stage.
+  - Python subprocess capture points used by launcher, goal delivery runner, MVP summary, delivery audit, Mac self-check, web UI process checks, and execution acceptance audit now use explicit `encoding="utf-8", errors="replace"` to avoid Windows GBK decode thread crashes when child tools emit UTF-8/Chinese output.
+  - `tools/reachops_windows_credential_manager_check.py` now reports Windows CredWrite session failures as structured `blocked_external_validation` without tracebacks or secret leaks.
+  - `tools/reachops_web_ui.py` now explicitly closes the SQLite connection used by `build_operations_payload`, fixing Windows temp database file-lock cleanup errors in public-reply/conversion payload tests.
+  - `tools/reachops_goal_delivery_runner.py` now keeps `windows_final_artifacts` blocking when package status/final readiness is not passed, even if stale historical EXE/installer files exist; `deliverable_index.windows_final_package.failures` exposes the reason.
+  - Tests were adjusted to avoid POSIX-only path assumptions and stale-artifact assumptions on Windows.
+- Tests and checks:
+  - Windows `py_compile` for changed Python files: passed.
+  - Windows focused regression for subprocess encoding, package preflight, packaging sync, and Credential Manager session failure: passed, 4 tests.
+  - Windows full campaign regression: passed, 259 tests; log `/tmp/reachops-win-campaign-after-all-fixes.log`. Earlier in this slice the same Windows run exposed `2 failures, 4 errors`; after fixes it is `0 failures, 0 errors`.
+  - Local `py_compile` for changed Python files: passed.
+  - Local `tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - Local `tests.test_reachops_security`: passed, 16 tests.
+  - Local `tests.test_reachops_campaign`: passed, 259 tests; log `/tmp/reachops-local-campaign-after-windows-fixes.log`.
+  - `tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-after-windows-fixes-operator-pressure.json`.
+  - `tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-after-windows-fixes-delivery-audit.json`.
+  - `tools/reachops_goal_status_report.py --json`: passed, `status=ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-after-windows-fixes-goal-status-report.json`.
+  - `tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-after-windows-fixes-cleanliness.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-after-windows-fixes-diff-check.log`.
+  - Baseline comparison: `origin/main` campaign regression ran 230 tests with 14 failures and 1 error; current branch ran 259 tests with 0 failures and 0 errors, so `new_failures=[]`, `new_errors=[]`; main log `/tmp/reachops-main-campaign-compare.log`.
+- Windows VM evidence:
+  - `tools\reachops_windows_package_preflight.py --json` on Windows returned `status=ready_for_windows_build` and confirmed `execution_acceptance_audit` plus `windows_credential_manager_check` exist; output `/tmp/reachops-win-package-preflight-after-utf8-sync.json`.
+  - `tools\reachops_windows_credential_manager_check.py --json` on Windows returned `status=blocked_external_validation`, `backend=windows_credential_manager`, `windows_credential_manager_available=true`, but `CredWrite` failed with Windows error 1312: login session does not exist or has ended; output `/tmp/reachops-win-credential-manager-after-utf8-sync.json`.
+  - `tools\reachops_final_acceptance_gate.py --json` on Windows remains `status=not_ready`, as expected, because final acceptance summary/package evidence and external authorized execution are not complete; output `/tmp/reachops-win-final-gate-after-utf8-sync.json`.
+- Safety:
+  - No TikTok live-submit was attempted.
+  - No browser profile launch was performed by the Credential Manager/package checks; reported `no_browser_started=true`, `no_submit=true`.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - Existing untracked `ReachOps-1/` remains outside the work and was not modified.
+- Remaining blockers:
+  - Mac/client MVP remains blocked by current account readiness: latest goal runner reports `status=not_ready`, `client_delivery.status=blocked_by_accounts`, `profile_available=0`, and requires at least one READY logged-in/kernel-compatible profile before the five-run real no-submit client loop.
+  - Windows Credential Manager validation requires an interactive Windows login/session where CredWrite succeeds; current VM SSH session returns error 1312 and is correctly classified as `blocked_external_validation`.
+  - Final Windows delivery still requires current `ReachOps.exe`, installer, portable update manifest, root `reports/reachops_acceptance/acceptance_summary.json`, Windows acceptance reports, and final gate `final_delivery_ready=true`.
+  - Authorized live-submit evidence remains separate and must not be attempted without explicit authorization.
+
 ## Latest P4 freeze safe-landing snapshot
 
 - Date: `2026-07-24`

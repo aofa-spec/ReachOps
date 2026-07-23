@@ -117,7 +117,15 @@ def _launch_web_client() -> int:
         print("ReachOps 客户端入口已统一到本地客户端控制台；缺少 Web 控制台启动器时不会静默回退。", file=sys.stderr)
         return 2
     command = [sys.executable, str(self_check), "--start-web"]
-    completed = subprocess.run(command, cwd=str(root), text=True, capture_output=True, check=False)
+    completed = subprocess.run(
+        command,
+        cwd=str(root),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
     if completed.stdout:
         print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
     if completed.stderr:

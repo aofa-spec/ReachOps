@@ -35,6 +35,8 @@ REQUIRED_FILES = {
     "package_check": "tools/reachops_delivery_package_check.py",
     "final_gate": "tools/reachops_final_acceptance_gate.py",
     "repository_cleanliness": "tools/reachops_repository_cleanliness_check.py",
+    "execution_acceptance_audit": "tools/reachops_execution_acceptance_audit.py",
+    "windows_credential_manager_check": "tools/reachops_windows_credential_manager_check.py",
     "acceptance_summary_verifier": "tools/verify_reachops_acceptance_summary.py",
 }
 

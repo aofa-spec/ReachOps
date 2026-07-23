@@ -137,6 +137,7 @@ for helper in \
   reachops_operator_pressure.py \
   reachops_delivery_audit.py \
   reachops_delivery_package_check.py \
+  reachops_execution_acceptance_audit.py \
   reachops_final_acceptance_gate.py \
   reachops_activation_status_check.py \
   reachops_activation_status_template.py \
@@ -158,6 +159,7 @@ for helper in \
   reachops_live_readiness.py \
   reachops_live_submit_acceptance.py \
   reachops_repository_cleanliness_check.py \
+  reachops_windows_credential_manager_check.py \
   reachops_windows_package_preflight.py \
   reachops_apply_account_repair_plan.py \
   run_reachops_live_readiness_windows.ps1 \

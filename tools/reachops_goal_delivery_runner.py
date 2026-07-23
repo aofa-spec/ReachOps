@@ -29,6 +29,8 @@ def run_json(command: list[str], timeout: int = 120) -> tuple[dict[str, Any], in
         cwd=str(ROOT_DIR),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         check=False,
         env={"PYTHONDONTWRITEBYTECODE": "1", **dict(os.environ)},
@@ -337,6 +339,7 @@ def build_deliverable_index(
             "ready": str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready")),
             "status": package.get("status"),
             "missing_artifacts": package.get("missing_artifacts") or [],
+            "failures": package.get("failures") or [],
             "artifacts": package.get("artifacts") or {},
             "remediation_plan": windows_blocker.get("remediation_plan") or package.get("remediation_plan") or {},
             "blocking_scope": "" if str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready")) else "windows_final_artifacts",
@@ -550,13 +553,15 @@ def build_report() -> dict[str, Any]:
                 "action": "补齐 Windows 打包输入文件和脚本合同。",
             }
         )
-    if package.get("missing_artifacts"):
+    package_ready = str(package.get("status") or "") == "passed" and bool(package.get("final_delivery_ready"))
+    if not package_ready:
         remediation = package.get("remediation_plan") if isinstance(package.get("remediation_plan"), dict) else {}
         blockers.append(
             {
                 "scope": "windows_final_artifacts",
                 "status": package.get("status"),
                 "missing_artifacts": package.get("missing_artifacts") or [],
+                "failures": package.get("failures") or [],
                 "remediation_plan": remediation,
                 "action": "在 Windows 实机运行 build 和 acceptance，生成 exe、installer、manifest、acceptance_summary。",
             }
