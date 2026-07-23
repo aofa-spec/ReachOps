@@ -375,6 +375,58 @@ def verify_summary(
             failures.append("live_validation_started_browser")
         if not bool(live_validation.get("no_submit", True)):
             failures.append("live_validation_submitted_action")
+    live_validation_missing_inputs = as_list(live_validation.get("missing_inputs"))
+    live_validation_selected_profile_ids = as_list(live_validation.get("selected_profile_ids"))
+    live_validation_json = report_path_status(
+        summary_path,
+        str(live_validation.get("json_path") or ""),
+    )
+    live_validation_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not live_validation:
+        failures.append("live_validation_missing")
+    if live_validation:
+        if status == STATUS_PASSED and str(live_validation.get("status") or "") != "ready":
+            failures.append("live_validation_not_ready")
+        if status == STATUS_PASSED and live_validation_missing_inputs:
+            failures.append("live_validation_missing_inputs")
+        if status == STATUS_PASSED and not live_validation_selected_profile_ids:
+            failures.append("live_validation_profile_ids_missing")
+        if status == STATUS_PASSED and not str(live_validation.get("json_path") or "").strip():
+            failures.append("live_validation_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(live_validation.get("json_path") or "").strip():
+            if not live_validation_json["exists"]:
+                failures.append("live_validation_json_missing")
+            elif int(live_validation_json.get("size") or 0) <= 0:
+                failures.append("live_validation_json_empty")
+            elif not bool(live_validation_json.get("inside_summary_dir")):
+                failures.append("live_validation_json_outside_summary_dir")
+            else:
+                live_validation_payload_detail = load_report_payload(live_validation_json)
+                live_validation_payload = live_validation_payload_detail.get("payload") or {}
+                if not bool(live_validation_payload_detail.get("loaded")):
+                    failures.append("live_validation_json_invalid")
+                else:
+                    expected_live_validation_fields = {
+                        "status": str(live_validation.get("status") or ""),
+                        "no_browser_started": bool(live_validation.get("no_browser_started", True)),
+                        "no_submit": bool(live_validation.get("no_submit", True)),
+                    }
+                    for key, expected in expected_live_validation_fields.items():
+                        actual = live_validation_payload.get(key)
+                        if isinstance(expected, bool):
+                            matches = bool(actual) == expected
+                        else:
+                            matches = str(actual or "") == expected
+                        if not matches:
+                            failures.append(f"live_validation_json_mismatch:{key}")
+                    payload_missing_inputs = [str(item) for item in as_list(live_validation_payload.get("missing_inputs"))]
+                    if payload_missing_inputs != [str(item) for item in live_validation_missing_inputs]:
+                        failures.append("live_validation_json_mismatch:missing_inputs")
+                    payload_profile_ids = [str(item) for item in as_list(live_validation_payload.get("selected_profile_ids"))]
+                    if payload_profile_ids != [str(item) for item in live_validation_selected_profile_ids]:
+                        failures.append("live_validation_json_mismatch:selected_profile_ids")
+    else:
+        live_validation_json = report_path_status(summary_path, "")
 
     activation_status_value = str(activation_status.get("status") or "")
     activation_status_ready = bool(activation_status.get("ready"))
@@ -1391,8 +1443,14 @@ def verify_summary(
             "status": str(live_validation.get("status") or ""),
             "no_browser_started": bool(live_validation.get("no_browser_started", True)),
             "no_submit": bool(live_validation.get("no_submit", True)),
-            "missing_inputs": as_list(live_validation.get("missing_inputs")),
-            "selected_profile_ids": as_list(live_validation.get("selected_profile_ids")),
+            "missing_inputs": live_validation_missing_inputs,
+            "selected_profile_ids": live_validation_selected_profile_ids,
+            "json_path": str(live_validation.get("json_path") or ""),
+            "json_exists": bool(live_validation_json.get("exists")),
+            "json_size": int(live_validation_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_validation_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_validation_payload_detail.get("loaded")),
+            "json_error": str(live_validation_payload_detail.get("error") or ""),
         },
         "activation_status": {
             "status": activation_status_value,
