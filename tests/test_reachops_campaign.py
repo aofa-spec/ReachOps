@@ -1733,6 +1733,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             path_checked_summary["goal_status"]["json_path"] = "goal_status_report.json"
             path_checked_summary["final_acceptance_gate"]["json_path"] = "final_acceptance_gate.json"
             path_checked_summary["authorization_handoff"]["json_path"] = "authorization_handoff_payload.json"
+            path_checked_summary["authorization_handoff"]["bundle_path"] = "latest_reachops_authorization_handoff.zip"
             path_checked_summary["final_acceptance_gate"]["checks"] = final_acceptance_gate_payload()["checks"]
             delivery_audit_payload = {
                 "status": path_checked_summary["delivery_audit"]["status"],
@@ -1834,6 +1835,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(path_checked_summary["authorization_handoff"]),
                 encoding="utf-8",
             )
+            (report_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"PK\x05\x06" + (b"\x00" * 18))
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
             self.assertTrue(path_checked["delivery_audit"]["json_exists"])
@@ -1870,6 +1872,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["final_acceptance_gate"]["json_loaded"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
             self.assertTrue(path_checked["authorization_handoff"]["json_loaded"])
+            self.assertTrue(path_checked["authorization_handoff"]["bundle_exists"])
+            self.assertTrue(path_checked["authorization_handoff"]["bundle_inside_summary_dir"])
             self.assertTrue(path_checked["delivery_audit"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["operator_pressure"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["installer_smoke"]["json_inside_summary_dir"])
@@ -2408,6 +2412,17 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(path_checked_summary["final_acceptance_gate"]),
                 encoding="utf-8",
             )
+            (report_dir / "latest_reachops_authorization_handoff.zip").unlink()
+            missing_handoff_bundle_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_handoff_bundle_file["passed"])
+            self.assertIn("authorization_handoff_bundle_file_missing", missing_handoff_bundle_file["failures"])
+
+            (report_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"")
+            empty_handoff_bundle_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_handoff_bundle_file["passed"])
+            self.assertIn("authorization_handoff_bundle_file_empty", empty_handoff_bundle_file["failures"])
+
+            (report_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"PK\x05\x06" + (b"\x00" * 18))
             (report_dir / "authorization_handoff_payload.json").unlink()
             missing_handoff_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_handoff_file["passed"])
@@ -2446,6 +2461,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (outside_dir / "goal_status_report.json").write_text("{}", encoding="utf-8")
             (outside_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (outside_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"PK\x05\x06" + (b"\x00" * 18))
             outside_summary = json.loads(json.dumps(path_checked_summary))
             outside_summary["delivery_audit"]["json_path"] = "../outside/delivery_audit_payload.json"
             outside_summary["operator_pressure"]["json_path"] = "../outside/operator_pressure_payload.json"
@@ -2463,6 +2479,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             outside_summary["goal_status"]["json_path"] = "../outside/goal_status_report.json"
             outside_summary["final_acceptance_gate"]["json_path"] = "../outside/final_acceptance_gate.json"
             outside_summary["authorization_handoff"]["json_path"] = "../outside/authorization_handoff_payload.json"
+            outside_summary["authorization_handoff"]["bundle_path"] = "../outside/latest_reachops_authorization_handoff.zip"
             outside_report_file = verify_reachops_acceptance_summary(outside_summary, summary_path=summary_path)
             self.assertFalse(outside_report_file["passed"])
             self.assertIn("delivery_audit_json_outside_summary_dir", outside_report_file["failures"])
@@ -2481,6 +2498,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("goal_status_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("final_acceptance_gate_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("authorization_handoff_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("authorization_handoff_bundle_outside_summary_dir", outside_report_file["failures"])
             self.assertFalse(outside_report_file["delivery_audit"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["operator_pressure"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["installer_smoke"]["json_inside_summary_dir"])
@@ -2497,6 +2515,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(outside_report_file["goal_status"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["final_acceptance_gate"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["authorization_handoff"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["authorization_handoff"]["bundle_inside_summary_dir"])
 
         missing_readiness_summary = json.loads(json.dumps(passed_summary))
         missing_readiness_summary["live_readiness"] = {"status": "skipped", "ready": False, "no_submit": True}
@@ -3353,6 +3372,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(summary["authorization_handoff"]),
                 encoding="utf-8",
             )
+            (report_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"PK\x05\x06" + (b"\x00" * 18))
             (report_dir / "live_preflight_payload.json").write_text(
                 json.dumps(summary["live_preflight"]),
                 encoding="utf-8",

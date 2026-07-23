@@ -925,6 +925,10 @@ def verify_summary(
         summary_path,
         authorization_handoff.get("json_path") if isinstance(authorization_handoff, dict) else "",
     )
+    authorization_handoff_bundle = report_path_status(
+        summary_path,
+        authorization_handoff.get("bundle_path") if isinstance(authorization_handoff, dict) else "",
+    )
     if status == STATUS_PASSED and not authorization_handoff:
         failures.append("authorization_handoff_missing")
     if authorization_handoff:
@@ -940,6 +944,13 @@ def verify_summary(
             failures.append("authorization_handoff_submitted_action")
         if status == STATUS_PASSED and not str(authorization_handoff.get("bundle_path") or "").strip():
             failures.append("authorization_handoff_bundle_path_missing")
+        if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("bundle_path") or "").strip():
+            if not authorization_handoff_bundle["exists"]:
+                failures.append("authorization_handoff_bundle_file_missing")
+            elif int(authorization_handoff_bundle.get("size") or 0) <= 0:
+                failures.append("authorization_handoff_bundle_file_empty")
+            elif not bool(authorization_handoff_bundle.get("inside_summary_dir")):
+                failures.append("authorization_handoff_bundle_outside_summary_dir")
         if status == STATUS_PASSED and not str(authorization_handoff.get("json_path") or "").strip():
             failures.append("authorization_handoff_json_path_missing")
         if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("json_path") or "").strip():
@@ -969,6 +980,7 @@ def verify_summary(
     else:
         authorization_handoff_status = ""
         authorization_handoff_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        authorization_handoff_bundle = report_path_status(summary_path, "")
 
     if str(live_preflight.get("status") or "") == "completed":
         missing_preflight = (
@@ -1553,6 +1565,9 @@ def verify_summary(
             "no_browser_started": bool(authorization_handoff.get("no_browser_started", True)),
             "no_submit": bool(authorization_handoff.get("no_submit", True)),
             "bundle_path": str(authorization_handoff.get("bundle_path") or ""),
+            "bundle_exists": bool(authorization_handoff_bundle.get("exists")),
+            "bundle_size": int(authorization_handoff_bundle.get("size") or 0),
+            "bundle_inside_summary_dir": bool(authorization_handoff_bundle.get("inside_summary_dir")),
             "readiness_status": str(authorization_handoff.get("readiness_status") or ""),
             "json_path": str(authorization_handoff.get("json_path") or ""),
             "json_exists": bool(authorization_handoff_json.get("exists")),
