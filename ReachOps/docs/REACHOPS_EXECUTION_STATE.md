@@ -2076,6 +2076,33 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - Runtime evidence and account/profile data remain under git-ignored local reports; no customer runtime database or raw evidence is committed.
   - Final delivery remains blocked until at least one execution-group profile is logged in, kernel-compatible, and page-openable; Windows artifacts, Windows Credential Manager validation, and authorized live evidence remain external final gates.
 
+## Latest minimum-MVP client calibration
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Re-check the product-owner minimum MVP freeze gate from the customer-visible local client boundary without starting live submit, Windows packaging, EXE acceptance, installer acceptance, or account repair.
+- Runtime evidence:
+  - The Mac ixBrowser application is installed at `/Applications/ixBrowser.app` and ixBrowser processes are running.
+  - `GET http://127.0.0.1:8769/api/ixbrowser-status` returned `status=ready`, `ready=true`, `base_url=http://127.0.0.1:53200/api/v2/`, `no_browser_started=true`, and `no_submit=true`; output `/tmp/reachops-current-ixbrowser-status.json`.
+  - `GET http://127.0.0.1:8769/api/groups?refresh=1` returned `group_count=16`, `known_group_count=16`, `live_all_group_counts_known=true`, `profile_count=2910`, and `United States` group `257999` with `397` known accounts. Count source is still reported as `cached_known_count_after_live_group_list`, so it is display/supporting evidence and not sufficient by itself to prove an executable READY profile.
+  - `tools/reachops_client_delivery_check.py --json` failed as expected with `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `acceptance_ready=false`, `final_delivery_ready=false`, `profile_available=0`, and `failed_checks=["acceptance:ready"]`; output `/tmp/reachops-current-client-delivery.json`.
+  - `tools/reachops_mac_loop_acceptance.py --base-url http://127.0.0.1:8769 --json` failed as expected with `status=failed`, `mac_loop_ready=false`, `client_delivery.status=blocked_by_accounts`, `client_delivery.readiness=blocked_by_accounts`, `final_delivery_ready=false`, and `failed_checks=["acceptance:ready"]`; output `/tmp/reachops-current-mac-loop.json`.
+- Blocker classification:
+  - Current blocker is external account/environment readiness, not a new software defect: `profile_available=0` in the `United States` execution group.
+  - Existing remediation evidence continues to show hard account blockers: `IXBROWSER_KERNEL_MISMATCH`, `LOGIN_REQUIRED`, `PROFILE_PREFLIGHT_TIMEOUT`, and `PAGE_OPEN_FAILED`.
+  - The client correctly refuses to treat this as a passed no-submit run and keeps `minimum_mvp_ready=false`.
+- Windows boundary:
+  - Windows 11 VM, Windows ixBrowser, installed `ReachOps.exe`, installer, manifest, and Windows acceptance summary were not accessed or validated in this calibration.
+  - Mac ixBrowser Local API readiness does not prove Windows client readiness.
+- Safety:
+  - No TikTok live-submit, follow, DM, or comment was authorized or attempted.
+  - No ixBrowser profile was opened by this calibration beyond read-only Local API status/group checks.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or local acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Next action:
+  - On Mac, repair or supply at least one `United States` profile that is TikTok logged-in, ixBrowser-kernel compatible, proxy/page-open stable, and eligible for automatic selection; then rerun the same customer-visible no-submit client calibration until five consecutive runs pass.
+  - For final Windows delivery, enter the Windows 11 environment and validate installed `ReachOps.exe` with Windows ixBrowser; Mac-side verification remains insufficient for Windows acceptance.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.
