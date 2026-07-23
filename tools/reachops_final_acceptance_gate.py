@@ -41,6 +41,17 @@ REQUIRED_PACKAGE_REPORT_FILES = (
     "live_submit",
     "final_acceptance_gate",
 )
+FINAL_WINDOWS_REQUIRED_ARTIFACTS = (
+    "dist\\ReachOps\\ReachOps.exe",
+    "dist\\installer\\ReachOps-Setup-0.4.0.exe",
+    "dist\\installer\\reachops-update-manifest.json",
+    "reports\\reachops_acceptance\\acceptance_summary.json",
+    "reports\\reachops_acceptance\\<timestamp>\\windows_package_preflight.json",
+    "reports\\reachops_acceptance\\<timestamp>\\authorization_handoff_payload.json",
+    "reports\\reachops_acceptance\\<timestamp>\\latest_reachops_authorization_handoff.zip",
+    "reports\\reachops_acceptance\\<timestamp>\\windows_credential_manager_validation.json",
+    "reports\\reachops_acceptance\\<timestamp>\\final_acceptance_gate.json",
+)
 
 
 def _load_json(path: str | Path) -> dict[str, Any]:
@@ -310,12 +321,7 @@ def build_final_delivery_evidence_plan(
             title="Windows 最终客户端包证据",
             ready=_package_ready(package_check),
             status=str(package_check.get("status") or FAILED),
-            required_artifacts=[
-                "dist\\ReachOps\\ReachOps.exe",
-                "dist\\installer\\ReachOps-Setup-0.4.0.exe",
-                "dist\\installer\\reachops-update-manifest.json",
-                "reports\\reachops_acceptance\\acceptance_summary.json",
-            ],
+            required_artifacts=list(FINAL_WINDOWS_REQUIRED_ARTIFACTS),
             commands=[
                 "powershell -ExecutionPolicy Bypass -File tools\\build_reachops_windows.ps1",
                 "powershell -ExecutionPolicy Bypass -File tools\\run_reachops_acceptance_windows.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets",
@@ -626,12 +632,7 @@ def build_final_acceptance_gate(
                 "status": str(package_check.get("status") or FAILED),
                 "missing_artifacts": missing,
                 "failures": failures,
-                "required_artifacts": [
-                    "dist\\ReachOps\\ReachOps.exe",
-                    "dist\\installer\\ReachOps-Setup-0.4.0.exe",
-                    "dist\\installer\\reachops-update-manifest.json",
-                    "reports\\reachops_acceptance\\acceptance_summary.json",
-                ],
+                "required_artifacts": list(FINAL_WINDOWS_REQUIRED_ARTIFACTS),
                 "next_action": "在 Windows 实机生成 exe、installer、update manifest 和通过的 acceptance_summary.json，然后复跑 tools\\reachops_delivery_package_check.py --json。",
             }
         )

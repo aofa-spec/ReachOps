@@ -3823,6 +3823,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("client_delivery.final_delivery_ready=true", plan_items["client_delivery_gate"]["proof_fields"])
         self.assertIn("delivery_package.final_delivery_ready=true", plan_items["windows_final_artifacts"]["proof_fields"])
         self.assertIn("dist\\ReachOps\\ReachOps.exe", plan_items["windows_final_artifacts"]["required_artifacts"])
+        self.assertIn(
+            "reports\\reachops_acceptance\\<timestamp>\\authorization_handoff_payload.json",
+            plan_items["windows_final_artifacts"]["required_artifacts"],
+        )
+        self.assertIn(
+            "reports\\reachops_acceptance\\<timestamp>\\latest_reachops_authorization_handoff.zip",
+            plan_items["windows_final_artifacts"]["required_artifacts"],
+        )
+        self.assertIn(
+            "reports\\reachops_acceptance\\<timestamp>\\windows_credential_manager_validation.json",
+            plan_items["windows_final_artifacts"]["required_artifacts"],
+        )
+        self.assertIn(
+            "reports\\reachops_acceptance\\<timestamp>\\final_acceptance_gate.json",
+            blockers["windows_final_artifacts"]["required_artifacts"],
+        )
         self.assertTrue(any("Windows 实机生成" in item for item in gate["next_actions"]))
 
     def test_reachops_final_acceptance_gate_passes_only_when_all_final_evidence_is_ready(self):

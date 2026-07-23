@@ -35,6 +35,40 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Windows code-signing certificate is not currently available; internal builds may show an unknown-publisher warning.
 - Natural user replies cannot be guaranteed; authorized test accounts may validate reply-linking mechanics, while natural reply rate remains a business observation.
 
+## Product-owner minimum MVP freeze decision
+
+- Date: `2026-07-24`
+- Status: `ACTIVE`
+- Decision: ReachOps is now in minimum MVP delivery freeze mode. Stop expanding P1/P2/P3/P4 product surface; keep existing stable code, but do not make post-MVP capabilities a `minimum_mvp_ready` blocker.
+- Minimum MVP delivery focus:
+  - Mac real ixBrowser no-submit acceptance against the real `United States` group, bounded profile scan, at least one `READY` profile, five consecutive real no-submit acquisition runs, 100% EvidenceBundle completeness, zero unauthorized submit, zero orphan processes, and explicit terminal state.
+  - Windows minimum package acceptance: `ReachOps.exe`, installer, update manifest, hash verification, clean VM install, first launch, basic activation, default no-submit, uninstall, and `acceptance_summary.json`.
+- Frozen / POST_MVP for minimum readiness: real comments, Follow, DM, public reply monitoring, qualified lead, conversion, revenue, CRM, Workspace, RBAC, multi-device seats, telemetry, encrypted backup, and formal multilingual acceptance.
+- Important boundary: `minimum_mvp_ready=true` will represent only the minimum MVP; it must not be equated with `final_delivery_ready=true`, which remains false until full commercial and external platform acceptance is complete.
+
+## Latest P4 freeze safe-landing snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Complete the already-started final-artifact evidence-plan alignment and then stop feature expansion under the product-owner minimum MVP freeze decision.
+- Code evidence:
+  - `tools/reachops_final_acceptance_gate.py` now centralizes the Windows final required artifact list and includes package preflight, authorization handoff payload/zip, Windows Credential Manager validation, and final acceptance gate evidence in the final-delivery evidence plan/blocker output.
+  - `tests/test_reachops_campaign.py` verifies those required evidence paths are surfaced in the final delivery evidence plan and blocker.
+- Tests and checks:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m py_compile tools/reachops_final_acceptance_gate.py tests/test_reachops_campaign.py`: passed.
+  - Focused tests `test_reachops_final_acceptance_gate_requires_client_and_package_final_ready` and `test_reachops_final_acceptance_gate_passes_only_when_all_final_evidence_is_ready`: passed.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 11 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-freeze-safe-landing-delivery-audit.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 258 tests; log `/tmp/reachops-freeze-safe-landing-campaign.log`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-freeze-safe-landing-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-freeze-safe-landing-diff-check.log`.
+- Safety:
+  - No Windows build, EXE, installer, update manifest, Windows VM access, ixBrowser profile launch, real TikTok page open, or TikTok live-submit was attempted in this safe-landing slice.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+  - `minimum_mvp_ready` is not implemented or claimed in this slice; next work must add/report that minimum-MVP-specific gate instead of continuing full-scope feature expansion.
+
 ## Latest P4 final-gate required report alignment snapshot
 
 - Date: `2026-07-24`
