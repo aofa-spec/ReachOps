@@ -1630,7 +1630,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             report_dir = Path(tmp) / "acceptance"
             report_dir.mkdir()
             summary_path = report_dir / "acceptance_summary.json"
-            (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps(passed_summary["repository_cleanliness"]),
+                encoding="utf-8",
+            )
             (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             path_checked_summary = json.loads(json.dumps(passed_summary))
@@ -1686,6 +1689,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["ui_startup"]["json_exists"])
             self.assertTrue(path_checked["ui_startup"]["json_loaded"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_exists"])
+            self.assertTrue(path_checked["repository_cleanliness"]["json_loaded"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_exists"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_loaded"])
             self.assertTrue(path_checked["windows_credential_manager_validation"]["json_exists"])
@@ -1738,7 +1742,25 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(missing_report_file["passed"])
             self.assertIn("repository_cleanliness_json_missing", missing_report_file["failures"])
 
-            (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (report_dir / "repository_cleanliness_payload.json").write_text("{", encoding="utf-8")
+            invalid_cleanliness_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_cleanliness_file["passed"])
+            self.assertIn("repository_cleanliness_json_invalid", invalid_cleanliness_file["failures"])
+
+            mismatched_cleanliness_payload = json.loads(json.dumps(path_checked_summary["repository_cleanliness"]))
+            mismatched_cleanliness_payload["forbidden_count"] = 1
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps(mismatched_cleanliness_payload),
+                encoding="utf-8",
+            )
+            mismatched_cleanliness_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_cleanliness_file["passed"])
+            self.assertIn("repository_cleanliness_json_mismatch:forbidden_count", mismatched_cleanliness_file["failures"])
+
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps(path_checked_summary["repository_cleanliness"]),
+                encoding="utf-8",
+            )
             (report_dir / "windows_package_preflight.json").unlink()
             missing_preflight_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_preflight_report_file["passed"])
@@ -2791,6 +2813,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (report_dir / "client_delivery.json").write_text(json.dumps(summary["client_delivery"]), encoding="utf-8")
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps(summary["repository_cleanliness"]),
+                encoding="utf-8",
+            )
             (report_dir / "windows_package_preflight.json").write_text(
                 json.dumps(summary["windows_package_preflight"]),
                 encoding="utf-8",

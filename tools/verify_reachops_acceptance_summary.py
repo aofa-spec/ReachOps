@@ -257,6 +257,7 @@ def verify_summary(
     if status == STATUS_PASSED and not repository_cleanliness:
         failures.append("repository_cleanliness_missing")
     if repository_cleanliness:
+        repository_cleanliness_payload_detail = {"loaded": False, "error": "", "payload": {}}
         if repository_cleanliness_status != STATUS_PASSED:
             failures.append("repository_cleanliness_not_passed")
         if not repository_cleanliness_passed:
@@ -272,6 +273,17 @@ def verify_summary(
                 failures.append("repository_cleanliness_json_empty")
             elif not bool(repository_cleanliness_json.get("inside_summary_dir")):
                 failures.append("repository_cleanliness_json_outside_summary_dir")
+            else:
+                repository_cleanliness_payload_detail = load_report_payload(repository_cleanliness_json)
+                repository_cleanliness_payload = repository_cleanliness_payload_detail["payload"]
+                if not bool(repository_cleanliness_payload_detail.get("loaded")):
+                    failures.append("repository_cleanliness_json_invalid")
+                else:
+                    for key in ("status", "passed", "forbidden_count"):
+                        if repository_cleanliness_payload.get(key) != repository_cleanliness.get(key):
+                            failures.append(f"repository_cleanliness_json_mismatch:{key}")
+    else:
+        repository_cleanliness_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     windows_preflight_status = str(windows_package_preflight.get("status") or "")
     windows_preflight_ready = bool(windows_package_preflight.get("ready_for_windows_build"))
@@ -1019,6 +1031,8 @@ def verify_summary(
             "json_exists": bool(repository_cleanliness_json.get("exists")),
             "json_size": int(repository_cleanliness_json.get("size") or 0),
             "json_inside_summary_dir": bool(repository_cleanliness_json.get("inside_summary_dir")),
+            "json_loaded": bool(repository_cleanliness_payload_detail.get("loaded")),
+            "json_error": str(repository_cleanliness_payload_detail.get("error") or ""),
         },
         "windows_package_preflight": {
             "status": windows_preflight_status,
