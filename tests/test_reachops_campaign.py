@@ -1260,6 +1260,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         passed_summary["status"] = "passed"
         passed_summary["delivery_audit"]["resolved_external_validation"] = 1
         passed_summary["delivery_audit"]["effective_pending_external_validation"] = 0
+        passed_summary["delivery_audit"]["json_path"] = "reports/reachops_acceptance/current/delivery_audit_payload.json"
+        passed_summary["operator_pressure"]["json_path"] = "reports/reachops_acceptance/current/operator_pressure_payload.json"
         passed_summary["installer_smoke"]["json_path"] = "reports/reachops_acceptance/current/installer_smoke_payload.json"
         passed_summary["goal_status"] = {
             "status": "passed",
@@ -1632,17 +1634,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
             report_dir = Path(tmp) / "acceptance"
             report_dir.mkdir()
             summary_path = report_dir / "acceptance_summary.json"
-            (report_dir / "installer_smoke_payload.json").write_text(
-                json.dumps(passed_summary["installer_smoke"]),
-                encoding="utf-8",
-            )
-            (report_dir / "repository_cleanliness_payload.json").write_text(
-                json.dumps(passed_summary["repository_cleanliness"]),
-                encoding="utf-8",
-            )
-            (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
-            (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             path_checked_summary = json.loads(json.dumps(passed_summary))
+            path_checked_summary["delivery_audit"]["json_path"] = "delivery_audit_payload.json"
+            path_checked_summary["operator_pressure"]["json_path"] = "operator_pressure_payload.json"
             path_checked_summary["installer_smoke"]["json_path"] = "installer_smoke_payload.json"
             path_checked_summary["ui_startup"]["json_path"] = "ui_startup_payload.json"
             path_checked_summary["repository_cleanliness"]["json_path"] = "repository_cleanliness_payload.json"
@@ -1654,6 +1648,44 @@ class ReachOpsCampaignTests(unittest.TestCase):
             path_checked_summary["final_acceptance_gate"]["json_path"] = "final_acceptance_gate.json"
             path_checked_summary["authorization_handoff"]["json_path"] = "authorization_handoff_payload.json"
             path_checked_summary["final_acceptance_gate"]["checks"] = final_acceptance_gate_payload()["checks"]
+            delivery_audit_payload = {
+                "status": path_checked_summary["delivery_audit"]["status"],
+                "summary": {
+                    "passed": path_checked_summary["delivery_audit"]["passed"],
+                    "pending_external_validation": path_checked_summary["delivery_audit"]["pending_external_validation"],
+                    "failed": path_checked_summary["delivery_audit"]["failed"],
+                },
+            }
+            operator_pressure_payload = {
+                "status": path_checked_summary["operator_pressure"]["status"],
+                "campaign_count": path_checked_summary["operator_pressure"]["campaign_count"],
+                "summary": {
+                    "content_found": path_checked_summary["operator_pressure"]["content_found"],
+                    "comment_users": path_checked_summary["operator_pressure"]["comment_users"],
+                    "customer_leads": path_checked_summary["operator_pressure"]["customer_leads"],
+                    "outreach_actions": path_checked_summary["operator_pressure"]["outreach_actions"],
+                    "execution_success": path_checked_summary["operator_pressure"]["execution_success"],
+                    "account_switched": path_checked_summary["operator_pressure"]["account_switched"],
+                },
+            }
+            (report_dir / "delivery_audit_payload.json").write_text(
+                json.dumps(delivery_audit_payload),
+                encoding="utf-8",
+            )
+            (report_dir / "operator_pressure_payload.json").write_text(
+                json.dumps(operator_pressure_payload),
+                encoding="utf-8",
+            )
+            (report_dir / "installer_smoke_payload.json").write_text(
+                json.dumps(passed_summary["installer_smoke"]),
+                encoding="utf-8",
+            )
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps(passed_summary["repository_cleanliness"]),
+                encoding="utf-8",
+            )
+            (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
+            (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "windows_package_preflight.json").write_text(
                 json.dumps(path_checked_summary["windows_package_preflight"]),
                 encoding="utf-8",
@@ -1698,6 +1730,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             )
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
+            self.assertTrue(path_checked["delivery_audit"]["json_exists"])
+            self.assertTrue(path_checked["delivery_audit"]["json_loaded"])
+            self.assertTrue(path_checked["operator_pressure"]["json_exists"])
+            self.assertTrue(path_checked["operator_pressure"]["json_loaded"])
             self.assertTrue(path_checked["installer_smoke"]["json_exists"])
             self.assertTrue(path_checked["installer_smoke"]["json_loaded"])
             self.assertTrue(path_checked["ui_startup"]["json_exists"])
@@ -1718,6 +1754,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["final_acceptance_gate"]["json_loaded"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
             self.assertTrue(path_checked["authorization_handoff"]["json_loaded"])
+            self.assertTrue(path_checked["delivery_audit"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["operator_pressure"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["installer_smoke"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["ui_startup"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_inside_summary_dir"])
@@ -1729,6 +1767,64 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["final_acceptance_gate"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["authorization_handoff"]["json_inside_summary_dir"])
 
+            (report_dir / "delivery_audit_payload.json").unlink()
+            missing_audit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_audit_file["passed"])
+            self.assertIn("delivery_audit_json_missing", missing_audit_file["failures"])
+
+            (report_dir / "delivery_audit_payload.json").write_text("", encoding="utf-8")
+            empty_audit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_audit_file["passed"])
+            self.assertIn("delivery_audit_json_empty", empty_audit_file["failures"])
+
+            (report_dir / "delivery_audit_payload.json").write_text("{", encoding="utf-8")
+            invalid_audit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_audit_file["passed"])
+            self.assertIn("delivery_audit_json_invalid", invalid_audit_file["failures"])
+
+            mismatched_audit_payload = json.loads(json.dumps(delivery_audit_payload))
+            mismatched_audit_payload["summary"]["failed"] = 1
+            (report_dir / "delivery_audit_payload.json").write_text(
+                json.dumps(mismatched_audit_payload),
+                encoding="utf-8",
+            )
+            mismatched_audit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_audit_file["passed"])
+            self.assertIn("delivery_audit_json_mismatch:failed", mismatched_audit_file["failures"])
+
+            (report_dir / "delivery_audit_payload.json").write_text(
+                json.dumps(delivery_audit_payload),
+                encoding="utf-8",
+            )
+            (report_dir / "operator_pressure_payload.json").unlink()
+            missing_pressure_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_pressure_file["passed"])
+            self.assertIn("operator_pressure_json_missing", missing_pressure_file["failures"])
+
+            (report_dir / "operator_pressure_payload.json").write_text("", encoding="utf-8")
+            empty_pressure_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_pressure_file["passed"])
+            self.assertIn("operator_pressure_json_empty", empty_pressure_file["failures"])
+
+            (report_dir / "operator_pressure_payload.json").write_text("{", encoding="utf-8")
+            invalid_pressure_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_pressure_file["passed"])
+            self.assertIn("operator_pressure_json_invalid", invalid_pressure_file["failures"])
+
+            mismatched_pressure_payload = json.loads(json.dumps(operator_pressure_payload))
+            mismatched_pressure_payload["summary"]["customer_leads"] = 0
+            (report_dir / "operator_pressure_payload.json").write_text(
+                json.dumps(mismatched_pressure_payload),
+                encoding="utf-8",
+            )
+            mismatched_pressure_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_pressure_file["passed"])
+            self.assertIn("operator_pressure_json_mismatch:customer_leads", mismatched_pressure_file["failures"])
+
+            (report_dir / "operator_pressure_payload.json").write_text(
+                json.dumps(operator_pressure_payload),
+                encoding="utf-8",
+            )
             (report_dir / "installer_smoke_payload.json").unlink()
             missing_installer_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_installer_file["passed"])
@@ -2063,6 +2159,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
             outside_dir = Path(tmp) / "outside"
             outside_dir.mkdir()
+            (outside_dir / "delivery_audit_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "operator_pressure_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "installer_smoke_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "ui_startup_payload.json").write_text("{}", encoding="utf-8")
@@ -2073,6 +2171,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (outside_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (outside_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             outside_summary = json.loads(json.dumps(path_checked_summary))
+            outside_summary["delivery_audit"]["json_path"] = "../outside/delivery_audit_payload.json"
+            outside_summary["operator_pressure"]["json_path"] = "../outside/operator_pressure_payload.json"
             outside_summary["installer_smoke"]["json_path"] = "../outside/installer_smoke_payload.json"
             outside_summary["ui_startup"]["json_path"] = "../outside/ui_startup_payload.json"
             outside_summary["repository_cleanliness"]["json_path"] = str(outside_dir / "repository_cleanliness_payload.json")
@@ -2084,6 +2184,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             outside_summary["authorization_handoff"]["json_path"] = "../outside/authorization_handoff_payload.json"
             outside_report_file = verify_reachops_acceptance_summary(outside_summary, summary_path=summary_path)
             self.assertFalse(outside_report_file["passed"])
+            self.assertIn("delivery_audit_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("operator_pressure_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("installer_smoke_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("ui_startup_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("repository_cleanliness_json_outside_summary_dir", outside_report_file["failures"])
@@ -2093,6 +2195,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("live_acceptance_status_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("final_acceptance_gate_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("authorization_handoff_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertFalse(outside_report_file["delivery_audit"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["operator_pressure"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["installer_smoke"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["ui_startup"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["repository_cleanliness"]["json_inside_summary_dir"])
@@ -2874,6 +2978,36 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "json_path": str(report_dir / "final_acceptance_gate.json"),
                 },
             }
+            (report_dir / "delivery_audit_payload.json").write_text(
+                json.dumps(
+                    {
+                        "status": summary["delivery_audit"]["status"],
+                        "summary": {
+                            "passed": summary["delivery_audit"]["passed"],
+                            "pending_external_validation": summary["delivery_audit"]["pending_external_validation"],
+                            "failed": summary["delivery_audit"]["failed"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "operator_pressure_payload.json").write_text(
+                json.dumps(
+                    {
+                        "status": summary["operator_pressure"]["status"],
+                        "campaign_count": summary["operator_pressure"]["campaign_count"],
+                        "summary": {
+                            "content_found": summary["operator_pressure"]["content_found"],
+                            "comment_users": summary["operator_pressure"]["comment_users"],
+                            "customer_leads": summary["operator_pressure"]["customer_leads"],
+                            "outreach_actions": summary["operator_pressure"]["outreach_actions"],
+                            "execution_success": summary["operator_pressure"]["execution_success"],
+                            "account_switched": summary["operator_pressure"]["account_switched"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
             (report_dir / "ui_startup_payload.json").write_text(
                 json.dumps(
                     {

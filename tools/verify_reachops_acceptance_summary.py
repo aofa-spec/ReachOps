@@ -133,6 +133,46 @@ def verify_summary(
         failures.append("delivery_audit_failed")
     if str(delivery_audit.get("status") or "") != "ok":
         failures.append("delivery_audit_not_ok")
+    delivery_audit_json = report_path_status(
+        summary_path,
+        str(delivery_audit.get("json_path") or ""),
+    )
+    delivery_audit_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not str(delivery_audit.get("json_path") or "").strip():
+        failures.append("delivery_audit_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(delivery_audit.get("json_path") or "").strip():
+        if not delivery_audit_json["exists"]:
+            failures.append("delivery_audit_json_missing")
+        elif int(delivery_audit_json.get("size") or 0) <= 0:
+            failures.append("delivery_audit_json_empty")
+        elif not bool(delivery_audit_json.get("inside_summary_dir")):
+            failures.append("delivery_audit_json_outside_summary_dir")
+        else:
+            delivery_audit_payload_detail = load_report_payload(delivery_audit_json)
+            delivery_audit_payload = delivery_audit_payload_detail.get("payload") or {}
+            if not bool(delivery_audit_payload_detail.get("loaded")):
+                failures.append("delivery_audit_json_invalid")
+            else:
+                payload_summary = (
+                    delivery_audit_payload.get("summary")
+                    if isinstance(delivery_audit_payload.get("summary"), dict)
+                    else {}
+                )
+                expected_audit_fields = {
+                    "status": str(delivery_audit.get("status") or ""),
+                    "passed": int(delivery_audit.get("passed") or 0),
+                    "pending_external_validation": int(delivery_audit.get("pending_external_validation") or 0),
+                    "failed": int(delivery_audit.get("failed") or 0),
+                }
+                actual_audit_fields = {
+                    "status": str(delivery_audit_payload.get("status") or ""),
+                    "passed": int(payload_summary.get("passed") or 0),
+                    "pending_external_validation": int(payload_summary.get("pending_external_validation") or 0),
+                    "failed": int(payload_summary.get("failed") or 0),
+                }
+                for key, expected in expected_audit_fields.items():
+                    if actual_audit_fields.get(key) != expected:
+                        failures.append(f"delivery_audit_json_mismatch:{key}")
 
     operator_pressure_ok = (
         str(operator_pressure.get("status") or "") == "ok"
@@ -146,6 +186,54 @@ def verify_summary(
     )
     if not operator_pressure_ok:
         failures.append("operator_pressure_failed")
+    operator_pressure_json = report_path_status(
+        summary_path,
+        str(operator_pressure.get("json_path") or ""),
+    )
+    operator_pressure_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not str(operator_pressure.get("json_path") or "").strip():
+        failures.append("operator_pressure_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(operator_pressure.get("json_path") or "").strip():
+        if not operator_pressure_json["exists"]:
+            failures.append("operator_pressure_json_missing")
+        elif int(operator_pressure_json.get("size") or 0) <= 0:
+            failures.append("operator_pressure_json_empty")
+        elif not bool(operator_pressure_json.get("inside_summary_dir")):
+            failures.append("operator_pressure_json_outside_summary_dir")
+        else:
+            operator_pressure_payload_detail = load_report_payload(operator_pressure_json)
+            operator_pressure_payload = operator_pressure_payload_detail.get("payload") or {}
+            if not bool(operator_pressure_payload_detail.get("loaded")):
+                failures.append("operator_pressure_json_invalid")
+            else:
+                payload_summary = (
+                    operator_pressure_payload.get("summary")
+                    if isinstance(operator_pressure_payload.get("summary"), dict)
+                    else {}
+                )
+                expected_pressure_fields = {
+                    "status": str(operator_pressure.get("status") or ""),
+                    "campaign_count": int(operator_pressure.get("campaign_count") or 0),
+                    "content_found": int(operator_pressure.get("content_found") or 0),
+                    "comment_users": int(operator_pressure.get("comment_users") or 0),
+                    "customer_leads": int(operator_pressure.get("customer_leads") or 0),
+                    "outreach_actions": int(operator_pressure.get("outreach_actions") or 0),
+                    "execution_success": int(operator_pressure.get("execution_success") or 0),
+                    "account_switched": int(operator_pressure.get("account_switched") or 0),
+                }
+                actual_pressure_fields = {
+                    "status": str(operator_pressure_payload.get("status") or ""),
+                    "campaign_count": int(operator_pressure_payload.get("campaign_count") or 0),
+                    "content_found": int(payload_summary.get("content_found") or 0),
+                    "comment_users": int(payload_summary.get("comment_users") or 0),
+                    "customer_leads": int(payload_summary.get("customer_leads") or 0),
+                    "outreach_actions": int(payload_summary.get("outreach_actions") or 0),
+                    "execution_success": int(payload_summary.get("execution_success") or 0),
+                    "account_switched": int(payload_summary.get("account_switched") or 0),
+                }
+                for key, expected in expected_pressure_fields.items():
+                    if actual_pressure_fields.get(key) != expected:
+                        failures.append(f"operator_pressure_json_mismatch:{key}")
 
     pending_external = int(delivery_audit.get("pending_external_validation") or 0)
     resolved_external = int(delivery_audit.get("resolved_external_validation") or 0)
@@ -1020,11 +1108,18 @@ def verify_summary(
         "failures": failures,
         "pending": pending,
         "delivery_audit": {
+            "status": str(delivery_audit.get("status") or ""),
             "passed": int(delivery_audit.get("passed") or 0),
             "pending_external_validation": pending_external,
             "resolved_external_validation": resolved_external,
             "effective_pending_external_validation": effective_pending_external,
             "failed": int(delivery_audit.get("failed") or 0),
+            "json_path": str(delivery_audit.get("json_path") or ""),
+            "json_exists": bool(delivery_audit_json.get("exists")),
+            "json_size": int(delivery_audit_json.get("size") or 0),
+            "json_inside_summary_dir": bool(delivery_audit_json.get("inside_summary_dir")),
+            "json_loaded": bool(delivery_audit_payload_detail.get("loaded")),
+            "json_error": str(delivery_audit_payload_detail.get("error") or ""),
         },
         "operator_pressure": {
             "status": str(operator_pressure.get("status") or ""),
@@ -1035,6 +1130,12 @@ def verify_summary(
             "outreach_actions": int(operator_pressure.get("outreach_actions") or 0),
             "execution_success": int(operator_pressure.get("execution_success") or 0),
             "account_switched": int(operator_pressure.get("account_switched") or 0),
+            "json_path": str(operator_pressure.get("json_path") or ""),
+            "json_exists": bool(operator_pressure_json.get("exists")),
+            "json_size": int(operator_pressure_json.get("size") or 0),
+            "json_inside_summary_dir": bool(operator_pressure_json.get("inside_summary_dir")),
+            "json_loaded": bool(operator_pressure_payload_detail.get("loaded")),
+            "json_error": str(operator_pressure_payload_detail.get("error") or ""),
         },
         "installer_smoke": {
             "status": installer_status,
