@@ -485,6 +485,11 @@ def verify_summary(
     else:
         client_delivery_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
+    live_readiness_json = report_path_status(
+        summary_path,
+        str(live_readiness.get("json_path") or ""),
+    )
+    live_readiness_payload_detail = {"loaded": False, "error": "", "payload": {}}
     if final_external_resolved:
         readiness_status = str(live_readiness.get("status") or "")
         if readiness_status not in {"ready", "completed"} or not bool(live_readiness.get("ready")):
@@ -493,6 +498,35 @@ def verify_summary(
             failures.append("live_readiness_started_browser")
         if not bool(live_readiness.get("no_submit", True)):
             failures.append("live_readiness_submitted_action")
+        if status == STATUS_PASSED and not str(live_readiness.get("json_path") or "").strip():
+            failures.append("live_readiness_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(live_readiness.get("json_path") or "").strip():
+            if not live_readiness_json["exists"]:
+                failures.append("live_readiness_json_missing")
+            elif int(live_readiness_json.get("size") or 0) <= 0:
+                failures.append("live_readiness_json_empty")
+            elif not bool(live_readiness_json.get("inside_summary_dir")):
+                failures.append("live_readiness_json_outside_summary_dir")
+            else:
+                live_readiness_payload_detail = load_report_payload(live_readiness_json)
+                live_readiness_payload = live_readiness_payload_detail.get("payload") or {}
+                if not bool(live_readiness_payload_detail.get("loaded")):
+                    failures.append("live_readiness_json_invalid")
+                else:
+                    expected_live_readiness_fields = {
+                        "status": readiness_status,
+                        "ready": bool(live_readiness.get("ready")),
+                        "no_browser_started": bool(live_readiness.get("no_browser_started", True)),
+                        "no_submit": bool(live_readiness.get("no_submit", True)),
+                    }
+                    for key, expected in expected_live_readiness_fields.items():
+                        actual = live_readiness_payload.get(key)
+                        if isinstance(expected, bool):
+                            matches = bool(actual) == expected
+                        else:
+                            matches = str(actual or "") == expected
+                        if not matches:
+                            failures.append(f"live_readiness_json_mismatch:{key}")
         if str(live_preflight.get("status") or "") != "completed":
             failures.append("live_preflight_not_completed")
 
@@ -1081,6 +1115,12 @@ def verify_summary(
             "ready": bool(live_readiness.get("ready")),
             "no_browser_started": bool(live_readiness.get("no_browser_started", True)),
             "no_submit": bool(live_readiness.get("no_submit", True)),
+            "json_path": str(live_readiness.get("json_path") or ""),
+            "json_exists": bool(live_readiness_json.get("exists")),
+            "json_size": int(live_readiness_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_readiness_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_readiness_payload_detail.get("loaded")),
+            "json_error": str(live_readiness_payload_detail.get("error") or ""),
         },
         "live_acceptance_status": {
             "status": live_acceptance_status_value,
