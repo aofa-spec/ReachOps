@@ -588,6 +588,7 @@ def verify_summary(
         failures.append("authorization_handoff_missing")
     if authorization_handoff:
         authorization_handoff_status = str(authorization_handoff.get("status") or "")
+        authorization_handoff_payload_detail = {"loaded": False, "error": "", "payload": {}}
         if status == STATUS_PASSED and authorization_handoff_status not in {"created", "passed"}:
             failures.append("authorization_handoff_not_created")
         if status == STATUS_PASSED and not bool(authorization_handoff.get("exists")):
@@ -607,8 +608,26 @@ def verify_summary(
                 failures.append("authorization_handoff_json_empty")
             elif not bool(authorization_handoff_json.get("inside_summary_dir")):
                 failures.append("authorization_handoff_json_outside_summary_dir")
+            else:
+                authorization_handoff_payload_detail = load_report_payload(authorization_handoff_json)
+                authorization_handoff_payload = authorization_handoff_payload_detail["payload"]
+                if not bool(authorization_handoff_payload_detail.get("loaded")):
+                    failures.append("authorization_handoff_json_invalid")
+                else:
+                    for key in (
+                        "status",
+                        "exists",
+                        "final_delivery_ready",
+                        "no_browser_started",
+                        "no_submit",
+                        "bundle_path",
+                        "readiness_status",
+                    ):
+                        if authorization_handoff_payload.get(key) != authorization_handoff.get(key):
+                            failures.append(f"authorization_handoff_json_mismatch:{key}")
     else:
         authorization_handoff_status = ""
+        authorization_handoff_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     if str(live_preflight.get("status") or "") == "completed":
         missing_preflight = (
@@ -1054,6 +1073,8 @@ def verify_summary(
             "json_exists": bool(authorization_handoff_json.get("exists")),
             "json_size": int(authorization_handoff_json.get("size") or 0),
             "json_inside_summary_dir": bool(authorization_handoff_json.get("inside_summary_dir")),
+            "json_loaded": bool(authorization_handoff_payload_detail.get("loaded")),
+            "json_error": str(authorization_handoff_payload_detail.get("error") or ""),
         },
         "live_submit": {
             "status": str(live_submit.get("status") or ""),
