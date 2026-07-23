@@ -91,6 +91,7 @@ def verify_summary(
     operator_pressure = summary.get("operator_pressure") or {}
     installer_smoke = summary.get("installer_smoke") or {}
     ui_startup = summary.get("ui_startup") or {}
+    activation_status = summary.get("activation_status") or {}
     live_validation = summary.get("live_validation") or {}
     repository_cleanliness = summary.get("repository_cleanliness") or {}
     windows_package_preflight = summary.get("windows_package_preflight") or {}
@@ -374,6 +375,64 @@ def verify_summary(
             failures.append("live_validation_started_browser")
         if not bool(live_validation.get("no_submit", True)):
             failures.append("live_validation_submitted_action")
+
+    activation_status_value = str(activation_status.get("status") or "")
+    activation_status_ready = bool(activation_status.get("ready"))
+    activation_status_exists = bool(activation_status.get("activation_status_exists"))
+    activation_current_device_id = str(activation_status.get("current_device_id") or "").strip()
+    activation_status_json = report_path_status(
+        summary_path,
+        str(activation_status.get("json_path") or ""),
+    )
+    activation_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not activation_status:
+        failures.append("activation_status_missing")
+    if activation_status:
+        if status == STATUS_PASSED and activation_status_value != "ready":
+            failures.append("activation_status_not_ready")
+        if status == STATUS_PASSED and not activation_status_ready:
+            failures.append("activation_status_ready_false")
+        if status == STATUS_PASSED and not activation_status_exists:
+            failures.append("activation_status_file_missing")
+        if not bool(activation_status.get("no_browser_started", True)):
+            failures.append("activation_status_started_browser")
+        if not bool(activation_status.get("no_submit", True)):
+            failures.append("activation_status_submitted_action")
+        if status == STATUS_PASSED and not activation_current_device_id:
+            failures.append("activation_status_device_id_missing")
+        if status == STATUS_PASSED and not str(activation_status.get("json_path") or "").strip():
+            failures.append("activation_status_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(activation_status.get("json_path") or "").strip():
+            if not activation_status_json["exists"]:
+                failures.append("activation_status_json_missing")
+            elif int(activation_status_json.get("size") or 0) <= 0:
+                failures.append("activation_status_json_empty")
+            elif not bool(activation_status_json.get("inside_summary_dir")):
+                failures.append("activation_status_json_outside_summary_dir")
+            else:
+                activation_payload_detail = load_report_payload(activation_status_json)
+                activation_payload = activation_payload_detail.get("payload") or {}
+                if not bool(activation_payload_detail.get("loaded")):
+                    failures.append("activation_status_json_invalid")
+                else:
+                    expected_activation_fields = {
+                        "status": activation_status_value,
+                        "ready": activation_status_ready,
+                        "no_browser_started": bool(activation_status.get("no_browser_started", True)),
+                        "no_submit": bool(activation_status.get("no_submit", True)),
+                        "activation_status_exists": activation_status_exists,
+                        "current_device_id": activation_current_device_id,
+                    }
+                    for key, expected in expected_activation_fields.items():
+                        actual = activation_payload.get(key)
+                        if isinstance(expected, bool):
+                            matches = bool(actual) == expected
+                        else:
+                            matches = str(actual or "").strip() == expected
+                        if not matches:
+                            failures.append(f"activation_status_json_mismatch:{key}")
+    else:
+        activation_status_json = report_path_status(summary_path, "")
 
     repository_cleanliness_status = str(repository_cleanliness.get("status") or "")
     repository_cleanliness_passed = bool(repository_cleanliness.get("passed"))
@@ -1334,6 +1393,20 @@ def verify_summary(
             "no_submit": bool(live_validation.get("no_submit", True)),
             "missing_inputs": as_list(live_validation.get("missing_inputs")),
             "selected_profile_ids": as_list(live_validation.get("selected_profile_ids")),
+        },
+        "activation_status": {
+            "status": activation_status_value,
+            "ready": activation_status_ready,
+            "activation_status_exists": activation_status_exists,
+            "current_device_id": activation_current_device_id,
+            "no_browser_started": bool(activation_status.get("no_browser_started", True)),
+            "no_submit": bool(activation_status.get("no_submit", True)),
+            "json_path": str(activation_status.get("json_path") or ""),
+            "json_exists": bool(activation_status_json.get("exists")),
+            "json_size": int(activation_status_json.get("size") or 0),
+            "json_inside_summary_dir": bool(activation_status_json.get("inside_summary_dir")),
+            "json_loaded": bool(activation_payload_detail.get("loaded")),
+            "json_error": str(activation_payload_detail.get("error") or ""),
         },
         "repository_cleanliness": {
             "status": repository_cleanliness_status,

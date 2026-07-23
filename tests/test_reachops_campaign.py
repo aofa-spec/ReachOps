@@ -1324,6 +1324,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
             "no_submit": True,
             "json_path": "reports/reachops_acceptance/current/live_readiness_payload.json",
         }
+        passed_summary["activation_status"] = {
+            "status": "ready",
+            "ready": True,
+            "no_browser_started": True,
+            "no_submit": True,
+            "activation_status_exists": True,
+            "current_device_id": "device-a",
+            "json_path": "reports/reachops_acceptance/current/activation_status_payload.json",
+        }
         passed_summary["live_acceptance_status"] = {
             "status": "passed",
             "final_delivery_ready": True,
@@ -1450,6 +1459,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(passed["live_acceptance_status"]["local_inputs_usable"])
         self.assertTrue(passed["live_acceptance_status"]["activation_ready"])
         self.assertEqual(passed["live_acceptance_status"]["selected_profile_ids"], ["profile-a"])
+        self.assertEqual(passed["activation_status"]["status"], "ready")
+        self.assertTrue(passed["activation_status"]["ready"])
+        self.assertTrue(passed["activation_status"]["activation_status_exists"])
+        self.assertEqual(passed["activation_status"]["current_device_id"], "device-a")
+        self.assertTrue(passed["activation_status"]["json_path"].endswith("activation_status_payload.json"))
         self.assertEqual(passed["authorization_handoff"]["status"], "created")
         self.assertTrue(passed["authorization_handoff"]["exists"])
         self.assertTrue(passed["authorization_handoff"]["no_browser_started"])
@@ -1485,6 +1499,32 @@ class ReachOpsCampaignTests(unittest.TestCase):
         missing_live_acceptance_status = verify_reachops_acceptance_summary(missing_live_acceptance_status_summary)
         self.assertFalse(missing_live_acceptance_status["passed"])
         self.assertIn("live_acceptance_status_missing", missing_live_acceptance_status["failures"])
+
+        missing_activation_status_summary = json.loads(json.dumps(passed_summary))
+        missing_activation_status_summary.pop("activation_status")
+        missing_activation_status = verify_reachops_acceptance_summary(missing_activation_status_summary)
+        self.assertFalse(missing_activation_status["passed"])
+        self.assertIn("activation_status_missing", missing_activation_status["failures"])
+
+        bad_activation_status_summary = json.loads(json.dumps(passed_summary))
+        bad_activation_status_summary["activation_status"] = {
+            "status": "blocked",
+            "ready": False,
+            "no_browser_started": False,
+            "no_submit": False,
+            "activation_status_exists": False,
+            "current_device_id": "",
+            "json_path": "",
+        }
+        bad_activation_status = verify_reachops_acceptance_summary(bad_activation_status_summary)
+        self.assertFalse(bad_activation_status["passed"])
+        self.assertIn("activation_status_not_ready", bad_activation_status["failures"])
+        self.assertIn("activation_status_ready_false", bad_activation_status["failures"])
+        self.assertIn("activation_status_file_missing", bad_activation_status["failures"])
+        self.assertIn("activation_status_started_browser", bad_activation_status["failures"])
+        self.assertIn("activation_status_submitted_action", bad_activation_status["failures"])
+        self.assertIn("activation_status_device_id_missing", bad_activation_status["failures"])
+        self.assertIn("activation_status_json_path_missing", bad_activation_status["failures"])
 
         blocked_live_acceptance_summary = json.loads(json.dumps(passed_summary))
         blocked_live_acceptance_summary["live_acceptance_status"] = {
@@ -1649,6 +1689,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             path_checked_summary["windows_credential_manager_validation"]["json_path"] = "windows_credential_manager_validation.json"
             path_checked_summary["client_delivery"]["json_path"] = "client_delivery.json"
             path_checked_summary["live_readiness"]["json_path"] = "live_readiness_payload.json"
+            path_checked_summary["activation_status"]["json_path"] = "activation_status_payload.json"
             path_checked_summary["live_acceptance_status"]["json_path"] = "live_acceptance_status_payload.json"
             path_checked_summary["live_preflight"]["json_path"] = "live_preflight_payload.json"
             path_checked_summary["live_submit"]["json_path"] = "live_submit_payload.json"
@@ -1724,6 +1765,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(path_checked_summary["live_readiness"]),
                 encoding="utf-8",
             )
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(path_checked_summary["activation_status"]),
+                encoding="utf-8",
+            )
             (report_dir / "live_acceptance_status_payload.json").write_text(
                 json.dumps(path_checked_summary["live_acceptance_status"]),
                 encoding="utf-8",
@@ -1768,6 +1813,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["client_delivery"]["json_loaded"])
             self.assertTrue(path_checked["live_readiness"]["json_exists"])
             self.assertTrue(path_checked["live_readiness"]["json_loaded"])
+            self.assertTrue(path_checked["activation_status"]["json_exists"])
+            self.assertTrue(path_checked["activation_status"]["json_loaded"])
             self.assertTrue(path_checked["live_acceptance_status"]["json_exists"])
             self.assertTrue(path_checked["live_acceptance_status"]["json_loaded"])
             self.assertTrue(path_checked["live_preflight"]["json_exists"])
@@ -2075,6 +2122,39 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(path_checked_summary["live_readiness"]),
                 encoding="utf-8",
             )
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(path_checked_summary["activation_status"]),
+                encoding="utf-8",
+            )
+            (report_dir / "activation_status_payload.json").unlink()
+            missing_activation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_activation_file["passed"])
+            self.assertIn("activation_status_json_missing", missing_activation_file["failures"])
+
+            (report_dir / "activation_status_payload.json").write_text("", encoding="utf-8")
+            empty_activation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_activation_file["passed"])
+            self.assertIn("activation_status_json_empty", empty_activation_file["failures"])
+
+            (report_dir / "activation_status_payload.json").write_text("{", encoding="utf-8")
+            invalid_activation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_activation_file["passed"])
+            self.assertIn("activation_status_json_invalid", invalid_activation_file["failures"])
+
+            mismatched_activation_payload = json.loads(json.dumps(path_checked_summary["activation_status"]))
+            mismatched_activation_payload["current_device_id"] = "device-b"
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(mismatched_activation_payload),
+                encoding="utf-8",
+            )
+            mismatched_activation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_activation_file["passed"])
+            self.assertIn("activation_status_json_mismatch:current_device_id", mismatched_activation_file["failures"])
+
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(path_checked_summary["activation_status"]),
+                encoding="utf-8",
+            )
             (report_dir / "live_acceptance_status_payload.json").unlink()
             missing_live_acceptance_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_live_acceptance_file["passed"])
@@ -2286,6 +2366,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (outside_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (outside_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (outside_dir / "live_readiness_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "activation_status_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "live_acceptance_status_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "live_preflight_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "live_submit_payload.json").write_text("{}", encoding="utf-8")
@@ -2301,6 +2382,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             outside_summary["windows_package_preflight"]["json_path"] = "../outside/windows_package_preflight.json"
             outside_summary["client_delivery"]["json_path"] = "../outside/client_delivery.json"
             outside_summary["live_readiness"]["json_path"] = "../outside/live_readiness_payload.json"
+            outside_summary["activation_status"]["json_path"] = "../outside/activation_status_payload.json"
             outside_summary["live_acceptance_status"]["json_path"] = "../outside/live_acceptance_status_payload.json"
             outside_summary["live_preflight"]["json_path"] = "../outside/live_preflight_payload.json"
             outside_summary["live_submit"]["json_path"] = "../outside/live_submit_payload.json"
@@ -2317,6 +2399,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("windows_package_preflight_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("client_delivery_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("live_readiness_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("activation_status_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("live_acceptance_status_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("live_preflight_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("live_submit_json_outside_summary_dir", outside_report_file["failures"])
@@ -2331,6 +2414,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(outside_report_file["windows_package_preflight"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["client_delivery"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["live_readiness"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["activation_status"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["live_acceptance_status"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["live_preflight"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["live_submit"]["json_inside_summary_dir"])
@@ -3169,6 +3253,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (report_dir / "client_delivery.json").write_text(json.dumps(summary["client_delivery"]), encoding="utf-8")
             (report_dir / "live_readiness_payload.json").write_text(
                 json.dumps(summary["live_readiness"]),
+                encoding="utf-8",
+            )
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(summary["activation_status"]),
                 encoding="utf-8",
             )
             (report_dir / "repository_cleanliness_payload.json").write_text(
