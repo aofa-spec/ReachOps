@@ -468,6 +468,10 @@ def verify_summary(
         failures.append("live_acceptance_status_missing")
     if live_acceptance_status:
         live_acceptance_status_value = str(live_acceptance_status.get("status") or "")
+        live_acceptance_status_json = report_path_status(
+            summary_path,
+            str(live_acceptance_status.get("json_path") or ""),
+        )
         live_acceptance_local_inputs = (
             live_acceptance_status.get("local_inputs")
             if isinstance(live_acceptance_status.get("local_inputs"), dict)
@@ -502,8 +506,73 @@ def verify_summary(
             failures.append("live_acceptance_status_missing_inputs")
         if status == STATUS_PASSED and live_acceptance_failed_checks:
             failures.append("live_acceptance_status_failed_checks")
+        if status == STATUS_PASSED and not str(live_acceptance_status.get("json_path") or "").strip():
+            failures.append("live_acceptance_status_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(live_acceptance_status.get("json_path") or "").strip():
+            if not live_acceptance_status_json["exists"]:
+                failures.append("live_acceptance_status_json_missing")
+            elif int(live_acceptance_status_json.get("size") or 0) <= 0:
+                failures.append("live_acceptance_status_json_empty")
+            elif not bool(live_acceptance_status_json.get("inside_summary_dir")):
+                failures.append("live_acceptance_status_json_outside_summary_dir")
+        live_acceptance_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        if (
+            status == STATUS_PASSED
+            and summary_path
+            and bool(live_acceptance_status_json.get("exists"))
+            and int(live_acceptance_status_json.get("size") or 0) > 0
+            and bool(live_acceptance_status_json.get("inside_summary_dir"))
+        ):
+            live_acceptance_payload_detail = load_report_payload(live_acceptance_status_json)
+            live_acceptance_payload = live_acceptance_payload_detail.get("payload") or {}
+            if not bool(live_acceptance_payload_detail.get("loaded")):
+                failures.append("live_acceptance_status_json_invalid")
+            else:
+                expected_live_acceptance_fields = {
+                    "status": live_acceptance_status_value,
+                    "final_delivery_ready": bool(live_acceptance_status.get("final_delivery_ready")),
+                    "ready_for_live_submit": bool(live_acceptance_status.get("ready_for_live_submit")),
+                    "no_browser_started": bool(live_acceptance_status.get("no_browser_started", True)),
+                    "no_submit": bool(live_acceptance_status.get("no_submit", True)),
+                }
+                for key, expected in expected_live_acceptance_fields.items():
+                    actual = live_acceptance_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"live_acceptance_status_json_mismatch:{key}")
+                payload_failed_checks = as_list(live_acceptance_payload.get("failed_checks"))
+                if [str(item) for item in payload_failed_checks] != [str(item) for item in live_acceptance_failed_checks]:
+                    failures.append("live_acceptance_status_json_mismatch:failed_checks")
+                payload_local_inputs = (
+                    live_acceptance_payload.get("local_inputs")
+                    if isinstance(live_acceptance_payload.get("local_inputs"), dict)
+                    else {}
+                )
+                payload_activation = (
+                    live_acceptance_payload.get("activation")
+                    if isinstance(live_acceptance_payload.get("activation"), dict)
+                    else {}
+                )
+                payload_validation = (
+                    live_acceptance_payload.get("live_validation")
+                    if isinstance(live_acceptance_payload.get("live_validation"), dict)
+                    else {}
+                )
+                if bool(payload_local_inputs.get("usable")) != bool(live_acceptance_local_inputs.get("usable")):
+                    failures.append("live_acceptance_status_json_mismatch:local_inputs.usable")
+                if bool(payload_activation.get("ready")) != bool(live_acceptance_activation.get("ready")):
+                    failures.append("live_acceptance_status_json_mismatch:activation.ready")
+                if [str(item) for item in as_list(payload_validation.get("missing_inputs"))] != [str(item) for item in live_acceptance_missing_inputs]:
+                    failures.append("live_acceptance_status_json_mismatch:live_validation.missing_inputs")
+                if [str(item) for item in as_list(payload_validation.get("selected_profile_ids"))] != [str(item) for item in live_acceptance_selected_profiles]:
+                    failures.append("live_acceptance_status_json_mismatch:live_validation.selected_profile_ids")
     else:
         live_acceptance_status_value = ""
+        live_acceptance_status_json = report_path_status(summary_path, "")
+        live_acceptance_payload_detail = {"loaded": False, "error": "", "payload": {}}
         live_acceptance_local_inputs = {}
         live_acceptance_activation = {}
         live_acceptance_validation = {}
@@ -967,6 +1036,12 @@ def verify_summary(
             "activation_ready": bool(live_acceptance_activation.get("ready")),
             "selected_profile_ids": live_acceptance_selected_profiles,
             "missing_inputs": live_acceptance_missing_inputs,
+            "json_path": str(live_acceptance_status.get("json_path") or ""),
+            "json_exists": bool(live_acceptance_status_json.get("exists")),
+            "json_size": int(live_acceptance_status_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_acceptance_status_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_acceptance_payload_detail.get("loaded")),
+            "json_error": str(live_acceptance_payload_detail.get("error") or ""),
         },
         "authorization_handoff": {
             "status": authorization_handoff_status,
