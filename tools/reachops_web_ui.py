@@ -4316,6 +4316,13 @@ def html_page() -> bytes:
       const value = String(text || '').replace(/\\s+/g, ' ').trim();
       return value || fallback;
     }}
+    function localizedRowText(row, key, fallback='-') {{
+      const value = row && row[key + '_i18n'];
+      if (value && typeof value === 'object') {{
+        return value[currentUiLocale] || value[DEFAULT_UI_LOCALE] || row[key] || fallback;
+      }}
+      return row && row[key] ? row[key] : fallback;
+    }}
     function safeDownload(path) {{
       const value = String(path || '').trim();
       if (!value) return '';
@@ -4588,8 +4595,8 @@ def html_page() -> bytes:
         outreachStatusLabel(row),
         {{html:`<div class="copyText">${{esc(compactText(row.suggested_text || row.executed_text || row.message))}}</div>`}},
         actionLink(row.evidence_label || '查看证据', safeDownload(row.evidence_path)),
-        row.language_gate_summary || row.risk_gate_summary || (['failed','retryable','skipped'].includes(String(row.status || '')) ? (row.failure_reason || row.error_message || row.last_error_message || '-') : '-'),
-        row.next_step || '-',
+        localizedRowText(row, 'language_gate_summary', '') || row.risk_gate_summary || (['failed','retryable','skipped'].includes(String(row.status || '')) ? (row.failure_reason || row.error_message || row.last_error_message || '-') : '-'),
+        localizedRowText(row, 'next_step'),
       ]));
     }}
     function renderOperations(data) {{
@@ -6196,9 +6203,11 @@ def build_operator_outreach_rows(action_rows: list[dict], execution_rows: list[d
         row["failure_reason"] = human_failure_reason(row)
         row["risk_gate"] = extract_risk_gate(row)
         row["language_gate_summary"] = human_language_gate_summary(row)
+        row["language_gate_summary_i18n"] = language_gate_summary_i18n(row)
         row["risk_gate_summary"] = human_risk_gate_summary(row)
         row["evidence_label"] = "查看证据" if row.get("evidence_path") and not str(row.get("evidence_path")).startswith("evidence://") else ""
         row["next_step"] = outreach_next_step(row)
+        row["next_step_i18n"] = outreach_next_step_i18n(row)
         result.append(row)
     for execution in execution_rows:
         action_id = str(execution.get("action_id") or "")
@@ -6211,9 +6220,11 @@ def build_operator_outreach_rows(action_rows: list[dict], execution_rows: list[d
         row["failure_reason"] = human_failure_reason(row)
         row["risk_gate"] = extract_risk_gate(row)
         row["language_gate_summary"] = human_language_gate_summary(row)
+        row["language_gate_summary_i18n"] = language_gate_summary_i18n(row)
         row["risk_gate_summary"] = human_risk_gate_summary(row)
         row["evidence_label"] = "查看证据" if row.get("evidence_path") and not str(row.get("evidence_path")).startswith("evidence://") else ""
         row["next_step"] = outreach_next_step(row)
+        row["next_step_i18n"] = outreach_next_step_i18n(row)
         result.append(row)
     return sorted(result, key=lambda item: str(item.get("created_at") or item.get("last_executed_at") or ""), reverse=True)[:120]
 
@@ -6420,31 +6431,62 @@ def human_risk_gate_summary(row: dict) -> str:
 
 
 def human_language_gate_summary(row: dict) -> str:
+    return language_gate_summary_i18n(row).get("zh-CN", "")
+
+
+def language_gate_summary_i18n(row: dict) -> dict:
     status = str(row.get("language_gate_status") or "").strip()
     if not status or status == "ready":
-        return ""
+        return {}
     comment_language = str(row.get("comment_language") or "unknown").strip() or "unknown"
     group_language = str(row.get("group_default_language") or "unknown").strip() or "unknown"
     note = str(row.get("language_gate_note") or "").strip()
-    mapping = {
+    zh_mapping = {
         "language_conflict_with_group_default": "语言冲突阻断",
         "architecture_supported_requires_operator_confirmation": "语言未正式验收",
         "requires_operator_confirmation": "语言需人工确认",
     }
-    parts = [mapping.get(status, "语言门控阻断"), f"评论={comment_language}", f"分组={group_language}"]
+    en_mapping = {
+        "language_conflict_with_group_default": "Language conflict blocked",
+        "architecture_supported_requires_operator_confirmation": "Language not formally acceptance-tested",
+        "requires_operator_confirmation": "Language requires operator confirmation",
+    }
+    zh_parts = [zh_mapping.get(status, "语言门控阻断"), f"评论={comment_language}", f"分组={group_language}"]
+    en_parts = [en_mapping.get(status, "Language gate blocked"), f"comment={comment_language}", f"group={group_language}"]
     if note:
-        parts.append(note)
-    return " / ".join(parts)
+        zh_parts.append(note)
+        en_parts.append(note)
+    return {"zh-CN": " / ".join(zh_parts), "en-US": " / ".join(en_parts)}
 
 
 def outreach_next_step(row: dict) -> str:
+    i18n = outreach_next_step_i18n(row)
+    if i18n:
+        return i18n.get("zh-CN", "")
+    return outreach_next_step_default(row)
+
+
+def outreach_next_step_i18n(row: dict) -> dict:
     language_status = str(row.get("language_gate_status") or "").strip()
     if language_status and language_status != "ready":
         if language_status == "language_conflict_with_group_default":
-            return "确认评论语言和分组默认语言；冲突解除前不能真实提交"
+            return {
+                "zh-CN": "确认评论语言和分组默认语言；冲突解除前不能真实提交",
+                "en-US": "Confirm the comment language and group default language; do not live-submit until the conflict is resolved",
+            }
         if language_status == "architecture_supported_requires_operator_confirmation":
-            return "人工确认未正式验收语言后再决定是否执行"
-        return "人工确认评论语言和回复语言后再执行"
+            return {
+                "zh-CN": "人工确认未正式验收语言后再决定是否执行",
+                "en-US": "Manually confirm this not-formally-tested language before deciding whether to execute",
+            }
+        return {
+            "zh-CN": "人工确认评论语言和回复语言后再执行",
+            "en-US": "Manually confirm the comment and reply language before execution",
+        }
+    return {}
+
+
+def outreach_next_step_default(row: dict) -> str:
     risk_gate = extract_risk_gate(row)
     risk_actions = risk_gate.get("risk_actions") if isinstance(risk_gate, dict) else []
     if isinstance(risk_actions, list) and risk_actions:

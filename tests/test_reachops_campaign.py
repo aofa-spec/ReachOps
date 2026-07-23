@@ -7715,9 +7715,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertIn("语言冲突阻断", rows[0]["language_gate_summary"])
+        self.assertEqual(rows[0]["language_gate_summary"], rows[0]["language_gate_summary_i18n"]["zh-CN"])
+        self.assertIn("Language conflict blocked", rows[0]["language_gate_summary_i18n"]["en-US"])
+        self.assertIn("comment=pt", rows[0]["language_gate_summary_i18n"]["en-US"])
+        self.assertIn("group=en", rows[0]["language_gate_summary_i18n"]["en-US"])
         self.assertIn("评论=pt", rows[0]["language_gate_summary"])
         self.assertIn("分组=en", rows[0]["language_gate_summary"])
         self.assertIn("冲突解除前不能真实提交", rows[0]["next_step"])
+        self.assertEqual(rows[0]["next_step"], rows[0]["next_step_i18n"]["zh-CN"])
+        self.assertIn("do not live-submit", rows[0]["next_step_i18n"]["en-US"])
 
     def test_standalone_browser_adapter_acquires_reuses_and_releases_session(self):
         fake_adapter = FakeBrowserDriverAdapter()
