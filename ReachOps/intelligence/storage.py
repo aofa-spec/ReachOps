@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import uuid
+import hashlib
 from contextlib import contextmanager
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -30,6 +31,10 @@ from .schemas import (
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
+
+
+LEAD_DECISION_SCHEMA_VERSION = "reachops.lead_decision.v1"
+LEAD_DECISION_RULE_VERSION = "reachops.rule_based_lead_decision.v1"
 
 
 class GrowthStorage:
@@ -322,6 +327,9 @@ class GrowthStorage:
                     campaign_id TEXT NOT NULL,
                     run_id TEXT NOT NULL,
                     candidate_observation_id TEXT NOT NULL,
+                    decision_version INTEGER DEFAULT 1,
+                    decision_schema_version TEXT DEFAULT 'reachops.lead_decision.v1',
+                    decision_source TEXT DEFAULT 'rule_based',
                     intent_type TEXT DEFAULT '',
                     intent_score INTEGER DEFAULT 0,
                     product_fit_score INTEGER DEFAULT 0,
@@ -332,8 +340,12 @@ class GrowthStorage:
                     reason_codes_json TEXT DEFAULT '[]',
                     feature_snapshot_json TEXT DEFAULT '{}',
                     classifier_provider_version TEXT DEFAULT '',
+                    rule_version TEXT DEFAULT 'reachops.rule_based_lead_decision.v1',
                     human_review_status TEXT DEFAULT 'pending',
+                    base_decision_key TEXT DEFAULT '',
                     decision_key TEXT DEFAULT '',
+                    decision_fingerprint TEXT DEFAULT '',
+                    decision_json TEXT DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     UNIQUE(campaign_id, run_id, candidate_observation_id, classifier_provider_version, decision_key)
                 );
@@ -665,6 +677,19 @@ class GrowthStorage:
                     "batch_id": "TEXT DEFAULT ''",
                     "run_id": "TEXT DEFAULT ''",
                     "updated_at": "TEXT DEFAULT ''",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "lead_decisions",
+                {
+                    "decision_version": "INTEGER DEFAULT 1",
+                    "decision_schema_version": "TEXT DEFAULT 'reachops.lead_decision.v1'",
+                    "decision_source": "TEXT DEFAULT 'rule_based'",
+                    "rule_version": "TEXT DEFAULT 'reachops.rule_based_lead_decision.v1'",
+                    "base_decision_key": "TEXT DEFAULT ''",
+                    "decision_fingerprint": "TEXT DEFAULT ''",
+                    "decision_json": "TEXT DEFAULT '{}'",
                 },
             )
             self._ensure_columns(
@@ -1203,44 +1228,137 @@ class GrowthStorage:
             raise ValueError("candidate_observation_id is required")
         provider = str(classifier_provider_version or "").strip()
         key = str(decision_key or "").strip()
+        reasons = [str(item) for item in reason_codes or [] if str(item or "").strip()]
+        snapshot = feature_snapshot or {}
+        if not isinstance(snapshot, dict):
+            snapshot = {"value": snapshot}
+        payload = {
+            "schema_version": LEAD_DECISION_SCHEMA_VERSION,
+            "campaign_id": campaign,
+            "run_id": run,
+            "candidate_observation_id": observation,
+            "intent_type": str(intent_type or ""),
+            "intent_score": int(intent_score or 0),
+            "product_fit_score": int(product_fit_score or 0),
+            "contactability_score": int(contactability_score or 0),
+            "source_quality_score": int(source_quality_score or 0),
+            "total_lead_score": int(total_lead_score or 0),
+            "confidence": int(confidence or 0),
+            "reason_codes": reasons,
+            "feature_snapshot": snapshot,
+            "classifier_provider_version": provider,
+            "rule_version": LEAD_DECISION_RULE_VERSION,
+            "human_review_status": str(human_review_status or "pending"),
+            "base_decision_key": key,
+            "local_data_only": True,
+        }
+        fingerprint = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
         with self.connect() as conn:
             row = conn.execute(
                 """
                 SELECT * FROM lead_decisions
-                WHERE campaign_id=? AND run_id=? AND candidate_observation_id=?
-                  AND classifier_provider_version=? AND decision_key=?
+                WHERE campaign_id=? AND run_id=? AND candidate_observation_id=? AND decision_fingerprint=?
                 """,
-                (campaign, run, observation, provider, key),
+                (campaign, run, observation, fingerprint),
             ).fetchone()
             if row:
                 return dict(row)
+            legacy_row = conn.execute(
+                """
+                SELECT * FROM lead_decisions
+                WHERE campaign_id=? AND run_id=? AND candidate_observation_id=?
+                  AND classifier_provider_version=? AND decision_key=? AND COALESCE(decision_fingerprint, '')=''
+                """,
+                (campaign, run, observation, provider, key),
+            ).fetchone()
+            if legacy_row:
+                try:
+                    legacy_reasons = json.loads(legacy_row["reason_codes_json"] or "[]")
+                except Exception:
+                    legacy_reasons = []
+                try:
+                    legacy_snapshot = json.loads(legacy_row["feature_snapshot_json"] or "{}")
+                except Exception:
+                    legacy_snapshot = {}
+                if {
+                    "intent_type": str(legacy_row["intent_type"] or ""),
+                    "intent_score": int(legacy_row["intent_score"] or 0),
+                    "product_fit_score": int(legacy_row["product_fit_score"] or 0),
+                    "contactability_score": int(legacy_row["contactability_score"] or 0),
+                    "source_quality_score": int(legacy_row["source_quality_score"] or 0),
+                    "total_lead_score": int(legacy_row["total_lead_score"] or 0),
+                    "confidence": int(legacy_row["confidence"] or 0),
+                    "reason_codes": legacy_reasons if isinstance(legacy_reasons, list) else [],
+                    "feature_snapshot": legacy_snapshot if isinstance(legacy_snapshot, dict) else {},
+                    "classifier_provider_version": str(legacy_row["classifier_provider_version"] or ""),
+                    "human_review_status": str(legacy_row["human_review_status"] or ""),
+                } == {
+                    "intent_type": payload["intent_type"],
+                    "intent_score": payload["intent_score"],
+                    "product_fit_score": payload["product_fit_score"],
+                    "contactability_score": payload["contactability_score"],
+                    "source_quality_score": payload["source_quality_score"],
+                    "total_lead_score": payload["total_lead_score"],
+                    "confidence": payload["confidence"],
+                    "reason_codes": payload["reason_codes"],
+                    "feature_snapshot": payload["feature_snapshot"],
+                    "classifier_provider_version": payload["classifier_provider_version"],
+                    "human_review_status": payload["human_review_status"],
+                }:
+                    return dict(legacy_row)
+            version_row = conn.execute(
+                """
+                SELECT COALESCE(MAX(decision_version), 0) AS latest_version
+                FROM lead_decisions
+                WHERE campaign_id=? AND run_id=? AND candidate_observation_id=?
+                  AND classifier_provider_version=?
+                  AND (
+                    COALESCE(base_decision_key, '')=?
+                    OR (COALESCE(base_decision_key, '')='' AND decision_key=?)
+                  )
+                """,
+                (campaign, run, observation, provider, key, key),
+            ).fetchone()
+            decision_version = int((version_row["latest_version"] if version_row else 0) or 0) + 1
+            stored_key = key if decision_version <= 1 else f"{key}#v{decision_version}"
+            payload["decision_version"] = decision_version
+            payload["decision_key"] = stored_key
             decision_id = new_id("ld")
             conn.execute(
                 """
                 INSERT INTO lead_decisions
-                (id, campaign_id, run_id, candidate_observation_id, intent_type, intent_score,
+                (id, campaign_id, run_id, candidate_observation_id, decision_version,
+                 decision_schema_version, decision_source, intent_type, intent_score,
                  product_fit_score, contactability_score, source_quality_score, total_lead_score,
                  confidence, reason_codes_json, feature_snapshot_json, classifier_provider_version,
-                 human_review_status, decision_key, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 rule_version, human_review_status, base_decision_key, decision_key,
+                 decision_fingerprint, decision_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     decision_id,
                     campaign,
                     run,
                     observation,
-                    str(intent_type or ""),
-                    int(intent_score or 0),
-                    int(product_fit_score or 0),
-                    int(contactability_score or 0),
-                    int(source_quality_score or 0),
-                    int(total_lead_score or 0),
-                    int(confidence or 0),
-                    json.dumps(reason_codes or [], ensure_ascii=False),
-                    json.dumps(feature_snapshot or {}, ensure_ascii=False, sort_keys=True),
+                    decision_version,
+                    LEAD_DECISION_SCHEMA_VERSION,
+                    "rule_based",
+                    payload["intent_type"],
+                    payload["intent_score"],
+                    payload["product_fit_score"],
+                    payload["contactability_score"],
+                    payload["source_quality_score"],
+                    payload["total_lead_score"],
+                    payload["confidence"],
+                    json.dumps(reasons, ensure_ascii=False),
+                    json.dumps(snapshot, ensure_ascii=False, sort_keys=True),
                     provider,
-                    str(human_review_status or "pending"),
+                    LEAD_DECISION_RULE_VERSION,
+                    payload["human_review_status"],
                     key,
+                    stored_key,
+                    fingerprint,
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True),
                     utc_now_iso(),
                 ),
             )
@@ -1331,6 +1449,48 @@ class GrowthStorage:
                     for row in conn.execute("SELECT * FROM lead_decisions WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
                 ],
             }
+
+    def list_lead_decisions(
+        self,
+        *,
+        campaign_id: str = "",
+        run_id: str = "",
+        candidate_observation_id: str = "",
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if candidate_observation_id:
+            filters.append("candidate_observation_id=?")
+            args.append(str(candidate_observation_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM lead_decisions
+                {where}
+                ORDER BY campaign_id ASC, run_id ASC, candidate_observation_id ASC, decision_version ASC, created_at ASC
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 200)]),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            try:
+                decision = json.loads(item.get("decision_json") or "{}")
+            except Exception:
+                decision = {}
+            item["decision"] = decision if isinstance(decision, dict) else {}
+            result.append(item)
+        return result
 
     def create_campaign(
         self,

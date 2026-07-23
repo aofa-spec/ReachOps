@@ -44,24 +44,28 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - CampaignRun coverage is present through `campaign_runs`, collection-batch binding, active run context, scoped report/export traceability, and run-scoped lead/action/execution rows.
   - Observation coverage now includes `source_observations`, `content_observations`, `comment_observations`, `candidate_observations`, `evidence_artifacts`, and `lead_decisions`.
   - Traceability coverage includes `runtime_traceability_summary(...)`, `list_observations_for_run(...)`, report/export `runtime_scope`, and explicit campaign/run IDs.
-  - PR #12's broader `lead_decision_observations` version model is treated as LeadDecision scope expansion and remains split from this P1 Runtime ledger cleanup.
+  - LeadDecision traceability has been pulled into the P1 Runtime data-model closeout only at the storage/versioned-observation boundary: decisions are immutable/versioned, tied to campaign/run/candidate observation, fingerprinted by normalized decision payload, and exposed through `list_lead_decisions(...)`.
+  - Broader LeadDecision lifecycle/product behavior remains outside this P1 slice unless it is required for runtime traceability.
 - Code evidence:
   - Local SQLite migrations add `source_observations`, `content_observations`, and `comment_observations` with campaign/run/batch scope and idempotency keys.
   - `create_collection_task(...)` records source observations when a real campaign run is bound to the batch.
   - `upsert_content(...)` records content observations for active campaign runs.
   - `upsert_candidate(...)` records comment observations for active campaign runs, preserving distinct same-user comments in the same content/run while making duplicate identical comments idempotent.
   - New observation methods require an existing campaign run; legacy rows with empty `run_id` are not backfilled and no fabricated `run_id` is assigned.
+  - `lead_decisions` migration adds `decision_version`, `decision_schema_version`, `decision_source`, `rule_version`, `base_decision_key`, `decision_fingerprint`, and `decision_json` without rewriting legacy rows.
+  - Exact duplicate LeadDecision payloads are idempotent by fingerprint; changed same-provider/same-key decisions append `#vN` versions instead of overwriting or colliding with the older unique key.
+  - Migrated legacy LeadDecision rows with empty new fingerprint fields remain readable/idempotent when the same payload is observed again, and changed payloads append a new version without fabricating history.
   - Delivery audit P1 contract now requires the source/content/comment ledger tables and APIs.
   - The activation grace test fixture now uses a current in-grace timestamp instead of the stale `2026-07-15T00:00:00Z`, preserving the intended P2 grace/no-live-submit assertion after July 22, 2026.
 - Tests and checks:
   - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py tools/reachops_delivery_audit.py tests/test_reachops_runtime_model.py tests/test_reachops_campaign.py`: passed.
-  - `/usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 9 tests. Coverage includes campaign isolation, run isolation, source/content/comment/candidate observation traceability, evidence traceability, migration compatibility, no-run legacy handling, and idempotency.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 10 tests. Coverage includes campaign isolation, run isolation, source/content/comment/candidate observation traceability, evidence traceability, LeadDecision traceability/versioning, legacy LeadDecision append compatibility, migration compatibility, no-run legacy handling, and idempotency.
   - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
   - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`.
   - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`.
   - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`.
-  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; blockers are `local_mvp`, `windows_final_artifacts`, and `external_authorized_execution`.
-  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 254 tests; log `/tmp/reachops-p1-runtime-ledger-campaign.log`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`; blockers are `local_mvp`, `client_delivery_gate`, `windows_final_artifacts`, and `external_authorized_execution`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 254 tests.
   - Main comparison: `origin/main` at `887f706` ran 230 tests with 14 failures and 1 error; current branch ran 254 tests with 0 failures and 0 errors; comparison artifact `/tmp/reachops-p1-runtime-ledger-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`.
   - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`.
   - `git diff --check`: passed.

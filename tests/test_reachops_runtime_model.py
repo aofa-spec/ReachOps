@@ -298,8 +298,14 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
             run_id=run["id"],
             candidate_observation_id=observation["id"],
             intent_type="purchase_need",
-            intent_score=10,
-            total_lead_score=10,
+            intent_score=80,
+            product_fit_score=70,
+            contactability_score=60,
+            source_quality_score=50,
+            total_lead_score=72,
+            confidence=75,
+            reason_codes=["need_signal"],
+            feature_snapshot={"comment_text": "Need this for my shop"},
             classifier_provider_version="rules-v1",
             decision_key="primary",
         )
@@ -313,11 +319,105 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
             classifier_provider_version="rules-v2",
             decision_key="primary",
         )
+        changed_same_provider = storage.record_lead_decision(
+            campaign_id=campaign.id,
+            run_id=run["id"],
+            candidate_observation_id=observation["id"],
+            intent_type="purchase_need",
+            intent_score=90,
+            total_lead_score=85,
+            classifier_provider_version="rules-v1",
+            decision_key="primary",
+        )
+        changed_duplicate = storage.record_lead_decision(
+            campaign_id=campaign.id,
+            run_id=run["id"],
+            candidate_observation_id=observation["id"],
+            intent_type="purchase_need",
+            intent_score=90,
+            total_lead_score=85,
+            classifier_provider_version="rules-v1",
+            decision_key="primary",
+        )
 
         self.assertEqual(first["id"], duplicate["id"])
         self.assertEqual(int(duplicate["intent_score"]), 80)
         self.assertNotEqual(first["id"], second_version["id"])
-        self.assertEqual(storage.runtime_traceability_summary(campaign.id, run["id"])["counts"]["lead_decisions"], 2)
+        self.assertNotEqual(first["id"], changed_same_provider["id"])
+        self.assertEqual(changed_same_provider["id"], changed_duplicate["id"])
+        self.assertEqual(changed_same_provider["base_decision_key"], "primary")
+        self.assertEqual(changed_same_provider["decision_key"], "primary#v2")
+        decisions = storage.list_lead_decisions(campaign_id=campaign.id, run_id=run["id"])
+        self.assertEqual([int(row["decision_version"]) for row in decisions], [1, 1, 2])
+        self.assertEqual(decisions[0]["decision_schema_version"], "reachops.lead_decision.v1")
+        self.assertEqual(decisions[2]["decision"]["local_data_only"], True)
+        self.assertEqual(storage.runtime_traceability_summary(campaign.id, run["id"])["counts"]["lead_decisions"], 3)
+
+    def test_legacy_lead_decision_can_append_new_version_without_rewriting_history(self) -> None:
+        storage = self.make_storage()
+        campaign = storage.create_campaign("creator_url", "https://www.tiktok.com/@creator")
+        run = storage.create_campaign_run(campaign.id, idempotency_key="legacy-decision-run")
+        evidence = storage.record_evidence_artifact(
+            campaign_id=campaign.id,
+            run_id=run["id"],
+            entity_type="candidate",
+            entity_id="candidate-legacy-decision",
+            local_path="evidence/candidate-legacy-decision.json",
+            sha256="sha-candidate-legacy-decision",
+        )
+        observation = storage.record_candidate_observation(
+            campaign_id=campaign.id,
+            run_id=run["id"],
+            candidate_user_id="candidate-legacy-decision",
+            content_id="video-legacy-decision",
+            evidence_id=evidence["id"],
+            feature_snapshot={"comment_text": "Need this for my shop"},
+        )
+        legacy = storage.record_lead_decision(
+            campaign_id=campaign.id,
+            run_id=run["id"],
+            candidate_observation_id=observation["id"],
+            intent_type="purchase_need",
+            intent_score=70,
+            total_lead_score=70,
+            classifier_provider_version="rules-v1",
+            decision_key="primary",
+        )
+        with storage.connect() as conn:
+            conn.execute(
+                """
+                UPDATE lead_decisions
+                SET base_decision_key='', decision_fingerprint='', decision_json='{}'
+                WHERE id=?
+                """,
+                (legacy["id"],),
+            )
+
+        duplicate_legacy = storage.record_lead_decision(
+            campaign_id=campaign.id,
+            run_id=run["id"],
+            candidate_observation_id=observation["id"],
+            intent_type="purchase_need",
+            intent_score=70,
+            total_lead_score=70,
+            classifier_provider_version="rules-v1",
+            decision_key="primary",
+        )
+        changed = storage.record_lead_decision(
+            campaign_id=campaign.id,
+            run_id=run["id"],
+            candidate_observation_id=observation["id"],
+            intent_type="purchase_need",
+            intent_score=90,
+            total_lead_score=85,
+            classifier_provider_version="rules-v1",
+            decision_key="primary",
+        )
+
+        self.assertEqual(duplicate_legacy["id"], legacy["id"])
+        self.assertNotEqual(changed["id"], legacy["id"])
+        self.assertEqual(int(changed["decision_version"]), 2)
+        self.assertEqual(changed["decision_key"], "primary#v2")
 
     def test_new_observation_and_evidence_require_real_run_id(self) -> None:
         storage = self.make_storage()
@@ -619,6 +719,7 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
             summary = storage.runtime_traceability_summary()
             self.assertFalse(summary["legacy_run_id_fabricated"])
             self.assertGreaterEqual(summary["legacy_rows_with_empty_run_id"]["candidate_users"], 1)
+            self.assertEqual(storage.list_lead_decisions(), [])
 
 
 if __name__ == "__main__":
