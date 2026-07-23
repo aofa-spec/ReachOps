@@ -30,6 +30,7 @@ from ReachOps.intelligence.source_planner import CampaignAnalyzer
 from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.action_router import ActionRouterConfig
+from ReachOps.workbench.risk_gate import RiskGate
 from ReachOps.workbench.action_router import FixtureActionExecutor
 from ReachOps.workbench.profile_preflight import ProfilePreflightChecker, ProfilePreflightConfig
 from ReachOps.workbench.console import GrowthOpsConsole, format_campaign_plan_summary, quick_send_mode_key, quick_send_preset
@@ -7468,7 +7469,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             candidates = service.storage.list_candidates_with_content()
 
@@ -7496,7 +7504,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             actions = service.storage.list_action_queue(limit=20)
 
@@ -7566,6 +7581,115 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual([row["action_type"] for row in actions], ["comment_reply", "comment_reply"])
             self.assertEqual({row["batch_id"] for row in actions}, {"gb_policy"})
             self.assertIn("product page", actions[0]["suggested_text"])
+
+    def test_action_queue_records_language_gate_and_localized_reply_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            manager = service.router.operation_leads
+
+            class Config:
+                enable_action_queue = True
+                enable_comment_queue = True
+                enable_follow_queue = False
+                enable_dm_queue = False
+                enable_standard_outreach_policy = True
+                min_lead_score_for_action = 50
+                active_batch_id = "gb_language_ready"
+                default_reply_language = "es"
+                group_default_reply_language = "es"
+
+            created = manager._create_actions(
+                "lead-language-ready",
+                {
+                    "username": "comprador_es",
+                    "profile_url": "https://www.tiktok.com/@comprador_es",
+                    "source_path": "https://www.tiktok.com/@creator/video/es",
+                    "qualify_score": 80,
+                    "comment_text": "donde comprar",
+                    "comment_language": "es",
+                },
+                "找链接/入口",
+                "high",
+                Config(),
+            )
+            actions = service.storage.list_action_queue(limit=20)
+
+            self.assertEqual(created, 1)
+            self.assertEqual(actions[0]["language_gate_status"], "ready")
+            self.assertEqual(actions[0]["comment_language"], "es")
+            self.assertEqual(actions[0]["group_default_language"], "es")
+            self.assertIn("language_gate=ready", actions[0]["reason"])
+            self.assertIn("pagina del producto", actions[0]["suggested_text"])
+
+    def test_action_queue_language_conflict_and_uncertain_language_require_operator_confirmation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            manager = service.router.operation_leads
+
+            class Config:
+                enable_action_queue = True
+                enable_comment_queue = True
+                enable_follow_queue = False
+                enable_dm_queue = False
+                enable_standard_outreach_policy = True
+                min_lead_score_for_action = 50
+                active_batch_id = "gb_language_gate"
+                default_reply_language = "en"
+                group_default_reply_language = "en"
+
+            manager._create_actions(
+                "lead-language-conflict",
+                {
+                    "username": "comprador_pt",
+                    "profile_url": "https://www.tiktok.com/@comprador_pt",
+                    "source_path": "https://www.tiktok.com/@creator/video/pt",
+                    "qualify_score": 80,
+                    "comment_text": "onde comprar",
+                    "comment_language": "pt",
+                },
+                "找链接/入口",
+                "high",
+                Config(),
+            )
+            manager._create_actions(
+                "lead-language-unknown",
+                {
+                    "username": "viewer_unknown",
+                    "profile_url": "https://www.tiktok.com/@viewer_unknown",
+                    "source_path": "https://www.tiktok.com/@creator/video/unknown",
+                    "qualify_score": 80,
+                    "comment_text": "???",
+                    "comment_language": "unknown",
+                },
+                "找链接/入口",
+                "high",
+                Config(),
+            )
+            by_user = {row["target_username"]: row for row in service.storage.list_action_queue(limit=20)}
+
+            conflict = by_user["comprador_pt"]
+            uncertain = by_user["viewer_unknown"]
+            self.assertEqual(conflict["language_gate_status"], "language_conflict_with_group_default")
+            self.assertEqual(conflict["risk_level"], "high")
+            self.assertIn("comment_language=pt", conflict["reason"])
+            self.assertIn("group_default_language=en", conflict["reason"])
+            self.assertEqual(uncertain["language_gate_status"], "requires_operator_confirmation")
+            self.assertIn("comment_language_uncertain", uncertain["language_gate_note"])
+
+            gate = RiskGate().evaluate(
+                {
+                    **conflict,
+                    "status": "approved",
+                    "execution_confirmed": 1,
+                    "review_note": "operator reviewed",
+                },
+                {"profile_id": "profile-language"},
+                live_submit=True,
+                require_action_review=True,
+            )
+            self.assertFalse(gate["allowed"])
+            self.assertEqual(gate["reason_code"], "LANGUAGE_CONFLICT_WITH_GROUP_DEFAULT")
+            self.assertTrue(gate["requires_human_review"])
 
     def test_standalone_browser_adapter_acquires_reuses_and_releases_session(self):
         fake_adapter = FakeBrowserDriverAdapter()
@@ -9182,7 +9306,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -9354,7 +9485,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             batch = service.storage.latest_collection_batch_for_campaign(plan["campaign"]["id"])
 
@@ -9390,7 +9528,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             result = GrowthWorkflowService(service).run_action_router(
                 [{"profile_id": "exec-1", "group_name": "US"}],
@@ -9431,7 +9576,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             result = GrowthWorkflowService(service).run_action_router(
                 [{"profile_id": "exec-1", "group_name": "US"}],
@@ -9472,7 +9624,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -9512,7 +9671,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -9557,7 +9723,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -9603,7 +9776,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -9652,7 +9832,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             comment_action = next(row for row in service.storage.list_action_queue(limit=10) if row["action_type"] == "comment_reply")
             evidence_path = Path(tmp) / "comment-evidence.png"
@@ -9714,7 +9901,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             dm_action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "dm_review")
             service.storage.update_action_status(dm_action["id"], "approved", "authorized dm review")
@@ -9776,7 +9970,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             dm_action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "dm_review")
             service.storage.update_action_status(dm_action["id"], "approved", "authorized dm review")
@@ -9849,7 +10050,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -9899,7 +10107,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -9940,7 +10155,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             comment_action = next(row for row in service.storage.list_action_queue(limit=10) if row["action_type"] == "comment_reply")
             evidence_path = Path(tmp) / "device-bound-comment-evidence.png"

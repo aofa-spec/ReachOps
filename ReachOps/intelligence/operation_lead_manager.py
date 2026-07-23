@@ -45,6 +45,9 @@ PURCHASE_INTENT = {
     "valor": "问价格",
 }
 
+FORMALLY_ACCEPTED_REPLY_LANGUAGES = {"en", "es", "pt", "zh"}
+UNCERTAIN_REPLY_LANGUAGES = {"", "unknown", "auto", "latin"}
+
 
 class OperationLeadManager:
     def __init__(self, storage: GrowthStorage, copy_recommender: OutreachCopyRecommender | None = None):
@@ -213,6 +216,7 @@ class OperationLeadManager:
         username = str(row.get("username") or "")
         profile_url = str(row.get("profile_url") or "")
         comment_target_url = str(row.get("source_path") or row.get("video_url") or profile_url)
+        language_gate = self._language_gate(row, config)
         actions = []
         if getattr(config, "enable_comment_queue", True):
             suggestion = self.copy_recommender.recommend("comment_reply", row, lead_type, priority, config)
@@ -226,12 +230,20 @@ class OperationLeadManager:
             suggestion = self.copy_recommender.recommend("dm_review", row, lead_type, priority, config)
             actions.append(("dm_review", profile_url, suggestion.text, dm_risk, suggestion))
         for action_type, target_url, text, risk, suggestion in actions:
+            action_language_gate = dict(language_gate)
+            if action_type != "comment_reply" and action_language_gate["status"] == "ready":
+                action_language_gate["note"] = "non_reply_action_comment_language_recorded"
+            effective_risk = "high" if action_language_gate["status"] != "ready" else risk
             reason = " | ".join(
                 item
                 for item in [
                     f"lead_type={lead_type}",
                     f"copy_provider={getattr(suggestion, 'provider', '')}",
                     f"copy_angle={getattr(suggestion, 'angle', '')}",
+                    f"comment_language={action_language_gate['comment_language']}",
+                    f"group_default_language={action_language_gate['group_default_language']}",
+                    f"language_gate={action_language_gate['status']}",
+                    f"language_gate_note={action_language_gate['note']}",
                 ]
                 if item and not item.endswith("=")
             )
@@ -242,8 +254,12 @@ class OperationLeadManager:
                 target_username=username,
                 target_url=target_url,
                 suggested_text=text,
-                risk_level=risk,
+                risk_level=effective_risk,
                 reason=reason,
+                comment_language=action_language_gate["comment_language"],
+                group_default_language=action_language_gate["group_default_language"],
+                language_gate_status=action_language_gate["status"],
+                language_gate_note=action_language_gate["note"],
                 created_at=utc_now_iso(),
             )
             _, created = self.storage.upsert_action_queue_item(item)
@@ -261,6 +277,51 @@ class OperationLeadManager:
                 created_count += 1
                 self.storage.log_event("action_queue_created", item.id, {"action_type": action_type, "username": username})
         return created_count
+
+    def _normalize_reply_language(self, value: str) -> str:
+        language = str(value or "").strip().lower().replace("_", "-")
+        aliases = {
+            "english": "en",
+            "spanish": "es",
+            "portuguese": "pt",
+            "chinese": "zh",
+            "zh-cn": "zh",
+            "zh-hans": "zh",
+            "zh-hant": "zh",
+        }
+        return aliases.get(language, language)
+
+    def _language_gate(self, row: dict, config) -> dict:
+        comment_language = self._normalize_reply_language(str(row.get("comment_language") or "unknown"))
+        group_default = self._normalize_reply_language(
+            str(
+                getattr(config, "group_default_reply_language", "")
+                or getattr(config, "default_reply_language", "")
+                or "unknown"
+            )
+        )
+        if comment_language in UNCERTAIN_REPLY_LANGUAGES:
+            status = "requires_operator_confirmation"
+            note = "comment_language_uncertain"
+        elif group_default in UNCERTAIN_REPLY_LANGUAGES:
+            status = "requires_operator_confirmation"
+            note = "group_default_language_unconfigured"
+        elif comment_language != group_default:
+            status = "language_conflict_with_group_default"
+            note = "comment_language_conflicts_with_group_default"
+        elif comment_language not in FORMALLY_ACCEPTED_REPLY_LANGUAGES:
+            status = "architecture_supported_requires_operator_confirmation"
+            note = "language_not_formally_acceptance_tested"
+        else:
+            status = "ready"
+            note = "comment_language_matches_group_default"
+        return {
+            "comment_language": comment_language or "unknown",
+            "group_default_language": group_default or "unknown",
+            "status": status,
+            "note": note,
+            "no_submit": status != "ready",
+        }
 
     def _render_template(self, action_type: str, values: dict, fallback: str) -> str:
         body = self.storage.get_action_template_body(action_type, fallback)

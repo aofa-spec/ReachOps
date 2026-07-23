@@ -111,6 +111,8 @@ def run_fixture_collection(base_dir: str, target: str):
             max_comments_per_video=3,
             task_delay_min_seconds=30,
             task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
             test_mode=True,
             intent_keywords=["where", "link", "buy", "app", "free", "name"],
             exclude_keywords=["spam", "bot"],
@@ -388,7 +390,14 @@ def run_public_reply_monitor_fixture(target: str) -> dict:
     service.run_collection(
         [{"type": "keyword", "value": target}],
         [{"profile_id": "reply-discovery-1", "group_name": "AUDIT"}],
-        GrowthTaskConfig(campaign_id=campaign_id, max_videos_per_creator=1, max_comments_per_video=5, test_mode=True),
+        GrowthTaskConfig(
+            campaign_id=campaign_id,
+            max_videos_per_creator=1,
+            max_comments_per_video=5,
+            default_reply_language="en",
+            group_default_reply_language="en",
+            test_mode=True,
+        ),
     )
     action = next(
         (row for row in service.storage.list_action_queue(limit=1000) if str(row.get("action_type") or "") == "comment_reply"),
@@ -609,6 +618,7 @@ def run_web_local_api_architecture_fixture() -> dict:
     headless = (ROOT_DIR / "tools" / "run_reachops_headless_macos.py").read_text(encoding="utf-8")
     standalone = (ROOT_DIR / "ReachOps" / "workbench" / "standalone_app.py").read_text(encoding="utf-8")
     action_router = (ROOT_DIR / "ReachOps" / "workbench" / "action_router.py").read_text(encoding="utf-8")
+    execution_guard = (ROOT_DIR / "ReachOps" / "workbench" / "execution_guard.py").read_text(encoding="utf-8")
     router = (ROOT_DIR / "ReachOps" / "intelligence" / "growth_task_router.py").read_text(encoding="utf-8")
     action_executor = (ROOT_DIR / "ReachOps" / "workbench" / "tiktok_action_executor.py").read_text(encoding="utf-8")
     browser_manager = (ROOT_DIR / "ReachOps" / "adapters" / "browser_manager.py").read_text(encoding="utf-8")
@@ -705,6 +715,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "repair_policy_covers_all_page_states": "PAGE_STATE_REPAIR_COVERAGE_SCHEMA_VERSION" in repair_policy_engine and "build_page_state_repair_coverage" in repair_policy_engine and "all_page_states_covered" in repair_policy_engine and "continue_execution" in repair_policy_engine and "COMMENT_BOX_MISSING" in repair_policy_engine and "UNKNOWN_PAGE_STATE" in repair_policy_engine,
         "action_router_uses_repair_policy_engine": "RepairPolicyEngine" in action_router and "action_router_repair_decision" in action_router and "retry_same_profile" in action_router and "repair_decision" in action_router and "executable_steps" in action_router and "_execute_repair_steps" in action_router and "repair_step_results" in action_router and "requires_browser_executor" in action_router and "requires_human_review" in action_router,
         "risk_gate_unifies_account_authorization_and_quota": "RiskGate" in risk_gate and "block_precheck" in risk_gate and "PUBLISH_PROFILE_BLOCKED" in risk_gate and "HIGH_RISK_REVIEW_NOTE_REQUIRED" in risk_gate and "DAILY_QUOTA_EXCEEDED" in risk_gate and "DUPLICATE_ACTION_TEXT" in risk_gate and "profile_group_" in risk_gate and "rewrite_or_rotate_message" in risk_gate and "risk_actions" in risk_gate and "risk_decision_id" in risk_gate and "risk_category" in risk_gate and "terminal_outcome" in risk_gate and "block_execution" in risk_gate and "no_ai_token_used" in risk_gate,
+        "language_gate_blocks_unsafe_live_submit": "comment_language TEXT DEFAULT 'unknown'" in growth_storage and "group_default_language TEXT DEFAULT 'unknown'" in growth_storage and "language_gate_status TEXT DEFAULT 'requires_operator_confirmation'" in growth_storage and "language_gate_status" in operation_lead_manager and "language_conflict_with_group_default" in operation_lead_manager and "FORMALLY_ACCEPTED_REPLY_LANGUAGES" in operation_lead_manager and "LANGUAGE_CONFLICT_WITH_GROUP_DEFAULT" in risk_gate and "LANGUAGE_CONFIRMATION_REQUIRED" in risk_gate and "LANGUAGE_NOT_FORMALLY_ACCEPTANCE_TESTED" in risk_gate and "确认评论语言和回复语言" in risk_gate and "LANGUAGE_CONFIRMATION_REQUIRED" in execution_guard and "default_reply_language=group_language" in standalone and "group_default_reply_language=group_language" in standalone,
         "action_router_uses_risk_gate_before_execution": "RiskGate" in action_router and "self.risk_gate.evaluate" in action_router and "\"risk_gate\"" in action_router and "live_submit_authorization_blocked" in action_router and "_duplicate_text_status" in action_router and "risk_gate_duplicate_text_blocked" in action_router,
         "web_operator_outreach_rows_explain_risk_gate": "risk_gate_json" in web_ui and "extract_risk_gate" in web_ui and "human_risk_gate_summary" in web_ui and "风险/失败原因" in web_ui and "风险门禁阻断" in web_ui and "风险门禁通过" in web_ui and "改写或轮换话术后重试" in web_ui and "等待人工授权后再执行" in web_ui,
         "runtime_smoke_verifies_operator_risk_gate_snapshot": "snapshot_outreach_view_explains_risk_gate_to_operator" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "seed_snapshot_risk_gate_execution" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "DUPLICATE_ACTION_TEXT" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "风险门禁阻断" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8"),
@@ -1400,6 +1411,8 @@ def run_campaign_funnel_isolation_fixture(target: str) -> dict:
             max_comments_per_video=3,
             task_delay_min_seconds=30,
             task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
             test_mode=True,
         ),
     )
@@ -1464,6 +1477,8 @@ def run_campaign_funnel_isolation_fixture(target: str) -> dict:
             max_comments_per_video=3,
             task_delay_min_seconds=30,
             task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
             test_mode=True,
         ),
     )
@@ -1553,7 +1568,13 @@ def run_collection_error_state_fixture() -> dict:
     page_fail_result = page_fail_service.run_collection(
         [{"type": "creator_url", "value": "https://www.tiktok.com/@audit_creator"}],
         [{"profile_id": "audit-page-fail", "group_name": "US"}],
-        GrowthTaskConfig(test_mode=True, task_delay_min_seconds=30, task_delay_max_seconds=30),
+        GrowthTaskConfig(
+            test_mode=True,
+            task_delay_min_seconds=30,
+            task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
+        ),
     )
     page_fail_tasks = page_fail_service.storage.list_collection_tasks(limit=20)
 
@@ -1572,7 +1593,13 @@ def run_collection_error_state_fixture() -> dict:
     empty_comment_result = empty_comment_service.run_collection(
         [{"type": "creator_url", "value": "https://www.tiktok.com/@audit_creator"}],
         [{"profile_id": "audit-empty-comments", "group_name": "US"}],
-        GrowthTaskConfig(test_mode=True, task_delay_min_seconds=30, task_delay_max_seconds=30),
+        GrowthTaskConfig(
+            test_mode=True,
+            task_delay_min_seconds=30,
+            task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
+        ),
     )
     empty_comment_tasks = empty_comment_service.storage.list_collection_tasks(limit=20)
 
@@ -1894,6 +1921,8 @@ def run_audit(args) -> dict:
             max_comments_per_video=3,
             task_delay_min_seconds=30,
             task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
             test_mode=True,
             intent_keywords=["where", "link", "buy", "app", "free", "name"],
             exclude_keywords=["spam", "bot"],

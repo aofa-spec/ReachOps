@@ -220,6 +220,10 @@ class GrowthStorage:
                     reason TEXT DEFAULT '',
                     status TEXT DEFAULT 'pending_review',
                     risk_level TEXT DEFAULT 'medium',
+                    comment_language TEXT DEFAULT 'unknown',
+                    group_default_language TEXT DEFAULT 'unknown',
+                    language_gate_status TEXT DEFAULT 'requires_operator_confirmation',
+                    language_gate_note TEXT DEFAULT '',
                     batch_id TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
                     UNIQUE(lead_id, action_type)
@@ -668,6 +672,10 @@ class GrowthStorage:
                     "last_executed_at": "TEXT",
                     "batch_id": "TEXT DEFAULT ''",
                     "run_id": "TEXT DEFAULT ''",
+                    "comment_language": "TEXT DEFAULT 'unknown'",
+                    "group_default_language": "TEXT DEFAULT 'unknown'",
+                    "language_gate_status": "TEXT DEFAULT 'requires_operator_confirmation'",
+                    "language_gate_note": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -2347,10 +2355,11 @@ class GrowthStorage:
                 """
                 INSERT INTO action_queue
                 (id, lead_id, action_type, target_username, target_url, suggested_text, reason, status, risk_level,
+                 comment_language, group_default_language, language_gate_status, language_gate_note,
                  batch_id, run_id, created_at, review_status, reviewed_by, reviewed_at, review_note, daily_quota_key,
                  execution_confirmed, confirmed_by, confirmed_at, retry_count, last_execution_id,
                  last_error_code, last_error_message, last_executed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
@@ -2362,6 +2371,10 @@ class GrowthStorage:
                     item.reason,
                     item.status,
                     item.risk_level,
+                    item.comment_language,
+                    item.group_default_language,
+                    item.language_gate_status,
+                    item.language_gate_note,
                     self._active_batch_id(),
                     self._active_run_id(),
                     item.created_at,
@@ -3463,7 +3476,7 @@ class GrowthStorage:
                 f"""
                 SELECT aq.*, ol.lead_type, ol.priority, ol.score AS lead_score, ol.reason AS lead_reason,
                        ol.source_path,
-                       cu.comment_language,
+                       COALESCE(NULLIF(aq.comment_language, ''), cu.comment_language, 'unknown') AS comment_language,
                        dc.country AS content_country
                 FROM action_queue aq
                 LEFT JOIN operation_leads ol ON ol.id = aq.lead_id

@@ -35,6 +35,42 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Windows code-signing certificate is not currently available; internal builds may show an unknown-publisher warning.
 - Natural user replies cannot be guaranteed; authorized test accounts may validate reply-linking mechanics, while natural reply rate remains a business observation.
 
+## Latest P4 language gate snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Close the master-contract country/group/language runtime gap without creating a new architecture and without entering Windows, EXE, installer, or TikTok live-submit scope.
+- Code evidence:
+  - `ActionQueueItem` and local SQLite `action_queue` now persist `comment_language`, `group_default_language`, `language_gate_status`, and `language_gate_note`.
+  - Existing persisted action rows migrate conservatively: missing language-gate fields default to `requires_operator_confirmation`; no legacy action is treated as safe for automatic live submission merely because the column was absent.
+  - `OperationLeadManager` records detected comment language and configured group default language on every proposed action, escalates non-ready language gates to high risk, and distinguishes `requires_operator_confirmation`, `language_conflict_with_group_default`, and `architecture_supported_requires_operator_confirmation`.
+  - Rule-based comment reply suggestions now localize deterministic v1 copy for acceptance-tested languages `en`, `es`, `pt`, and `zh`; other languages remain architecture-supported only and require operator confirmation before live submit.
+  - `RiskGate` blocks live submit when the language gate is not `ready`, including explicit reason codes for group-language conflict, untested language, and generic operator confirmation.
+  - `ExecutionGuard` includes a lower-level `LANGUAGE_CONFIRMATION_REQUIRED` block so unsafe language-gate state cannot bypass the higher-level risk gate.
+  - The standalone client reads the editable local ixBrowser group mapping and passes the group default reply language into collection/action generation.
+  - Delivery audit now verifies language-gate storage, action-generation, risk-gate, execution-guard, and standalone wiring.
+- Tests and checks:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m py_compile ReachOps/intelligence/schemas.py ReachOps/intelligence/storage.py ReachOps/intelligence/outreach_copy.py ReachOps/intelligence/operation_lead_manager.py ReachOps/workbench/risk_gate.py ReachOps/workbench/execution_guard.py ReachOps/workbench/standalone_app.py tests/test_reachops_campaign.py tools/reachops_delivery_audit.py`: passed.
+  - New focused language-gate tests: `test_action_queue_records_language_gate_and_localized_reply_copy` and `test_action_queue_language_conflict_and_uncertain_language_require_operator_confirmation`: passed.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 11 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, summary `execution_success=9`, `submitted_unverified=0`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 257 tests; log `/tmp/reachops-language-gate-campaign.log`.
+  - Main comparison: `origin/main` at `887f706` ran 230 tests with 14 failures and 1 error; current branch ran 257 tests with 0 failures and 0 errors; comparison artifact `/tmp/reachops-language-gate-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-language-gate-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-language-gate-diff-check.log`.
+- Expected final-delivery blockers:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; blocker scopes `local_mvp`, `windows_final_artifacts`, and `external_authorized_execution`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`.
+- Safety:
+  - No Windows build, EXE, installer, update manifest, ixBrowser profile launch, or TikTok live-submit was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+  - Final delivery remains blocked by Windows final artifacts, Windows Credential Manager validation on Windows, current local MVP/ixBrowser readiness, and authorized live evidence.
+
 ## Latest P4 ixBrowser group mapping snapshot
 
 - Date: `2026-07-24`

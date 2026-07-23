@@ -284,6 +284,10 @@ class ActionQueueItem:
     reason: str = ""
     status: str = "pending_review"
     risk_level: str = "medium"
+    comment_language: str = "unknown"
+    group_default_language: str = "unknown"
+    language_gate_status: str = "ready"
+    language_gate_note: str = "manual_action_no_language_gate"
     created_at: str = field(default_factory=utc_now_iso)
 
 
@@ -561,6 +565,8 @@ class GrowthTaskConfig:
     campaign_id: str = ""
     active_batch_id: str = ""
     active_run_id: str = ""
+    default_reply_language: str = "unknown"
+    group_default_reply_language: str = "unknown"
     intent_keywords: List[str] = field(default_factory=list)
     exclude_keywords: List[str] = field(default_factory=list)
     test_mode: bool = False

@@ -32,6 +32,8 @@ class ExecutionGuard:
             return allowed, code
         if self.profile_action_counts[profile_id] >= self.policy.max_actions_per_profile_round:
             return False, "PROFILE_ROUND_LIMIT_REACHED"
+        if str(action.get("language_gate_status") or "ready") != "ready":
+            return False, "LANGUAGE_CONFIRMATION_REQUIRED"
         if self.policy.require_execution_confirmation and not int(action.get("execution_confirmed") or 0):
             return False, "ACTION_REQUIRES_EXECUTION_CONFIRMATION"
         return True, ""

@@ -2692,6 +2692,12 @@ class GrowthIntelligenceStandaloneApp:
                     f"profile_ids={','.join(list(handed_off_sessions.keys())[:8]) or '-'}"
                 )
                 effective_sources = list(planned_sources)
+                group_language = "unknown"
+                try:
+                    mapping = self.service.storage.get_ixbrowser_group_mapping(group_name=profile_group)
+                    group_language = str(mapping.get("default_reply_language") or "unknown")
+                except Exception:
+                    group_language = "unknown"
                 if quick_volume_key == "quick" and len(executable_profiles) < profile_limit:
                     max_sources_for_available = max(
                         len(executable_profiles),
@@ -2733,6 +2739,8 @@ class GrowthIntelligenceStandaloneApp:
                         max_comments_per_video=max_comments,
                         profile_group=profile_group,
                         campaign_id=str(campaign.get("id") or ""),
+                        default_reply_language=group_language,
+                        group_default_reply_language=group_language,
                         intent_keywords=list(persona.get("intent_keywords") or intent_keywords),
                         exclude_keywords=list(persona.get("exclude_keywords") or exclude_keywords),
                         active_batch_id=self.active_batch_id,
