@@ -87,6 +87,32 @@ from tools.reachops_windows_package_preflight import build_preflight as build_re
 from tools.write_reachops_update_manifest import build_manifest
 
 
+def write_minimal_authorization_handoff_bundle(path):
+    manifest = {
+        "no_browser_started": True,
+        "no_submit": True,
+        "operator_commands": ["powershell -ExecutionPolicy Bypass -File tools\\init_reachops_acceptance_inputs_windows.ps1 -Json"],
+        "excluded_sensitive_files": ["tools/reachops_acceptance_inputs.local.ps1"],
+    }
+    readiness = {"status": "passed", "final_delivery_ready": False}
+    phase2 = {"live_readiness": {"local_inputs": {"usable": True}}}
+    commands = "\n".join(
+        [
+            "powershell -ExecutionPolicy Bypass -File tools\\init_reachops_acceptance_inputs_windows.ps1 -Json",
+            "python tools\\reachops_final_acceptance_gate.py --json",
+        ]
+    )
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("README_AUTHORIZATION_HANDOFF.md", "# ReachOps Authorization Handoff Bundle\n")
+        zf.writestr("latest_live_acceptance_readiness.md", "# ReachOps Live Acceptance Readiness\n")
+        zf.writestr("latest_live_acceptance_readiness.json", json.dumps(readiness))
+        zf.writestr("latest_phase2_handoff_check.md", "# ReachOps Phase 2 Handoff Check\n")
+        zf.writestr("latest_phase2_handoff_check.json", json.dumps(phase2))
+        zf.writestr("authorization_handoff_commands.txt", commands)
+        zf.writestr("authorization_handoff_manifest.json", json.dumps(manifest))
+        zf.writestr("reachops_acceptance_inputs.example.ps1", "# safe example only\n")
+
+
 class FakeDriver:
     def __init__(self):
         self.current_url = ""
@@ -1835,7 +1861,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(path_checked_summary["authorization_handoff"]),
                 encoding="utf-8",
             )
-            (report_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"PK\x05\x06" + (b"\x00" * 18))
+            write_minimal_authorization_handoff_bundle(report_dir / "latest_reachops_authorization_handoff.zip")
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
             self.assertTrue(path_checked["delivery_audit"]["json_exists"])
@@ -1874,6 +1900,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["authorization_handoff"]["json_loaded"])
             self.assertTrue(path_checked["authorization_handoff"]["bundle_exists"])
             self.assertTrue(path_checked["authorization_handoff"]["bundle_inside_summary_dir"])
+            self.assertTrue(path_checked["authorization_handoff"]["bundle_verification_passed"])
+            self.assertEqual(path_checked["authorization_handoff"]["bundle_verification_failures"], [])
             self.assertTrue(path_checked["delivery_audit"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["operator_pressure"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["installer_smoke"]["json_inside_summary_dir"])
@@ -2422,7 +2450,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(empty_handoff_bundle_file["passed"])
             self.assertIn("authorization_handoff_bundle_file_empty", empty_handoff_bundle_file["failures"])
 
-            (report_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"PK\x05\x06" + (b"\x00" * 18))
+            write_minimal_authorization_handoff_bundle(report_dir / "latest_reachops_authorization_handoff.zip")
+            with zipfile.ZipFile(report_dir / "latest_reachops_authorization_handoff.zip", "w") as zf:
+                zf.writestr("reachops_acceptance_inputs.local.ps1", "real values must not be bundled")
+            invalid_handoff_bundle_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_handoff_bundle_file["passed"])
+            self.assertIn("authorization_handoff_bundle_verification_failed", invalid_handoff_bundle_file["failures"])
+            self.assertFalse(invalid_handoff_bundle_file["authorization_handoff"]["bundle_verification_passed"])
+            self.assertIn(
+                "forbidden_sensitive_files_included",
+                invalid_handoff_bundle_file["authorization_handoff"]["bundle_verification_failures"],
+            )
+
+            write_minimal_authorization_handoff_bundle(report_dir / "latest_reachops_authorization_handoff.zip")
             (report_dir / "authorization_handoff_payload.json").unlink()
             missing_handoff_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_handoff_file["passed"])
@@ -2461,7 +2501,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (outside_dir / "goal_status_report.json").write_text("{}", encoding="utf-8")
             (outside_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (outside_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
-            (outside_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"PK\x05\x06" + (b"\x00" * 18))
+            write_minimal_authorization_handoff_bundle(outside_dir / "latest_reachops_authorization_handoff.zip")
             outside_summary = json.loads(json.dumps(path_checked_summary))
             outside_summary["delivery_audit"]["json_path"] = "../outside/delivery_audit_payload.json"
             outside_summary["operator_pressure"]["json_path"] = "../outside/operator_pressure_payload.json"
@@ -3372,7 +3412,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(summary["authorization_handoff"]),
                 encoding="utf-8",
             )
-            (report_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"PK\x05\x06" + (b"\x00" * 18))
+            write_minimal_authorization_handoff_bundle(report_dir / "latest_reachops_authorization_handoff.zip")
             (report_dir / "live_preflight_payload.json").write_text(
                 json.dumps(summary["live_preflight"]),
                 encoding="utf-8",

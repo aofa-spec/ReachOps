@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from tools.reachops_authorization_handoff_bundle import verify_handoff_bundle
+
 
 STATUS_PASSED = "passed"
 STATUS_READY_FOR_EXTERNAL_VALIDATION = "ready_for_external_validation"
@@ -929,6 +931,13 @@ def verify_summary(
         summary_path,
         authorization_handoff.get("bundle_path") if isinstance(authorization_handoff, dict) else "",
     )
+    authorization_handoff_bundle_verification: dict[str, Any] = {
+        "status": "",
+        "passed": False,
+        "failures": [],
+        "forbidden_files": [],
+        "missing_files": [],
+    }
     if status == STATUS_PASSED and not authorization_handoff:
         failures.append("authorization_handoff_missing")
     if authorization_handoff:
@@ -951,6 +960,12 @@ def verify_summary(
                 failures.append("authorization_handoff_bundle_file_empty")
             elif not bool(authorization_handoff_bundle.get("inside_summary_dir")):
                 failures.append("authorization_handoff_bundle_outside_summary_dir")
+            else:
+                authorization_handoff_bundle_verification = verify_handoff_bundle(
+                    authorization_handoff_bundle.get("path") or ""
+                )
+                if not bool(authorization_handoff_bundle_verification.get("passed")):
+                    failures.append("authorization_handoff_bundle_verification_failed")
         if status == STATUS_PASSED and not str(authorization_handoff.get("json_path") or "").strip():
             failures.append("authorization_handoff_json_path_missing")
         if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("json_path") or "").strip():
@@ -981,6 +996,13 @@ def verify_summary(
         authorization_handoff_status = ""
         authorization_handoff_payload_detail = {"loaded": False, "error": "", "payload": {}}
         authorization_handoff_bundle = report_path_status(summary_path, "")
+        authorization_handoff_bundle_verification = {
+            "status": "",
+            "passed": False,
+            "failures": [],
+            "forbidden_files": [],
+            "missing_files": [],
+        }
 
     if str(live_preflight.get("status") or "") == "completed":
         missing_preflight = (
@@ -1568,6 +1590,17 @@ def verify_summary(
             "bundle_exists": bool(authorization_handoff_bundle.get("exists")),
             "bundle_size": int(authorization_handoff_bundle.get("size") or 0),
             "bundle_inside_summary_dir": bool(authorization_handoff_bundle.get("inside_summary_dir")),
+            "bundle_verification_status": str(authorization_handoff_bundle_verification.get("status") or ""),
+            "bundle_verification_passed": bool(authorization_handoff_bundle_verification.get("passed")),
+            "bundle_verification_failures": [
+                str(item) for item in as_list(authorization_handoff_bundle_verification.get("failures"))
+            ],
+            "bundle_forbidden_files": [
+                str(item) for item in as_list(authorization_handoff_bundle_verification.get("forbidden_files"))
+            ],
+            "bundle_missing_files": [
+                str(item) for item in as_list(authorization_handoff_bundle_verification.get("missing_files"))
+            ],
             "readiness_status": str(authorization_handoff.get("readiness_status") or ""),
             "json_path": str(authorization_handoff.get("json_path") or ""),
             "json_exists": bool(authorization_handoff_json.get("exists")),
