@@ -1628,7 +1628,6 @@ class ReachOpsCampaignTests(unittest.TestCase):
             report_dir.mkdir()
             summary_path = report_dir / "acceptance_summary.json"
             (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
-            (report_dir / "ui_startup_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (report_dir / "windows_credential_manager_validation.json").write_text("{}", encoding="utf-8")
             (report_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
@@ -1642,9 +1641,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
             path_checked_summary["client_delivery"]["json_path"] = "client_delivery.json"
             path_checked_summary["final_acceptance_gate"]["json_path"] = "final_acceptance_gate.json"
             path_checked_summary["authorization_handoff"]["json_path"] = "authorization_handoff_payload.json"
+            (report_dir / "ui_startup_payload.json").write_text(
+                json.dumps(
+                    {
+                        "status": path_checked_summary["ui_startup"]["status"],
+                        "process_running": path_checked_summary["ui_startup"]["process_running"],
+                        "interactive_task": path_checked_summary["ui_startup"]["interactive_task"],
+                        "client_surface": path_checked_summary["ui_startup"]["client_surface"],
+                        "loopback_host": path_checked_summary["ui_startup"]["loopback_host"],
+                        "no_browser_started": path_checked_summary["ui_startup"]["no_browser_started"],
+                        "no_submit": path_checked_summary["ui_startup"]["no_submit"],
+                    }
+                ),
+                encoding="utf-8",
+            )
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
             self.assertTrue(path_checked["ui_startup"]["json_exists"])
+            self.assertTrue(path_checked["ui_startup"]["json_loaded"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_exists"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_exists"])
             self.assertTrue(path_checked["windows_credential_manager_validation"]["json_exists"])
@@ -1664,7 +1678,27 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(missing_ui_startup_file["passed"])
             self.assertIn("ui_startup_json_missing", missing_ui_startup_file["failures"])
 
-            (report_dir / "ui_startup_payload.json").write_text("{}", encoding="utf-8")
+            (report_dir / "ui_startup_payload.json").write_text("{", encoding="utf-8")
+            invalid_ui_startup_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_ui_startup_file["passed"])
+            self.assertIn("ui_startup_json_invalid", invalid_ui_startup_file["failures"])
+
+            mismatched_ui_payload = {
+                "status": "ok",
+                "process_running": True,
+                "interactive_task": True,
+                "client_surface": "local_client_console",
+                "loopback_host": "0.0.0.0",
+                "no_browser_started": True,
+                "no_submit": True,
+            }
+            (report_dir / "ui_startup_payload.json").write_text(json.dumps(mismatched_ui_payload), encoding="utf-8")
+            mismatched_ui_startup_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_ui_startup_file["passed"])
+            self.assertIn("ui_startup_json_mismatch:loopback_host", mismatched_ui_startup_file["failures"])
+
+            mismatched_ui_payload["loopback_host"] = "127.0.0.1"
+            (report_dir / "ui_startup_payload.json").write_text(json.dumps(mismatched_ui_payload), encoding="utf-8")
             (report_dir / "repository_cleanliness_payload.json").unlink()
             missing_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_report_file["passed"])
@@ -2501,6 +2535,20 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "json_path": str(report_dir / "final_acceptance_gate.json"),
                 },
             }
+            (report_dir / "ui_startup_payload.json").write_text(
+                json.dumps(
+                    {
+                        "status": summary["ui_startup"]["status"],
+                        "process_running": summary["ui_startup"]["process_running"],
+                        "interactive_task": summary["ui_startup"]["interactive_task"],
+                        "client_surface": summary["ui_startup"]["client_surface"],
+                        "loopback_host": summary["ui_startup"]["loopback_host"],
+                        "no_browser_started": summary["ui_startup"]["no_browser_started"],
+                        "no_submit": summary["ui_startup"]["no_submit"],
+                    }
+                ),
+                encoding="utf-8",
+            )
             (report_dir / "client_delivery.json").write_text(json.dumps(summary["client_delivery"]), encoding="utf-8")
             (report_dir / "final_acceptance_gate.json").write_text(json.dumps(summary["final_acceptance_gate"]), encoding="utf-8")
             acceptance_summary = report_dir / "acceptance_summary.json"

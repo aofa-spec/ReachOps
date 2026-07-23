@@ -69,6 +69,18 @@ def report_path_status(summary_path: str | Path | None, raw_path: str) -> dict[s
     return detail
 
 
+def load_report_payload(detail: dict[str, Any]) -> dict[str, Any]:
+    if not bool(detail.get("exists")):
+        return {"loaded": False, "error": "missing", "payload": {}}
+    try:
+        payload = json.loads(Path(str(detail.get("path") or "")).read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"loaded": False, "error": exc.__class__.__name__, "payload": {}}
+    if not isinstance(payload, dict):
+        return {"loaded": False, "error": "not_object", "payload": {}}
+    return {"loaded": True, "error": "", "payload": payload}
+
+
 def verify_summary(
     summary: dict[str, Any],
     allow_external_pending: bool = False,
@@ -198,6 +210,36 @@ def verify_summary(
             failures.append("ui_startup_json_empty")
         elif not bool(ui_startup_json.get("inside_summary_dir")):
             failures.append("ui_startup_json_outside_summary_dir")
+    ui_startup_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if (
+        status == STATUS_PASSED
+        and summary_path
+        and bool(ui_startup_json.get("exists"))
+        and int(ui_startup_json.get("size") or 0) > 0
+        and bool(ui_startup_json.get("inside_summary_dir"))
+    ):
+        ui_startup_payload_detail = load_report_payload(ui_startup_json)
+        ui_startup_payload = ui_startup_payload_detail.get("payload") or {}
+        if not bool(ui_startup_payload_detail.get("loaded")):
+            failures.append("ui_startup_json_invalid")
+        else:
+            expected_ui_fields = {
+                "status": str(ui_startup.get("status") or ""),
+                "process_running": bool(ui_startup.get("process_running")),
+                "interactive_task": bool(ui_startup.get("interactive_task")),
+                "client_surface": str(ui_startup.get("client_surface") or ""),
+                "loopback_host": str(ui_startup.get("loopback_host") or ""),
+                "no_browser_started": bool(ui_startup.get("no_browser_started", False)),
+                "no_submit": bool(ui_startup.get("no_submit", False)),
+            }
+            for key, expected in expected_ui_fields.items():
+                actual = ui_startup_payload.get(key)
+                if isinstance(expected, bool):
+                    matches = bool(actual) == expected
+                else:
+                    matches = str(actual or "") == expected
+                if not matches:
+                    failures.append(f"ui_startup_json_mismatch:{key}")
 
     if live_validation:
         if not bool(live_validation.get("no_browser_started", True)):
@@ -688,6 +730,8 @@ def verify_summary(
             "json_path": str(ui_startup.get("json_path") or ""),
             "json_exists": bool(ui_startup_json.get("exists")),
             "json_inside_summary_dir": bool(ui_startup_json.get("inside_summary_dir")),
+            "json_loaded": bool(ui_startup_payload_detail.get("loaded")),
+            "json_error": str(ui_startup_payload_detail.get("error") or ""),
         },
         "live_preflight": {
             "status": str(live_preflight.get("status") or ""),

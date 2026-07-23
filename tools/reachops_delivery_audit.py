@@ -2496,6 +2496,8 @@ def run_audit(args) -> dict:
                 and "ui_startup_started_browser" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
                 and "ui_startup_submitted_action" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
                 and "ui_startup_json_missing" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_json_invalid" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_json_mismatch" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
             ),
             {
                 "launcher": "tools/start_reachops_ui_windows.ps1",
