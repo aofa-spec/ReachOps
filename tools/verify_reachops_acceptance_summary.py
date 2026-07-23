@@ -166,13 +166,38 @@ def verify_summary(
     if not installer_ok:
         failures.append("installer_smoke_failed")
 
+    ui_startup_json = report_path_status(
+        summary_path,
+        str(ui_startup.get("json_path") or ""),
+    )
     ui_startup_ok = (
         str(ui_startup.get("status") or "") == "ok"
         and bool(ui_startup.get("process_running"))
         and bool(ui_startup.get("interactive_task"))
+        and str(ui_startup.get("client_surface") or "") == "local_client_console"
+        and str(ui_startup.get("loopback_host") or "") in {"127.0.0.1", "localhost"}
+        and bool(ui_startup.get("no_browser_started", False))
+        and bool(ui_startup.get("no_submit", False))
     )
     if not ui_startup_ok:
         failures.append("ui_startup_failed")
+    if str(ui_startup.get("client_surface") or "") != "local_client_console":
+        failures.append("ui_startup_client_surface_not_local_console")
+    if str(ui_startup.get("loopback_host") or "") not in {"127.0.0.1", "localhost"}:
+        failures.append("ui_startup_loopback_not_local")
+    if not bool(ui_startup.get("no_browser_started", False)):
+        failures.append("ui_startup_started_browser")
+    if not bool(ui_startup.get("no_submit", False)):
+        failures.append("ui_startup_submitted_action")
+    if status == STATUS_PASSED and not str(ui_startup.get("json_path") or "").strip():
+        failures.append("ui_startup_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(ui_startup.get("json_path") or "").strip():
+        if not ui_startup_json["exists"]:
+            failures.append("ui_startup_json_missing")
+        elif int(ui_startup_json.get("size") or 0) <= 0:
+            failures.append("ui_startup_json_empty")
+        elif not bool(ui_startup_json.get("inside_summary_dir")):
+            failures.append("ui_startup_json_outside_summary_dir")
 
     if live_validation:
         if not bool(live_validation.get("no_browser_started", True)):
@@ -656,6 +681,13 @@ def verify_summary(
             "status": str(ui_startup.get("status") or ""),
             "process_running": bool(ui_startup.get("process_running")),
             "interactive_task": bool(ui_startup.get("interactive_task")),
+            "client_surface": str(ui_startup.get("client_surface") or ""),
+            "loopback_host": str(ui_startup.get("loopback_host") or ""),
+            "no_browser_started": bool(ui_startup.get("no_browser_started", False)),
+            "no_submit": bool(ui_startup.get("no_submit", False)),
+            "json_path": str(ui_startup.get("json_path") or ""),
+            "json_exists": bool(ui_startup_json.get("exists")),
+            "json_inside_summary_dir": bool(ui_startup_json.get("inside_summary_dir")),
         },
         "live_preflight": {
             "status": str(live_preflight.get("status") or ""),

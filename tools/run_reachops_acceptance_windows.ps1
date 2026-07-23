@@ -339,6 +339,10 @@ function Write-AcceptanceSummary {
             status = if ($uiStartup) { [string]$uiStartup.status } else { "skipped" }
             process_running = if ($uiStartup) { [bool]$uiStartup.process_running } else { $false }
             interactive_task = if ($uiStartup) { [bool]$uiStartup.interactive_task } else { $false }
+            client_surface = if ($uiStartup) { [string]$uiStartup.client_surface } else { "" }
+            loopback_host = if ($uiStartup) { [string]$uiStartup.loopback_host } else { "" }
+            no_browser_started = if ($uiStartup) { [bool]$uiStartup.no_browser_started } else { $true }
+            no_submit = if ($uiStartup) { [bool]$uiStartup.no_submit } else { $true }
             pid = if ($uiStartup) { [int]$uiStartup.pid } else { 0 }
             json_path = if (Test-Path $UiStartupJsonPath) { $UiStartupJsonPath } else { "" }
         }
@@ -569,8 +573,12 @@ if ($ReuseExistingUiStartup) {
             state_path = $existingUiStatePath
             pid = $existingUiPid
             process_running = $true
+            client_surface = if ($existingUiState.client_surface) { [string]$existingUiState.client_surface } else { "" }
+            loopback_host = if ($existingUiState.loopback_host) { [string]$existingUiState.loopback_host } else { "" }
             interactive_task = if ($existingUiState.interactive_task) { [bool]$existingUiState.interactive_task } else { $false }
             task_name = if ($existingUiState.task_name) { [string]$existingUiState.task_name } else { "" }
+            no_browser_started = $true
+            no_submit = $true
             stdout = "reused_existing_ui_startup_state"
         }
         $uiStartupPayloadJson = $uiStartupPayload | ConvertTo-Json -Depth 8 -Compress

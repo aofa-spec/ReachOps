@@ -35,6 +35,39 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Windows code-signing certificate is not currently available; internal builds may show an unknown-publisher warning.
 - Natural user replies cannot be guaranteed; authorized test accounts may validate reply-linking mechanics, while natural reply rate remains a business observation.
 
+## Latest P4 Windows UI startup acceptance contract snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Harden final Windows acceptance so `acceptance_summary.json` cannot pass with weak or ambiguous local UI startup evidence, without entering Windows build, EXE, installer, ixBrowser profile launch, or TikTok live-submit scope.
+- Code evidence:
+  - `tools/run_reachops_ui_startup_smoke_windows.ps1` now marks UI startup evidence as `no_browser_started=true` and `no_submit=true`.
+  - `tools/run_reachops_acceptance_windows.ps1` now carries `client_surface`, `loopback_host`, `no_browser_started`, and `no_submit` from UI startup smoke into `acceptance_summary.ui_startup`, including the `-ReuseExistingUiStartup` path.
+  - `tools/verify_reachops_acceptance_summary.py` now rejects passed summaries unless UI startup evidence proves `status=ok`, `process_running=true`, `interactive_task=true`, `client_surface=local_client_console`, local loopback host, `no_browser_started=true`, `no_submit=true`, and a final-status `json_path` inside the acceptance summary directory.
+  - `tools/reachops_delivery_audit.py` now audits the startup smoke and acceptance summary verifier contract for local-console, loopback, no-browser, no-submit, and UI payload-file enforcement.
+- Tests and checks:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m py_compile tools/verify_reachops_acceptance_summary.py tools/reachops_delivery_audit.py tests/test_reachops_campaign.py`: passed.
+  - Focused tests `test_reachops_acceptance_summary_verifier_classifies_external_pending_and_failures`, `test_reachops_delivery_package_check_validates_artifacts_manifest_and_reports`, and `test_reachops_packaging_files_define_standalone_windows_artifacts`: passed.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 11 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`; output `/tmp/reachops-ui-startup-contract-operator-pressure.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-ui-startup-contract-delivery-audit.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 258 tests; log `/tmp/reachops-ui-startup-contract-campaign.log`.
+  - Main comparison: `origin/main` at `887f706` ran 230 tests with 14 failures and 1 error; current branch ran 258 tests with 0 failures and 0 errors; comparison artifact `/tmp/reachops-ui-startup-contract-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-ui-startup-contract-goal-status-report.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-ui-startup-contract-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-ui-startup-contract-diff-check.log`.
+- Expected final-delivery blockers:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_client_delivery_check.py --json`: failed as expected, exit `1`, `status=blocked_by_accounts`, `profile_available=0`; output `/tmp/reachops-ui-startup-contract-client-delivery.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-ui-startup-contract-goal-delivery-runner.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-ui-startup-contract-package-check.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-ui-startup-contract-final-gate.json`.
+- Safety:
+  - No Windows build, EXE, installer, update manifest, ixBrowser profile launch, or TikTok live-submit was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+  - Final delivery remains blocked by current Mac/local account readiness, Windows final artifacts, Windows Credential Manager validation on Windows, and authorized live evidence.
+
 ## Latest P4 bilingual language-gate UI snapshot
 
 - Date: `2026-07-24`

@@ -1150,6 +1150,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "status": "ok",
                 "process_running": True,
                 "interactive_task": True,
+                "client_surface": "local_client_console",
+                "loopback_host": "127.0.0.1",
+                "no_browser_started": True,
+                "no_submit": True,
+                "json_path": "reports/reachops_acceptance/current/ui_startup_payload.json",
             },
             "live_validation": {
                 "status": "blocked",
@@ -1232,6 +1237,24 @@ class ReachOpsCampaignTests(unittest.TestCase):
         failed_ui = verify_reachops_acceptance_summary(failed_ui_summary, allow_external_pending=True)
         self.assertFalse(failed_ui["passed"])
         self.assertIn("ui_startup_failed", failed_ui["failures"])
+
+        remote_ui_summary = json.loads(json.dumps(base_summary))
+        remote_ui_summary["ui_startup"]["loopback_host"] = "0.0.0.0"
+        remote_ui = verify_reachops_acceptance_summary(remote_ui_summary, allow_external_pending=True)
+        self.assertFalse(remote_ui["passed"])
+        self.assertIn("ui_startup_loopback_not_local", remote_ui["failures"])
+
+        browser_started_ui_summary = json.loads(json.dumps(base_summary))
+        browser_started_ui_summary["ui_startup"]["no_browser_started"] = False
+        browser_started_ui = verify_reachops_acceptance_summary(browser_started_ui_summary, allow_external_pending=True)
+        self.assertFalse(browser_started_ui["passed"])
+        self.assertIn("ui_startup_started_browser", browser_started_ui["failures"])
+
+        submitted_ui_summary = json.loads(json.dumps(base_summary))
+        submitted_ui_summary["ui_startup"]["no_submit"] = False
+        submitted_ui = verify_reachops_acceptance_summary(submitted_ui_summary, allow_external_pending=True)
+        self.assertFalse(submitted_ui["passed"])
+        self.assertIn("ui_startup_submitted_action", submitted_ui["failures"])
 
         passed_summary = json.loads(json.dumps(base_summary))
         passed_summary["status"] = "passed"
@@ -1383,6 +1406,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(passed["delivery_audit"]["pending_external_validation"], 1)
         self.assertEqual(passed["delivery_audit"]["effective_pending_external_validation"], 0)
         self.assertEqual(passed["goal_status"]["status"], "passed")
+        self.assertEqual(passed["ui_startup"]["client_surface"], "local_client_console")
+        self.assertEqual(passed["ui_startup"]["loopback_host"], "127.0.0.1")
+        self.assertTrue(passed["ui_startup"]["no_browser_started"])
+        self.assertTrue(passed["ui_startup"]["no_submit"])
+        self.assertTrue(passed["ui_startup"]["json_path"].endswith("ui_startup_payload.json"))
         self.assertEqual(passed["repository_cleanliness"]["status"], "passed")
         self.assertEqual(passed["repository_cleanliness"]["forbidden_count"], 0)
         self.assertTrue(passed["repository_cleanliness"]["json_path"].endswith("repository_cleanliness_payload.json"))
@@ -1600,12 +1628,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             report_dir.mkdir()
             summary_path = report_dir / "acceptance_summary.json"
             (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (report_dir / "ui_startup_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (report_dir / "windows_credential_manager_validation.json").write_text("{}", encoding="utf-8")
             (report_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (report_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             path_checked_summary = json.loads(json.dumps(passed_summary))
+            path_checked_summary["ui_startup"]["json_path"] = "ui_startup_payload.json"
             path_checked_summary["repository_cleanliness"]["json_path"] = "repository_cleanliness_payload.json"
             path_checked_summary["windows_package_preflight"]["json_path"] = "windows_package_preflight.json"
             path_checked_summary["windows_credential_manager_validation"]["json_path"] = "windows_credential_manager_validation.json"
@@ -1614,12 +1644,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             path_checked_summary["authorization_handoff"]["json_path"] = "authorization_handoff_payload.json"
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
+            self.assertTrue(path_checked["ui_startup"]["json_exists"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_exists"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_exists"])
             self.assertTrue(path_checked["windows_credential_manager_validation"]["json_exists"])
             self.assertTrue(path_checked["client_delivery"]["json_exists"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_exists"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
+            self.assertTrue(path_checked["ui_startup"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["windows_credential_manager_validation"]["json_inside_summary_dir"])
@@ -1627,6 +1659,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["final_acceptance_gate"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["authorization_handoff"]["json_inside_summary_dir"])
 
+            (report_dir / "ui_startup_payload.json").unlink()
+            missing_ui_startup_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_ui_startup_file["passed"])
+            self.assertIn("ui_startup_json_missing", missing_ui_startup_file["failures"])
+
+            (report_dir / "ui_startup_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "repository_cleanliness_payload.json").unlink()
             missing_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_report_file["passed"])
@@ -1665,11 +1703,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             outside_dir = Path(tmp) / "outside"
             outside_dir.mkdir()
             (outside_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "ui_startup_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (outside_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (outside_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (outside_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             outside_summary = json.loads(json.dumps(path_checked_summary))
+            outside_summary["ui_startup"]["json_path"] = "../outside/ui_startup_payload.json"
             outside_summary["repository_cleanliness"]["json_path"] = str(outside_dir / "repository_cleanliness_payload.json")
             outside_summary["windows_package_preflight"]["json_path"] = "../outside/windows_package_preflight.json"
             outside_summary["client_delivery"]["json_path"] = "../outside/client_delivery.json"
@@ -1677,11 +1717,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             outside_summary["authorization_handoff"]["json_path"] = "../outside/authorization_handoff_payload.json"
             outside_report_file = verify_reachops_acceptance_summary(outside_summary, summary_path=summary_path)
             self.assertFalse(outside_report_file["passed"])
+            self.assertIn("ui_startup_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("repository_cleanliness_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("windows_package_preflight_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("client_delivery_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("final_acceptance_gate_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("authorization_handoff_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertFalse(outside_report_file["ui_startup"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["repository_cleanliness"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["windows_package_preflight"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["client_delivery"]["json_inside_summary_dir"])
@@ -2305,6 +2347,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "status": "ok",
                     "process_running": True,
                     "interactive_task": True,
+                    "client_surface": "local_client_console",
+                    "loopback_host": "127.0.0.1",
+                    "no_browser_started": True,
+                    "no_submit": True,
                     "json_path": str(report_dir / "ui_startup_payload.json"),
                 },
                 "activation_status": {
@@ -8549,7 +8595,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "account_switched": 3,
                 },
                 "installer_smoke": {"status": "ok", "exe_exists": True, "data_in_install_dir": False, "hash_ok": True},
-                "ui_startup": {"status": "ok", "process_running": True, "interactive_task": True},
+                "ui_startup": {
+                    "status": "ok",
+                    "process_running": True,
+                    "interactive_task": True,
+                    "client_surface": "local_client_console",
+                    "loopback_host": "127.0.0.1",
+                    "no_browser_started": True,
+                    "no_submit": True,
+                },
                 "live_validation": {"status": "ready", "no_browser_started": True, "no_submit": True},
                 "repository_cleanliness": {
                     "status": "passed",

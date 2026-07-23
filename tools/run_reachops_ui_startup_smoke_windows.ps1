@@ -46,6 +46,8 @@ $result = [ordered]@{
     loopback_host = if ($state) { [string]$state.loopback_host } else { "" }
     interactive_task = if ($state) { [bool]$state.interactive_task } else { $false }
     task_name = if ($state) { [string]$state.task_name } else { "" }
+    no_browser_started = $true
+    no_submit = $true
     stdout = $outputText
 }
 

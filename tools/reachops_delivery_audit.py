@@ -2490,10 +2490,17 @@ def run_audit(args) -> dict:
                 and 'loopback_host = "127.0.0.1"' in (ROOT_DIR / "tools" / "start_reachops_ui_windows.ps1").read_text(encoding="utf-8")
                 and "client_surface_not_local_console" in (ROOT_DIR / "tools" / "run_reachops_ui_startup_smoke_windows.ps1").read_text(encoding="utf-8")
                 and "loopback_host_not_local" in (ROOT_DIR / "tools" / "run_reachops_ui_startup_smoke_windows.ps1").read_text(encoding="utf-8")
+                and "no_browser_started = $true" in (ROOT_DIR / "tools" / "run_reachops_ui_startup_smoke_windows.ps1").read_text(encoding="utf-8")
+                and "no_submit = $true" in (ROOT_DIR / "tools" / "run_reachops_ui_startup_smoke_windows.ps1").read_text(encoding="utf-8")
+                and "ui_startup_loopback_not_local" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_started_browser" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_submitted_action" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_json_missing" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
             ),
             {
                 "launcher": "tools/start_reachops_ui_windows.ps1",
                 "startup_smoke": "tools/run_reachops_ui_startup_smoke_windows.ps1",
+                "acceptance_summary_verifier": "tools/verify_reachops_acceptance_summary.py",
                 "client_surface": "local_client_console",
             },
         ),
