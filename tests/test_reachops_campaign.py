@@ -1629,7 +1629,6 @@ class ReachOpsCampaignTests(unittest.TestCase):
             summary_path = report_dir / "acceptance_summary.json"
             (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
-            (report_dir / "windows_credential_manager_validation.json").write_text("{}", encoding="utf-8")
             (report_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (report_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
@@ -1655,6 +1654,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(path_checked_summary["windows_credential_manager_validation"]),
+                encoding="utf-8",
+            )
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
             self.assertTrue(path_checked["ui_startup"]["json_exists"])
@@ -1662,6 +1665,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["repository_cleanliness"]["json_exists"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_exists"])
             self.assertTrue(path_checked["windows_credential_manager_validation"]["json_exists"])
+            self.assertTrue(path_checked["windows_credential_manager_validation"]["json_loaded"])
             self.assertTrue(path_checked["client_delivery"]["json_exists"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_exists"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
@@ -1716,7 +1720,38 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(missing_credential_report_file["passed"])
             self.assertIn("windows_credential_manager_validation_json_missing", missing_credential_report_file["failures"])
 
-            (report_dir / "windows_credential_manager_validation.json").write_text("{}", encoding="utf-8")
+            (report_dir / "windows_credential_manager_validation.json").write_text("{", encoding="utf-8")
+            invalid_credential_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_credential_report_file["passed"])
+            self.assertIn("windows_credential_manager_validation_json_invalid", invalid_credential_report_file["failures"])
+
+            mismatched_credential_payload = json.loads(json.dumps(path_checked_summary["windows_credential_manager_validation"]))
+            mismatched_credential_payload["backend"] = "non_windows_unavailable"
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(mismatched_credential_payload),
+                encoding="utf-8",
+            )
+            mismatched_credential_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_credential_report_file["passed"])
+            self.assertIn("windows_credential_manager_validation_json_mismatch:backend", mismatched_credential_report_file["failures"])
+
+            mismatched_credential_payload = json.loads(json.dumps(path_checked_summary["windows_credential_manager_validation"]))
+            mismatched_credential_payload["checks"]["output_excludes_secret_value"] = False
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(mismatched_credential_payload),
+                encoding="utf-8",
+            )
+            mismatched_credential_check_report = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_credential_check_report["passed"])
+            self.assertIn(
+                "windows_credential_manager_validation_json_mismatch:checks.output_excludes_secret_value",
+                mismatched_credential_check_report["failures"],
+            )
+
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(path_checked_summary["windows_credential_manager_validation"]),
+                encoding="utf-8",
+            )
             (report_dir / "client_delivery.json").unlink()
             missing_client_delivery_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_client_delivery_report_file["passed"])
@@ -2547,6 +2582,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         "no_submit": summary["ui_startup"]["no_submit"],
                     }
                 ),
+                encoding="utf-8",
+            )
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(summary["windows_credential_manager_validation"]),
                 encoding="utf-8",
             )
             (report_dir / "client_delivery.json").write_text(json.dumps(summary["client_delivery"]), encoding="utf-8")

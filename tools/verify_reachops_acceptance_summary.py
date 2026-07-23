@@ -351,6 +351,42 @@ def verify_summary(
                 failures.append("windows_credential_manager_validation_json_empty")
             elif not bool(credential_validation_json.get("inside_summary_dir")):
                 failures.append("windows_credential_manager_validation_json_outside_summary_dir")
+        credential_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        if (
+            status == STATUS_PASSED
+            and summary_path
+            and bool(credential_validation_json.get("exists"))
+            and int(credential_validation_json.get("size") or 0) > 0
+            and bool(credential_validation_json.get("inside_summary_dir"))
+        ):
+            credential_payload_detail = load_report_payload(credential_validation_json)
+            credential_payload = credential_payload_detail.get("payload") or {}
+            if not bool(credential_payload_detail.get("loaded")):
+                failures.append("windows_credential_manager_validation_json_invalid")
+            else:
+                expected_credential_fields = {
+                    "status": credential_validation_status,
+                    "passed": bool(windows_credential_manager_validation.get("passed")),
+                    "backend": str(windows_credential_manager_validation.get("backend") or ""),
+                    "no_browser_started": bool(windows_credential_manager_validation.get("no_browser_started", True)),
+                    "no_submit": bool(windows_credential_manager_validation.get("no_submit", True)),
+                    "customer_data_uploaded": bool(windows_credential_manager_validation.get("customer_data_uploaded")),
+                    "secret_value_included": bool(windows_credential_manager_validation.get("secret_value_included")),
+                }
+                for key, expected in expected_credential_fields.items():
+                    actual = credential_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"windows_credential_manager_validation_json_mismatch:{key}")
+                payload_checks = credential_payload.get("checks") if isinstance(credential_payload.get("checks"), dict) else {}
+                for key, expected in credential_validation_checks.items():
+                    if bool(payload_checks.get(key)) != bool(expected):
+                        failures.append(f"windows_credential_manager_validation_json_mismatch:checks.{key}")
+    else:
+        credential_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     client_delivery_status = str(client_delivery.get("status") or "")
     client_delivery_readiness = str(client_delivery.get("readiness") or "")
@@ -800,6 +836,8 @@ def verify_summary(
             "json_exists": bool(credential_validation_json.get("exists")),
             "json_size": int(credential_validation_json.get("size") or 0),
             "json_inside_summary_dir": bool(credential_validation_json.get("inside_summary_dir")),
+            "json_loaded": bool(credential_payload_detail.get("loaded")),
+            "json_error": str(credential_payload_detail.get("error") or ""),
         },
         "client_delivery": {
             "status": client_delivery_status,

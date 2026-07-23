@@ -35,6 +35,40 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Windows code-signing certificate is not currently available; internal builds may show an unknown-publisher warning.
 - Natural user replies cannot be guaranteed; authorized test accounts may validate reply-linking mechanics, while natural reply rate remains a business observation.
 
+## Latest P2/P4 Windows Credential Manager payload verification snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Tighten final Windows acceptance summary verification so Windows Credential Manager validation cannot pass merely because a report file exists; the payload content must match the summarized secret-storage facts and safety flags.
+- Code evidence:
+  - `tools/verify_reachops_acceptance_summary.py` now reads the final `windows_credential_manager_validation.json_path` payload when `acceptance_summary.status=passed` and a summary path is supplied.
+  - Final passed summaries now fail with `windows_credential_manager_validation_json_invalid` when the credential validation payload is unreadable or not a JSON object.
+  - Final passed summaries now fail with `windows_credential_manager_validation_json_mismatch:<field>` when payload values for `status`, `passed`, `backend`, `no_browser_started`, `no_submit`, `customer_data_uploaded`, or `secret_value_included` disagree with `acceptance_summary.windows_credential_manager_validation`.
+  - Final passed summaries now fail with `windows_credential_manager_validation_json_mismatch:checks.<name>` when payload check values disagree with the summary checks, including Windows Credential Manager availability, set/read/delete, and output redaction.
+  - `tools/reachops_delivery_audit.py` now audits that invalid and mismatched Windows Credential Manager payload enforcement exists.
+- Tests and checks:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m py_compile tools/verify_reachops_acceptance_summary.py tools/reachops_delivery_audit.py tests/test_reachops_campaign.py`: passed.
+  - Focused tests `test_reachops_acceptance_summary_verifier_classifies_external_pending_and_failures` and `test_reachops_delivery_package_check_validates_artifacts_manifest_and_reports`: passed.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 11 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`; output `/tmp/reachops-credential-payload-contract-operator-pressure.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-credential-payload-contract-delivery-audit.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 258 tests; log `/tmp/reachops-credential-payload-contract-campaign.log`.
+  - Main comparison: `origin/main` at `887f706` ran 230 tests with 14 failures and 1 error; current branch ran 258 tests with 0 failures and 0 errors; comparison artifact `/tmp/reachops-credential-payload-contract-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-credential-payload-contract-goal-status-report.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-credential-payload-contract-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-credential-payload-contract-diff-check.log`.
+- Expected final-delivery blockers:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_client_delivery_check.py --json`: failed as expected, exit `1`, `status=blocked_by_accounts`, `profile_available=0`; output `/tmp/reachops-credential-payload-contract-client-delivery.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-credential-payload-contract-goal-delivery-runner.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-credential-payload-contract-package-check.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`; output `/tmp/reachops-credential-payload-contract-final-gate.json`.
+- Safety:
+  - No Windows build, EXE, installer, update manifest, ixBrowser profile launch, or TikTok live-submit was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+  - Final delivery remains blocked by current Mac/local account readiness, Windows final artifacts, Windows Credential Manager validation on Windows, and authorized live evidence.
+
 ## Latest P4 Windows UI startup payload verification snapshot
 
 - Date: `2026-07-24`
