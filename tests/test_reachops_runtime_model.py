@@ -419,6 +419,43 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
         self.assertEqual(int(changed["decision_version"]), 2)
         self.assertEqual(changed["decision_key"], "primary#v2")
 
+    def test_ixbrowser_group_mapping_is_local_editable_and_not_name_derived_country(self) -> None:
+        storage = self.make_storage()
+        mappings = storage.ensure_ixbrowser_group_mappings(
+            [
+                {"group_id": "257999", "group_name": "United States"},
+                {"group_id": "281726", "group_name": "Canada"},
+            ]
+        )
+        by_name = {row["group_name"]: row for row in mappings}
+
+        self.assertEqual(by_name["United States"]["target_country"], "")
+        self.assertEqual(by_name["United States"]["timezone"], "")
+        self.assertEqual(by_name["United States"]["default_reply_language"], "unknown")
+        self.assertEqual(by_name["United States"]["status"], "needs_operator_review")
+        self.assertEqual(by_name["United States"]["allowed_action_types"], ["comment_reply"])
+        self.assertTrue(by_name["United States"]["no_submit"])
+
+        saved = storage.upsert_ixbrowser_group_mapping(
+            group_id="257999",
+            group_name="United States",
+            target_country="US",
+            timezone="America/New_York",
+            default_reply_language="en",
+            allowed_action_types=["comment_reply", "follow_review", "unsupported_action"],
+            per_day_limit=12,
+            per_hour_limit=2,
+        )
+        self.assertEqual(saved["status"], "ready")
+        self.assertEqual(saved["target_country"], "US")
+        self.assertEqual(saved["allowed_action_types"], ["comment_reply", "follow_review"])
+        self.assertEqual(int(saved["per_day_limit"]), 12)
+
+        storage.ensure_ixbrowser_group_mappings([{"group_id": "257999", "group_name": "United States"}])
+        preserved = storage.get_ixbrowser_group_mapping(group_id="257999", group_name="United States")
+        self.assertEqual(preserved["target_country"], "US")
+        self.assertEqual(preserved["timezone"], "America/New_York")
+
     def test_new_observation_and_evidence_require_real_run_id(self) -> None:
         storage = self.make_storage()
         campaign = storage.create_campaign("keyword", "tea")

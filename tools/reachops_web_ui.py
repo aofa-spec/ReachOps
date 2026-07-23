@@ -204,6 +204,7 @@ GROUP_REFRESH_LOG_SIGNATURE = ""
 IXBROWSER_API_PORT_OVERRIDE = ""
 WEB_SETTINGS_PATH = DATA_DIR / "config/reachops_web_settings.json"
 LATEST_GROUPS_PATH = DATA_DIR / "config/latest_ixbrowser_groups.json"
+GROUP_MAPPING_DB_PATH = DATA_DIR / "data/growth_intelligence/growth_intelligence.db"
 GROUP_REFRESH_TIMEOUT_SECONDS = 10.0
 GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS = float(os.environ.get("REACHOPS_GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS") or "45")
 GROUP_COUNT_RESOLVE_WORKERS = max(1, int(os.environ.get("REACHOPS_GROUP_COUNT_RESOLVE_WORKERS") or "3"))
@@ -982,6 +983,126 @@ def safe_int(value, default: int = 0) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def group_mapping_key(group: dict) -> str:
+    group_id = str((group or {}).get("group_id") or "").strip()
+    name = str((group or {}).get("name") or (group or {}).get("group_name") or "").strip()
+    return f"id:{group_id}" if group_id else (f"name:{name.lower()}" if name else "")
+
+
+def group_mapping_storage() -> GrowthStorage:
+    return GrowthStorage(str(GROUP_MAPPING_DB_PATH))
+
+
+def summarize_group_mapping(row: dict) -> dict:
+    return {
+        "schema_version": str(row.get("schema_version") or "reachops.ixbrowser_group_mapping.v1"),
+        "mapping_key": str(row.get("mapping_key") or ""),
+        "group_id": str(row.get("group_id") or ""),
+        "group_name": str(row.get("group_name") or ""),
+        "target_country": str(row.get("target_country") or ""),
+        "timezone": str(row.get("timezone") or ""),
+        "default_reply_language": str(row.get("default_reply_language") or "unknown"),
+        "allowed_action_types": list(row.get("allowed_action_types") or []),
+        "per_day_limit": safe_int(row.get("per_day_limit"), 0),
+        "per_hour_limit": safe_int(row.get("per_hour_limit"), 0),
+        "status": str(row.get("status") or "needs_operator_review"),
+        "requires_operator_review": bool(row.get("requires_operator_review", str(row.get("status") or "") != "ready")),
+        "no_submit": True,
+    }
+
+
+def attach_group_mappings(payload: dict) -> dict:
+    data = dict(payload or {})
+    groups = [dict(row) for row in (data.get("groups") or []) if isinstance(row, dict)]
+    if not groups:
+        data["group_mapping"] = {
+            "schema_version": "reachops.ixbrowser_group_mapping.v1",
+            "configured_count": 0,
+            "needs_operator_review_count": 0,
+            "no_browser_started": True,
+            "no_submit": True,
+        }
+        return data
+    try:
+        mappings = group_mapping_storage().ensure_ixbrowser_group_mappings(groups)
+        by_key = {str(row.get("mapping_key") or ""): row for row in mappings}
+        configured = 0
+        needs_review = 0
+        enriched = []
+        for group in groups:
+            mapping = summarize_group_mapping(by_key.get(group_mapping_key(group), {}))
+            group["mapping"] = mapping
+            group["mapping_status"] = mapping["status"]
+            group["mapping_requires_operator_review"] = bool(mapping["requires_operator_review"])
+            if mapping["status"] == "ready":
+                configured += 1
+            else:
+                needs_review += 1
+            enriched.append(group)
+        data["groups"] = enriched
+        data["group_mapping"] = {
+            "schema_version": "reachops.ixbrowser_group_mapping.v1",
+            "configured_count": configured,
+            "needs_operator_review_count": needs_review,
+            "editable_local_mapping": True,
+            "group_name_is_not_country_authority": True,
+            "no_browser_started": True,
+            "no_submit": True,
+        }
+    except Exception as exc:
+        data["groups"] = groups
+        data["group_mapping"] = {
+            "schema_version": "reachops.ixbrowser_group_mapping.v1",
+            "status": "unavailable",
+            "error": str(exc),
+            "no_browser_started": True,
+            "no_submit": True,
+        }
+    return data
+
+
+def build_group_mappings_payload() -> dict:
+    mappings = [summarize_group_mapping(row) for row in group_mapping_storage().list_ixbrowser_group_mappings()]
+    return {
+        "status": "ok",
+        "schema_version": "reachops.ixbrowser_group_mapping.v1",
+        "mappings": mappings,
+        "mapping_count": len(mappings),
+        "configured_count": len([row for row in mappings if row.get("status") == "ready"]),
+        "needs_operator_review_count": len([row for row in mappings if row.get("requires_operator_review")]),
+        "editable_local_mapping": True,
+        "group_name_is_not_country_authority": True,
+        "no_browser_started": True,
+        "no_submit": True,
+    }
+
+
+def save_group_mapping_from_payload(payload: dict) -> dict:
+    item = payload or {}
+    mapping = group_mapping_storage().upsert_ixbrowser_group_mapping(
+        group_id=str(item.get("group_id") or item.get("groupId") or ""),
+        group_name=str(item.get("group_name") or item.get("groupName") or item.get("name") or ""),
+        target_country=str(item.get("target_country") or item.get("targetCountry") or ""),
+        timezone=str(item.get("timezone") or ""),
+        default_reply_language=str(item.get("default_reply_language") or item.get("defaultReplyLanguage") or ""),
+        allowed_action_types=item.get("allowed_action_types", item.get("allowedActionTypes")),
+        per_day_limit=safe_int(item.get("per_day_limit", item.get("perDayLimit")), 0),
+        per_hour_limit=safe_int(item.get("per_hour_limit", item.get("perHourLimit")), 0),
+        source="web_ui",
+    )
+    append_web_log(
+        f"CONFIG group_mapping_saved group={mapping.get('group_name') or '-'} "
+        f"status={mapping.get('status') or '-'} no_browser_started=true no_submit=true"
+    )
+    return {
+        "status": "saved",
+        "schema_version": "reachops.ixbrowser_group_mapping.v1",
+        "mapping": summarize_group_mapping(mapping),
+        "no_browser_started": True,
+        "no_submit": True,
+    }
 
 
 def safe_report_download_path(raw_path: str) -> Path | None:
@@ -2658,6 +2779,11 @@ def html_page() -> bytes:
     .inlineConfig button {{ height:32px; padding:0 8px; }}
 	    .groupDetails {{ display:none; }}
 	    .groupDetails.hasContent {{ display:block; border:1px solid #2c3540; border-radius:8px; background:#15191d; padding:8px; }}
+	    .groupMapping {{ display:grid; gap:8px; border:1px solid #2c3540; border-radius:8px; background:#15191d; padding:9px; }}
+	    .groupMappingGrid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:8px; }}
+	    .groupMappingGrid label {{ display:grid; gap:4px; }}
+	    .groupMappingActions {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
+	    .groupMappingChecks {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:12px; }}
 	    .selectedGroupBar {{ display:grid; grid-template-columns:minmax(0,1.4fr) minmax(118px,.55fr) minmax(96px,.45fr); gap:8px; align-items:center; border:1px solid #314151; border-radius:8px; background:#151c22; padding:9px 10px; min-width:0; }}
 	    .selectedGroupBar .barLabel {{ color:var(--muted); font-size:11px; margin-bottom:3px; }}
 	    .selectedGroupBar b {{ display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
@@ -2903,7 +3029,25 @@ def html_page() -> bytes:
 	            <div><div class="barLabel">Group ID</div><b id="selectedGroupId">-</b></div>
 	          </div>
 	          <div class="groupDetails compact" id="groupDetails"></div>
-          <div class="taskParams">
+	          <div class="groupMapping compact" id="groupMappingPanel">
+	            <div class="groupMappingGrid">
+	              <label><span>目标国家</span><input id="groupTargetCountry" placeholder="US" /></label>
+	              <label><span>时区</span><input id="groupTimezone" placeholder="America/New_York" /></label>
+	              <label><span>默认回复语言</span><input id="groupDefaultLanguage" placeholder="en" /></label>
+	              <label><span>每日上限</span><input id="groupPerDayLimit" type="number" min="0" value="0" /></label>
+	              <label><span>每小时上限</span><input id="groupPerHourLimit" type="number" min="0" value="0" /></label>
+	            </div>
+	            <div class="groupMappingActions">
+	              <span class="groupMappingChecks">
+	                <label><input type="checkbox" id="groupAllowComment" checked /> 评论</label>
+	                <label><input type="checkbox" id="groupAllowFollow" /> 关注</label>
+	                <label><input type="checkbox" id="groupAllowDm" /> 私信</label>
+	              </span>
+	              <button id="saveGroupMapping">保存分组映射</button>
+	              <span class="sub" id="groupMappingState">分组名不作为国家依据；首次使用需运营配置。</span>
+	            </div>
+	          </div>
+	          <div class="taskParams">
             <label><span data-i18n="field.source_type">目标类型</span>
               <select id="sourceType">
                 <option value="auto" selected data-i18n="option.auto_detect">自动识别</option>
@@ -4184,10 +4328,45 @@ def html_page() -> bytes:
       const label = String(group.count_label || (group.count_known ? `${{Number(group.count || 0)}}账号` : '数量未返回'));
       return `${{name}}（${{label}}）`;
     }}
-    function selectedGroupPayload(name) {{
-      const target = String(name || '').toLowerCase();
-      return (loadedGroups || []).find(g => String(g.name || '').toLowerCase() === target) || {{}};
-    }}
+	    function selectedGroupPayload(name) {{
+	      const target = String(name || '').toLowerCase();
+	      return (loadedGroups || []).find(g => String(g.name || '').toLowerCase() === target) || {{}};
+	    }}
+	    function selectedGroupMapping(group) {{
+	      return (group && group.mapping) || {{
+	        status:'needs_operator_review',
+	        target_country:'',
+	        timezone:'',
+	        default_reply_language:'unknown',
+	        allowed_action_types:['comment_reply'],
+	        per_day_limit:0,
+	        per_hour_limit:0
+	      }};
+	    }}
+	    function setCheckbox(id, checked) {{
+	      const el = $(id);
+	      if (el) el.checked = !!checked;
+	    }}
+	    function renderSelectedGroupMapping(group) {{
+	      const mapping = selectedGroupMapping(group);
+	      const actions = Array.isArray(mapping.allowed_action_types) ? mapping.allowed_action_types : [];
+	      if ($('groupTargetCountry')) $('groupTargetCountry').value = String(mapping.target_country || '');
+	      if ($('groupTimezone')) $('groupTimezone').value = String(mapping.timezone || '');
+	      if ($('groupDefaultLanguage')) $('groupDefaultLanguage').value = String(mapping.default_reply_language || 'unknown');
+	      if ($('groupPerDayLimit')) $('groupPerDayLimit').value = String(Number(mapping.per_day_limit || 0));
+	      if ($('groupPerHourLimit')) $('groupPerHourLimit').value = String(Number(mapping.per_hour_limit || 0));
+	      setCheckbox('groupAllowComment', actions.includes('comment_reply') || !actions.length);
+	      setCheckbox('groupAllowFollow', actions.includes('follow_review'));
+	      setCheckbox('groupAllowDm', actions.includes('dm_review'));
+	      if ($('groupMappingState')) {{
+	        const state = String(mapping.status || 'needs_operator_review');
+	        const country = String(mapping.target_country || '').trim();
+	        const lang = String(mapping.default_reply_language || 'unknown').trim();
+	        $('groupMappingState').textContent = state === 'ready'
+	          ? `映射已配置：${{country || '-'}} / ${{mapping.timezone || '-'}} / ${{lang || '-'}}`
+	          : '分组名不作为国家依据；首次使用需运营配置。';
+	      }}
+	    }}
 	    function updateSelectedGroupQuantity() {{
 	      const group = selectedGroupPayload($('group').value);
 	      const label = group && group.name ? groupOptionLabel(group) : ($('group').value || '-');
@@ -4200,6 +4379,7 @@ def html_page() -> bytes:
 	      $('selectedGroupCount').textContent = countLabel;
 	      $('selectedGroupCount').className = countKnown ? 'count' : 'count unknown';
 	      $('selectedGroupId').textContent = group && group.group_id ? String(group.group_id) : '-';
+	      renderSelectedGroupMapping(group);
 	    }}
     function formatGroupSummary(groups, data) {{
       const known = groups.filter(g => g.count_known).length;
@@ -4242,7 +4422,35 @@ def html_page() -> bytes:
 	        return;
 	      }}
 	      box.classList.add('hasContent');
-	      box.innerHTML = rows.join('');
+		      box.innerHTML = rows.join('');
+		    }}
+	    async function saveGroupMapping() {{
+	      const group = selectedGroupPayload($('group').value);
+	      if (!group || !group.name) {{
+	        showApiNotice('分组映射未保存', {{status:'rejected', message:'请先刷新并选择 ixBrowser 分组。'}}, 'blocked');
+	        return;
+	      }}
+	      const actions = [];
+	      if ($('groupAllowComment') && $('groupAllowComment').checked) actions.push('comment_reply');
+	      if ($('groupAllowFollow') && $('groupAllowFollow').checked) actions.push('follow_review');
+	      if ($('groupAllowDm') && $('groupAllowDm').checked) actions.push('dm_review');
+	      const result = await postJson('/api/group-mapping', {{
+	        group_id: group.group_id || '',
+	        group_name: group.name || '',
+	        target_country: $('groupTargetCountry') ? $('groupTargetCountry').value : '',
+	        timezone: $('groupTimezone') ? $('groupTimezone').value : '',
+	        default_reply_language: $('groupDefaultLanguage') ? $('groupDefaultLanguage').value : '',
+	        allowed_action_types: actions,
+	        per_day_limit: $('groupPerDayLimit') ? $('groupPerDayLimit').value : 0,
+	        per_hour_limit: $('groupPerHourLimit') ? $('groupPerHourLimit').value : 0
+	      }});
+	      if (result.http_ok && result.mapping) {{
+	        group.mapping = result.mapping;
+	        group.mapping_status = result.mapping.status;
+	        group.mapping_requires_operator_review = result.mapping.requires_operator_review;
+	        renderSelectedGroupMapping(group);
+	      }}
+	      showApiNotice(result.http_ok ? '分组映射已保存' : '分组映射保存失败', result, result.http_ok ? '' : 'blocked');
 	    }}
     function leadIntentChips(row) {{
       const labels = [];
@@ -5166,6 +5374,7 @@ def html_page() -> bytes:
 	    $('refresh').onclick = () => {{ refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus(); }};
 	    $('refreshGroups').onclick = refreshGroups;
 	    $('refreshGroupsInline').onclick = () => {{ refreshIxBrowserStatus(); refreshGroups(); }};
+	    $('saveGroupMapping').onclick = saveGroupMapping;
 	    $('applyIxBrowserPort').onclick = applyIxBrowserPort;
 	    $('initAcceptanceInputs').onclick = initAcceptanceInputs;
 	    $('refreshMvpAcceptance').onclick = refreshMvpAcceptance;
@@ -6612,6 +6821,7 @@ def load_groups(refresh: bool = False, *, allow_async: bool = False) -> dict:
             "stale_cache": False,
             "background_refresh": False,
         })
+        GROUP_CACHE = attach_group_mappings(GROUP_CACHE)
         write_latest_groups_payload(GROUP_CACHE)
         return GROUP_CACHE
     except Exception as exc:
@@ -7120,6 +7330,9 @@ class Handler(BaseHTTPRequestHandler):
             append_group_refresh_log(payload, refresh=refresh)
             self._send_json(payload)
             return
+        if parsed.path == "/api/group-mappings":
+            self._send_json(build_group_mappings_payload())
+            return
         if parsed.path.startswith("/api/"):
             self._send_json({"status": "rejected", "error": "unknown_api"}, 404)
             return
@@ -7217,6 +7430,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             result = apply_ixbrowser_api_port((payload or {}).get("port"))
             self._send_json(result, 200 if result.get("status") == "saved" else 400)
+            return
+        if parsed.path == "/api/group-mapping":
+            payload, error = self._read_json_payload()
+            if error:
+                self._send_json({"status": "rejected", "error": error}, 400)
+                return
+            try:
+                result = save_group_mapping_from_payload(payload or {})
+                self._send_json(result, 200)
+            except ValueError as exc:
+                self._send_json({"status": "rejected", "error": "invalid_group_mapping", "message": str(exc)}, 400)
+            except Exception as exc:
+                append_web_log(f"ERROR  group_mapping_save_failed error={exc}")
+                self._send_json({"status": "failed", "error": "group_mapping_save_failed", "message": str(exc)}, 500)
             return
         if parsed.path == "/api/account-repair-apply":
             payload, error = self._read_json_payload()

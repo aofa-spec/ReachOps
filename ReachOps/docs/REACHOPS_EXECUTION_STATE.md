@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-23`
+- Last manually reconciled: `2026-07-24`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -17,7 +17,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | P1 runtime ledger storage, runtime/lead-pipeline wiring, and scoped report/export surfacing exist on branch `codex/p4-web-runtime-smoke`: `campaign_runs`, `source_observations`, `content_observations`, `comment_observations`, `candidate_observations`, `evidence_artifacts`, and immutable/versioned `lead_decisions`; collection batches bind to campaign runs; collection task/content/comment/lead/action/execution rows can carry `run_id`; reports expose `runtime_scope` and `runtime_traceability`; JSON/CSV/Markdown exports include campaign/run traceability; legacy migration keeps old `run_id` empty instead of fabricating run attribution; P1 focused tests and full campaign regression passed on 2026-07-23 | Review P1 PR slice and merge without expanding LeadDecision lifecycle beyond traceability |
 | P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Windows Credential Manager secret-storage contract exists on branch `codex/p4-web-runtime-smoke`; secret redaction now fully masks values when `visible_tail=0`, closing a local reporting edge case; `tools/reachops_windows_credential_manager_check.py` now provides a Windows-only set/read/delete validation entry that reports non-Windows as `blocked_external_validation` without leaking secret values; Windows acceptance now runs that validation and final acceptance summary/package verification require the `windows_credential_manager_validation` report before any final passed package can be accepted; license-state evaluator models active/current, revoked, expired, and 7-day grace while keeping grace out of live-submit readiness; encrypted `.reachops-backup` lightweight and full selected-evidence backup/restore contracts now cover customer password, manifest, integrity hashes, preview, wrong password, corrupted archive, interrupted restore rollback, unsafe path rejection, secret/cookie exclusions, lightweight raw-evidence exclusion, and full backup selected evidence inclusion; minimal external license refresh client contract now refreshes only license/device/version metadata over HTTPS and writes local activation status atomically without browser start, submit, or customer-data upload; focused P2 tests passed on 2026-07-20 | Run `python tools\reachops_windows_credential_manager_check.py --json` on Windows 10/11 and require `status=passed`; complete Windows Credential Manager validation on Windows |
 | P3 | Public comment-reply monitoring and lead lifecycle | `IN_PROGRESS` | Public reply replay parser, local `public_reply_events` storage, idempotent reply ingestion, qualified-lead lifecycle promotion, campaign report/export traceability, and local client UI/API surfacing now exist on branch `codex/p4-web-runtime-smoke`; local `conversion_events` storage now records manual conversion/won/lost/opt-out/revenue/currency capture with campaign/run/batch/lead/action/reply traceability and idempotency; a lead is promoted to `qualified` only when a public reply confirms need and is linked to an evidence-verified live contact, and conversion/revenue records advance the lifecycle without fabricating legacy run attribution; focused P3 tests and delivery audit passed on 2026-07-20 | Automatic platform reply detection |
-| P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, Python 3.9-compatible runtime smoke cleanup, customer-visible control evidence, campaign funnel isolation fixture truthfulness, Web-to-local-API execution-chain evidence, and goal delivery boundary reporting. Runtime smoke, DOM smoke, delivery audit, goal status, and campaign regression now pass locally; group-count resolution is configurable for large ixBrowser libraries; a fresh no-submit Web start produced PLAN/START/profile-preflight evidence and correctly blocked on `profile_available=0`; final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
+| P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, editable local ixBrowser group mapping, Python 3.9-compatible runtime smoke cleanup, customer-visible control evidence, campaign funnel isolation fixture truthfulness, Web-to-local-API execution-chain evidence, and goal delivery boundary reporting. Runtime smoke, DOM smoke, delivery audit, goal status, and campaign regression now pass locally; group-count resolution is configurable for large ixBrowser libraries; a fresh no-submit Web start produced PLAN/START/profile-preflight evidence and correctly blocked on `profile_available=0`; final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
 | P5 | DM inbox monitoring | `DEFERRED` | Explicitly deferred behind public reply monitoring | Separate privacy/evidence contract and acceptance after P3/P4 |
 
 ## Next autonomous action
@@ -34,6 +34,45 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Real targets and activation inputs must remain local and git-ignored.
 - Windows code-signing certificate is not currently available; internal builds may show an unknown-publisher warning.
 - Natural user replies cannot be guaranteed; authorized test accounts may validate reply-linking mechanics, while natural reply rate remains a business observation.
+
+## Latest P4 ixBrowser group mapping snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Close the non-external country/group/timezone/language gap from the master contract without entering Windows, EXE, installer, or TikTok live-submit scope.
+- Code evidence:
+  - Local SQLite now has `ixbrowser_group_mappings` with `group_id`, `group_name`, `target_country`, `timezone`, `default_reply_language`, allowed action types, per-day/per-hour limits, status, source, and schema version.
+  - `ensure_ixbrowser_group_mappings(...)` creates first-use local placeholders from ixBrowser groups without deriving country, timezone, or language from the group name.
+  - `upsert_ixbrowser_group_mapping(...)` preserves operator-edited local mapping, filters allowed action types to `comment_reply`, `follow_review`, and `dm_review`, clamps negative limits, and marks rows `ready` only after country, timezone, and language are configured.
+  - `/api/groups` attaches local mapping status to each refreshed group; `/api/group-mappings` lists mappings; `/api/group-mapping` saves operator edits.
+  - The Web client exposes the group mapping panel beside group selection and states that the group name is not country authority.
+  - All group-mapping APIs report `no_browser_started=true` and `no_submit=true`; saving a mapping does not launch ixBrowser and does not submit platform actions.
+- Browser evidence:
+  - Temporary local UI `http://127.0.0.1:8770/` loaded with title `ReachOps 统一控制台`.
+  - DOM contained `保存分组映射`; `#groupMappingPanel` was visible; exactly one `#saveGroupMapping` button was present.
+  - Console `error/warn` logs were empty.
+  - Manual interaction filled `目标国家=US` and `时区=America/New_York`; the save control was clickable and did not fabricate a group selection when no fresh selected group was available.
+  - Local API round trip saved `qa-curl-group-1` as `ready`; unsupported action types were filtered; `/api/group-mappings` returned `configured_count=1`, `group_name_is_not_country_authority=true`, `no_browser_started=true`, and `no_submit=true`.
+- Tests and checks:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py tools/reachops_web_ui.py tools/reachops_delivery_audit.py tests/test_reachops_runtime_model.py tests/test_reachops_campaign.py`: passed.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 11 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_web_panel_dom_smoke.py --json`: passed.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`, blockers `local_mvp`, `windows_final_artifacts`, and `external_authorized_execution`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, exit `1`, `final_delivery_ready=false`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 255 tests; log `/tmp/reachops-group-mapping-campaign.log`.
+  - Main comparison: `origin/main` at `887f706` ran 230 tests with 14 failures and 1 error; current branch ran 255 tests with 0 failures and 0 errors; comparison artifact `/tmp/reachops-group-mapping-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`.
+  - `git diff --check`: passed.
+- Safety:
+  - No Windows build, EXE, installer, update manifest, ixBrowser profile launch, or TikTok live-submit was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this commit and was not modified.
+  - Final delivery remains blocked by Windows final artifacts, Windows Credential Manager validation on Windows, current account readiness, and authorized live evidence.
 
 ## Latest P1 Runtime observation ledger snapshot
 

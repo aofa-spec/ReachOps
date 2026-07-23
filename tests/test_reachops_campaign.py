@@ -11739,6 +11739,53 @@ class ReachOpsCampaignTests(unittest.TestCase):
             persisted = json.loads(latest_path.read_text(encoding="utf-8"))
             self.assertEqual(persisted["groups"][0]["count"], 717)
 
+    def test_web_group_payload_attaches_editable_local_group_mapping(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_db_path = reachops_web_ui.GROUP_MAPPING_DB_PATH
+            try:
+                reachops_web_ui.GROUP_MAPPING_DB_PATH = Path(tmp) / "growth_intelligence.db"
+                payload = reachops_web_ui.attach_group_mappings(
+                    {
+                        "groups": [
+                            {
+                                "name": "United States",
+                                "group_id": "257999",
+                                "count": 3,
+                                "count_known": True,
+                            }
+                        ]
+                    }
+                )
+                group = payload["groups"][0]
+
+                self.assertEqual(payload["group_mapping"]["schema_version"], "reachops.ixbrowser_group_mapping.v1")
+                self.assertTrue(payload["group_mapping"]["group_name_is_not_country_authority"])
+                self.assertEqual(group["mapping"]["target_country"], "")
+                self.assertEqual(group["mapping_status"], "needs_operator_review")
+
+                saved = reachops_web_ui.save_group_mapping_from_payload(
+                    {
+                        "group_id": "257999",
+                        "group_name": "United States",
+                        "target_country": "US",
+                        "timezone": "America/New_York",
+                        "default_reply_language": "en",
+                        "allowed_action_types": ["comment_reply", "dm_review"],
+                        "per_day_limit": 10,
+                        "per_hour_limit": 2,
+                    }
+                )
+                self.assertEqual(saved["mapping"]["status"], "ready")
+                self.assertEqual(saved["mapping"]["allowed_action_types"], ["comment_reply", "dm_review"])
+
+                listed = reachops_web_ui.build_group_mappings_payload()
+                self.assertEqual(listed["configured_count"], 1)
+                self.assertEqual(listed["needs_operator_review_count"], 0)
+            finally:
+                reachops_web_ui.GROUP_MAPPING_DB_PATH = old_db_path
+
     def test_ixbrowser_adapter_closes_profile_when_driver_import_fails(self):
         import builtins
         import sys

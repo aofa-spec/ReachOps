@@ -35,6 +35,8 @@ def new_id(prefix: str) -> str:
 
 LEAD_DECISION_SCHEMA_VERSION = "reachops.lead_decision.v1"
 LEAD_DECISION_RULE_VERSION = "reachops.rule_based_lead_decision.v1"
+IXBROWSER_GROUP_MAPPING_SCHEMA_VERSION = "reachops.ixbrowser_group_mapping.v1"
+IXBROWSER_GROUP_ACTION_TYPES = {"comment_reply", "follow_review", "dm_review"}
 
 
 class GrowthStorage:
@@ -373,6 +375,22 @@ class GrowthStorage:
                     last_error_code TEXT DEFAULT '',
                     last_error_message TEXT DEFAULT '',
                     last_used_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS ixbrowser_group_mappings (
+                    mapping_key TEXT PRIMARY KEY,
+                    group_id TEXT DEFAULT '',
+                    group_name TEXT NOT NULL,
+                    target_country TEXT DEFAULT '',
+                    timezone TEXT DEFAULT '',
+                    default_reply_language TEXT DEFAULT 'unknown',
+                    allowed_action_types_json TEXT DEFAULT '["comment_reply"]',
+                    per_day_limit INTEGER DEFAULT 0,
+                    per_hour_limit INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'needs_operator_review',
+                    source TEXT DEFAULT 'operator',
+                    schema_version TEXT DEFAULT 'reachops.ixbrowser_group_mapping.v1',
+                    created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS scheduled_scans (
@@ -811,6 +829,176 @@ class GrowthStorage:
                 tuple(ids + [int(limit or 300)]),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def _ixbrowser_group_mapping_key(self, group_id: str = "", group_name: str = "") -> str:
+        gid = str(group_id or "").strip()
+        name = str(group_name or "").strip()
+        if gid:
+            return f"id:{gid}"
+        if name:
+            return f"name:{name.lower()}"
+        raise ValueError("group_id or group_name is required")
+
+    def _normalize_group_allowed_actions(self, values: Any) -> List[str]:
+        if isinstance(values, str):
+            raw_items = [item.strip() for item in values.split(",")]
+        elif isinstance(values, list):
+            raw_items = [str(item or "").strip() for item in values]
+        else:
+            raw_items = []
+        result = []
+        for item in raw_items:
+            if item in IXBROWSER_GROUP_ACTION_TYPES and item not in result:
+                result.append(item)
+        return result or ["comment_reply"]
+
+    def _group_mapping_status(self, target_country: str, timezone: str, default_reply_language: str) -> str:
+        if str(target_country or "").strip() and str(timezone or "").strip() and str(default_reply_language or "").strip() not in {"", "unknown", "auto"}:
+            return "ready"
+        return "needs_operator_review"
+
+    def _decode_group_mapping(self, row: Any) -> Dict[str, Any]:
+        item = dict(row)
+        try:
+            actions = json.loads(item.get("allowed_action_types_json") or "[]")
+        except Exception:
+            actions = []
+        item["allowed_action_types"] = self._normalize_group_allowed_actions(actions)
+        item["schema_version"] = item.get("schema_version") or IXBROWSER_GROUP_MAPPING_SCHEMA_VERSION
+        item["requires_operator_review"] = str(item.get("status") or "") != "ready"
+        item["no_submit"] = True
+        return item
+
+    def ensure_ixbrowser_group_mappings(self, groups: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized_groups = []
+        for group in groups or []:
+            if not isinstance(group, dict):
+                continue
+            group_id = str(group.get("group_id") or group.get("id") or "").strip()
+            group_name = str(group.get("group_name") or group.get("name") or "").strip()
+            if not group_id and not group_name:
+                continue
+            normalized_groups.append((self._ixbrowser_group_mapping_key(group_id, group_name), group_id, group_name))
+        if not normalized_groups:
+            return []
+        now = utc_now_iso()
+        with self.connect() as conn:
+            for mapping_key, group_id, group_name in normalized_groups:
+                conn.execute(
+                    """
+                    INSERT INTO ixbrowser_group_mappings
+                    (mapping_key, group_id, group_name, target_country, timezone, default_reply_language,
+                     allowed_action_types_json, per_day_limit, per_hour_limit, status, source, schema_version,
+                     created_at, updated_at)
+                    VALUES (?, ?, ?, '', '', 'unknown', ?, 0, 0, 'needs_operator_review',
+                            'ixbrowser_group_refresh', ?, ?, ?)
+                    ON CONFLICT(mapping_key) DO UPDATE SET
+                        group_id=excluded.group_id,
+                        group_name=excluded.group_name,
+                        updated_at=ixbrowser_group_mappings.updated_at
+                    """,
+                    (
+                        mapping_key,
+                        group_id,
+                        group_name,
+                        json.dumps(["comment_reply"], ensure_ascii=False),
+                        IXBROWSER_GROUP_MAPPING_SCHEMA_VERSION,
+                        now,
+                        now,
+                    ),
+                )
+            placeholders = ",".join(["?"] * len(normalized_groups))
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM ixbrowser_group_mappings
+                WHERE mapping_key IN ({placeholders})
+                ORDER BY group_name ASC, group_id ASC
+                """,
+                tuple(item[0] for item in normalized_groups),
+            ).fetchall()
+        return [self._decode_group_mapping(row) for row in rows]
+
+    def upsert_ixbrowser_group_mapping(
+        self,
+        *,
+        group_id: str = "",
+        group_name: str = "",
+        target_country: str = "",
+        timezone: str = "",
+        default_reply_language: str = "",
+        allowed_action_types: Any = None,
+        per_day_limit: int = 0,
+        per_hour_limit: int = 0,
+        source: str = "operator",
+    ) -> Dict[str, Any]:
+        name = str(group_name or "").strip()
+        gid = str(group_id or "").strip()
+        key = self._ixbrowser_group_mapping_key(gid, name)
+        actions = self._normalize_group_allowed_actions(allowed_action_types)
+        language = str(default_reply_language or "").strip() or "unknown"
+        country = str(target_country or "").strip()
+        tz = str(timezone or "").strip()
+        status = self._group_mapping_status(country, tz, language)
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ixbrowser_group_mappings
+                (mapping_key, group_id, group_name, target_country, timezone, default_reply_language,
+                 allowed_action_types_json, per_day_limit, per_hour_limit, status, source, schema_version,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(mapping_key) DO UPDATE SET
+                    group_id=excluded.group_id,
+                    group_name=excluded.group_name,
+                    target_country=excluded.target_country,
+                    timezone=excluded.timezone,
+                    default_reply_language=excluded.default_reply_language,
+                    allowed_action_types_json=excluded.allowed_action_types_json,
+                    per_day_limit=excluded.per_day_limit,
+                    per_hour_limit=excluded.per_hour_limit,
+                    status=excluded.status,
+                    source=excluded.source,
+                    schema_version=excluded.schema_version,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    key,
+                    gid,
+                    name,
+                    country,
+                    tz,
+                    language,
+                    json.dumps(actions, ensure_ascii=False),
+                    max(0, int(per_day_limit or 0)),
+                    max(0, int(per_hour_limit or 0)),
+                    status,
+                    str(source or "operator"),
+                    IXBROWSER_GROUP_MAPPING_SCHEMA_VERSION,
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM ixbrowser_group_mappings WHERE mapping_key=?", (key,)).fetchone()
+        return self._decode_group_mapping(row)
+
+    def list_ixbrowser_group_mappings(self) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM ixbrowser_group_mappings
+                ORDER BY group_name ASC, group_id ASC
+                """
+            ).fetchall()
+        return [self._decode_group_mapping(row) for row in rows]
+
+    def get_ixbrowser_group_mapping(self, group_id: str = "", group_name: str = "") -> Dict[str, Any]:
+        key = self._ixbrowser_group_mapping_key(group_id, group_name)
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM ixbrowser_group_mappings WHERE mapping_key=?", (key,)).fetchone()
+        return self._decode_group_mapping(row) if row else {}
 
     def log_error(self, error_code: str, message: str = "", source_id: str = "", creator_id: str = "", profile_id: str = ""):
         with self.connect() as conn:
