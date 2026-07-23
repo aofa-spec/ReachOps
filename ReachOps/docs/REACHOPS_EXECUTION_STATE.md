@@ -35,6 +35,37 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Windows code-signing certificate is not currently available; internal builds may show an unknown-publisher warning.
 - Natural user replies cannot be guaranteed; authorized test accounts may validate reply-linking mechanics, while natural reply rate remains a business observation.
 
+## Latest P4 final-gate required report alignment snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Minimal-MVP final gate consistency hardening. The strict final acceptance gate now requires the same critical final package report evidence that package check already produces for Windows Credential Manager validation and authorization handoff.
+- Code evidence:
+  - `tools/reachops_final_acceptance_gate.py` now includes `authorization_handoff` and `windows_credential_manager_validation` in `REQUIRED_PACKAGE_REPORT_FILES`.
+  - `tests/test_reachops_campaign.py` updates the final package fixture and verifies final gate rejection when `authorization_handoff`, `windows_credential_manager_validation`, or `live_submit` report evidence is missing and when `live_preflight` evidence is empty.
+- Tests and checks:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m py_compile tools/reachops_final_acceptance_gate.py tests/test_reachops_campaign.py`: passed.
+  - Focused tests `test_reachops_final_acceptance_gate_passes_only_when_all_final_evidence_is_ready` and `test_reachops_final_acceptance_gate_rejects_package_missing_required_report_file`: passed.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 11 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`; output `/tmp/reachops-final-gate-required-reports-operator-pressure.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-final-gate-required-reports-delivery-audit.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 258 tests; log `/tmp/reachops-final-gate-required-reports-campaign.log`.
+  - Main comparison: `origin/main` at `887f706` ran 230 tests with 14 failures and 1 error; current branch worktree ran 258 tests with 0 failures and 0 errors; comparison artifact `/tmp/reachops-final-gate-required-reports-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-final-gate-required-reports-goal-status-report.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-final-gate-required-reports-cleanliness.json`.
+  - `git diff --check`: passed; log `/tmp/reachops-final-gate-required-reports-diff-check.log`.
+- Expected final-delivery blockers:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_client_delivery_check.py --json`: failed as expected, exit `1`, `status=blocked_by_accounts`, `profile_available=0`, failed check `acceptance:ready`; output `/tmp/reachops-final-gate-required-reports-client-delivery.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-final-gate-required-reports-goal-delivery-runner.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_package_check.py --json`: failed as expected, exit `1`, missing `exe`, `installer`, `manifest`, and `acceptance_summary`; output `/tmp/reachops-final-gate-required-reports-package-check.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_final_acceptance_gate.py --json`: failed as expected, exit `1`, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-final-gate-required-reports-final-gate.json`.
+- Safety:
+  - No Windows build, EXE, installer, update manifest, Windows VM access, ixBrowser profile launch, or TikTok live-submit was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+  - Final delivery remains blocked by current account readiness/local MVP, Windows final artifacts, Windows Credential Manager validation on Windows, and authorized live evidence.
+
 ## Latest P4 authorization-handoff bundle content verification snapshot
 
 - Date: `2026-07-24`

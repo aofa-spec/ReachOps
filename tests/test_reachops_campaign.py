@@ -719,6 +719,7 @@ def final_package_check_payload():
             "live_validation": {"exists": True, "size": 1},
             "repository_cleanliness": {"exists": True, "size": 1},
             "windows_package_preflight": {"exists": True, "size": 1},
+            "windows_credential_manager_validation": {"exists": True, "size": 1},
             "client_delivery": {"exists": True, "size": 1},
             "live_readiness": {"exists": True, "size": 1},
             "live_preflight": {"exists": True, "size": 1},
@@ -4070,6 +4071,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
     def test_reachops_final_acceptance_gate_rejects_package_missing_required_report_file(self):
         package_check = final_package_check_payload()
         package_check["report_files"].pop("live_submit")
+        package_check["report_files"].pop("authorization_handoff")
+        package_check["report_files"].pop("windows_credential_manager_validation")
         package_check["report_files"]["live_preflight"]["size"] = 0
         with tempfile.TemporaryDirectory() as tmp:
             client_path = Path(tmp) / "latest_delivery_check.json"
@@ -4090,6 +4093,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("delivery_package:passed", gate["failed_checks"])
         package_evidence = {row["name"]: row for row in gate["checks"]}["delivery_package:passed"]["evidence"]
         self.assertNotIn("live_submit", package_evidence["report_files"])
+        self.assertNotIn("authorization_handoff", package_evidence["report_files"])
+        self.assertNotIn("windows_credential_manager_validation", package_evidence["report_files"])
         self.assertEqual(package_evidence["report_files"]["live_preflight"]["size"], 0)
 
     def test_reachops_final_acceptance_gate_rejects_bootstrap_package_check(self):
