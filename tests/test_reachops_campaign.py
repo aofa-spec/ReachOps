@@ -1629,7 +1629,6 @@ class ReachOpsCampaignTests(unittest.TestCase):
             summary_path = report_dir / "acceptance_summary.json"
             (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
             (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
-            (report_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
             (report_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             path_checked_summary = json.loads(json.dumps(passed_summary))
@@ -1658,6 +1657,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 json.dumps(path_checked_summary["windows_credential_manager_validation"]),
                 encoding="utf-8",
             )
+            (report_dir / "client_delivery.json").write_text(
+                json.dumps(path_checked_summary["client_delivery"]),
+                encoding="utf-8",
+            )
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
             self.assertTrue(path_checked["ui_startup"]["json_exists"])
@@ -1667,6 +1670,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["windows_credential_manager_validation"]["json_exists"])
             self.assertTrue(path_checked["windows_credential_manager_validation"]["json_loaded"])
             self.assertTrue(path_checked["client_delivery"]["json_exists"])
+            self.assertTrue(path_checked["client_delivery"]["json_loaded"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_exists"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
             self.assertTrue(path_checked["ui_startup"]["json_inside_summary_dir"])
@@ -1757,7 +1761,35 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(missing_client_delivery_report_file["passed"])
             self.assertIn("client_delivery_json_missing", missing_client_delivery_report_file["failures"])
 
-            (report_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
+            (report_dir / "client_delivery.json").write_text("{", encoding="utf-8")
+            invalid_client_delivery_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_client_delivery_report_file["passed"])
+            self.assertIn("client_delivery_json_invalid", invalid_client_delivery_report_file["failures"])
+
+            mismatched_client_delivery_payload = json.loads(json.dumps(path_checked_summary["client_delivery"]))
+            mismatched_client_delivery_payload["status"] = "blocked_by_accounts"
+            (report_dir / "client_delivery.json").write_text(
+                json.dumps(mismatched_client_delivery_payload),
+                encoding="utf-8",
+            )
+            mismatched_client_delivery_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_client_delivery_report_file["passed"])
+            self.assertIn("client_delivery_json_mismatch:status", mismatched_client_delivery_report_file["failures"])
+
+            mismatched_client_delivery_payload = json.loads(json.dumps(path_checked_summary["client_delivery"]))
+            mismatched_client_delivery_payload["failed_checks"] = ["acceptance:ready"]
+            (report_dir / "client_delivery.json").write_text(
+                json.dumps(mismatched_client_delivery_payload),
+                encoding="utf-8",
+            )
+            mismatched_client_delivery_checks = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_client_delivery_checks["passed"])
+            self.assertIn("client_delivery_json_mismatch:failed_checks", mismatched_client_delivery_checks["failures"])
+
+            (report_dir / "client_delivery.json").write_text(
+                json.dumps(path_checked_summary["client_delivery"]),
+                encoding="utf-8",
+            )
             (report_dir / "final_acceptance_gate.json").write_text("", encoding="utf-8")
             empty_final_gate_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(empty_final_gate_file["passed"])

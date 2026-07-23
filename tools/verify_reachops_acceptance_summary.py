@@ -419,6 +419,39 @@ def verify_summary(
                 failures.append("client_delivery_json_empty")
             elif not bool(client_delivery_json.get("inside_summary_dir")):
                 failures.append("client_delivery_json_outside_summary_dir")
+        client_delivery_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        if (
+            status == STATUS_PASSED
+            and summary_path
+            and bool(client_delivery_json.get("exists"))
+            and int(client_delivery_json.get("size") or 0) > 0
+            and bool(client_delivery_json.get("inside_summary_dir"))
+        ):
+            client_delivery_payload_detail = load_report_payload(client_delivery_json)
+            client_delivery_payload = client_delivery_payload_detail.get("payload") or {}
+            if not bool(client_delivery_payload_detail.get("loaded")):
+                failures.append("client_delivery_json_invalid")
+            else:
+                expected_client_delivery_fields = {
+                    "status": client_delivery_status,
+                    "readiness": client_delivery_readiness,
+                    "contract_ok": bool(client_delivery.get("contract_ok")),
+                    "acceptance_ready": bool(client_delivery.get("acceptance_ready")),
+                    "final_delivery_ready": bool(client_delivery.get("final_delivery_ready")),
+                }
+                for key, expected in expected_client_delivery_fields.items():
+                    actual = client_delivery_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"client_delivery_json_mismatch:{key}")
+                payload_failed_checks = as_list(client_delivery_payload.get("failed_checks"))
+                if [str(item) for item in payload_failed_checks] != [str(item) for item in client_delivery_failed_checks]:
+                    failures.append("client_delivery_json_mismatch:failed_checks")
+    else:
+        client_delivery_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     if final_external_resolved:
         readiness_status = str(live_readiness.get("status") or "")
@@ -850,6 +883,8 @@ def verify_summary(
             "json_exists": bool(client_delivery_json.get("exists")),
             "json_size": int(client_delivery_json.get("size") or 0),
             "json_inside_summary_dir": bool(client_delivery_json.get("inside_summary_dir")),
+            "json_loaded": bool(client_delivery_payload_detail.get("loaded")),
+            "json_error": str(client_delivery_payload_detail.get("error") or ""),
         },
         "live_readiness": {
             "status": str(live_readiness.get("status") or ""),
