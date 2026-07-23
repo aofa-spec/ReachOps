@@ -30,7 +30,6 @@ from ReachOps.intelligence.source_planner import CampaignAnalyzer
 from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.action_router import ActionRouterConfig
-from ReachOps.workbench.risk_gate import RiskGate
 from ReachOps.workbench.action_router import FixtureActionExecutor
 from ReachOps.workbench.profile_preflight import ProfilePreflightChecker, ProfilePreflightConfig
 from ReachOps.workbench.console import GrowthOpsConsole, format_campaign_plan_summary, quick_send_mode_key, quick_send_preset
@@ -56,6 +55,7 @@ from tools.init_reachops_acceptance_inputs import main as init_reachops_acceptan
 from tools.reachops_goal_status_report import build_goal_status_report
 from tools.reachops_goal_status_report import main as reachops_goal_status_main
 from tools.reachops_operator_pressure import run_pressure as run_reachops_operator_pressure
+from tools.reachops_web_ui import build_operator_outreach_rows
 from tools.reachops_visual_collection_preflight import build_operator_diagnosis as visual_preflight_operator_diagnosis
 from tools.reachops_visual_collection_preflight import source_from_plan as visual_preflight_source_from_plan
 from tools.reachops_live_validation_manifest import build_manifest as build_reachops_live_validation_manifest
@@ -7690,6 +7690,34 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(gate["allowed"])
             self.assertEqual(gate["reason_code"], "LANGUAGE_CONFLICT_WITH_GROUP_DEFAULT")
             self.assertTrue(gate["requires_human_review"])
+
+    def test_operator_outreach_rows_surface_language_gate_warning(self):
+        rows = build_operator_outreach_rows(
+            [
+                {
+                    "id": "aq_language_conflict",
+                    "action_type": "comment_reply",
+                    "target_username": "comprador_pt",
+                    "target_url": "https://www.tiktok.com/@creator/video/pt",
+                    "suggested_text": "Voce pode conferir primeiro a pagina do produto.",
+                    "status": "approved",
+                    "risk_level": "high",
+                    "comment_language": "pt",
+                    "group_default_language": "en",
+                    "language_gate_status": "language_conflict_with_group_default",
+                    "language_gate_note": "comment_language_conflicts_with_group_default",
+                    "created_at": "2026-07-24T00:00:00Z",
+                }
+            ],
+            [],
+            {"mode": "live_comment"},
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertIn("语言冲突阻断", rows[0]["language_gate_summary"])
+        self.assertIn("评论=pt", rows[0]["language_gate_summary"])
+        self.assertIn("分组=en", rows[0]["language_gate_summary"])
+        self.assertIn("冲突解除前不能真实提交", rows[0]["next_step"])
 
     def test_standalone_browser_adapter_acquires_reuses_and_releases_session(self):
         fake_adapter = FakeBrowserDriverAdapter()
