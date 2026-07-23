@@ -287,6 +287,7 @@ def verify_summary(
     if status == STATUS_PASSED and not windows_package_preflight:
         failures.append("windows_package_preflight_missing")
     if windows_package_preflight:
+        windows_preflight_payload_detail = {"loaded": False, "error": "", "payload": {}}
         if windows_preflight_status != "ready_for_windows_build":
             failures.append("windows_package_preflight_not_ready")
         if not windows_preflight_ready:
@@ -304,6 +305,25 @@ def verify_summary(
                 failures.append("windows_package_preflight_json_empty")
             elif not bool(windows_preflight_json.get("inside_summary_dir")):
                 failures.append("windows_package_preflight_json_outside_summary_dir")
+            else:
+                windows_preflight_payload_detail = load_report_payload(windows_preflight_json)
+                windows_preflight_payload = windows_preflight_payload_detail["payload"]
+                if not bool(windows_preflight_payload_detail.get("loaded")):
+                    failures.append("windows_package_preflight_json_invalid")
+                else:
+                    for key in ("status", "ready_for_windows_build", "final_delivery_ready"):
+                        if windows_preflight_payload.get(key) != windows_package_preflight.get(key):
+                            failures.append(f"windows_package_preflight_json_mismatch:{key}")
+                    payload_contract = (
+                        windows_preflight_payload.get("build_contract")
+                        if isinstance(windows_preflight_payload.get("build_contract"), dict)
+                        else {}
+                    )
+                    for key in ("default_build_requires_installer", "skip_installer_is_non_final"):
+                        if payload_contract.get(key) != windows_preflight_contract.get(key):
+                            failures.append(f"windows_package_preflight_json_mismatch:build_contract.{key}")
+    else:
+        windows_preflight_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     credential_validation_status = str(windows_credential_manager_validation.get("status") or "")
     credential_validation_checks = (
@@ -1009,6 +1029,8 @@ def verify_summary(
             "json_exists": bool(windows_preflight_json.get("exists")),
             "json_size": int(windows_preflight_json.get("size") or 0),
             "json_inside_summary_dir": bool(windows_preflight_json.get("inside_summary_dir")),
+            "json_loaded": bool(windows_preflight_payload_detail.get("loaded")),
+            "json_error": str(windows_preflight_payload_detail.get("error") or ""),
         },
         "windows_credential_manager_validation": {
             "status": credential_validation_status,

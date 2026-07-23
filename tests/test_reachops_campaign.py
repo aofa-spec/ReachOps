@@ -1643,6 +1643,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             path_checked_summary["final_acceptance_gate"]["json_path"] = "final_acceptance_gate.json"
             path_checked_summary["authorization_handoff"]["json_path"] = "authorization_handoff_payload.json"
             path_checked_summary["final_acceptance_gate"]["checks"] = final_acceptance_gate_payload()["checks"]
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(path_checked_summary["windows_package_preflight"]),
+                encoding="utf-8",
+            )
             (report_dir / "ui_startup_payload.json").write_text(
                 json.dumps(
                     {
@@ -1683,6 +1687,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["ui_startup"]["json_loaded"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_exists"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_exists"])
+            self.assertTrue(path_checked["windows_package_preflight"]["json_loaded"])
             self.assertTrue(path_checked["windows_credential_manager_validation"]["json_exists"])
             self.assertTrue(path_checked["windows_credential_manager_validation"]["json_loaded"])
             self.assertTrue(path_checked["client_delivery"]["json_exists"])
@@ -1739,7 +1744,43 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(missing_preflight_report_file["passed"])
             self.assertIn("windows_package_preflight_json_missing", missing_preflight_report_file["failures"])
 
-            (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
+            (report_dir / "windows_package_preflight.json").write_text("", encoding="utf-8")
+            empty_preflight_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_preflight_report_file["passed"])
+            self.assertIn("windows_package_preflight_json_empty", empty_preflight_report_file["failures"])
+
+            (report_dir / "windows_package_preflight.json").write_text("{", encoding="utf-8")
+            invalid_preflight_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_preflight_report_file["passed"])
+            self.assertIn("windows_package_preflight_json_invalid", invalid_preflight_report_file["failures"])
+
+            mismatched_preflight_payload = json.loads(json.dumps(path_checked_summary["windows_package_preflight"]))
+            mismatched_preflight_payload["ready_for_windows_build"] = False
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(mismatched_preflight_payload),
+                encoding="utf-8",
+            )
+            mismatched_preflight_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_preflight_report_file["passed"])
+            self.assertIn("windows_package_preflight_json_mismatch:ready_for_windows_build", mismatched_preflight_report_file["failures"])
+
+            mismatched_preflight_contract = json.loads(json.dumps(path_checked_summary["windows_package_preflight"]))
+            mismatched_preflight_contract["build_contract"]["skip_installer_is_non_final"] = False
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(mismatched_preflight_contract),
+                encoding="utf-8",
+            )
+            mismatched_preflight_contract_report = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_preflight_contract_report["passed"])
+            self.assertIn(
+                "windows_package_preflight_json_mismatch:build_contract.skip_installer_is_non_final",
+                mismatched_preflight_contract_report["failures"],
+            )
+
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(path_checked_summary["windows_package_preflight"]),
+                encoding="utf-8",
+            )
             (report_dir / "windows_credential_manager_validation.json").unlink()
             missing_credential_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_credential_report_file["passed"])
@@ -2750,6 +2791,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (report_dir / "client_delivery.json").write_text(json.dumps(summary["client_delivery"]), encoding="utf-8")
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(summary["windows_package_preflight"]),
+                encoding="utf-8",
+            )
             (report_dir / "authorization_handoff_payload.json").write_text(
                 json.dumps(summary["authorization_handoff"]),
                 encoding="utf-8",
