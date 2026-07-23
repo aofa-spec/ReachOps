@@ -726,6 +726,7 @@ def verify_summary(
     if final_acceptance_gate:
         final_gate_status = str(final_acceptance_gate.get("status") or "")
         final_gate_failed_checks = as_list(final_acceptance_gate.get("failed_checks"))
+        final_gate_checks = final_acceptance_gate.get("checks") if isinstance(final_acceptance_gate.get("checks"), list) else []
         final_gate_json = report_path_status(
             summary_path,
             str(final_acceptance_gate.get("json_path") or ""),
@@ -755,7 +756,72 @@ def verify_summary(
             elif not bool(final_gate_json.get("inside_summary_dir")):
                 failures.append("final_acceptance_gate_json_outside_summary_dir")
                 passed = False
+        final_gate_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        if (
+            status == STATUS_PASSED
+            and summary_path
+            and bool(final_gate_json.get("exists"))
+            and int(final_gate_json.get("size") or 0) > 0
+            and bool(final_gate_json.get("inside_summary_dir"))
+        ):
+            final_gate_payload_detail = load_report_payload(final_gate_json)
+            final_gate_payload = final_gate_payload_detail.get("payload") or {}
+            if not bool(final_gate_payload_detail.get("loaded")):
+                failures.append("final_acceptance_gate_json_invalid")
+                passed = False
+            else:
+                expected_final_gate_fields = {
+                    "status": final_gate_status,
+                    "final_delivery_ready": bool(final_acceptance_gate.get("final_delivery_ready")),
+                }
+                for key, expected in expected_final_gate_fields.items():
+                    actual = final_gate_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"final_acceptance_gate_json_mismatch:{key}")
+                        passed = False
+                payload_failed_checks = as_list(final_gate_payload.get("failed_checks"))
+                if [str(item) for item in payload_failed_checks] != [str(item) for item in final_gate_failed_checks]:
+                    failures.append("final_acceptance_gate_json_mismatch:failed_checks")
+                    passed = False
+                payload_checks = final_gate_payload.get("checks") if isinstance(final_gate_payload.get("checks"), list) else []
+                required_final_gate_checks = {
+                    "goal_status:passed",
+                    "client_delivery:final_ready",
+                    "delivery_package:passed",
+                    "delivery_audit:no_failed_checks",
+                    "operator_pressure:leads_and_actions",
+                }
+                payload_checks_by_name = {
+                    str(row.get("name") or ""): row
+                    for row in payload_checks
+                    if isinstance(row, dict) and str(row.get("name") or "")
+                }
+                missing_required_checks = sorted(required_final_gate_checks - set(payload_checks_by_name))
+                if missing_required_checks:
+                    failures.append("final_acceptance_gate_json_checks_missing")
+                    passed = False
+                failed_required_checks = sorted(
+                    name for name in required_final_gate_checks if name in payload_checks_by_name and not bool(payload_checks_by_name[name].get("ok"))
+                )
+                if failed_required_checks:
+                    failures.append("final_acceptance_gate_json_checks_failed")
+                    passed = False
+                if final_gate_checks:
+                    summary_checks_by_name = {
+                        str(row.get("name") or ""): bool(row.get("ok"))
+                        for row in final_gate_checks
+                        if isinstance(row, dict) and str(row.get("name") or "")
+                    }
+                    for name, expected_ok in summary_checks_by_name.items():
+                        if name in payload_checks_by_name and bool(payload_checks_by_name[name].get("ok")) != expected_ok:
+                            failures.append(f"final_acceptance_gate_json_mismatch:checks.{name}")
+                            passed = False
     else:
+        final_gate_payload_detail = {"loaded": False, "error": "", "payload": {}}
         final_gate_json = report_path_status(summary_path, "")
 
     return {
@@ -944,6 +1010,8 @@ def verify_summary(
             "json_exists": bool(final_gate_json.get("exists")),
             "json_size": int(final_gate_json.get("size") or 0),
             "json_inside_summary_dir": bool(final_gate_json.get("inside_summary_dir")),
+            "json_loaded": bool(final_gate_payload_detail.get("loaded")),
+            "json_error": str(final_gate_payload_detail.get("error") or ""),
         },
     }
 

@@ -498,6 +498,10 @@ def check_delivery_package(
                 "final_acceptance_gate_not_passed",
                 "final_acceptance_gate_not_ready",
                 "final_acceptance_gate_failed_checks",
+                "final_acceptance_gate_json_mismatch:status",
+                "final_acceptance_gate_json_mismatch:final_delivery_ready",
+                "final_acceptance_gate_json_mismatch:failed_checks",
+                "final_acceptance_gate_json_checks_failed",
             }
         ]
     if acceptance_path.exists():
