@@ -54,6 +54,56 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
             local_path="evidence/b1.json",
             sha256="sha-b1",
         )
+        source_a1 = storage.record_source_observation(
+            campaign_id=campaign_a.id,
+            run_id=run_a1["id"],
+            source_id="source-same",
+            source_type="keyword",
+            source_value="running shoes",
+            observation_key="collection_task_planned",
+        )
+        source_a2 = storage.record_source_observation(
+            campaign_id=campaign_a.id,
+            run_id=run_a2["id"],
+            source_id="source-same",
+            source_type="keyword",
+            source_value="running shoes",
+            observation_key="collection_task_planned",
+        )
+        source_b1 = storage.record_source_observation(
+            campaign_id=campaign_b.id,
+            run_id=run_b1["id"],
+            source_id="source-same",
+            source_type="keyword",
+            source_value="trail shoes",
+            observation_key="collection_task_planned",
+        )
+        content_a1 = storage.record_content_observation(
+            campaign_id=campaign_a.id,
+            run_id=run_a1["id"],
+            content_id="video-1",
+            source_observation_id=source_a1["id"],
+        )
+        storage.record_content_observation(
+            campaign_id=campaign_a.id,
+            run_id=run_a2["id"],
+            content_id="video-1",
+            source_observation_id=source_a2["id"],
+        )
+        storage.record_content_observation(
+            campaign_id=campaign_b.id,
+            run_id=run_b1["id"],
+            content_id="video-1",
+            source_observation_id=source_b1["id"],
+        )
+        comment_a1 = storage.record_comment_observation(
+            campaign_id=campaign_a.id,
+            run_id=run_a1["id"],
+            content_id="video-1",
+            candidate_user_id="candidate_same_user",
+            username="redacted_same",
+            comment_text="where can I buy this",
+        )
 
         obs_a1 = storage.record_candidate_observation(
             campaign_id=campaign_a.id,
@@ -81,9 +131,16 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
 
         self.assertNotEqual(obs_a1["id"], obs_a2["id"])
         self.assertNotEqual(obs_a1["id"], obs_b1["id"])
+        self.assertEqual(content_a1["source_observation_id"], source_a1["id"])
+        self.assertEqual(comment_a1["campaign_id"], campaign_a.id)
         self.assertEqual(storage.runtime_traceability_summary(campaign_a.id, run_a1["id"])["counts"]["candidate_observations"], 1)
+        self.assertEqual(storage.runtime_traceability_summary(campaign_a.id, run_a1["id"])["counts"]["source_observations"], 1)
+        self.assertEqual(storage.runtime_traceability_summary(campaign_a.id, run_a1["id"])["counts"]["content_observations"], 1)
+        self.assertEqual(storage.runtime_traceability_summary(campaign_a.id, run_a1["id"])["counts"]["comment_observations"], 1)
         self.assertEqual(storage.runtime_traceability_summary(campaign_a.id)["counts"]["candidate_observations"], 2)
+        self.assertEqual(storage.runtime_traceability_summary(campaign_a.id)["counts"]["source_observations"], 2)
         self.assertEqual(storage.runtime_traceability_summary(campaign_b.id)["counts"]["candidate_observations"], 1)
+        self.assertEqual(storage.list_observations_for_run(run_a1["id"])["source_observations"][0]["campaign_id"], campaign_a.id)
 
     def test_observation_evidence_and_run_creation_are_idempotent(self) -> None:
         storage = self.make_storage()
@@ -111,6 +168,72 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
         )
         self.assertEqual(evidence_1["id"], evidence_2["id"])
 
+        source_1 = storage.record_source_observation(
+            campaign_id=campaign.id,
+            run_id=run_1["id"],
+            source_id="source-1",
+            source_type="hashtag",
+            source_value="skincare",
+            observation_key="collection_task_planned",
+            payload={"profile_id": "profile-1"},
+        )
+        source_2 = storage.record_source_observation(
+            campaign_id=campaign.id,
+            run_id=run_1["id"],
+            source_id="source-1",
+            source_type="hashtag",
+            source_value="skincare",
+            observation_key="collection_task_planned",
+            payload={"profile_id": "changed"},
+        )
+        self.assertEqual(source_1["id"], source_2["id"])
+
+        content_1 = storage.record_content_observation(
+            campaign_id=campaign.id,
+            run_id=run_1["id"],
+            content_id="video-1",
+            source_observation_id=source_1["id"],
+            observation_key="content_observed",
+        )
+        content_2 = storage.record_content_observation(
+            campaign_id=campaign.id,
+            run_id=run_1["id"],
+            content_id="video-1",
+            source_observation_id=source_1["id"],
+            observation_key="content_observed",
+        )
+        self.assertEqual(content_1["id"], content_2["id"])
+
+        comment_1 = storage.record_comment_observation(
+            campaign_id=campaign.id,
+            run_id=run_1["id"],
+            content_id="video-1",
+            candidate_user_id="candidate-1",
+            username="redacted_user",
+            comment_text="where can I buy this",
+            observation_key="comment_observed",
+        )
+        comment_2 = storage.record_comment_observation(
+            campaign_id=campaign.id,
+            run_id=run_1["id"],
+            content_id="video-1",
+            candidate_user_id="candidate-1",
+            username="redacted_user",
+            comment_text="where can I buy this",
+            observation_key="comment_observed",
+        )
+        second_comment = storage.record_comment_observation(
+            campaign_id=campaign.id,
+            run_id=run_1["id"],
+            content_id="video-1",
+            candidate_user_id="candidate-1",
+            username="redacted_user",
+            comment_text="does this ship to the US",
+            observation_key="comment_observed",
+        )
+        self.assertEqual(comment_1["id"], comment_2["id"])
+        self.assertNotEqual(comment_1["id"], second_comment["id"])
+
         obs_1 = storage.record_candidate_observation(
             campaign_id=campaign.id,
             run_id=run_1["id"],
@@ -128,6 +251,9 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
         self.assertEqual(obs_1["id"], obs_2["id"])
         summary = storage.runtime_traceability_summary(campaign.id, run_1["id"])
         self.assertEqual(summary["counts"]["evidence_artifacts"], 1)
+        self.assertEqual(summary["counts"]["source_observations"], 1)
+        self.assertEqual(summary["counts"]["content_observations"], 1)
+        self.assertEqual(summary["counts"]["comment_observations"], 2)
         self.assertEqual(summary["counts"]["candidate_observations"], 1)
 
     def test_lead_decision_is_traceable_versioned_and_not_overwritten(self) -> None:
@@ -208,6 +334,23 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
                 candidate_user_id="candidate-without-run",
                 evidence_id="ev_missing",
             )
+        with self.assertRaises(ValueError):
+            storage.record_source_observation(
+                campaign_id=campaign.id,
+                source_id="source-without-run",
+            )
+        with self.assertRaises(ValueError):
+            storage.record_content_observation(
+                campaign_id=campaign.id,
+                content_id="content-without-run",
+            )
+        with self.assertRaises(ValueError):
+            storage.record_comment_observation(
+                campaign_id=campaign.id,
+                content_id="content-without-run",
+                username="redacted_without_run",
+                comment_text="legacy comment",
+            )
 
     def test_run_scoped_leads_actions_and_execution_queries(self) -> None:
         storage = self.make_storage()
@@ -281,6 +424,13 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
         storage.bind_collection_batch_run(batch.id, run["id"])
         storage.set_active_collection_batch(batch.id)
         storage.set_active_campaign_run(run["id"])
+        task = storage.create_collection_task(
+            batch.id,
+            source_id="source-trace",
+            source_type="keyword",
+            source_value="shopify tool",
+            profile_id="profile-trace",
+        )
 
         content, _ = storage.upsert_content(
             DiscoveredContent(
@@ -310,8 +460,15 @@ class ReachOpsRuntimeModelTests(unittest.TestCase):
 
         summary = storage.runtime_traceability_summary(campaign.id, run["id"])
         self.assertEqual(summary["counts"]["evidence_artifacts"], 1)
+        self.assertEqual(summary["counts"]["source_observations"], 1)
+        self.assertEqual(summary["counts"]["content_observations"], 1)
+        self.assertEqual(summary["counts"]["comment_observations"], 1)
         self.assertEqual(summary["counts"]["candidate_observations"], 1)
         self.assertEqual(summary["counts"]["lead_decisions"], 1)
+        trace = storage.list_observations_for_run(run["id"])
+        self.assertEqual(trace["source_observations"][0]["payload_json"], json.dumps({"profile_id": "profile-trace", "status": "pending", "task_id": task.id}, ensure_ascii=False, sort_keys=True))
+        self.assertEqual(trace["content_observations"][0]["content_id"], content.id)
+        self.assertEqual(trace["comment_observations"][0]["username"], "redacted_trace")
         self.assertEqual(storage.list_operation_leads(run_id=run["id"])[0]["run_id"], run["id"])
 
     def test_runtime_traceability_is_scoped_in_reports_and_exports(self) -> None:

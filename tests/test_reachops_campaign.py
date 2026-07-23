@@ -10,7 +10,7 @@ import zipfile
 from collections import Counter
 from contextlib import redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -3869,12 +3869,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
     def test_reachops_activation_status_check_reports_grace_as_not_live_ready(self):
         with tempfile.TemporaryDirectory() as tmp:
             activation_path = Path(tmp) / "reachops_activation_status.json"
+            last_verified_at = (datetime.now(timezone.utc) - timedelta(days=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
             activation_path.write_text(
                 json.dumps(
                     {
                         "active": True,
                         "subscription_status": "past_due",
-                        "last_verified_at": "2026-07-15T00:00:00Z",
+                        "last_verified_at": last_verified_at,
                         "expires_at": "2999-01-01T00:00:00Z",
                         "license_tier": "enterprise",
                         "capabilities": {"live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},

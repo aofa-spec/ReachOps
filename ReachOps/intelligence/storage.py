@@ -259,6 +259,48 @@ class GrowthStorage:
                     created_at TEXT NOT NULL,
                     UNIQUE(campaign_id, run_id, entity_type, entity_id, local_path, sha256)
                 );
+                CREATE TABLE IF NOT EXISTS source_observations (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    source_id TEXT DEFAULT '',
+                    source_type TEXT DEFAULT '',
+                    source_value TEXT DEFAULT '',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, source_id, observation_key)
+                );
+                CREATE TABLE IF NOT EXISTS content_observations (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    content_id TEXT DEFAULT '',
+                    source_observation_id TEXT DEFAULT '',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, content_id, observation_key)
+                );
+                CREATE TABLE IF NOT EXISTS comment_observations (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    content_id TEXT DEFAULT '',
+                    candidate_user_id TEXT DEFAULT '',
+                    username TEXT DEFAULT '',
+                    comment_text TEXT DEFAULT '',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, content_id, username, comment_text, observation_key)
+                );
                 CREATE TABLE IF NOT EXISTS candidate_observations (
                     id TEXT PRIMARY KEY,
                     campaign_id TEXT NOT NULL,
@@ -774,6 +816,28 @@ class GrowthStorage:
             raise ValueError("run_id is required; legacy rows must not be assigned a fabricated run_id")
         return campaign, run
 
+    def _campaign_run_row(self, conn, campaign_id: str = "", run_id: str = "", batch_id: str = "") -> Optional[Dict[str, Any]]:
+        run = str(run_id or self._active_run_id()).strip()
+        batch = str(batch_id or self._active_batch_id()).strip()
+        campaign = str(campaign_id or "").strip()
+        row = None
+        if run:
+            row = conn.execute("SELECT * FROM campaign_runs WHERE id=?", (run,)).fetchone()
+        elif batch:
+            row = conn.execute("SELECT * FROM campaign_runs WHERE batch_id=?", (batch,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        if campaign and str(item.get("campaign_id") or "") != campaign:
+            return None
+        return item
+
+    def _require_campaign_run_row(self, conn, campaign_id: str = "", run_id: str = "", batch_id: str = "") -> Dict[str, Any]:
+        row = self._campaign_run_row(conn, campaign_id=campaign_id, run_id=run_id, batch_id=batch_id)
+        if not row:
+            raise ValueError("campaign run is required; legacy rows must not be assigned a fabricated run_id")
+        return row
+
     def create_campaign_run(
         self,
         campaign_id: str,
@@ -889,6 +953,170 @@ class GrowthStorage:
                 (evidence_id, campaign, run, str(batch_id or self._active_batch_id()), entity_type, entity_id, local_path, sha256, sidecar_json, now),
             )
             row = conn.execute("SELECT * FROM evidence_artifacts WHERE id=?", (evidence_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_source_observation(
+        self,
+        *,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+        source_id: str,
+        source_type: str = "",
+        source_value: str = "",
+        observation_key: str = "source_observed",
+        payload: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+    ) -> Dict[str, Any]:
+        source = str(source_id or "").strip()
+        key = str(observation_key or "source_observed").strip()
+        if not source:
+            raise ValueError("source_id is required")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._require_campaign_run_row(conn, campaign_id=campaign_id, run_id=run_id, batch_id=batch_id)
+            row = conn.execute(
+                """
+                SELECT * FROM source_observations
+                WHERE campaign_id=? AND run_id=? AND source_id=? AND observation_key=?
+                """,
+                (run["campaign_id"], run["id"], source, key),
+            ).fetchone()
+            if row:
+                return dict(row)
+            observation_id = new_id("sobs")
+            conn.execute(
+                """
+                INSERT INTO source_observations
+                (id, campaign_id, run_id, batch_id, source_id, source_type, source_value,
+                 observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    run["campaign_id"],
+                    run["id"],
+                    str(batch_id or run.get("batch_id") or self._active_batch_id()),
+                    source,
+                    str(source_type or ""),
+                    str(source_value or ""),
+                    key,
+                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                    str(observed_at or now),
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM source_observations WHERE id=?", (observation_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_content_observation(
+        self,
+        *,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+        content_id: str,
+        source_observation_id: str = "",
+        observation_key: str = "content_observed",
+        payload: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+    ) -> Dict[str, Any]:
+        content = str(content_id or "").strip()
+        key = str(observation_key or "content_observed").strip()
+        if not content:
+            raise ValueError("content_id is required")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._require_campaign_run_row(conn, campaign_id=campaign_id, run_id=run_id, batch_id=batch_id)
+            row = conn.execute(
+                """
+                SELECT * FROM content_observations
+                WHERE campaign_id=? AND run_id=? AND content_id=? AND observation_key=?
+                """,
+                (run["campaign_id"], run["id"], content, key),
+            ).fetchone()
+            if row:
+                return dict(row)
+            observation_id = new_id("cobs")
+            conn.execute(
+                """
+                INSERT INTO content_observations
+                (id, campaign_id, run_id, batch_id, content_id, source_observation_id,
+                 observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    run["campaign_id"],
+                    run["id"],
+                    str(batch_id or run.get("batch_id") or self._active_batch_id()),
+                    content,
+                    str(source_observation_id or ""),
+                    key,
+                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                    str(observed_at or now),
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM content_observations WHERE id=?", (observation_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_comment_observation(
+        self,
+        *,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+        content_id: str,
+        candidate_user_id: str = "",
+        username: str = "",
+        comment_text: str = "",
+        observation_key: str = "comment_observed",
+        payload: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+    ) -> Dict[str, Any]:
+        content = str(content_id or "").strip()
+        user = str(username or "").strip()
+        text = str(comment_text or "")
+        key = str(observation_key or "comment_observed").strip()
+        if not content or not user:
+            raise ValueError("content_id and username are required")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._require_campaign_run_row(conn, campaign_id=campaign_id, run_id=run_id, batch_id=batch_id)
+            row = conn.execute(
+                """
+                SELECT * FROM comment_observations
+                WHERE campaign_id=? AND run_id=? AND content_id=? AND username=? AND comment_text=? AND observation_key=?
+                """,
+                (run["campaign_id"], run["id"], content, user, text, key),
+            ).fetchone()
+            if row:
+                return dict(row)
+            observation_id = new_id("mobs")
+            conn.execute(
+                """
+                INSERT INTO comment_observations
+                (id, campaign_id, run_id, batch_id, content_id, candidate_user_id, username,
+                 comment_text, observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    run["campaign_id"],
+                    run["id"],
+                    str(batch_id or run.get("batch_id") or self._active_batch_id()),
+                    content,
+                    str(candidate_user_id or ""),
+                    user,
+                    text,
+                    key,
+                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                    str(observed_at or now),
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM comment_observations WHERE id=?", (observation_id,)).fetchone()
         return dict(row) if row else {}
 
     def record_candidate_observation(
@@ -1044,7 +1272,14 @@ class GrowthStorage:
             run_where = "WHERE " + " AND ".join(run_filters) if run_filters else ""
             row = conn.execute(f"SELECT COUNT(*) AS count FROM campaign_runs {run_where}", tuple(run_args)).fetchone()
             counts["campaign_runs"] = int((row["count"] if row else 0) or 0)
-            for table in ["evidence_artifacts", "candidate_observations", "lead_decisions"]:
+            for table in [
+                "evidence_artifacts",
+                "source_observations",
+                "content_observations",
+                "comment_observations",
+                "candidate_observations",
+                "lead_decisions",
+            ]:
                 rows = conn.execute(f"SELECT COUNT(*) AS count FROM {table} {where}", tuple(args)).fetchone()
                 counts[table] = int((rows["count"] if rows else 0) or 0)
             legacy_empty = {}
@@ -1060,6 +1295,42 @@ class GrowthStorage:
             "legacy_rows_with_empty_run_id": legacy_empty,
             "legacy_run_id_fabricated": False,
         }
+
+    def list_observations_for_run(self, run_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        run = str(run_id or "").strip()
+        if not run:
+            raise ValueError("run_id is required")
+        with self.connect() as conn:
+            return {
+                "campaign_runs": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM campaign_runs WHERE id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "evidence_artifacts": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM evidence_artifacts WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "source_observations": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM source_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "content_observations": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM content_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "comment_observations": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM comment_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "candidate_observations": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM candidate_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "lead_decisions": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM lead_decisions WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+            }
 
     def create_campaign(
         self,
@@ -1379,38 +1650,63 @@ class GrowthStorage:
                 (content.creator_id, content.video_id),
             ).fetchone()
             if row:
-                return self._row_to_content(row), False
-            conn.execute(
-                """
-                INSERT INTO discovered_contents
-                (id, creator_id, video_id, video_url, caption, views, likes, comments, shares,
-                 content_language, country, material_type, collector_level, source_path, raw_meta, batch_id, run_id,
-                 published_at, collected_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    content.id,
-                    content.creator_id,
-                    content.video_id,
-                    content.video_url,
-                    content.caption,
-                    content.views,
-                    content.likes,
-                    content.comments,
-                    content.shares,
-                    content.content_language,
-                    content.country,
-                    content.material_type,
-                    content.collector_level,
-                    content.source_path,
-                    json.dumps(content.raw_meta or {}, ensure_ascii=False),
-                    self._active_batch_id(),
-                    self._active_run_id(),
-                    content.published_at,
-                    content.collected_at,
-                ),
-            )
-            return content, True
+                item = self._row_to_content(row)
+                created = False
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO discovered_contents
+                    (id, creator_id, video_id, video_url, caption, views, likes, comments, shares,
+                     content_language, country, material_type, collector_level, source_path, raw_meta, batch_id, run_id,
+                     published_at, collected_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        content.id,
+                        content.creator_id,
+                        content.video_id,
+                        content.video_url,
+                        content.caption,
+                        content.views,
+                        content.likes,
+                        content.comments,
+                        content.shares,
+                        content.content_language,
+                        content.country,
+                        content.material_type,
+                        content.collector_level,
+                        content.source_path,
+                        json.dumps(content.raw_meta or {}, ensure_ascii=False),
+                        self._active_batch_id(),
+                        self._active_run_id(),
+                        content.published_at,
+                        content.collected_at,
+                    ),
+                )
+                item = content
+                created = True
+        if self._active_run_id():
+            try:
+                self.record_content_observation(
+                    batch_id=self._active_batch_id(),
+                    content_id=item.id,
+                    observation_key="content_observed",
+                    payload={
+                        "creator_id": item.creator_id,
+                        "video_id": item.video_id,
+                        "video_url": item.video_url,
+                        "caption": item.caption,
+                        "views": item.views,
+                        "likes": item.likes,
+                        "comments": item.comments,
+                        "shares": item.shares,
+                        "source_path": item.source_path,
+                    },
+                    observed_at=item.collected_at,
+                )
+            except ValueError:
+                pass
+        return item, created
 
     def upsert_candidate(self, candidate: CandidateUser) -> tuple[CandidateUser, bool]:
         with self.connect() as conn:
@@ -1438,38 +1734,64 @@ class GrowthStorage:
                     ),
                 )
                 updated = conn.execute("SELECT * FROM candidate_users WHERE id=?", (row["id"],)).fetchone()
-                return self._row_to_candidate(updated), False
-            conn.execute(
-                """
-                INSERT INTO candidate_users
-                (id, content_id, username, profile_url, comment_text, comment_likes, reply_count,
-                 qualify_score, intent_tags, comment_language, author_profile_completed, collector_level,
-                 source_path, repeat_seen_count, raw_meta, batch_id, run_id, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    candidate.id,
-                    candidate.content_id,
-                    candidate.username,
-                    candidate.profile_url,
-                    candidate.comment_text,
-                    candidate.comment_likes,
-                    candidate.reply_count,
-                    candidate.qualify_score,
-                    json.dumps(candidate.intent_tags, ensure_ascii=False),
-                    candidate.comment_language,
-                    1 if candidate.author_profile_completed else 0,
-                    candidate.collector_level,
-                    candidate.source_path,
-                    int(candidate.repeat_seen_count or 1),
-                    json.dumps(candidate.raw_meta or {}, ensure_ascii=False),
-                    self._active_batch_id(),
-                    self._active_run_id(),
-                    candidate.status,
-                    candidate.created_at,
-                ),
-            )
-            return candidate, True
+                item = self._row_to_candidate(updated)
+                created = False
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO candidate_users
+                    (id, content_id, username, profile_url, comment_text, comment_likes, reply_count,
+                     qualify_score, intent_tags, comment_language, author_profile_completed, collector_level,
+                     source_path, repeat_seen_count, raw_meta, batch_id, run_id, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candidate.id,
+                        candidate.content_id,
+                        candidate.username,
+                        candidate.profile_url,
+                        candidate.comment_text,
+                        candidate.comment_likes,
+                        candidate.reply_count,
+                        candidate.qualify_score,
+                        json.dumps(candidate.intent_tags, ensure_ascii=False),
+                        candidate.comment_language,
+                        1 if candidate.author_profile_completed else 0,
+                        candidate.collector_level,
+                        candidate.source_path,
+                        int(candidate.repeat_seen_count or 1),
+                        json.dumps(candidate.raw_meta or {}, ensure_ascii=False),
+                        self._active_batch_id(),
+                        self._active_run_id(),
+                        candidate.status,
+                        candidate.created_at,
+                    ),
+                )
+                item = candidate
+                created = True
+        if self._active_run_id():
+            try:
+                self.record_comment_observation(
+                    batch_id=self._active_batch_id(),
+                    content_id=item.content_id,
+                    candidate_user_id=item.id,
+                    username=item.username,
+                    comment_text=item.comment_text,
+                    observation_key="comment_observed",
+                    payload={
+                        "profile_url": item.profile_url,
+                        "comment_likes": item.comment_likes,
+                        "reply_count": item.reply_count,
+                        "qualify_score": item.qualify_score,
+                        "intent_tags": item.intent_tags,
+                        "comment_language": item.comment_language,
+                        "source_path": item.source_path,
+                    },
+                    observed_at=item.created_at,
+                )
+            except ValueError:
+                pass
+        return item, created
 
     def update_candidate_score(self, candidate_id: str, score: int, tags: List[str], status: str):
         with self.connect() as conn:
@@ -2447,6 +2769,18 @@ class GrowthStorage:
                     item.updated_at,
                 ),
             )
+        try:
+            self.record_source_observation(
+                batch_id=batch_id,
+                source_id=item.source_id,
+                source_type=item.source_type,
+                source_value=item.source_value,
+                observation_key="collection_task_planned",
+                payload={"task_id": item.id, "profile_id": item.profile_id, "status": item.status},
+                observed_at=item.created_at,
+            )
+        except ValueError:
+            pass
         return item
 
     def update_collection_task(self, task_id: str, status: str, error_code: str = "", error_message: str = ""):
@@ -3665,6 +3999,9 @@ class GrowthStorage:
             "acquisition_sources",
             "campaign_runs",
             "evidence_artifacts",
+            "source_observations",
+            "content_observations",
+            "comment_observations",
             "candidate_observations",
             "lead_decisions",
             "public_reply_events",

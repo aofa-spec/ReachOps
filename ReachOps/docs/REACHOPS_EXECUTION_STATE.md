@@ -2,7 +2,7 @@
 
 - Schema: `reachops.execution_state.v1`
 - Contract: `REACHOPS_MASTER_EXECUTION_CONTRACT_V1.md`
-- Last manually reconciled: `2026-07-20`
+- Last manually reconciled: `2026-07-23`
 - Rule: verify every status against the repository before acting.
 
 ## Current project state
@@ -14,7 +14,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 | Priority | Milestone | Status | Verified evidence | Exit condition |
 |---|---|---|---|---|
 | P0 | Truthful execution semantics | `IN_REVIEW` | Draft PR #10, branch `agent/reachops-truthful-execution-p0`; rebased on `origin/main`; evidence verification blocker fixed so live mode alone cannot set `evidence_verified`; unverified live submissions are tracked as `submitted_unverified` and do not increment generic success or `execution_success`; `tests.test_truthful_execution_semantics` 7/7 passed on 2026-07-17; exact campaign baseline comparison shows 230 tests on main and PR, both with 14 failures and 1 existing live-readiness error, `new_failures=0`, `new_errors=0` | Review and merge without new Evidence regressions; preserve no-live-action boundary; external Windows/TikTok acceptance remains separate |
-| P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | P1 runtime ledger storage, runtime/lead-pipeline wiring, and scoped report/export surfacing exist on branch `codex/p4-web-runtime-smoke`: `campaign_runs`, `candidate_observations`, `evidence_artifacts`, and immutable/versioned `lead_decisions`; collection batches bind to campaign runs; lead/action/execution rows can carry `run_id`; reports expose `runtime_scope` and `runtime_traceability`; JSON/CSV/Markdown exports include campaign/run traceability; legacy migration keeps old `run_id` empty instead of fabricating run attribution; P1 focused tests passed on 2026-07-20 | Review P1 PR slice and merge without expanding LeadDecision lifecycle beyond traceability |
+| P1 | Immutable Campaign Run / Observation model | `IN_REVIEW` | P1 runtime ledger storage, runtime/lead-pipeline wiring, and scoped report/export surfacing exist on branch `codex/p4-web-runtime-smoke`: `campaign_runs`, `source_observations`, `content_observations`, `comment_observations`, `candidate_observations`, `evidence_artifacts`, and immutable/versioned `lead_decisions`; collection batches bind to campaign runs; collection task/content/comment/lead/action/execution rows can carry `run_id`; reports expose `runtime_scope` and `runtime_traceability`; JSON/CSV/Markdown exports include campaign/run traceability; legacy migration keeps old `run_id` empty instead of fabricating run attribution; P1 focused tests and full campaign regression passed on 2026-07-23 | Review P1 PR slice and merge without expanding LeadDecision lifecycle beyond traceability |
 | P2 | Windows local security, licensing, backup, device seats | `IN_PROGRESS` | Windows Credential Manager secret-storage contract exists on branch `codex/p4-web-runtime-smoke`; secret redaction now fully masks values when `visible_tail=0`, closing a local reporting edge case; `tools/reachops_windows_credential_manager_check.py` now provides a Windows-only set/read/delete validation entry that reports non-Windows as `blocked_external_validation` without leaking secret values; Windows acceptance now runs that validation and final acceptance summary/package verification require the `windows_credential_manager_validation` report before any final passed package can be accepted; license-state evaluator models active/current, revoked, expired, and 7-day grace while keeping grace out of live-submit readiness; encrypted `.reachops-backup` lightweight and full selected-evidence backup/restore contracts now cover customer password, manifest, integrity hashes, preview, wrong password, corrupted archive, interrupted restore rollback, unsafe path rejection, secret/cookie exclusions, lightweight raw-evidence exclusion, and full backup selected evidence inclusion; minimal external license refresh client contract now refreshes only license/device/version metadata over HTTPS and writes local activation status atomically without browser start, submit, or customer-data upload; focused P2 tests passed on 2026-07-20 | Run `python tools\reachops_windows_credential_manager_check.py --json` on Windows 10/11 and require `status=passed`; complete Windows Credential Manager validation on Windows |
 | P3 | Public comment-reply monitoring and lead lifecycle | `IN_PROGRESS` | Public reply replay parser, local `public_reply_events` storage, idempotent reply ingestion, qualified-lead lifecycle promotion, campaign report/export traceability, and local client UI/API surfacing now exist on branch `codex/p4-web-runtime-smoke`; local `conversion_events` storage now records manual conversion/won/lost/opt-out/revenue/currency capture with campaign/run/batch/lead/action/reply traceability and idempotency; a lead is promoted to `qualified` only when a public reply confirms need and is linked to an evidence-verified live contact, and conversion/revenue records advance the lifecycle without fabricating legacy run attribution; focused P3 tests and delivery audit passed on 2026-07-20 | Automatic platform reply detection |
 | P4 | Bilingual UI, installer, update, Windows acceptance | `IN_REVIEW` | Branch `codex/p4-web-runtime-smoke` hardens the unified Web client entry, strict live-comment activation gate, account-gate start blocking, group-count DOM evidence, Python 3.9-compatible runtime smoke cleanup, customer-visible control evidence, campaign funnel isolation fixture truthfulness, Web-to-local-API execution-chain evidence, and goal delivery boundary reporting. Runtime smoke, DOM smoke, delivery audit, goal status, and campaign regression now pass locally; group-count resolution is configurable for large ixBrowser libraries; a fresh no-submit Web start produced PLAN/START/profile-preflight evidence and correctly blocked on `profile_available=0`; final Windows package and authorized live acceptance are still incomplete. | Win10/11 installer, zh-CN/en-US UI, update flow, acceptance matrix, authorized live evidence |
@@ -22,7 +22,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 ## Next autonomous action
 
-1. Review the P1 immutable Campaign Run / Observation model slice now that storage, pipeline wiring, and report/export traceability are implemented; keep unrelated LeadDecision lifecycle expansion split unless required for traceability.
+1. Review the P1 immutable Campaign Run / Observation model slice now that storage, collection/content/comment pipeline wiring, and report/export traceability are implemented; keep unrelated LeadDecision lifecycle expansion split unless required for traceability.
 2. Review Draft PR from branch `codex/p4-web-runtime-smoke`; keep Windows/installer/live-submit validation out of scope.
 3. Continue P2 convergence only where non-external work remains; minimal external license refresh client contract is complete, and the remaining P2 exit gate is Windows Credential Manager validation on Windows.
 4. Repair the current `United States` ixBrowser account pool: fix `IXBROWSER_KERNEL_MISMATCH`, complete TikTok login for `LOGIN_REQUIRED`, and keep at least one logged-in, kernel-compatible, page-openable profile in the execution group; then rerun the no-submit client acceptance loop.
@@ -34,6 +34,41 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Real targets and activation inputs must remain local and git-ignored.
 - Windows code-signing certificate is not currently available; internal builds may show an unknown-publisher warning.
 - Natural user replies cannot be guaranteed; authorized test accounts may validate reply-linking mechanics, while natural reply rate remains a business observation.
+
+## Latest P1 Runtime observation ledger snapshot
+
+- Date: `2026-07-23`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Review and tighten Draft PR #12 runtime data-model slice without merging the old branch or entering Windows, EXE, installer, or TikTok live-submit scope.
+- PR #12 scope review:
+  - CampaignRun coverage is present through `campaign_runs`, collection-batch binding, active run context, scoped report/export traceability, and run-scoped lead/action/execution rows.
+  - Observation coverage now includes `source_observations`, `content_observations`, `comment_observations`, `candidate_observations`, `evidence_artifacts`, and `lead_decisions`.
+  - Traceability coverage includes `runtime_traceability_summary(...)`, `list_observations_for_run(...)`, report/export `runtime_scope`, and explicit campaign/run IDs.
+  - PR #12's broader `lead_decision_observations` version model is treated as LeadDecision scope expansion and remains split from this P1 Runtime ledger cleanup.
+- Code evidence:
+  - Local SQLite migrations add `source_observations`, `content_observations`, and `comment_observations` with campaign/run/batch scope and idempotency keys.
+  - `create_collection_task(...)` records source observations when a real campaign run is bound to the batch.
+  - `upsert_content(...)` records content observations for active campaign runs.
+  - `upsert_candidate(...)` records comment observations for active campaign runs, preserving distinct same-user comments in the same content/run while making duplicate identical comments idempotent.
+  - New observation methods require an existing campaign run; legacy rows with empty `run_id` are not backfilled and no fabricated `run_id` is assigned.
+  - Delivery audit P1 contract now requires the source/content/comment ledger tables and APIs.
+  - The activation grace test fixture now uses a current in-grace timestamp instead of the stale `2026-07-15T00:00:00Z`, preserving the intended P2 grace/no-live-submit assertion after July 22, 2026.
+- Tests and checks:
+  - `/usr/bin/python3 -m py_compile ReachOps/intelligence/storage.py tools/reachops_delivery_audit.py tests/test_reachops_runtime_model.py tests/test_reachops_campaign.py`: passed.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_runtime_model`: passed, 9 tests. Coverage includes campaign isolation, run isolation, source/content/comment/candidate observation traceability, evidence traceability, migration compatibility, no-run legacy handling, and idempotency.
+  - `/usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `/usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`.
+  - `/usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`.
+  - `/usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`.
+  - `/usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, `status=not_ready`, `final_delivery_ready=false`; blockers are `local_mvp`, `windows_final_artifacts`, and `external_authorized_execution`.
+  - `/usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 254 tests; log `/tmp/reachops-p1-runtime-ledger-campaign.log`.
+  - Main comparison: `origin/main` at `887f706` ran 230 tests with 14 failures and 1 error; current branch ran 254 tests with 0 failures and 0 errors; comparison artifact `/tmp/reachops-p1-runtime-ledger-baseline-comparison.json` reports `new_failures=[]`, `new_errors=[]`.
+  - `/usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`.
+  - `git diff --check`: passed.
+- Safety:
+  - No Windows build, EXE, installer, update manifest, ixBrowser profile launch, or TikTok live-submit was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - Final delivery remains blocked by Windows final artifacts, Windows Credential Manager validation on Windows, current account readiness, and authorized live evidence.
 
 ## Latest P3 manual conversion and revenue capture snapshot
 
