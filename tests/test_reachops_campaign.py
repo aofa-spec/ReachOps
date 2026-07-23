@@ -1260,6 +1260,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         passed_summary["status"] = "passed"
         passed_summary["delivery_audit"]["resolved_external_validation"] = 1
         passed_summary["delivery_audit"]["effective_pending_external_validation"] = 0
+        passed_summary["installer_smoke"]["json_path"] = "reports/reachops_acceptance/current/installer_smoke_payload.json"
         passed_summary["goal_status"] = {
             "status": "passed",
             "summary": {"stages_passed": 5, "stages_pending_external_validation": 0, "stages_failed": 0},
@@ -1631,6 +1632,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
             report_dir = Path(tmp) / "acceptance"
             report_dir.mkdir()
             summary_path = report_dir / "acceptance_summary.json"
+            (report_dir / "installer_smoke_payload.json").write_text(
+                json.dumps(passed_summary["installer_smoke"]),
+                encoding="utf-8",
+            )
             (report_dir / "repository_cleanliness_payload.json").write_text(
                 json.dumps(passed_summary["repository_cleanliness"]),
                 encoding="utf-8",
@@ -1638,6 +1643,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             path_checked_summary = json.loads(json.dumps(passed_summary))
+            path_checked_summary["installer_smoke"]["json_path"] = "installer_smoke_payload.json"
             path_checked_summary["ui_startup"]["json_path"] = "ui_startup_payload.json"
             path_checked_summary["repository_cleanliness"]["json_path"] = "repository_cleanliness_payload.json"
             path_checked_summary["windows_package_preflight"]["json_path"] = "windows_package_preflight.json"
@@ -1692,6 +1698,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
             )
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
+            self.assertTrue(path_checked["installer_smoke"]["json_exists"])
+            self.assertTrue(path_checked["installer_smoke"]["json_loaded"])
             self.assertTrue(path_checked["ui_startup"]["json_exists"])
             self.assertTrue(path_checked["ui_startup"]["json_loaded"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_exists"])
@@ -1710,6 +1718,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["final_acceptance_gate"]["json_loaded"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
             self.assertTrue(path_checked["authorization_handoff"]["json_loaded"])
+            self.assertTrue(path_checked["installer_smoke"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["ui_startup"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_inside_summary_dir"])
@@ -1720,6 +1729,35 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(path_checked["final_acceptance_gate"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["authorization_handoff"]["json_inside_summary_dir"])
 
+            (report_dir / "installer_smoke_payload.json").unlink()
+            missing_installer_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_installer_file["passed"])
+            self.assertIn("installer_smoke_json_missing", missing_installer_file["failures"])
+
+            (report_dir / "installer_smoke_payload.json").write_text("", encoding="utf-8")
+            empty_installer_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_installer_file["passed"])
+            self.assertIn("installer_smoke_json_empty", empty_installer_file["failures"])
+
+            (report_dir / "installer_smoke_payload.json").write_text("{", encoding="utf-8")
+            invalid_installer_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_installer_file["passed"])
+            self.assertIn("installer_smoke_json_invalid", invalid_installer_file["failures"])
+
+            mismatched_installer_payload = json.loads(json.dumps(path_checked_summary["installer_smoke"]))
+            mismatched_installer_payload["data_in_install_dir"] = True
+            (report_dir / "installer_smoke_payload.json").write_text(
+                json.dumps(mismatched_installer_payload),
+                encoding="utf-8",
+            )
+            mismatched_installer_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_installer_file["passed"])
+            self.assertIn("installer_smoke_json_mismatch:data_in_install_dir", mismatched_installer_file["failures"])
+
+            (report_dir / "installer_smoke_payload.json").write_text(
+                json.dumps(path_checked_summary["installer_smoke"]),
+                encoding="utf-8",
+            )
             (report_dir / "ui_startup_payload.json").unlink()
             missing_ui_startup_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_ui_startup_file["passed"])
@@ -2025,6 +2063,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
 
             outside_dir = Path(tmp) / "outside"
             outside_dir.mkdir()
+            (outside_dir / "installer_smoke_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "ui_startup_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
@@ -2034,6 +2073,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             (outside_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (outside_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             outside_summary = json.loads(json.dumps(path_checked_summary))
+            outside_summary["installer_smoke"]["json_path"] = "../outside/installer_smoke_payload.json"
             outside_summary["ui_startup"]["json_path"] = "../outside/ui_startup_payload.json"
             outside_summary["repository_cleanliness"]["json_path"] = str(outside_dir / "repository_cleanliness_payload.json")
             outside_summary["windows_package_preflight"]["json_path"] = "../outside/windows_package_preflight.json"
@@ -2044,6 +2084,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             outside_summary["authorization_handoff"]["json_path"] = "../outside/authorization_handoff_payload.json"
             outside_report_file = verify_reachops_acceptance_summary(outside_summary, summary_path=summary_path)
             self.assertFalse(outside_report_file["passed"])
+            self.assertIn("installer_smoke_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("ui_startup_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("repository_cleanliness_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("windows_package_preflight_json_outside_summary_dir", outside_report_file["failures"])
@@ -2052,6 +2093,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("live_acceptance_status_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("final_acceptance_gate_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("authorization_handoff_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertFalse(outside_report_file["installer_smoke"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["ui_startup"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["repository_cleanliness"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["windows_package_preflight"]["json_inside_summary_dir"])
@@ -2844,6 +2886,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         "no_submit": summary["ui_startup"]["no_submit"],
                     }
                 ),
+                encoding="utf-8",
+            )
+            (report_dir / "installer_smoke_payload.json").write_text(
+                json.dumps(summary["installer_smoke"]),
                 encoding="utf-8",
             )
             (report_dir / "live_acceptance_status_payload.json").write_text(

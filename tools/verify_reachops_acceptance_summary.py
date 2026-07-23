@@ -177,6 +177,41 @@ def verify_summary(
     )
     if not installer_ok:
         failures.append("installer_smoke_failed")
+    installer_smoke_json = report_path_status(
+        summary_path,
+        str(installer_smoke.get("json_path") or ""),
+    )
+    installer_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not str(installer_smoke.get("json_path") or "").strip():
+        failures.append("installer_smoke_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(installer_smoke.get("json_path") or "").strip():
+        if not installer_smoke_json["exists"]:
+            failures.append("installer_smoke_json_missing")
+        elif int(installer_smoke_json.get("size") or 0) <= 0:
+            failures.append("installer_smoke_json_empty")
+        elif not bool(installer_smoke_json.get("inside_summary_dir")):
+            failures.append("installer_smoke_json_outside_summary_dir")
+        else:
+            installer_payload_detail = load_report_payload(installer_smoke_json)
+            installer_payload = installer_payload_detail.get("payload") or {}
+            if not bool(installer_payload_detail.get("loaded")):
+                failures.append("installer_smoke_json_invalid")
+            else:
+                expected_installer_fields = {
+                    "status": installer_status,
+                    "exe_exists": bool(installer_smoke.get("exe_exists")),
+                    "data_in_install_dir": bool(installer_smoke.get("data_in_install_dir")),
+                    "hash_ok": bool(installer_smoke.get("hash_ok")),
+                    "optional": installer_optional,
+                }
+                for key, expected in expected_installer_fields.items():
+                    actual = installer_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"installer_smoke_json_mismatch:{key}")
 
     ui_startup_json = report_path_status(
         summary_path,
@@ -1007,6 +1042,12 @@ def verify_summary(
             "exe_exists": bool(installer_smoke.get("exe_exists")),
             "data_in_install_dir": bool(installer_smoke.get("data_in_install_dir")),
             "hash_ok": bool(installer_smoke.get("hash_ok")),
+            "json_path": str(installer_smoke.get("json_path") or ""),
+            "json_exists": bool(installer_smoke_json.get("exists")),
+            "json_size": int(installer_smoke_json.get("size") or 0),
+            "json_inside_summary_dir": bool(installer_smoke_json.get("inside_summary_dir")),
+            "json_loaded": bool(installer_payload_detail.get("loaded")),
+            "json_error": str(installer_payload_detail.get("error") or ""),
         },
         "ui_startup": {
             "status": str(ui_startup.get("status") or ""),
