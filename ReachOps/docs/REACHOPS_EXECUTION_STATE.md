@@ -2475,6 +2475,50 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 ## Non-blocking engineering work available
 
+## Latest account diagnostics customer-action snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Continue the customer-visible Web client path on selected group `获客分组测试` and make the account diagnostics page actionable without adding a new architecture or executing account changes.
+- Client-visible issue found:
+  - The `账号诊断` page showed `PAGE_OPEN_FAILED`, `PROFILE_PREFLIGHT_TIMEOUT`, profile IDs, and report paths, but did not show what the customer should do next on that same page.
+  - This made the account blocker visible but not operationally actionable for the customer.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now renders `账号诊断` with columns `类型`, `错误/状态`, `账号/路径`, and `客户动作`.
+  - `accountRepairCustomerAction` maps profile errors to customer-safe manual remediation guidance and respects existing `recommended_action` values when present.
+  - `报告中心` still keeps its path/report table compact by slicing diagnostics rows back to the original report columns.
+  - `tests/test_reachops_client_acceptance_status.py` verifies the customer-action column and the PAGE_OPEN_FAILED, PROFILE_PREFLIGHT_TIMEOUT, and LOGIN_REQUIRED remediation text.
+- Client/browser verification:
+  - Local client restarted and shown at `http://127.0.0.1:8769/`.
+  - `/api/settings` remained `selected_profile_group="获客分组测试"`, `no_browser_started=true`, `no_submit=true`.
+  - In-app browser on `账号诊断` showed headers `类型`, `错误/状态`, `账号/路径`, `客户动作`.
+  - Visible rows included `PAGE_OPEN_FAILED` for profiles `13685,13737,13742,13791` with customer action to manually open profiles in ixBrowser and verify proxy/TikTok page-open stability.
+  - Visible rows included `PROFILE_PREFLIGHT_TIMEOUT` for profiles `13708,13712,16292,18430,18444` with customer action to verify browser kernel, proxy, and TikTok login stability before re-preflight.
+  - The page check found no `python tools/...` command text and no live-submit wording in the diagnostics view.
+- Tests and checks:
+  - `python3 -m py_compile tools/reachops_web_ui.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 131 tests; log `/tmp/reachops-account-diagnostics-action-scope-client.log`.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed; log `/tmp/reachops-account-diagnostics-action-scope-truthful.log`.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed, 259 tests; log `/tmp/reachops-account-diagnostics-action-scope-campaign.log`.
+  - `python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-account-diagnostics-action-scope-dom.json`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed; output `/tmp/reachops-account-diagnostics-action-scope-operator-pressure.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed; output `/tmp/reachops-account-diagnostics-action-scope-delivery-audit.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed, `status=ready_for_external_validation`; output `/tmp/reachops-account-diagnostics-action-scope-goal-status.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-account-diagnostics-action-scope-cleanliness.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-account-diagnostics-action-scope-diff-check.log`.
+- Expected blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `final_delivery_ready=false`, failed check `acceptance:ready`; output `/tmp/reachops-account-diagnostics-action-scope-client-delivery.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-account-diagnostics-action-scope-goal-delivery.json`.
+- Classification:
+  - Current execution blocker remains account/page-open readiness in `获客分组测试`, not a new runtime data-model issue.
+  - This slice fixed a customer-visible client usability defect: the diagnostics page now explains the exact safe manual account actions needed before rerun.
+- Safety:
+  - No Windows build, EXE, installer, Windows VM action, new ixBrowser profile launch, TikTok live-submit, follow, DM, or comment was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or local acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Next action:
+  - Keep selected group `获客分组测试`. Manually repair or remove failing profiles until at least one profile is logged in, kernel-compatible, proxy/page-open stable, and able to open TikTok; then rerun the same customer-visible no-submit flow toward five consecutive passing client runs.
+
 - LeadDecision versioning and unified scoring contract.
 - Windows Credential Manager validation on Windows.
 - Encrypted backup format and restore tests.

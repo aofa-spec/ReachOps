@@ -4712,31 +4712,47 @@ def html_page() -> bytes:
       const a = data.acceptance || {{}};
       const mvp = data.mvp_acceptance || {{}};
       const rows = [
-        ['本地验收输入模板', '可下载', {{text:'reachops_acceptance_inputs.example.ps1', href:'/api/acceptance-input-template'}}],
+        ['本地验收输入模板', '可下载', {{text:'reachops_acceptance_inputs.example.ps1', href:'/api/acceptance-input-template'}}, '按模板准备本地验收输入。'],
       ];
-      if (mvp.path) rows.push(['产品经理 MVP 验收摘要', mvp.mvp_local_ready ? '本地MVP通过' : (mvp.status || '未生成'), {{text:mvp.path, href:'/api/download?path=' + encodeURIComponent(mvp.path)}}]);
+      if (mvp.path) rows.push(['产品经理 MVP 验收摘要', mvp.mvp_local_ready ? '本地MVP通过' : (mvp.status || '未生成'), {{text:mvp.path, href:'/api/download?path=' + encodeURIComponent(mvp.path)}}, '查看摘要中的未通过项后继续复测。']);
       Object.entries(a.profile_error_summary || {{}}).forEach(([error, item]) => {{
         rows.push([
           '账号修复',
           error,
-          `count=${{item.count || 0}} profiles=${{(item.profile_ids || []).slice(0, 16).join(',') || '-'}}`
+          `count=${{item.count || 0}} profiles=${{(item.profile_ids || []).slice(0, 16).join(',') || '-'}}`,
+          accountRepairCustomerAction(error, item)
         ]);
       }});
       const report = data.remediation_report || {{}};
-      if (report.csv_path) rows.push(['修复清单 CSV', '已生成', {{text: report.csv_path, href: '/api/download?path=' + encodeURIComponent(report.csv_path)}}]);
-      if (report.json_path) rows.push(['修复清单 JSON', '已生成', {{text: report.json_path, href: '/api/download?path=' + encodeURIComponent(report.json_path)}}]);
-      if (report.markdown_path) rows.push(['验收报告 Markdown', '已生成', {{text: report.markdown_path, href: '/api/download?path=' + encodeURIComponent(report.markdown_path)}}]);
-      if (report.account_plan_markdown_path) rows.push(['账号修复计划 Markdown', '已生成', {{text: report.account_plan_markdown_path, href: '/api/download?path=' + encodeURIComponent(report.account_plan_markdown_path)}}]);
-      if (report.account_plan_json_path) rows.push(['账号修复计划 JSON', '已生成', {{text: report.account_plan_json_path, href: '/api/download?path=' + encodeURIComponent(report.account_plan_json_path)}}]);
-      if (report.guide_path) rows.push(['客户验收指南', '已生成', {{text: report.guide_path, href: '/api/download?path=' + encodeURIComponent(report.guide_path)}}]);
-      if (report.index_path) rows.push(['验收包首页 HTML', '已生成', {{text: report.index_path, href: '/api/download?path=' + encodeURIComponent(report.index_path)}}]);
-      if (report.manifest_path) rows.push(['验收包 Manifest', '已生成', {{text: report.manifest_path, href: '/api/download?path=' + encodeURIComponent(report.manifest_path)}}]);
-      if (report.latest_account_plan_markdown_path) rows.push(['最新账号修复计划', '已生成', {{text: report.latest_account_plan_markdown_path, href: '/api/download?path=' + encodeURIComponent(report.latest_account_plan_markdown_path)}}]);
-      if (report.latest_account_plan_json_path) rows.push(['最新账号修复计划 JSON', '已生成', {{text: report.latest_account_plan_json_path, href: '/api/download?path=' + encodeURIComponent(report.latest_account_plan_json_path)}}]);
-      if (report.latest_guide_path) rows.push(['最新验收指南', '已生成', {{text: report.latest_guide_path, href: '/api/download?path=' + encodeURIComponent(report.latest_guide_path)}}]);
-      if (report.latest_index_path) rows.push(['最新验收包首页', '已生成', {{text: report.latest_index_path, href: '/api/download?path=' + encodeURIComponent(report.latest_index_path)}}]);
-      if (report.latest_manifest_path) rows.push(['最新 Manifest', '已生成', {{text: report.latest_manifest_path, href: '/api/download?path=' + encodeURIComponent(report.latest_manifest_path)}}]);
+      if (report.csv_path) rows.push(['修复清单 CSV', '已生成', {{text: report.csv_path, href: '/api/download?path=' + encodeURIComponent(report.csv_path)}}, '下载后逐项核对账号。']);
+      if (report.json_path) rows.push(['修复清单 JSON', '已生成', {{text: report.json_path, href: '/api/download?path=' + encodeURIComponent(report.json_path)}}, '用于机器可读复核，不会自动执行账号操作。']);
+      if (report.markdown_path) rows.push(['验收报告 Markdown', '已生成', {{text: report.markdown_path, href: '/api/download?path=' + encodeURIComponent(report.markdown_path)}}, '查看本轮验收结论和剩余阻断。']);
+      if (report.account_plan_markdown_path) rows.push(['账号修复计划 Markdown', '已生成', {{text: report.account_plan_markdown_path, href: '/api/download?path=' + encodeURIComponent(report.account_plan_markdown_path)}}, '按计划人工修复账号后再重新预检。']);
+      if (report.account_plan_json_path) rows.push(['账号修复计划 JSON', '已生成', {{text: report.account_plan_json_path, href: '/api/download?path=' + encodeURIComponent(report.account_plan_json_path)}}, '用于复核账号修复计划，不会自动启动浏览器。']);
+      if (report.guide_path) rows.push(['客户验收指南', '已生成', {{text: report.guide_path, href: '/api/download?path=' + encodeURIComponent(report.guide_path)}}, '按指南执行本地客户验收。']);
+      if (report.index_path) rows.push(['验收包首页 HTML', '已生成', {{text: report.index_path, href: '/api/download?path=' + encodeURIComponent(report.index_path)}}, '打开首页查看完整验收包。']);
+      if (report.manifest_path) rows.push(['验收包 Manifest', '已生成', {{text: report.manifest_path, href: '/api/download?path=' + encodeURIComponent(report.manifest_path)}}, '核对验收包清单。']);
+      if (report.latest_account_plan_markdown_path) rows.push(['最新账号修复计划', '已生成', {{text: report.latest_account_plan_markdown_path, href: '/api/download?path=' + encodeURIComponent(report.latest_account_plan_markdown_path)}}, '优先按最新计划处理当前分组。']);
+      if (report.latest_account_plan_json_path) rows.push(['最新账号修复计划 JSON', '已生成', {{text: report.latest_account_plan_json_path, href: '/api/download?path=' + encodeURIComponent(report.latest_account_plan_json_path)}}, '用于确认最新账号修复范围。']);
+      if (report.latest_guide_path) rows.push(['最新验收指南', '已生成', {{text: report.latest_guide_path, href: '/api/download?path=' + encodeURIComponent(report.latest_guide_path)}}, '按最新指南继续客户验收。']);
+      if (report.latest_index_path) rows.push(['最新验收包首页', '已生成', {{text: report.latest_index_path, href: '/api/download?path=' + encodeURIComponent(report.latest_index_path)}}, '打开最新首页复核全部证据。']);
+      if (report.latest_manifest_path) rows.push(['最新 Manifest', '已生成', {{text: report.latest_manifest_path, href: '/api/download?path=' + encodeURIComponent(report.latest_manifest_path)}}, '核对最新验收包文件清单。']);
       return rows;
+    }}
+    function accountRepairCustomerAction(error, item) {{
+      const explicit = String((item && item.recommended_action) || '').trim();
+      if (explicit) return explicit;
+      const actions = {{
+        PAGE_OPEN_FAILED: '在 ixBrowser 手动打开这些 Profile，确认代理可用且 TikTok 页面能打开；不能打开的先移出执行分组。',
+        PROFILE_PREFLIGHT_TIMEOUT: '在 ixBrowser 手动打开这些 Profile，确认浏览器内核、代理和 TikTok 登录态稳定；超时账号先移出执行分组后再重新预检。',
+        LOGIN_REQUIRED: '手动完成 TikTok 登录后重新预检；无法登录的账号先移出执行分组。',
+        IXBROWSER_KERNEL_MISMATCH: '按 ixBrowser 提示更新或切换内核版本；无法修复的账号先移出执行分组。',
+        CAPTCHA_DETECTED: '人工处理验证码或风控；未解除前不要继续执行该账号。',
+        PROXY_FAILED: '修复或更换代理后重新预检；代理不可用的账号先移出执行分组。',
+        IXBROWSER_NETWORK_ERROR: '确认 ixBrowser Local API 和本机网络稳定后重试。',
+        IXBROWSER_SERVER_BUSY: '等待 ixBrowser 恢复空闲后重新预检。'
+      }};
+      return actions[String(error || '')] || '按账号修复计划处理后，勾选“已修复账号，允许重新预检”。';
     }}
     function statusChip(label, tone='') {{
       return {{html:`<span class="chip ${{esc(tone)}}">${{esc(label)}}</span>`}};
@@ -5212,8 +5228,8 @@ def html_page() -> bytes:
 	      if (twoPhase.markdown_path) goalRows.push(['两阶段验收矩阵 Markdown', twoPhase.status || '-', {{text: twoPhase.markdown_path, href: safeDownload(twoPhase.markdown_path)}}]);
 	      if (winPreflight.preflight_report_path) goalRows.push(['Windows打包前置门禁', winPreflight.status || '-', {{text: winPreflight.preflight_report_path, href: safeDownload(winPreflight.preflight_report_path)}}]);
 	      if (mvp.path) goalRows.push(['MVP验收摘要', mvp.status || '-', {{text: mvp.path, href: safeDownload(mvp.path)}}]);
-      if (rows.length) table('healthTable', ['类型', '错误/状态', '账号/路径'], rows);
-      if (goalRows.length || rows.length) table('reportTable', ['类型', '状态', '路径'], [...goalRows, ...rows]);
+      if (rows.length) table('healthTable', ['类型', '错误/状态', '账号/路径', '客户动作'], rows);
+      if (goalRows.length || rows.length) table('reportTable', ['类型', '状态', '路径'], [...goalRows, ...rows.map(row => row.slice(0, 3))]);
     }}
     async function refreshLogs() {{
       let data = {{}};
