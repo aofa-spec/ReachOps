@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import uuid
+import hashlib
 from contextlib import contextmanager
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -32,10 +33,17 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
+LEAD_DECISION_SCHEMA_VERSION = "reachops.lead_decision.v1"
+LEAD_DECISION_RULE_VERSION = "reachops.rule_based_lead_decision.v1"
+IXBROWSER_GROUP_MAPPING_SCHEMA_VERSION = "reachops.ixbrowser_group_mapping.v1"
+IXBROWSER_GROUP_ACTION_TYPES = {"comment_reply", "follow_review", "dm_review"}
+
+
 class GrowthStorage:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.active_collection_batch_id = ""
+        self.active_campaign_run_id = ""
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self.init_schema()
 
@@ -44,6 +52,12 @@ class GrowthStorage:
 
     def _active_batch_id(self) -> str:
         return str(getattr(self, "active_collection_batch_id", "") or "")
+
+    def set_active_campaign_run(self, run_id: str = ""):
+        self.active_campaign_run_id = str(run_id or "").strip()
+
+    def _active_run_id(self) -> str:
+        return str(getattr(self, "active_campaign_run_id", "") or "")
 
     @contextmanager
     def connect(self):
@@ -206,6 +220,10 @@ class GrowthStorage:
                     reason TEXT DEFAULT '',
                     status TEXT DEFAULT 'pending_review',
                     risk_level TEXT DEFAULT 'medium',
+                    comment_language TEXT DEFAULT 'unknown',
+                    group_default_language TEXT DEFAULT 'unknown',
+                    language_gate_status TEXT DEFAULT 'requires_operator_confirmation',
+                    language_gate_note TEXT DEFAULT '',
                     batch_id TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
                     UNIQUE(lead_id, action_type)
@@ -213,6 +231,7 @@ class GrowthStorage:
                 CREATE TABLE IF NOT EXISTS collection_batches (
                     id TEXT PRIMARY KEY,
                     campaign_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
                     status TEXT DEFAULT 'running',
                     total_sources INTEGER DEFAULT 0,
                     processed_sources INTEGER DEFAULT 0,
@@ -223,6 +242,118 @@ class GrowthStorage:
                     completed_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS campaign_runs (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    status TEXT DEFAULT 'running',
+                    collector_version TEXT DEFAULT '',
+                    classifier_version TEXT DEFAULT '',
+                    config_json TEXT DEFAULT '{}',
+                    idempotency_key TEXT DEFAULT '',
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS evidence_artifacts (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    local_path TEXT DEFAULT '',
+                    sha256 TEXT DEFAULT '',
+                    sidecar_json TEXT DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, entity_type, entity_id, local_path, sha256)
+                );
+                CREATE TABLE IF NOT EXISTS source_observations (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    source_id TEXT DEFAULT '',
+                    source_type TEXT DEFAULT '',
+                    source_value TEXT DEFAULT '',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, source_id, observation_key)
+                );
+                CREATE TABLE IF NOT EXISTS content_observations (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    content_id TEXT DEFAULT '',
+                    source_observation_id TEXT DEFAULT '',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, content_id, observation_key)
+                );
+                CREATE TABLE IF NOT EXISTS comment_observations (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    content_id TEXT DEFAULT '',
+                    candidate_user_id TEXT DEFAULT '',
+                    username TEXT DEFAULT '',
+                    comment_text TEXT DEFAULT '',
+                    observation_key TEXT NOT NULL,
+                    payload_json TEXT DEFAULT '{}',
+                    observed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, content_id, username, comment_text, observation_key)
+                );
+                CREATE TABLE IF NOT EXISTS candidate_observations (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    batch_id TEXT DEFAULT '',
+                    candidate_user_id TEXT NOT NULL,
+                    content_id TEXT DEFAULT '',
+                    source_id TEXT DEFAULT '',
+                    evidence_id TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    collector_version TEXT DEFAULT '',
+                    classifier_version TEXT DEFAULT '',
+                    feature_snapshot_json TEXT DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, candidate_user_id, content_id, evidence_id)
+                );
+                CREATE TABLE IF NOT EXISTS lead_decisions (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    candidate_observation_id TEXT NOT NULL,
+                    decision_version INTEGER DEFAULT 1,
+                    decision_schema_version TEXT DEFAULT 'reachops.lead_decision.v1',
+                    decision_source TEXT DEFAULT 'rule_based',
+                    intent_type TEXT DEFAULT '',
+                    intent_score INTEGER DEFAULT 0,
+                    product_fit_score INTEGER DEFAULT 0,
+                    contactability_score INTEGER DEFAULT 0,
+                    source_quality_score INTEGER DEFAULT 0,
+                    total_lead_score INTEGER DEFAULT 0,
+                    confidence INTEGER DEFAULT 0,
+                    reason_codes_json TEXT DEFAULT '[]',
+                    feature_snapshot_json TEXT DEFAULT '{}',
+                    classifier_provider_version TEXT DEFAULT '',
+                    rule_version TEXT DEFAULT 'reachops.rule_based_lead_decision.v1',
+                    human_review_status TEXT DEFAULT 'pending',
+                    base_decision_key TEXT DEFAULT '',
+                    decision_key TEXT DEFAULT '',
+                    decision_fingerprint TEXT DEFAULT '',
+                    decision_json TEXT DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(campaign_id, run_id, candidate_observation_id, classifier_provider_version, decision_key)
                 );
                 CREATE TABLE IF NOT EXISTS collection_tasks (
                     id TEXT PRIMARY KEY,
@@ -248,6 +379,22 @@ class GrowthStorage:
                     last_error_code TEXT DEFAULT '',
                     last_error_message TEXT DEFAULT '',
                     last_used_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS ixbrowser_group_mappings (
+                    mapping_key TEXT PRIMARY KEY,
+                    group_id TEXT DEFAULT '',
+                    group_name TEXT NOT NULL,
+                    target_country TEXT DEFAULT '',
+                    timezone TEXT DEFAULT '',
+                    default_reply_language TEXT DEFAULT 'unknown',
+                    allowed_action_types_json TEXT DEFAULT '["comment_reply"]',
+                    per_day_limit INTEGER DEFAULT 0,
+                    per_hour_limit INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'needs_operator_review',
+                    source TEXT DEFAULT 'operator',
+                    schema_version TEXT DEFAULT 'reachops.ixbrowser_group_mapping.v1',
+                    created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS scheduled_scans (
@@ -406,6 +553,50 @@ class GrowthStorage:
                     completed_at TEXT,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS public_reply_events (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    lead_id TEXT NOT NULL,
+                    action_id TEXT DEFAULT '',
+                    execution_id TEXT DEFAULT '',
+                    target_username TEXT DEFAULT '',
+                    reply_author_username TEXT DEFAULT '',
+                    reply_text TEXT NOT NULL,
+                    reply_language TEXT DEFAULT 'unknown',
+                    source_url TEXT DEFAULT '',
+                    replied_at TEXT DEFAULT '',
+                    intent_confirmed INTEGER DEFAULT 0,
+                    qualification_state TEXT DEFAULT 'reply_received',
+                    confidence INTEGER DEFAULT 0,
+                    reason_codes_json TEXT DEFAULT '[]',
+                    verified_contact INTEGER DEFAULT 0,
+                    evidence_id TEXT DEFAULT '',
+                    evidence_json TEXT DEFAULT '{}',
+                    classifier_version TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(lead_id, action_id, reply_text, replied_at)
+                );
+                CREATE TABLE IF NOT EXISTS conversion_events (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT DEFAULT '',
+                    run_id TEXT DEFAULT '',
+                    batch_id TEXT DEFAULT '',
+                    lead_id TEXT NOT NULL,
+                    action_id TEXT DEFAULT '',
+                    public_reply_event_id TEXT DEFAULT '',
+                    conversion_type TEXT NOT NULL,
+                    conversion_state TEXT NOT NULL,
+                    amount_cents INTEGER DEFAULT 0,
+                    currency TEXT DEFAULT '',
+                    source TEXT DEFAULT 'manual_operator',
+                    notes TEXT DEFAULT '',
+                    idempotency_key TEXT DEFAULT '',
+                    recorded_at TEXT NOT NULL,
+                    created_by TEXT DEFAULT 'operator',
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS checkpoints (
                     id TEXT PRIMARY KEY,
                     source_id TEXT NOT NULL,
@@ -444,6 +635,7 @@ class GrowthStorage:
                     "source_path": "TEXT DEFAULT ''",
                     "raw_meta": "TEXT DEFAULT '{}'",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -457,6 +649,7 @@ class GrowthStorage:
                     "source_path": "TEXT DEFAULT ''",
                     "raw_meta": "TEXT DEFAULT '{}'",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -478,6 +671,11 @@ class GrowthStorage:
                     "last_error_message": "TEXT DEFAULT ''",
                     "last_executed_at": "TEXT",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
+                    "comment_language": "TEXT DEFAULT 'unknown'",
+                    "group_default_language": "TEXT DEFAULT 'unknown'",
+                    "language_gate_status": "TEXT DEFAULT 'requires_operator_confirmation'",
+                    "language_gate_note": "TEXT DEFAULT ''",
                 },
             )
             self._ensure_columns(
@@ -491,10 +689,11 @@ class GrowthStorage:
                     "repeat_seen_count": "INTEGER DEFAULT 1",
                     "raw_meta": "TEXT DEFAULT '{}'",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                 },
             )
-            self._ensure_columns(conn, "shop_contents", {"batch_id": "TEXT DEFAULT ''"})
-            self._ensure_columns(conn, "collection_batches", {"campaign_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "shop_contents", {"batch_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "collection_batches", {"campaign_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
             self._ensure_columns(
                 conn,
                 "operation_leads",
@@ -502,7 +701,63 @@ class GrowthStorage:
                     "lifecycle_stage": "TEXT DEFAULT 'new'",
                     "source_path": "TEXT DEFAULT ''",
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                     "updated_at": "TEXT DEFAULT ''",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "lead_decisions",
+                {
+                    "decision_version": "INTEGER DEFAULT 1",
+                    "decision_schema_version": "TEXT DEFAULT 'reachops.lead_decision.v1'",
+                    "decision_source": "TEXT DEFAULT 'rule_based'",
+                    "rule_version": "TEXT DEFAULT 'reachops.rule_based_lead_decision.v1'",
+                    "base_decision_key": "TEXT DEFAULT ''",
+                    "decision_fingerprint": "TEXT DEFAULT ''",
+                    "decision_json": "TEXT DEFAULT '{}'",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "public_reply_events",
+                {
+                    "campaign_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
+                    "batch_id": "TEXT DEFAULT ''",
+                    "action_id": "TEXT DEFAULT ''",
+                    "execution_id": "TEXT DEFAULT ''",
+                    "target_username": "TEXT DEFAULT ''",
+                    "reply_author_username": "TEXT DEFAULT ''",
+                    "reply_language": "TEXT DEFAULT 'unknown'",
+                    "source_url": "TEXT DEFAULT ''",
+                    "replied_at": "TEXT DEFAULT ''",
+                    "intent_confirmed": "INTEGER DEFAULT 0",
+                    "qualification_state": "TEXT DEFAULT 'reply_received'",
+                    "confidence": "INTEGER DEFAULT 0",
+                    "reason_codes_json": "TEXT DEFAULT '[]'",
+                    "verified_contact": "INTEGER DEFAULT 0",
+                    "evidence_id": "TEXT DEFAULT ''",
+                    "evidence_json": "TEXT DEFAULT '{}'",
+                    "classifier_version": "TEXT DEFAULT ''",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "conversion_events",
+                {
+                    "campaign_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
+                    "batch_id": "TEXT DEFAULT ''",
+                    "action_id": "TEXT DEFAULT ''",
+                    "public_reply_event_id": "TEXT DEFAULT ''",
+                    "amount_cents": "INTEGER DEFAULT 0",
+                    "currency": "TEXT DEFAULT ''",
+                    "source": "TEXT DEFAULT 'manual_operator'",
+                    "notes": "TEXT DEFAULT ''",
+                    "idempotency_key": "TEXT DEFAULT ''",
+                    "recorded_at": "TEXT DEFAULT ''",
+                    "created_by": "TEXT DEFAULT 'operator'",
                 },
             )
             self._ensure_columns(
@@ -510,6 +765,7 @@ class GrowthStorage:
                 "outreach_executions",
                 {
                     "batch_id": "TEXT DEFAULT ''",
+                    "run_id": "TEXT DEFAULT ''",
                     "risk_gate_json": "TEXT DEFAULT ''",
                     "execution_mode": "TEXT DEFAULT 'simulated'",
                     "submission_state": "TEXT DEFAULT 'not_attempted'",
@@ -517,7 +773,7 @@ class GrowthStorage:
                     "evidence_verified": "INTEGER DEFAULT 0",
                 },
             )
-            self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''"})
+            self._ensure_columns(conn, "growth_errors", {"batch_id": "TEXT DEFAULT ''", "run_id": "TEXT DEFAULT ''"})
             self._seed_default_action_templates(conn)
 
     def _ensure_columns(self, conn, table_name: str, columns: Dict[str, str]):
@@ -582,15 +838,855 @@ class GrowthStorage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def _ixbrowser_group_mapping_key(self, group_id: str = "", group_name: str = "") -> str:
+        gid = str(group_id or "").strip()
+        name = str(group_name or "").strip()
+        if gid:
+            return f"id:{gid}"
+        if name:
+            return f"name:{name.lower()}"
+        raise ValueError("group_id or group_name is required")
+
+    def _normalize_group_allowed_actions(self, values: Any) -> List[str]:
+        if isinstance(values, str):
+            raw_items = [item.strip() for item in values.split(",")]
+        elif isinstance(values, list):
+            raw_items = [str(item or "").strip() for item in values]
+        else:
+            raw_items = []
+        result = []
+        for item in raw_items:
+            if item in IXBROWSER_GROUP_ACTION_TYPES and item not in result:
+                result.append(item)
+        return result or ["comment_reply"]
+
+    def _group_mapping_status(self, target_country: str, timezone: str, default_reply_language: str) -> str:
+        if str(target_country or "").strip() and str(timezone or "").strip() and str(default_reply_language or "").strip() not in {"", "unknown", "auto"}:
+            return "ready"
+        return "needs_operator_review"
+
+    def _decode_group_mapping(self, row: Any) -> Dict[str, Any]:
+        item = dict(row)
+        try:
+            actions = json.loads(item.get("allowed_action_types_json") or "[]")
+        except Exception:
+            actions = []
+        item["allowed_action_types"] = self._normalize_group_allowed_actions(actions)
+        item["schema_version"] = item.get("schema_version") or IXBROWSER_GROUP_MAPPING_SCHEMA_VERSION
+        item["requires_operator_review"] = str(item.get("status") or "") != "ready"
+        item["no_submit"] = True
+        return item
+
+    def ensure_ixbrowser_group_mappings(self, groups: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized_groups = []
+        for group in groups or []:
+            if not isinstance(group, dict):
+                continue
+            group_id = str(group.get("group_id") or group.get("id") or "").strip()
+            group_name = str(group.get("group_name") or group.get("name") or "").strip()
+            if not group_id and not group_name:
+                continue
+            normalized_groups.append((self._ixbrowser_group_mapping_key(group_id, group_name), group_id, group_name))
+        if not normalized_groups:
+            return []
+        now = utc_now_iso()
+        with self.connect() as conn:
+            for mapping_key, group_id, group_name in normalized_groups:
+                conn.execute(
+                    """
+                    INSERT INTO ixbrowser_group_mappings
+                    (mapping_key, group_id, group_name, target_country, timezone, default_reply_language,
+                     allowed_action_types_json, per_day_limit, per_hour_limit, status, source, schema_version,
+                     created_at, updated_at)
+                    VALUES (?, ?, ?, '', '', 'unknown', ?, 0, 0, 'needs_operator_review',
+                            'ixbrowser_group_refresh', ?, ?, ?)
+                    ON CONFLICT(mapping_key) DO UPDATE SET
+                        group_id=excluded.group_id,
+                        group_name=excluded.group_name,
+                        updated_at=ixbrowser_group_mappings.updated_at
+                    """,
+                    (
+                        mapping_key,
+                        group_id,
+                        group_name,
+                        json.dumps(["comment_reply"], ensure_ascii=False),
+                        IXBROWSER_GROUP_MAPPING_SCHEMA_VERSION,
+                        now,
+                        now,
+                    ),
+                )
+            placeholders = ",".join(["?"] * len(normalized_groups))
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM ixbrowser_group_mappings
+                WHERE mapping_key IN ({placeholders})
+                ORDER BY group_name ASC, group_id ASC
+                """,
+                tuple(item[0] for item in normalized_groups),
+            ).fetchall()
+        return [self._decode_group_mapping(row) for row in rows]
+
+    def upsert_ixbrowser_group_mapping(
+        self,
+        *,
+        group_id: str = "",
+        group_name: str = "",
+        target_country: str = "",
+        timezone: str = "",
+        default_reply_language: str = "",
+        allowed_action_types: Any = None,
+        per_day_limit: int = 0,
+        per_hour_limit: int = 0,
+        source: str = "operator",
+    ) -> Dict[str, Any]:
+        name = str(group_name or "").strip()
+        gid = str(group_id or "").strip()
+        key = self._ixbrowser_group_mapping_key(gid, name)
+        actions = self._normalize_group_allowed_actions(allowed_action_types)
+        language = str(default_reply_language or "").strip() or "unknown"
+        country = str(target_country or "").strip()
+        tz = str(timezone or "").strip()
+        status = self._group_mapping_status(country, tz, language)
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ixbrowser_group_mappings
+                (mapping_key, group_id, group_name, target_country, timezone, default_reply_language,
+                 allowed_action_types_json, per_day_limit, per_hour_limit, status, source, schema_version,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(mapping_key) DO UPDATE SET
+                    group_id=excluded.group_id,
+                    group_name=excluded.group_name,
+                    target_country=excluded.target_country,
+                    timezone=excluded.timezone,
+                    default_reply_language=excluded.default_reply_language,
+                    allowed_action_types_json=excluded.allowed_action_types_json,
+                    per_day_limit=excluded.per_day_limit,
+                    per_hour_limit=excluded.per_hour_limit,
+                    status=excluded.status,
+                    source=excluded.source,
+                    schema_version=excluded.schema_version,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    key,
+                    gid,
+                    name,
+                    country,
+                    tz,
+                    language,
+                    json.dumps(actions, ensure_ascii=False),
+                    max(0, int(per_day_limit or 0)),
+                    max(0, int(per_hour_limit or 0)),
+                    status,
+                    str(source or "operator"),
+                    IXBROWSER_GROUP_MAPPING_SCHEMA_VERSION,
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM ixbrowser_group_mappings WHERE mapping_key=?", (key,)).fetchone()
+        return self._decode_group_mapping(row)
+
+    def list_ixbrowser_group_mappings(self) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM ixbrowser_group_mappings
+                ORDER BY group_name ASC, group_id ASC
+                """
+            ).fetchall()
+        return [self._decode_group_mapping(row) for row in rows]
+
+    def get_ixbrowser_group_mapping(self, group_id: str = "", group_name: str = "") -> Dict[str, Any]:
+        key = self._ixbrowser_group_mapping_key(group_id, group_name)
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM ixbrowser_group_mappings WHERE mapping_key=?", (key,)).fetchone()
+        return self._decode_group_mapping(row) if row else {}
+
     def log_error(self, error_code: str, message: str = "", source_id: str = "", creator_id: str = "", profile_id: str = ""):
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO growth_errors (id, error_code, message, source_id, creator_id, profile_id, batch_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO growth_errors (id, error_code, message, source_id, creator_id, profile_id, batch_id, run_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (new_id("err"), error_code, message, source_id, creator_id, profile_id, self._active_batch_id(), utc_now_iso()),
+                (
+                    new_id("err"),
+                    error_code,
+                    message,
+                    source_id,
+                    creator_id,
+                    profile_id,
+                    self._active_batch_id(),
+                    self._active_run_id(),
+                    utc_now_iso(),
+                ),
             )
+
+    def _require_campaign_run(self, campaign_id: str = "", run_id: str = "") -> tuple[str, str]:
+        campaign = str(campaign_id or "").strip()
+        run = str(run_id or self._active_run_id()).strip()
+        if not campaign:
+            raise ValueError("campaign_id is required")
+        if not run:
+            raise ValueError("run_id is required; legacy rows must not be assigned a fabricated run_id")
+        return campaign, run
+
+    def _campaign_run_row(self, conn, campaign_id: str = "", run_id: str = "", batch_id: str = "") -> Optional[Dict[str, Any]]:
+        run = str(run_id or self._active_run_id()).strip()
+        batch = str(batch_id or self._active_batch_id()).strip()
+        campaign = str(campaign_id or "").strip()
+        row = None
+        if run:
+            row = conn.execute("SELECT * FROM campaign_runs WHERE id=?", (run,)).fetchone()
+        elif batch:
+            row = conn.execute("SELECT * FROM campaign_runs WHERE batch_id=?", (batch,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        if campaign and str(item.get("campaign_id") or "") != campaign:
+            return None
+        return item
+
+    def _require_campaign_run_row(self, conn, campaign_id: str = "", run_id: str = "", batch_id: str = "") -> Dict[str, Any]:
+        row = self._campaign_run_row(conn, campaign_id=campaign_id, run_id=run_id, batch_id=batch_id)
+        if not row:
+            raise ValueError("campaign run is required; legacy rows must not be assigned a fabricated run_id")
+        return row
+
+    def create_campaign_run(
+        self,
+        campaign_id: str,
+        batch_id: str = "",
+        collector_version: str = "",
+        classifier_version: str = "",
+        config: Optional[Dict[str, Any]] = None,
+        idempotency_key: str = "",
+        status: str = "running",
+    ) -> Dict[str, Any]:
+        campaign = str(campaign_id or "").strip()
+        if not campaign:
+            raise ValueError("campaign_id is required")
+        key = str(idempotency_key or "").strip()
+        now = utc_now_iso()
+        config_json = json.dumps(config or {}, ensure_ascii=False)
+        with self.connect() as conn:
+            if key:
+                row = conn.execute(
+                    "SELECT * FROM campaign_runs WHERE campaign_id=? AND idempotency_key=?",
+                    (campaign, key),
+                ).fetchone()
+                if row:
+                    item = dict(row)
+                    self.set_active_campaign_run(item["id"])
+                    if item.get("batch_id"):
+                        self.set_active_collection_batch(item["batch_id"])
+                    return item
+            run_id = new_id("run")
+            conn.execute(
+                """
+                INSERT INTO campaign_runs
+                (id, campaign_id, batch_id, status, collector_version, classifier_version, config_json,
+                 idempotency_key, started_at, completed_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    campaign,
+                    str(batch_id or ""),
+                    str(status or "running"),
+                    str(collector_version or ""),
+                    str(classifier_version or ""),
+                    config_json,
+                    key,
+                    now,
+                    None,
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM campaign_runs WHERE id=?", (run_id,)).fetchone()
+        item = dict(row) if row else {}
+        self.set_active_campaign_run(run_id)
+        if batch_id:
+            self.set_active_collection_batch(batch_id)
+        self.log_event("campaign_run_created", run_id, {"campaign_id": campaign, "batch_id": batch_id, "idempotency_key": key})
+        return item
+
+    def update_campaign_run(self, run_id: str, status: str, completed: bool = False) -> None:
+        run = str(run_id or "").strip()
+        if not run:
+            return
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE campaign_runs
+                SET status=?, completed_at=COALESCE(?, completed_at), updated_at=?
+                WHERE id=?
+                """,
+                (str(status or "running"), now if completed else None, now, run),
+            )
+
+    def record_evidence_artifact(
+        self,
+        *,
+        campaign_id: str,
+        run_id: str = "",
+        entity_type: str,
+        entity_id: str,
+        local_path: str = "",
+        sha256: str = "",
+        sidecar: Optional[Dict[str, Any]] = None,
+        batch_id: str = "",
+    ) -> Dict[str, Any]:
+        campaign, run = self._require_campaign_run(campaign_id, run_id)
+        entity_type = str(entity_type or "").strip()
+        entity_id = str(entity_id or "").strip()
+        if not entity_type or not entity_id:
+            raise ValueError("entity_type and entity_id are required")
+        local_path = str(local_path or "")
+        sha256 = str(sha256 or "")
+        now = utc_now_iso()
+        sidecar_json = json.dumps(sidecar or {}, ensure_ascii=False, sort_keys=True)
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM evidence_artifacts
+                WHERE campaign_id=? AND run_id=? AND entity_type=? AND entity_id=? AND local_path=? AND sha256=?
+                """,
+                (campaign, run, entity_type, entity_id, local_path, sha256),
+            ).fetchone()
+            if row:
+                return dict(row)
+            evidence_id = new_id("ev")
+            conn.execute(
+                """
+                INSERT INTO evidence_artifacts
+                (id, campaign_id, run_id, batch_id, entity_type, entity_id, local_path, sha256, sidecar_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (evidence_id, campaign, run, str(batch_id or self._active_batch_id()), entity_type, entity_id, local_path, sha256, sidecar_json, now),
+            )
+            row = conn.execute("SELECT * FROM evidence_artifacts WHERE id=?", (evidence_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_source_observation(
+        self,
+        *,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+        source_id: str,
+        source_type: str = "",
+        source_value: str = "",
+        observation_key: str = "source_observed",
+        payload: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+    ) -> Dict[str, Any]:
+        source = str(source_id or "").strip()
+        key = str(observation_key or "source_observed").strip()
+        if not source:
+            raise ValueError("source_id is required")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._require_campaign_run_row(conn, campaign_id=campaign_id, run_id=run_id, batch_id=batch_id)
+            row = conn.execute(
+                """
+                SELECT * FROM source_observations
+                WHERE campaign_id=? AND run_id=? AND source_id=? AND observation_key=?
+                """,
+                (run["campaign_id"], run["id"], source, key),
+            ).fetchone()
+            if row:
+                return dict(row)
+            observation_id = new_id("sobs")
+            conn.execute(
+                """
+                INSERT INTO source_observations
+                (id, campaign_id, run_id, batch_id, source_id, source_type, source_value,
+                 observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    run["campaign_id"],
+                    run["id"],
+                    str(batch_id or run.get("batch_id") or self._active_batch_id()),
+                    source,
+                    str(source_type or ""),
+                    str(source_value or ""),
+                    key,
+                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                    str(observed_at or now),
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM source_observations WHERE id=?", (observation_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_content_observation(
+        self,
+        *,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+        content_id: str,
+        source_observation_id: str = "",
+        observation_key: str = "content_observed",
+        payload: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+    ) -> Dict[str, Any]:
+        content = str(content_id or "").strip()
+        key = str(observation_key or "content_observed").strip()
+        if not content:
+            raise ValueError("content_id is required")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._require_campaign_run_row(conn, campaign_id=campaign_id, run_id=run_id, batch_id=batch_id)
+            row = conn.execute(
+                """
+                SELECT * FROM content_observations
+                WHERE campaign_id=? AND run_id=? AND content_id=? AND observation_key=?
+                """,
+                (run["campaign_id"], run["id"], content, key),
+            ).fetchone()
+            if row:
+                return dict(row)
+            observation_id = new_id("cobs")
+            conn.execute(
+                """
+                INSERT INTO content_observations
+                (id, campaign_id, run_id, batch_id, content_id, source_observation_id,
+                 observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    run["campaign_id"],
+                    run["id"],
+                    str(batch_id or run.get("batch_id") or self._active_batch_id()),
+                    content,
+                    str(source_observation_id or ""),
+                    key,
+                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                    str(observed_at or now),
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM content_observations WHERE id=?", (observation_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_comment_observation(
+        self,
+        *,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+        content_id: str,
+        candidate_user_id: str = "",
+        username: str = "",
+        comment_text: str = "",
+        observation_key: str = "comment_observed",
+        payload: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+    ) -> Dict[str, Any]:
+        content = str(content_id or "").strip()
+        user = str(username or "").strip()
+        text = str(comment_text or "")
+        key = str(observation_key or "comment_observed").strip()
+        if not content or not user:
+            raise ValueError("content_id and username are required")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            run = self._require_campaign_run_row(conn, campaign_id=campaign_id, run_id=run_id, batch_id=batch_id)
+            row = conn.execute(
+                """
+                SELECT * FROM comment_observations
+                WHERE campaign_id=? AND run_id=? AND content_id=? AND username=? AND comment_text=? AND observation_key=?
+                """,
+                (run["campaign_id"], run["id"], content, user, text, key),
+            ).fetchone()
+            if row:
+                return dict(row)
+            observation_id = new_id("mobs")
+            conn.execute(
+                """
+                INSERT INTO comment_observations
+                (id, campaign_id, run_id, batch_id, content_id, candidate_user_id, username,
+                 comment_text, observation_key, payload_json, observed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    run["campaign_id"],
+                    run["id"],
+                    str(batch_id or run.get("batch_id") or self._active_batch_id()),
+                    content,
+                    str(candidate_user_id or ""),
+                    user,
+                    text,
+                    key,
+                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                    str(observed_at or now),
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM comment_observations WHERE id=?", (observation_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_candidate_observation(
+        self,
+        *,
+        campaign_id: str,
+        run_id: str = "",
+        candidate_user_id: str,
+        content_id: str = "",
+        source_id: str = "",
+        evidence_id: str,
+        collector_version: str = "",
+        classifier_version: str = "",
+        feature_snapshot: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+        batch_id: str = "",
+    ) -> Dict[str, Any]:
+        campaign, run = self._require_campaign_run(campaign_id, run_id)
+        candidate = str(candidate_user_id or "").strip()
+        evidence = str(evidence_id or "").strip()
+        if not candidate or not evidence:
+            raise ValueError("candidate_user_id and evidence_id are required")
+        observed = str(observed_at or utc_now_iso())
+        snapshot_json = json.dumps(feature_snapshot or {}, ensure_ascii=False, sort_keys=True)
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM candidate_observations
+                WHERE campaign_id=? AND run_id=? AND candidate_user_id=? AND content_id=? AND evidence_id=?
+                """,
+                (campaign, run, candidate, str(content_id or ""), evidence),
+            ).fetchone()
+            if row:
+                return dict(row)
+            observation_id = new_id("obs")
+            conn.execute(
+                """
+                INSERT INTO candidate_observations
+                (id, campaign_id, run_id, batch_id, candidate_user_id, content_id, source_id, evidence_id,
+                 observed_at, collector_version, classifier_version, feature_snapshot_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    campaign,
+                    run,
+                    str(batch_id or self._active_batch_id()),
+                    candidate,
+                    str(content_id or ""),
+                    str(source_id or ""),
+                    evidence,
+                    observed,
+                    str(collector_version or ""),
+                    str(classifier_version or ""),
+                    snapshot_json,
+                    utc_now_iso(),
+                ),
+            )
+            row = conn.execute("SELECT * FROM candidate_observations WHERE id=?", (observation_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def record_lead_decision(
+        self,
+        *,
+        campaign_id: str,
+        run_id: str = "",
+        candidate_observation_id: str,
+        intent_type: str = "",
+        intent_score: int = 0,
+        product_fit_score: int = 0,
+        contactability_score: int = 0,
+        source_quality_score: int = 0,
+        total_lead_score: int = 0,
+        confidence: int = 0,
+        reason_codes: Optional[List[str]] = None,
+        feature_snapshot: Optional[Dict[str, Any]] = None,
+        classifier_provider_version: str = "",
+        human_review_status: str = "pending",
+        decision_key: str = "",
+    ) -> Dict[str, Any]:
+        campaign, run = self._require_campaign_run(campaign_id, run_id)
+        observation = str(candidate_observation_id or "").strip()
+        if not observation:
+            raise ValueError("candidate_observation_id is required")
+        provider = str(classifier_provider_version or "").strip()
+        key = str(decision_key or "").strip()
+        reasons = [str(item) for item in reason_codes or [] if str(item or "").strip()]
+        snapshot = feature_snapshot or {}
+        if not isinstance(snapshot, dict):
+            snapshot = {"value": snapshot}
+        payload = {
+            "schema_version": LEAD_DECISION_SCHEMA_VERSION,
+            "campaign_id": campaign,
+            "run_id": run,
+            "candidate_observation_id": observation,
+            "intent_type": str(intent_type or ""),
+            "intent_score": int(intent_score or 0),
+            "product_fit_score": int(product_fit_score or 0),
+            "contactability_score": int(contactability_score or 0),
+            "source_quality_score": int(source_quality_score or 0),
+            "total_lead_score": int(total_lead_score or 0),
+            "confidence": int(confidence or 0),
+            "reason_codes": reasons,
+            "feature_snapshot": snapshot,
+            "classifier_provider_version": provider,
+            "rule_version": LEAD_DECISION_RULE_VERSION,
+            "human_review_status": str(human_review_status or "pending"),
+            "base_decision_key": key,
+            "local_data_only": True,
+        }
+        fingerprint = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM lead_decisions
+                WHERE campaign_id=? AND run_id=? AND candidate_observation_id=? AND decision_fingerprint=?
+                """,
+                (campaign, run, observation, fingerprint),
+            ).fetchone()
+            if row:
+                return dict(row)
+            legacy_row = conn.execute(
+                """
+                SELECT * FROM lead_decisions
+                WHERE campaign_id=? AND run_id=? AND candidate_observation_id=?
+                  AND classifier_provider_version=? AND decision_key=? AND COALESCE(decision_fingerprint, '')=''
+                """,
+                (campaign, run, observation, provider, key),
+            ).fetchone()
+            if legacy_row:
+                try:
+                    legacy_reasons = json.loads(legacy_row["reason_codes_json"] or "[]")
+                except Exception:
+                    legacy_reasons = []
+                try:
+                    legacy_snapshot = json.loads(legacy_row["feature_snapshot_json"] or "{}")
+                except Exception:
+                    legacy_snapshot = {}
+                if {
+                    "intent_type": str(legacy_row["intent_type"] or ""),
+                    "intent_score": int(legacy_row["intent_score"] or 0),
+                    "product_fit_score": int(legacy_row["product_fit_score"] or 0),
+                    "contactability_score": int(legacy_row["contactability_score"] or 0),
+                    "source_quality_score": int(legacy_row["source_quality_score"] or 0),
+                    "total_lead_score": int(legacy_row["total_lead_score"] or 0),
+                    "confidence": int(legacy_row["confidence"] or 0),
+                    "reason_codes": legacy_reasons if isinstance(legacy_reasons, list) else [],
+                    "feature_snapshot": legacy_snapshot if isinstance(legacy_snapshot, dict) else {},
+                    "classifier_provider_version": str(legacy_row["classifier_provider_version"] or ""),
+                    "human_review_status": str(legacy_row["human_review_status"] or ""),
+                } == {
+                    "intent_type": payload["intent_type"],
+                    "intent_score": payload["intent_score"],
+                    "product_fit_score": payload["product_fit_score"],
+                    "contactability_score": payload["contactability_score"],
+                    "source_quality_score": payload["source_quality_score"],
+                    "total_lead_score": payload["total_lead_score"],
+                    "confidence": payload["confidence"],
+                    "reason_codes": payload["reason_codes"],
+                    "feature_snapshot": payload["feature_snapshot"],
+                    "classifier_provider_version": payload["classifier_provider_version"],
+                    "human_review_status": payload["human_review_status"],
+                }:
+                    return dict(legacy_row)
+            version_row = conn.execute(
+                """
+                SELECT COALESCE(MAX(decision_version), 0) AS latest_version
+                FROM lead_decisions
+                WHERE campaign_id=? AND run_id=? AND candidate_observation_id=?
+                  AND classifier_provider_version=?
+                  AND (
+                    COALESCE(base_decision_key, '')=?
+                    OR (COALESCE(base_decision_key, '')='' AND decision_key=?)
+                  )
+                """,
+                (campaign, run, observation, provider, key, key),
+            ).fetchone()
+            decision_version = int((version_row["latest_version"] if version_row else 0) or 0) + 1
+            stored_key = key if decision_version <= 1 else f"{key}#v{decision_version}"
+            payload["decision_version"] = decision_version
+            payload["decision_key"] = stored_key
+            decision_id = new_id("ld")
+            conn.execute(
+                """
+                INSERT INTO lead_decisions
+                (id, campaign_id, run_id, candidate_observation_id, decision_version,
+                 decision_schema_version, decision_source, intent_type, intent_score,
+                 product_fit_score, contactability_score, source_quality_score, total_lead_score,
+                 confidence, reason_codes_json, feature_snapshot_json, classifier_provider_version,
+                 rule_version, human_review_status, base_decision_key, decision_key,
+                 decision_fingerprint, decision_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    decision_id,
+                    campaign,
+                    run,
+                    observation,
+                    decision_version,
+                    LEAD_DECISION_SCHEMA_VERSION,
+                    "rule_based",
+                    payload["intent_type"],
+                    payload["intent_score"],
+                    payload["product_fit_score"],
+                    payload["contactability_score"],
+                    payload["source_quality_score"],
+                    payload["total_lead_score"],
+                    payload["confidence"],
+                    json.dumps(reasons, ensure_ascii=False),
+                    json.dumps(snapshot, ensure_ascii=False, sort_keys=True),
+                    provider,
+                    LEAD_DECISION_RULE_VERSION,
+                    payload["human_review_status"],
+                    key,
+                    stored_key,
+                    fingerprint,
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    utc_now_iso(),
+                ),
+            )
+            row = conn.execute("SELECT * FROM lead_decisions WHERE id=?", (decision_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def runtime_traceability_summary(self, campaign_id: str = "", run_id: str = "") -> Dict[str, Any]:
+        campaign = str(campaign_id or "").strip()
+        run = str(run_id or "").strip()
+        filters = []
+        args: list[Any] = []
+        if campaign:
+            filters.append("campaign_id=?")
+            args.append(campaign)
+        if run:
+            filters.append("run_id=?")
+            args.append(run)
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            counts: Dict[str, int] = {}
+            run_filters = []
+            run_args: list[Any] = []
+            if campaign:
+                run_filters.append("campaign_id=?")
+                run_args.append(campaign)
+            if run:
+                run_filters.append("id=?")
+                run_args.append(run)
+            run_where = "WHERE " + " AND ".join(run_filters) if run_filters else ""
+            row = conn.execute(f"SELECT COUNT(*) AS count FROM campaign_runs {run_where}", tuple(run_args)).fetchone()
+            counts["campaign_runs"] = int((row["count"] if row else 0) or 0)
+            for table in [
+                "evidence_artifacts",
+                "source_observations",
+                "content_observations",
+                "comment_observations",
+                "candidate_observations",
+                "lead_decisions",
+            ]:
+                rows = conn.execute(f"SELECT COUNT(*) AS count FROM {table} {where}", tuple(args)).fetchone()
+                counts[table] = int((rows["count"] if rows else 0) or 0)
+            legacy_empty = {}
+            for table in ["discovered_creators", "discovered_contents", "candidate_users", "operation_leads", "action_queue", "outreach_executions", "growth_errors"]:
+                columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+                if "run_id" in columns:
+                    row = conn.execute(f"SELECT COUNT(*) AS count FROM {table} WHERE COALESCE(run_id, '')=''", ()).fetchone()
+                    legacy_empty[table] = int((row["count"] if row else 0) or 0)
+        return {
+            "campaign_id": campaign,
+            "run_id": run,
+            "counts": counts,
+            "legacy_rows_with_empty_run_id": legacy_empty,
+            "legacy_run_id_fabricated": False,
+        }
+
+    def list_observations_for_run(self, run_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        run = str(run_id or "").strip()
+        if not run:
+            raise ValueError("run_id is required")
+        with self.connect() as conn:
+            return {
+                "campaign_runs": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM campaign_runs WHERE id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "evidence_artifacts": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM evidence_artifacts WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "source_observations": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM source_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "content_observations": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM content_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "comment_observations": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM comment_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "candidate_observations": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM candidate_observations WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+                "lead_decisions": [
+                    dict(row)
+                    for row in conn.execute("SELECT * FROM lead_decisions WHERE run_id=? ORDER BY created_at ASC", (run,)).fetchall()
+                ],
+            }
+
+    def list_lead_decisions(
+        self,
+        *,
+        campaign_id: str = "",
+        run_id: str = "",
+        candidate_observation_id: str = "",
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if candidate_observation_id:
+            filters.append("candidate_observation_id=?")
+            args.append(str(candidate_observation_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM lead_decisions
+                {where}
+                ORDER BY campaign_id ASC, run_id ASC, candidate_observation_id ASC, decision_version ASC, created_at ASC
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 200)]),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            try:
+                decision = json.loads(item.get("decision_json") or "{}")
+            except Exception:
+                decision = {}
+            item["decision"] = decision if isinstance(decision, dict) else {}
+            result.append(item)
+        return result
 
     def create_campaign(
         self,
@@ -879,8 +1975,8 @@ class GrowthStorage:
                 """
                 INSERT INTO discovered_creators
                 (id, source_id, username, profile_url, followers, likes_total, vertical, country,
-                 language, source_path, raw_meta, batch_id, status, last_checked_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 language, source_path, raw_meta, batch_id, run_id, status, last_checked_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     creator.id,
@@ -895,6 +1991,7 @@ class GrowthStorage:
                     creator.source_path,
                     json.dumps(creator.raw_meta or {}, ensure_ascii=False),
                     self._active_batch_id(),
+                    self._active_run_id(),
                     creator.status,
                     creator.last_checked_at,
                     creator.created_at,
@@ -909,37 +2006,63 @@ class GrowthStorage:
                 (content.creator_id, content.video_id),
             ).fetchone()
             if row:
-                return self._row_to_content(row), False
-            conn.execute(
-                """
-                INSERT INTO discovered_contents
-                (id, creator_id, video_id, video_url, caption, views, likes, comments, shares,
-                 content_language, country, material_type, collector_level, source_path, raw_meta, batch_id,
-                 published_at, collected_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    content.id,
-                    content.creator_id,
-                    content.video_id,
-                    content.video_url,
-                    content.caption,
-                    content.views,
-                    content.likes,
-                    content.comments,
-                    content.shares,
-                    content.content_language,
-                    content.country,
-                    content.material_type,
-                    content.collector_level,
-                    content.source_path,
-                    json.dumps(content.raw_meta or {}, ensure_ascii=False),
-                    self._active_batch_id(),
-                    content.published_at,
-                    content.collected_at,
-                ),
-            )
-            return content, True
+                item = self._row_to_content(row)
+                created = False
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO discovered_contents
+                    (id, creator_id, video_id, video_url, caption, views, likes, comments, shares,
+                     content_language, country, material_type, collector_level, source_path, raw_meta, batch_id, run_id,
+                     published_at, collected_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        content.id,
+                        content.creator_id,
+                        content.video_id,
+                        content.video_url,
+                        content.caption,
+                        content.views,
+                        content.likes,
+                        content.comments,
+                        content.shares,
+                        content.content_language,
+                        content.country,
+                        content.material_type,
+                        content.collector_level,
+                        content.source_path,
+                        json.dumps(content.raw_meta or {}, ensure_ascii=False),
+                        self._active_batch_id(),
+                        self._active_run_id(),
+                        content.published_at,
+                        content.collected_at,
+                    ),
+                )
+                item = content
+                created = True
+        if self._active_run_id():
+            try:
+                self.record_content_observation(
+                    batch_id=self._active_batch_id(),
+                    content_id=item.id,
+                    observation_key="content_observed",
+                    payload={
+                        "creator_id": item.creator_id,
+                        "video_id": item.video_id,
+                        "video_url": item.video_url,
+                        "caption": item.caption,
+                        "views": item.views,
+                        "likes": item.likes,
+                        "comments": item.comments,
+                        "shares": item.shares,
+                        "source_path": item.source_path,
+                    },
+                    observed_at=item.collected_at,
+                )
+            except ValueError:
+                pass
+        return item, created
 
     def upsert_candidate(self, candidate: CandidateUser) -> tuple[CandidateUser, bool]:
         with self.connect() as conn:
@@ -967,37 +2090,64 @@ class GrowthStorage:
                     ),
                 )
                 updated = conn.execute("SELECT * FROM candidate_users WHERE id=?", (row["id"],)).fetchone()
-                return self._row_to_candidate(updated), False
-            conn.execute(
-                """
-                INSERT INTO candidate_users
-                (id, content_id, username, profile_url, comment_text, comment_likes, reply_count,
-                 qualify_score, intent_tags, comment_language, author_profile_completed, collector_level,
-                 source_path, repeat_seen_count, raw_meta, batch_id, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    candidate.id,
-                    candidate.content_id,
-                    candidate.username,
-                    candidate.profile_url,
-                    candidate.comment_text,
-                    candidate.comment_likes,
-                    candidate.reply_count,
-                    candidate.qualify_score,
-                    json.dumps(candidate.intent_tags, ensure_ascii=False),
-                    candidate.comment_language,
-                    1 if candidate.author_profile_completed else 0,
-                    candidate.collector_level,
-                    candidate.source_path,
-                    int(candidate.repeat_seen_count or 1),
-                    json.dumps(candidate.raw_meta or {}, ensure_ascii=False),
-                    self._active_batch_id(),
-                    candidate.status,
-                    candidate.created_at,
-                ),
-            )
-            return candidate, True
+                item = self._row_to_candidate(updated)
+                created = False
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO candidate_users
+                    (id, content_id, username, profile_url, comment_text, comment_likes, reply_count,
+                     qualify_score, intent_tags, comment_language, author_profile_completed, collector_level,
+                     source_path, repeat_seen_count, raw_meta, batch_id, run_id, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candidate.id,
+                        candidate.content_id,
+                        candidate.username,
+                        candidate.profile_url,
+                        candidate.comment_text,
+                        candidate.comment_likes,
+                        candidate.reply_count,
+                        candidate.qualify_score,
+                        json.dumps(candidate.intent_tags, ensure_ascii=False),
+                        candidate.comment_language,
+                        1 if candidate.author_profile_completed else 0,
+                        candidate.collector_level,
+                        candidate.source_path,
+                        int(candidate.repeat_seen_count or 1),
+                        json.dumps(candidate.raw_meta or {}, ensure_ascii=False),
+                        self._active_batch_id(),
+                        self._active_run_id(),
+                        candidate.status,
+                        candidate.created_at,
+                    ),
+                )
+                item = candidate
+                created = True
+        if self._active_run_id():
+            try:
+                self.record_comment_observation(
+                    batch_id=self._active_batch_id(),
+                    content_id=item.content_id,
+                    candidate_user_id=item.id,
+                    username=item.username,
+                    comment_text=item.comment_text,
+                    observation_key="comment_observed",
+                    payload={
+                        "profile_url": item.profile_url,
+                        "comment_likes": item.comment_likes,
+                        "reply_count": item.reply_count,
+                        "qualify_score": item.qualify_score,
+                        "intent_tags": item.intent_tags,
+                        "comment_language": item.comment_language,
+                        "source_path": item.source_path,
+                    },
+                    observed_at=item.created_at,
+                )
+            except ValueError:
+                pass
+        return item, created
 
     def update_candidate_score(self, candidate_id: str, score: int, tags: List[str], status: str):
         with self.connect() as conn:
@@ -1074,8 +2224,8 @@ class GrowthStorage:
                 """
                 INSERT INTO shop_contents
                 (id, source_id, product_id, creator_username, video_id, video_url, caption,
-                 material_type, hook_text, views, likes, comments, shares, batch_id, collected_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 material_type, hook_text, views, likes, comments, shares, batch_id, run_id, collected_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -1092,6 +2242,7 @@ class GrowthStorage:
                     int(data.get("comments") or 0),
                     int(data.get("shares") or 0),
                     self._active_batch_id(),
+                    self._active_run_id(),
                     now,
                 ),
             )
@@ -1171,8 +2322,8 @@ class GrowthStorage:
                 """
                 INSERT INTO operation_leads
                 (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage, source_path,
-                 status, batch_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, batch_id, run_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -1185,6 +2336,7 @@ class GrowthStorage:
                     source_path or "",
                     "new",
                     self._active_batch_id(),
+                    self._active_run_id(),
                     now,
                     now,
                 ),
@@ -1203,10 +2355,11 @@ class GrowthStorage:
                 """
                 INSERT INTO action_queue
                 (id, lead_id, action_type, target_username, target_url, suggested_text, reason, status, risk_level,
-                 batch_id, created_at, review_status, reviewed_by, reviewed_at, review_note, daily_quota_key,
+                 comment_language, group_default_language, language_gate_status, language_gate_note,
+                 batch_id, run_id, created_at, review_status, reviewed_by, reviewed_at, review_note, daily_quota_key,
                  execution_confirmed, confirmed_by, confirmed_at, retry_count, last_execution_id,
                  last_error_code, last_error_message, last_executed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
@@ -1218,7 +2371,12 @@ class GrowthStorage:
                     item.reason,
                     item.status,
                     item.risk_level,
+                    item.comment_language,
+                    item.group_default_language,
+                    item.language_gate_status,
+                    item.language_gate_note,
                     self._active_batch_id(),
+                    self._active_run_id(),
                     item.created_at,
                     "pending",
                     "",
@@ -1238,12 +2396,15 @@ class GrowthStorage:
             self._refresh_lead_lifecycle(conn, item.lead_id)
             return item.id, True
 
-    def list_operation_leads(self, limit: int = 200, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_operation_leads(self, limit: int = 200, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if batch_id:
             filters.append("ol.batch_id=?")
             args.append(str(batch_id))
+        if run_id:
+            filters.append("ol.run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -1261,15 +2422,22 @@ class GrowthStorage:
                        dc.views,
                        dc.comments AS video_comments,
                        COALESCE(NULLIF(ol.source_path, ''), NULLIF(cu.source_path, ''), NULLIF(dc.source_path, ''), dc.video_url, '') AS resolved_source_path,
-                       COUNT(aq.id) AS action_count,
-                       SUM(CASE WHEN aq.status='pending_review' THEN 1 ELSE 0 END) AS pending_action_count,
-                       SUM(CASE WHEN aq.status='approved' THEN 1 ELSE 0 END) AS approved_action_count,
-                       SUM(CASE WHEN aq.status='completed' THEN 1 ELSE 0 END) AS completed_action_count,
-                       SUM(CASE WHEN aq.status IN ('failed', 'retryable') THEN 1 ELSE 0 END) AS retryable_action_count
+                       COUNT(DISTINCT aq.id) AS action_count,
+                       COUNT(DISTINCT CASE WHEN aq.status='pending_review' THEN aq.id END) AS pending_action_count,
+                       COUNT(DISTINCT CASE WHEN aq.status='approved' THEN aq.id END) AS approved_action_count,
+                       COUNT(DISTINCT CASE WHEN aq.status='completed' THEN aq.id END) AS completed_action_count,
+                       COUNT(DISTINCT CASE WHEN aq.status IN ('failed', 'retryable') THEN aq.id END) AS retryable_action_count,
+                       COUNT(DISTINCT pre.id) AS public_reply_count,
+                       COUNT(DISTINCT CASE WHEN pre.qualification_state='qualified' THEN pre.id END) AS qualified_reply_count,
+                       (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id) AS conversion_event_count,
+                       (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.conversion_state IN ('converted','revenue_recorded','won')) AS converted_count,
+                       (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.conversion_state='won') AS won_count,
+                       (SELECT COALESCE(SUM(ce.amount_cents), 0) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.conversion_state IN ('revenue_recorded','won')) AS revenue_cents
                 FROM operation_leads ol
                 LEFT JOIN candidate_users cu ON cu.id = ol.candidate_user_id
                 LEFT JOIN discovered_contents dc ON dc.id = cu.content_id
                 LEFT JOIN action_queue aq ON aq.lead_id = ol.id
+                LEFT JOIN public_reply_events pre ON pre.lead_id = ol.id
                 {where}
                 GROUP BY ol.id
                 ORDER BY ol.score DESC, ol.updated_at DESC, ol.created_at DESC
@@ -1284,8 +2452,454 @@ class GrowthStorage:
                 result.append(item)
             return result
 
+    def record_public_reply_event(
+        self,
+        lead_id: str,
+        reply_text: str,
+        action_id: str = "",
+        execution_id: str = "",
+        target_username: str = "",
+        reply_author_username: str = "",
+        reply_language: str = "unknown",
+        source_url: str = "",
+        replied_at: str = "",
+        intent_confirmed: bool = False,
+        confidence: int = 0,
+        reason_codes: Optional[List[str]] = None,
+        evidence_id: str = "",
+        evidence: Optional[Dict[str, Any]] = None,
+        classifier_version: str = "",
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+    ) -> tuple[str, bool]:
+        lead = str(lead_id or "").strip()
+        text = str(reply_text or "").strip()
+        if not lead:
+            raise ValueError("lead_id is required")
+        if not text:
+            raise ValueError("reply_text is required")
+        now = utc_now_iso()
+        reasons = [str(item) for item in reason_codes or [] if str(item or "").strip()]
+        evidence_json = json.dumps(evidence or {}, ensure_ascii=False)
+        with self.connect() as conn:
+            lead_row = conn.execute("SELECT * FROM operation_leads WHERE id=?", (lead,)).fetchone()
+            if not lead_row:
+                raise ValueError("lead_id does not exist")
+            action_row = None
+            if action_id:
+                action_row = conn.execute("SELECT * FROM action_queue WHERE id=? AND lead_id=?", (str(action_id), lead)).fetchone()
+                if not action_row:
+                    raise ValueError("action_id does not belong to lead_id")
+            else:
+                action_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM action_queue
+                    WHERE lead_id=?
+                    ORDER BY last_executed_at DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (lead,),
+                ).fetchone()
+            resolved_action_id = str(action_id or (action_row["id"] if action_row else "") or "")
+            execution_row = None
+            if execution_id:
+                execution_row = conn.execute(
+                    "SELECT * FROM outreach_executions WHERE id=? AND action_id=COALESCE(NULLIF(?, ''), action_id)",
+                    (str(execution_id), resolved_action_id),
+                ).fetchone()
+                if not execution_row:
+                    raise ValueError("execution_id does not belong to action_id")
+            elif resolved_action_id:
+                execution_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM outreach_executions
+                    WHERE action_id=?
+                    ORDER BY completed_at DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (resolved_action_id,),
+                ).fetchone()
+            verified_contact = bool(
+                execution_row
+                and int(execution_row["evidence_verified"] or 0) == 1
+                and str(execution_row["verification_state"] or "") == "verified"
+                and str(execution_row["submission_state"] or "") == "verified_success"
+                and str(execution_row["status"] or "") in {"success", "completed"}
+            )
+            qualification_state = "qualified" if bool(intent_confirmed) and verified_contact else "reply_received"
+            lead_campaign = lead_row["campaign_id"] if "campaign_id" in lead_row.keys() else ""
+            lead_run = lead_row["run_id"] if "run_id" in lead_row.keys() else ""
+            lead_batch = lead_row["batch_id"] if "batch_id" in lead_row.keys() else ""
+            action_run = action_row["run_id"] if action_row and "run_id" in action_row.keys() else ""
+            action_batch = action_row["batch_id"] if action_row and "batch_id" in action_row.keys() else ""
+            action_target = action_row["target_username"] if action_row and "target_username" in action_row.keys() else ""
+            resolved_campaign = str(campaign_id or lead_campaign or "").strip()
+            resolved_run = str(run_id or action_run or lead_run or "").strip()
+            resolved_batch = str(batch_id or action_batch or lead_batch or "").strip()
+            resolved_target = str(target_username or action_target or "").strip()
+            row = conn.execute(
+                """
+                SELECT id
+                FROM public_reply_events
+                WHERE lead_id=? AND action_id=? AND reply_text=? AND replied_at=?
+                """,
+                (lead, resolved_action_id, text, str(replied_at or "")),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    UPDATE public_reply_events
+                    SET execution_id=?, target_username=?, reply_author_username=?, reply_language=?, source_url=?,
+                        intent_confirmed=?, qualification_state=?, confidence=?, reason_codes_json=?,
+                        verified_contact=?, evidence_id=?, evidence_json=?, classifier_version=?
+                    WHERE id=?
+                    """,
+                    (
+                        str(execution_id or (execution_row["id"] if execution_row else "") or ""),
+                        resolved_target,
+                        str(reply_author_username or ""),
+                        str(reply_language or "unknown"),
+                        str(source_url or ""),
+                        1 if intent_confirmed else 0,
+                        qualification_state,
+                        int(confidence or 0),
+                        json.dumps(reasons, ensure_ascii=False),
+                        1 if verified_contact else 0,
+                        str(evidence_id or ""),
+                        evidence_json,
+                        str(classifier_version or ""),
+                        row["id"],
+                    ),
+                )
+                self._refresh_lead_lifecycle(conn, lead)
+                return row["id"], False
+            event_id = new_id("pre")
+            conn.execute(
+                """
+                INSERT INTO public_reply_events
+                (id, campaign_id, run_id, batch_id, lead_id, action_id, execution_id, target_username,
+                 reply_author_username, reply_text, reply_language, source_url, replied_at, intent_confirmed,
+                 qualification_state, confidence, reason_codes_json, verified_contact, evidence_id,
+                 evidence_json, classifier_version, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    resolved_campaign,
+                    resolved_run,
+                    resolved_batch,
+                    lead,
+                    resolved_action_id,
+                    str(execution_id or (execution_row["id"] if execution_row else "") or ""),
+                    resolved_target,
+                    str(reply_author_username or ""),
+                    text,
+                    str(reply_language or "unknown"),
+                    str(source_url or ""),
+                    str(replied_at or ""),
+                    1 if intent_confirmed else 0,
+                    qualification_state,
+                    int(confidence or 0),
+                    json.dumps(reasons, ensure_ascii=False),
+                    1 if verified_contact else 0,
+                    str(evidence_id or ""),
+                    evidence_json,
+                    str(classifier_version or ""),
+                    now,
+                ),
+            )
+            self._refresh_lead_lifecycle(conn, lead)
+        self.log_event(
+            "public_reply_event_recorded",
+            lead,
+            {
+                "action_id": action_id or "",
+                "execution_id": execution_id or "",
+                "qualification_state": qualification_state,
+                "intent_confirmed": bool(intent_confirmed),
+                "verified_contact": verified_contact,
+            },
+        )
+        return event_id, True
+
+    def get_public_reply_event(self, event_id: str) -> Optional[Dict[str, Any]]:
+        event = str(event_id or "").strip()
+        if not event:
+            return None
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM public_reply_events WHERE id=?", (event,)).fetchone()
+        return dict(row) if row else None
+
+    def list_public_reply_events(
+        self,
+        lead_id: str = "",
+        limit: int = 200,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+    ) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if lead_id:
+            filters.append("lead_id=?")
+            args.append(str(lead_id))
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(str(batch_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM public_reply_events
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 200)]),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_conversion_event(
+        self,
+        lead_id: str,
+        conversion_type: str = "conversion",
+        conversion_state: str = "",
+        amount_cents: int = 0,
+        currency: str = "",
+        notes: str = "",
+        action_id: str = "",
+        public_reply_event_id: str = "",
+        idempotency_key: str = "",
+        recorded_at: str = "",
+        created_by: str = "operator",
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+    ) -> tuple[str, bool]:
+        lead = str(lead_id or "").strip()
+        if not lead:
+            raise ValueError("lead_id is required")
+        conversion_kind = str(conversion_type or "conversion").strip().lower()
+        allowed_types = {"conversion", "revenue", "won", "lost", "opt_out"}
+        if conversion_kind not in allowed_types:
+            raise ValueError("unsupported conversion_type")
+        amount = max(0, int(amount_cents or 0))
+        state = str(conversion_state or "").strip().lower()
+        if not state:
+            if conversion_kind == "revenue" or amount > 0:
+                state = "revenue_recorded"
+            elif conversion_kind == "won":
+                state = "won"
+            elif conversion_kind == "lost":
+                state = "lost"
+            elif conversion_kind == "opt_out":
+                state = "opted_out"
+            else:
+                state = "converted"
+        allowed_states = {"converted", "revenue_recorded", "won", "lost", "opted_out"}
+        if state not in allowed_states:
+            raise ValueError("unsupported conversion_state")
+        now = utc_now_iso()
+        recorded = str(recorded_at or now)
+        idem = str(idempotency_key or "").strip()
+        with self.connect() as conn:
+            lead_row = conn.execute("SELECT * FROM operation_leads WHERE id=?", (lead,)).fetchone()
+            if not lead_row:
+                raise ValueError("lead_id does not exist")
+            action_row = None
+            if action_id:
+                action_row = conn.execute("SELECT * FROM action_queue WHERE id=? AND lead_id=?", (str(action_id), lead)).fetchone()
+                if not action_row:
+                    raise ValueError("action_id does not belong to lead_id")
+            reply_row = None
+            if public_reply_event_id:
+                reply_row = conn.execute(
+                    "SELECT * FROM public_reply_events WHERE id=? AND lead_id=?",
+                    (str(public_reply_event_id), lead),
+                ).fetchone()
+                if not reply_row:
+                    raise ValueError("public_reply_event_id does not belong to lead_id")
+            if idem:
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM conversion_events
+                    WHERE lead_id=? AND conversion_type=? AND idempotency_key=?
+                    """,
+                    (lead, conversion_kind, idem),
+                ).fetchone()
+                if existing:
+                    return existing["id"], False
+            lead_campaign = lead_row["campaign_id"] if "campaign_id" in lead_row.keys() else ""
+            lead_run = lead_row["run_id"] if "run_id" in lead_row.keys() else ""
+            lead_batch = lead_row["batch_id"] if "batch_id" in lead_row.keys() else ""
+            action_run = action_row["run_id"] if action_row and "run_id" in action_row.keys() else ""
+            action_batch = action_row["batch_id"] if action_row and "batch_id" in action_row.keys() else ""
+            reply_campaign = reply_row["campaign_id"] if reply_row and "campaign_id" in reply_row.keys() else ""
+            reply_run = reply_row["run_id"] if reply_row and "run_id" in reply_row.keys() else ""
+            reply_batch = reply_row["batch_id"] if reply_row and "batch_id" in reply_row.keys() else ""
+            resolved_run = str(run_id or reply_run or action_run or lead_run or "").strip()
+            resolved_batch = str(batch_id or reply_batch or action_batch or lead_batch or "").strip()
+            batch_row = None
+            if resolved_batch:
+                batch_row = conn.execute("SELECT campaign_id, run_id FROM collection_batches WHERE id=?", (resolved_batch,)).fetchone()
+            batch_campaign = batch_row["campaign_id"] if batch_row and "campaign_id" in batch_row.keys() else ""
+            batch_run = batch_row["run_id"] if batch_row and "run_id" in batch_row.keys() else ""
+            resolved_campaign = str(campaign_id or reply_campaign or lead_campaign or batch_campaign or "").strip()
+            resolved_run = str(resolved_run or batch_run or "").strip()
+            event_id = new_id("ce")
+            conn.execute(
+                """
+                INSERT INTO conversion_events
+                (id, campaign_id, run_id, batch_id, lead_id, action_id, public_reply_event_id,
+                 conversion_type, conversion_state, amount_cents, currency, source, notes,
+                 idempotency_key, recorded_at, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    resolved_campaign,
+                    resolved_run,
+                    resolved_batch,
+                    lead,
+                    str(action_id or (action_row["id"] if action_row else "") or ""),
+                    str(public_reply_event_id or ""),
+                    conversion_kind,
+                    state,
+                    amount,
+                    str(currency or ""),
+                    "manual_operator",
+                    str(notes or ""),
+                    idem,
+                    recorded,
+                    str(created_by or "operator"),
+                    now,
+                ),
+            )
+            self._refresh_lead_lifecycle(conn, lead)
+        self.log_event(
+            "conversion_event_recorded",
+            lead,
+            {
+                "conversion_type": conversion_kind,
+                "conversion_state": state,
+                "amount_cents": amount,
+                "currency": currency or "",
+                "idempotency_key": idem,
+            },
+        )
+        return event_id, True
+
+    def get_conversion_event(self, event_id: str) -> Optional[Dict[str, Any]]:
+        event = str(event_id or "").strip()
+        if not event:
+            return None
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM conversion_events WHERE id=?", (event,)).fetchone()
+        return dict(row) if row else None
+
+    def list_conversion_events(
+        self,
+        lead_id: str = "",
+        limit: int = 200,
+        campaign_id: str = "",
+        run_id: str = "",
+        batch_id: str = "",
+    ) -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if lead_id:
+            filters.append("lead_id=?")
+            args.append(str(lead_id))
+        if campaign_id:
+            filters.append("campaign_id=?")
+            args.append(str(campaign_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(str(batch_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM conversion_events
+                {where}
+                ORDER BY recorded_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                tuple(args + [int(limit or 200)]),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def _refresh_lead_lifecycle(self, conn, lead_id: str):
         if not lead_id:
+            return
+        terminal_row = conn.execute(
+            """
+            SELECT conversion_state
+            FROM conversion_events
+            WHERE lead_id=? AND conversion_state IN ('won','lost','opted_out')
+            ORDER BY recorded_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            (lead_id,),
+        ).fetchone()
+        if terminal_row:
+            stage = str(terminal_row["conversion_state"] or "")
+            conn.execute(
+                "UPDATE operation_leads SET lifecycle_stage=?, status=?, updated_at=? WHERE id=?",
+                (stage, stage, utc_now_iso(), lead_id),
+            )
+            return
+        conversion_row = conn.execute(
+            """
+            SELECT id
+            FROM conversion_events
+            WHERE lead_id=? AND conversion_state IN ('converted','revenue_recorded')
+            LIMIT 1
+            """,
+            (lead_id,),
+        ).fetchone()
+        if conversion_row:
+            conn.execute(
+                "UPDATE operation_leads SET lifecycle_stage=?, status=?, updated_at=? WHERE id=?",
+                ("converted", "converted", utc_now_iso(), lead_id),
+            )
+            return
+        qualified_reply = conn.execute(
+            """
+            SELECT id
+            FROM public_reply_events
+            WHERE lead_id=? AND qualification_state='qualified' AND intent_confirmed=1 AND verified_contact=1
+            LIMIT 1
+            """,
+            (lead_id,),
+        ).fetchone()
+        if qualified_reply:
+            conn.execute(
+                "UPDATE operation_leads SET lifecycle_stage=?, status=?, updated_at=? WHERE id=?",
+                ("qualified", "qualified", utc_now_iso(), lead_id),
+            )
+            return
+        reply_row = conn.execute("SELECT id FROM public_reply_events WHERE lead_id=? LIMIT 1", (lead_id,)).fetchone()
+        if reply_row:
+            conn.execute(
+                "UPDATE operation_leads SET lifecycle_stage=?, status=?, updated_at=? WHERE id=?",
+                ("reply_received", "reply_received", utc_now_iso(), lead_id),
+            )
             return
         rows = conn.execute(
             "SELECT status, execution_confirmed FROM action_queue WHERE lead_id=?",
@@ -1336,8 +2950,8 @@ class GrowthStorage:
                 INSERT INTO outreach_executions
                 (id, action_id, action_type, target_username, status, execution_mode, submission_state,
                  verification_state, evidence_verified, profile_id, evidence_path, error_code, error_message,
-                 risk_gate_json, batch_id, started_at, completed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 risk_gate_json, batch_id, run_id, started_at, completed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -1355,6 +2969,7 @@ class GrowthStorage:
                     error_message,
                     risk_gate_json,
                     self._active_batch_id(),
+                    self._active_run_id(),
                     now if status in {"running", "completed", "success", "failed", "skipped", "account_switched"} else None,
                     now if status in {"completed", "success", "failed", "skipped", "account_switched"} else None,
                     now,
@@ -1381,11 +2996,15 @@ class GrowthStorage:
         config = dict(config or {})
         if campaign_id:
             config.setdefault("campaign_id", campaign_id)
+        run_id = str(config.get("run_id") or self._active_run_id()).strip()
+        if run_id:
+            config.setdefault("run_id", run_id)
         if initial_status not in {"pending", "running"}:
             initial_status = "running"
         item = CollectionBatch(
             id=new_id("gb"),
             campaign_id=campaign_id or "",
+            run_id=run_id,
             status=initial_status,
             total_sources=int(total_sources or 0),
             processed_sources=0,
@@ -1400,13 +3019,14 @@ class GrowthStorage:
             conn.execute(
                 """
                 INSERT INTO collection_batches
-                (id, campaign_id, status, total_sources, processed_sources, failed_sources, profile_group,
+                (id, campaign_id, run_id, status, total_sources, processed_sources, failed_sources, profile_group,
                  config_json, started_at, completed_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
                     campaign_id or "",
+                    run_id,
                     item.status,
                     item.total_sources,
                     item.processed_sources,
@@ -1421,6 +3041,27 @@ class GrowthStorage:
             )
         self.log_event("collection_batch_created", item.id, {"total_sources": item.total_sources, "profile_group": item.profile_group})
         return item
+
+    def bind_collection_batch_run(self, batch_id: str, run_id: str) -> None:
+        batch = str(batch_id or "").strip()
+        run = str(run_id or "").strip()
+        if not batch or not run:
+            return
+        now = utc_now_iso()
+        with self.connect() as conn:
+            row = conn.execute("SELECT config_json FROM collection_batches WHERE id=?", (batch,)).fetchone()
+            if not row:
+                return
+            try:
+                config = json.loads(row["config_json"] or "{}")
+            except Exception:
+                config = {}
+            if isinstance(config, dict):
+                config.setdefault("run_id", run)
+            conn.execute(
+                "UPDATE collection_batches SET run_id=?, config_json=?, updated_at=? WHERE id=?",
+                (run, json.dumps(config if isinstance(config, dict) else {}, ensure_ascii=False), now, batch),
+            )
 
     def update_collection_batch(self, batch_id: str, status: str, processed_delta: int = 0, failed_delta: int = 0):
         now = utc_now_iso()
@@ -1489,6 +3130,18 @@ class GrowthStorage:
                     item.updated_at,
                 ),
             )
+        try:
+            self.record_source_observation(
+                batch_id=batch_id,
+                source_id=item.source_id,
+                source_type=item.source_type,
+                source_value=item.source_value,
+                observation_key="collection_task_planned",
+                payload={"task_id": item.id, "profile_id": item.profile_id, "status": item.status},
+                observed_at=item.created_at,
+            )
+        except ValueError:
+            pass
         return item
 
     def update_collection_task(self, task_id: str, status: str, error_code: str = "", error_message: str = ""):
@@ -1551,7 +3204,7 @@ class GrowthStorage:
             score = int(row["health_score"] or 100)
             score = max(75, min(100, score + 25)) if ok else max(0, score - (5 if transient_failure else 20))
             status = "healthy"
-            if (failures >= 3 or score < 40) and error_code in hard_error_codes:
+            if failures >= 3 or (score < 40 and error_code in hard_error_codes):
                 status = "cooldown"
             elif not ok or score < 70:
                 status = "degraded"
@@ -1713,12 +3366,26 @@ class GrowthStorage:
                 )
             return self._row_to_checkpoint(conn.execute("SELECT * FROM checkpoints WHERE id=?", (cp_id,)).fetchone())
 
-    def list_contents(self, creator_id: Optional[str] = None) -> List[DiscoveredContent]:
+    def list_contents(
+        self,
+        creator_id: Optional[str] = None,
+        batch_id: str = "",
+        run_id: str = "",
+    ) -> List[DiscoveredContent]:
         query = "SELECT * FROM discovered_contents"
-        args: Iterable[Any] = ()
+        filters = []
+        args: list[Any] = []
         if creator_id:
-            query += " WHERE creator_id=?"
-            args = (creator_id,)
+            filters.append("creator_id=?")
+            args.append(creator_id)
+        if batch_id:
+            filters.append("batch_id=?")
+            args.append(str(batch_id))
+        if run_id:
+            filters.append("run_id=?")
+            args.append(str(run_id))
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
         query += " ORDER BY collected_at DESC"
         with self.connect() as conn:
             return [self._row_to_content(row) for row in conn.execute(query, tuple(args)).fetchall()]
@@ -1735,12 +3402,15 @@ class GrowthStorage:
         with self.connect() as conn:
             return [self._row_to_candidate(row) for row in conn.execute("SELECT * FROM candidate_users").fetchall()]
 
-    def list_candidates_with_content(self, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_candidates_with_content(self, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if batch_id:
             filters.append("cu.batch_id=?")
             args.append(str(batch_id))
+        if run_id:
+            filters.append("cu.run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -1760,20 +3430,30 @@ class GrowthStorage:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def list_top_topic_contents(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def list_top_topic_contents(self, limit: int = 20, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
+        filters = []
+        args: list[Any] = []
+        if batch_id:
+            filters.append("sc.batch_id=?")
+            args.append(str(batch_id))
+        if run_id:
+            filters.append("sc.run_id=?")
+            args.append(str(run_id))
+        where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT sc.*, sp.title AS product_title, sp.shop_name, sp.price,
                        COALESCE(ms.signal_score, 0) AS signal_score,
                        COALESCE(ms.signal_tags, '[]') AS signal_tags
                 FROM shop_contents sc
                 LEFT JOIN shop_products sp ON sp.product_id = sc.product_id AND sp.source_id = sc.source_id
                 LEFT JOIN material_signals ms ON ms.content_id = sc.id
+                {where}
                 ORDER BY signal_score DESC, sc.views DESC, sc.comments DESC
                 LIMIT ?
                 """,
-                (limit,),
+                tuple(args + [limit]),
             ).fetchall()
             rows = [dict(row) for row in rows]
         for row in rows:
@@ -1781,19 +3461,22 @@ class GrowthStorage:
             row["commerce_title"] = row.get("product_title") or ""
         return rows
 
-    def list_action_queue(self, limit: int = 100, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_action_queue(self, limit: int = 100, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
         filters = []
         args: list[Any] = []
         if batch_id:
             filters.append("aq.batch_id=?")
             args.append(str(batch_id))
+        if run_id:
+            filters.append("aq.run_id=?")
+            args.append(str(run_id))
         where = "WHERE " + " AND ".join(filters) if filters else ""
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
                 SELECT aq.*, ol.lead_type, ol.priority, ol.score AS lead_score, ol.reason AS lead_reason,
                        ol.source_path,
-                       cu.comment_language,
+                       COALESCE(NULLIF(aq.comment_language, ''), cu.comment_language, 'unknown') AS comment_language,
                        dc.country AS content_country
                 FROM action_queue aq
                 LEFT JOIN operation_leads ol ON ol.id = aq.lead_id
@@ -2216,12 +3899,23 @@ class GrowthStorage:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def list_outreach_executions(self, limit: int = 100, batch_id: str = "") -> List[Dict[str, Any]]:
+    def list_outreach_executions(self, limit: int = 100, batch_id: str = "", run_id: str = "") -> List[Dict[str, Any]]:
+        run_id = str(run_id or "").strip()
         with self.connect() as conn:
-            if batch_id:
+            if batch_id and run_id:
+                rows = conn.execute(
+                    "SELECT * FROM outreach_executions WHERE batch_id=? AND run_id=? ORDER BY created_at DESC LIMIT ?",
+                    (str(batch_id), run_id, limit),
+                ).fetchall()
+            elif batch_id:
                 rows = conn.execute(
                     "SELECT * FROM outreach_executions WHERE batch_id=? ORDER BY created_at DESC LIMIT ?",
                     (str(batch_id), limit),
+                ).fetchall()
+            elif run_id:
+                rows = conn.execute(
+                    "SELECT * FROM outreach_executions WHERE run_id=? ORDER BY created_at DESC LIMIT ?",
+                    (run_id, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -2664,6 +4358,15 @@ class GrowthStorage:
             "acquisition_campaigns",
             "audience_personas",
             "acquisition_sources",
+            "campaign_runs",
+            "evidence_artifacts",
+            "source_observations",
+            "content_observations",
+            "comment_observations",
+            "candidate_observations",
+            "lead_decisions",
+            "public_reply_events",
+            "conversion_events",
         }
         if table_name not in allowed:
             raise ValueError(f"unsupported table: {table_name}")

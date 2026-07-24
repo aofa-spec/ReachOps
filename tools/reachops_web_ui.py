@@ -33,13 +33,17 @@ from ReachOps.execution_plan import (
     write_execution_plan,
 )
 from ReachOps.ai_console import LocalAIConsole
+from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.run_session import (
     RUN_SESSION_STATE_RANK,
     TERMINAL_RUN_SESSION_STATES,
+    build_session_health,
     create_run_session,
     infer_run_state,
     read_run_session,
+    state_to_status,
     transition_run_session,
+    utc_now_iso,
     write_run_session,
 )
 from ReachOps.run_recovery import recover_interrupted_run_session
@@ -57,8 +61,125 @@ CONTROL_DIR = DATA_DIR / "control"
 DEFAULT_TARGET = ""
 WEB_UI_VERSION = "reachops-unified-ui-2026-07-05-v20-ai-machine-actions"
 CLIENT_DISPLAY_VERSION = "客户端 v20"
+DEFAULT_UI_LOCALE = "zh-CN"
+SUPPORTED_UI_LOCALES = ("zh-CN", "en-US")
+UI_TEXT_RESOURCES = {
+    "zh-CN": {
+        "app.title": "ReachOps 本地客户端控制台",
+        "app.client_shell": "客户端外壳",
+        "app.subtitle": "Mac / Windows 同一客户端，后端走本地真实执行链路",
+        "nav.task": "获客任务",
+        "nav.leads": "线索分析",
+        "nav.outreach": "触达执行",
+        "nav.accounts": "账号诊断",
+        "nav.reports": "报告中心",
+        "action.refresh": "刷新",
+        "action.refresh_groups": "刷新账号分组",
+        "action.start": "开始获客",
+        "action.pause": "暂停",
+        "action.resume": "继续",
+        "action.stop": "停止",
+        "status.account_gate_enabled": "账号门禁已启用",
+        "status.final_gate": "最终交付门禁",
+        "status.acceptance": "验收状态",
+        "status.no_submit": "默认 no-submit",
+        "field.target": "推广目标",
+        "field.source_type": "目标类型",
+        "field.group": "账号分组",
+        "field.current_group": "当前账号分组",
+        "field.readable_accounts": "可读取账号数",
+        "field.mode": "执行模式",
+        "field.profile_count": "账号数",
+        "field.volume": "目标数量",
+        "field.live_confirm": "真实评论确认",
+        "field.account_repair_confirm": "账号修复确认",
+        "field.comment_text": "评论内容",
+        "option.auto_detect": "自动识别",
+        "option.creator_url": "达人主页",
+        "option.content_url": "视频链接",
+        "option.live_room_url": "直播间活跃用户",
+        "option.keyword": "关键词搜索",
+        "option.topic": "话题/趋势",
+        "option.hashtag": "标签",
+        "option.product_url": "商品页",
+        "option.shop_url": "店铺页",
+        "mode.preflight": "采集 + 触达预检",
+        "mode.collect": "只采集",
+        "mode.live_comment": "授权真实评论",
+        "volume.quick": "快速",
+        "volume.standard": "标准",
+        "volume.stress": "压测",
+        "preview.mode": "后端模式",
+        "preview.range": "采集范围",
+        "preview.profiles": "账号上限",
+        "preview.timeout": "预计超时",
+        "preview.submit": "提交策略",
+        "preview.gate": "启动门禁",
+        "preview.plan": "执行计划",
+        "preview.autonomy": "自治预判",
+        "report.acceptance_inputs": "本地验收输入模板",
+        "report.final_commands": "最终复核命令",
+    },
+    "en-US": {
+        "app.title": "ReachOps Local Client Console",
+        "app.client_shell": "Client shell",
+        "app.subtitle": "One local client for Mac and Windows with the same local execution chain",
+        "nav.task": "Acquisition",
+        "nav.leads": "Leads",
+        "nav.outreach": "Outreach",
+        "nav.accounts": "Accounts",
+        "nav.reports": "Reports",
+        "action.refresh": "Refresh",
+        "action.refresh_groups": "Refresh account groups",
+        "action.start": "Start acquisition",
+        "action.pause": "Pause",
+        "action.resume": "Resume",
+        "action.stop": "Stop",
+        "status.account_gate_enabled": "Account gate enabled",
+        "status.final_gate": "Final delivery gate",
+        "status.acceptance": "Acceptance status",
+        "status.no_submit": "Default no-submit",
+        "field.target": "Promotion target",
+        "field.source_type": "Target type",
+        "field.group": "Account group",
+        "field.current_group": "Current account group",
+        "field.readable_accounts": "Readable accounts",
+        "field.mode": "Execution mode",
+        "field.profile_count": "Profile count",
+        "field.volume": "Target volume",
+        "field.live_confirm": "Live comment confirmation",
+        "field.account_repair_confirm": "Account repair confirmation",
+        "field.comment_text": "Comment text",
+        "option.auto_detect": "Auto detect",
+        "option.creator_url": "Creator profile",
+        "option.content_url": "Video URL",
+        "option.live_room_url": "Live-room active users",
+        "option.keyword": "Keyword search",
+        "option.topic": "Topic / trend",
+        "option.hashtag": "Hashtag",
+        "option.product_url": "Product page",
+        "option.shop_url": "Shop page",
+        "mode.preflight": "Collect + outreach preflight",
+        "mode.collect": "Collect only",
+        "mode.live_comment": "Authorized live comment",
+        "volume.quick": "Quick",
+        "volume.standard": "Standard",
+        "volume.stress": "Stress",
+        "preview.mode": "Backend mode",
+        "preview.range": "Collection range",
+        "preview.profiles": "Profile limit",
+        "preview.timeout": "Estimated timeout",
+        "preview.submit": "Submit policy",
+        "preview.gate": "Start gate",
+        "preview.plan": "Execution plan",
+        "preview.autonomy": "Autonomy forecast",
+        "report.acceptance_inputs": "Local acceptance input template",
+        "report.final_commands": "Final verification commands",
+    },
+}
 MAX_JSON_PAYLOAD_BYTES = 64 * 1024
 MAX_START_PROFILE_LIMIT = 20
+MINIMUM_MVP_REQUIRED_CLIENT_RUNS = 5
 STARTUP_HEALTHCHECK_SECONDS = 0.2
 LOCAL_API_HOSTS = {"127.0.0.1", "localhost", "::1"}
 ALLOWED_MODES = {"preflight", "collect", "live_comment"}
@@ -87,9 +208,10 @@ GROUP_REFRESH_LOG_SIGNATURE = ""
 IXBROWSER_API_PORT_OVERRIDE = ""
 WEB_SETTINGS_PATH = DATA_DIR / "config/reachops_web_settings.json"
 LATEST_GROUPS_PATH = DATA_DIR / "config/latest_ixbrowser_groups.json"
+GROUP_MAPPING_DB_PATH = DATA_DIR / "data/growth_intelligence/growth_intelligence.db"
 GROUP_REFRESH_TIMEOUT_SECONDS = 10.0
-GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS = 20.0
-GROUP_COUNT_RESOLVE_WORKERS = 1
+GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS = float(os.environ.get("REACHOPS_GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS") or "45")
+GROUP_COUNT_RESOLVE_WORKERS = max(1, int(os.environ.get("REACHOPS_GROUP_COUNT_RESOLVE_WORKERS") or "3"))
 ACCEPTANCE_INPUT_TEMPLATE_PATH = ROOT_DIR / "tools" / "reachops_acceptance_inputs.example.ps1"
 ACCEPTANCE_INPUT_LOCAL_PATH = ROOT_DIR / "tools" / "reachops_acceptance_inputs.local.ps1"
 MVP_ACCEPTANCE_SUMMARY_PATH = DATA_DIR / "reports/acceptance_remediation/latest_mvp_acceptance_summary.json"
@@ -115,6 +237,22 @@ def build_version_payload() -> dict:
         "display_name": "ReachOps Local Client Console",
         "loopback_host": "127.0.0.1",
         "pid": os.getpid(),
+        "no_browser_started": True,
+        "no_submit": True,
+    }
+
+
+def build_locales_payload() -> dict:
+    return {
+        "status": "ok",
+        "schema_version": "reachops.web_ui_locales.v1",
+        "default_locale": DEFAULT_UI_LOCALE,
+        "supported_locales": list(SUPPORTED_UI_LOCALES),
+        "resources": UI_TEXT_RESOURCES,
+        "resource_key_count": {
+            locale: len(resources)
+            for locale, resources in UI_TEXT_RESOURCES.items()
+        },
         "no_browser_started": True,
         "no_submit": True,
     }
@@ -177,14 +315,29 @@ def runtime_heartbeat_age_seconds(payload: dict | None = None) -> int | None:
     return max(0, int((datetime.now(timezone.utc) - heartbeat_at).total_seconds()))
 
 
+def runtime_heartbeat_matches_run_session(heartbeat: dict, session: dict) -> bool:
+    if not heartbeat or not session:
+        return False
+    session_id = str(session.get("session_id") or "")
+    heartbeat_session_id = str(heartbeat.get("session_id") or heartbeat.get("run_session_id") or "")
+    if heartbeat_session_id and session_id:
+        return heartbeat_session_id == session_id
+    heartbeat_run_session_path = str(heartbeat.get("run_session_path") or "").strip()
+    if heartbeat_run_session_path:
+        return heartbeat_run_session_path == str(run_session_path_for(session))
+    return False
+
+
 def build_runtime_heartbeat_payload() -> dict:
     heartbeat = read_runtime_heartbeat_payload()
-    age = runtime_heartbeat_age_seconds(heartbeat)
     running = run_is_active()
     run_age = int(time.time() - RUN_STARTED_AT) if RUN_STARTED_AT and running else 0
     session = read_current_run_session()
     terminal = str((session or {}).get("state") or "") in TERMINAL_RUN_SESSION_STATES
-    missing_stale = bool(running and not heartbeat and run_age > HEARTBEAT_STALE_SECONDS and not terminal)
+    heartbeat_matches_current_run = runtime_heartbeat_matches_run_session(heartbeat, session)
+    heartbeat_for_current_run = heartbeat if heartbeat_matches_current_run else {}
+    age = runtime_heartbeat_age_seconds(heartbeat_for_current_run)
+    missing_stale = bool(running and not heartbeat_for_current_run and run_age > HEARTBEAT_STALE_SECONDS and not terminal)
     stale = bool(
         running
         and not terminal
@@ -193,15 +346,25 @@ def build_runtime_heartbeat_payload() -> dict:
             or (age is not None and age > HEARTBEAT_STALE_SECONDS)
         )
     )
+    status = "healthy"
+    if missing_stale:
+        status = "missing_stale"
+    elif not heartbeat:
+        status = "missing"
+    elif not heartbeat_matches_current_run:
+        status = "mismatched"
+    elif stale:
+        status = "stale"
     return {
         "schema_version": "reachops.web_runtime_heartbeat.v1",
-        "status": "missing_stale" if missing_stale else ("missing" if not heartbeat else ("stale" if stale else "healthy")),
+        "status": status,
         "running": running,
         "stale": stale,
         "stale_after_seconds": HEARTBEAT_STALE_SECONDS,
         "age_seconds": age,
         "run_age_seconds": run_age,
         "heartbeat": heartbeat,
+        "heartbeat_matches_current_run": heartbeat_matches_current_run,
         "run_session_state": str((session or {}).get("state") or ""),
         "run_session_id": str((session or {}).get("session_id") or ""),
         "path": str(HEARTBEAT_PATH),
@@ -228,6 +391,169 @@ def summarize_mvp_acceptance(path: Path | None = None) -> dict:
         "final_delivery_ready": bool(payload.get("final_delivery_ready")),
         "failed_checks": payload.get("failed_checks") or [],
         "path": str(path) if path.is_file() else "",
+    }
+
+
+def _contains_log_marker(lines: list[str], marker: str) -> bool:
+    return any(marker in str(line or "") for line in lines)
+
+
+def classify_minimum_mvp_client_run(payload: dict, path: Path) -> dict:
+    payload, truth_corrected = correct_completed_session_with_blocked_terminal(payload)
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    tail = [str(line or "") for line in (result.get("tail") or [])]
+    contract = result.get("execution_plan_contract") if isinstance(result.get("execution_plan_contract"), dict) else {}
+    after = contract.get("after") if isinstance(contract.get("after"), dict) else {}
+    evidence_bundle = result.get("evidence_bundle") if isinstance(result.get("evidence_bundle"), dict) else {}
+    bundle_path = Path(str(evidence_bundle.get("path") or ""))
+    bundle_markdown_path = Path(str(evidence_bundle.get("markdown_path") or ""))
+    mode = str(after.get("mode") or result.get("mode") or "").strip()
+    profile_group = str(result.get("profile_group") or after.get("profile_group") or "").strip()
+    target = str(result.get("target") or after.get("target") or "").strip()
+    failed_reasons = []
+    if str(payload.get("state") or "") != "COMPLETED" or str(payload.get("status") or "") != "completed":
+        failed_reasons.append("run_session_not_completed")
+    if str(result.get("status") or "") != "completed":
+        failed_reasons.append("run_result_not_completed")
+    if mode not in {"preflight", "collect"}:
+        failed_reasons.append("not_real_no_submit_mode")
+    if not profile_group:
+        failed_reasons.append("missing_profile_group")
+    if not target:
+        failed_reasons.append("missing_target")
+    if str((result.get("execution_plan") or {}).get("source") or "") != "execution_plan":
+        failed_reasons.append("missing_execution_plan_source")
+    if not contract or contract.get("cli_args_ignored_for_plan_fields") is not True:
+        failed_reasons.append("missing_execution_plan_runtime_contract")
+    if not _contains_log_marker(tail, "RUN    web_headless_start"):
+        failed_reasons.append("missing_customer_client_runner_start")
+    if not _contains_log_marker(tail, "START  campaign"):
+        failed_reasons.append("missing_campaign_start")
+    if not _contains_log_marker(tail, "CHECK  profile_preflight"):
+        failed_reasons.append("missing_profile_preflight")
+    if not _contains_log_marker(tail, "DONE   collection"):
+        failed_reasons.append("missing_collection_done")
+    if not (
+        _contains_log_marker(tail, "DONE   action_preflight")
+        or _contains_log_marker(tail, "DONE   action_submit")
+        or isinstance(result.get("no_action_reason"), dict)
+    ):
+        failed_reasons.append("missing_no_submit_action_terminal")
+    if not evidence_bundle.get("schema_version") or not bundle_path.is_file() or not bundle_markdown_path.is_file():
+        failed_reasons.append("evidence_bundle_incomplete")
+    if "live_comment" in mode or _contains_log_marker(tail, "live_submit"):
+        failed_reasons.append("live_submit_not_allowed_for_minimum_mvp")
+    browser_started = _contains_log_marker(tail, "CHECK  profile_preflight")
+    return {
+        "path": str(path),
+        "run_session_id": str(payload.get("session_id") or path.stem),
+        "created_at": str(payload.get("created_at") or ""),
+        "updated_at": str(payload.get("updated_at") or ""),
+        "state": str(payload.get("state") or ""),
+        "status": str(payload.get("status") or ""),
+        "result_status": str(result.get("status") or ""),
+        "truth_corrected": bool(truth_corrected),
+        "truth_correction": result.get("truth_correction") if isinstance(result.get("truth_correction"), dict) else {},
+        "target_present": bool(target),
+        "target": target,
+        "profile_group": profile_group,
+        "mode": mode,
+        "evidence_bundle_path": str(bundle_path) if evidence_bundle.get("path") else "",
+        "evidence_bundle_markdown_path": str(bundle_markdown_path) if evidence_bundle.get("markdown_path") else "",
+        "passed": not failed_reasons,
+        "failed_reasons": failed_reasons,
+        "browser_started": browser_started,
+        "no_browser_started": not browser_started,
+        "no_submit": True,
+    }
+
+
+def build_minimum_mvp_gate_payload(data_dir: Path | None = None, selected_profile_group: str | None = None) -> dict:
+    data_dir = data_dir or DATA_DIR
+    runs_dir = data_dir / "runs"
+    selected_group = str(selected_profile_group or load_selected_profile_group_setting()).strip()
+    records = []
+    if runs_dir.is_dir():
+        for path in runs_dir.glob("run_*.json"):
+            payload = read_json_file(path)
+            if not payload:
+                continue
+            records.append(classify_minimum_mvp_client_run(payload, path))
+    records.sort(key=lambda row: (str(row.get("created_at") or ""), str(row.get("path") or "")), reverse=True)
+    consecutive = 0
+    reference_target = ""
+    reference_group = ""
+    reference_mode = ""
+    counted_runs = []
+    consistency_failure = ""
+    for row in records:
+        if row.get("passed") is not True:
+            break
+        row_target = str(row.get("target") or "").strip()
+        row_group = str(row.get("profile_group") or "").strip()
+        row_mode = str(row.get("mode") or "").strip()
+        if selected_group and row_group != selected_group:
+            consistency_failure = "selected_profile_group_mismatch"
+            break
+        if not reference_target:
+            reference_target = row_target
+            reference_group = row_group
+            reference_mode = row_mode
+        elif row_target != reference_target or row_group != reference_group or row_mode != reference_mode:
+            consistency_failure = "mixed_target_group_or_mode"
+            break
+        consecutive += 1
+        counted_runs.append(row)
+        if consecutive >= MINIMUM_MVP_REQUIRED_CLIENT_RUNS:
+            break
+    latest = records[0] if records else {}
+    ready = consecutive >= MINIMUM_MVP_REQUIRED_CLIENT_RUNS
+    failed_checks = []
+    if not ready:
+        failed_checks.append("minimum_mvp:five_consecutive_client_real_no_submit_runs")
+    if latest and latest.get("passed") is not True:
+        failed_checks.append("minimum_mvp:latest_client_run_not_passed")
+    if not records:
+        failed_checks.append("minimum_mvp:no_client_run_sessions")
+    if consistency_failure:
+        failed_checks.append(f"minimum_mvp:{consistency_failure}")
+    blockers = []
+    if not ready:
+        blockers.append(
+            f"最小 MVP 需要连续 {MINIMUM_MVP_REQUIRED_CLIENT_RUNS} 次客户客户端 real_no_submit 通过；当前连续通过 {consecutive} 次。"
+        )
+    if latest and latest.get("failed_reasons"):
+        blockers.append("最近客户端运行未通过：" + ", ".join(latest.get("failed_reasons") or []))
+    if consistency_failure == "selected_profile_group_mismatch":
+        blockers.append(f"最近通过运行不属于当前验收分组 `{selected_group}`，不能累计最小 MVP。")
+    elif consistency_failure == "mixed_target_group_or_mode":
+        blockers.append("连续通过运行必须使用同一推广目标、同一账号分组和同一 no-submit 模式。")
+    if selected_group:
+        blockers.append(f"当前验收分组：{selected_group}。")
+    next_actions = []
+    if not ready:
+        next_actions.append("从客户可见 Web 客户端输入同一推广目标并启动 no-submit 运行。")
+        next_actions.append("先修复账号环境，确保至少 1 个 READY profile 后再累计 5 次真实客户端通过证据。")
+    return {
+        "schema_version": "reachops.minimum_mvp_gate.v1",
+        "status": "passed" if ready else "blocked",
+        "minimum_mvp_ready": ready,
+        "required_consecutive_client_runs": MINIMUM_MVP_REQUIRED_CLIENT_RUNS,
+        "consecutive_client_real_no_submit_passes": consecutive,
+        "selected_profile_group": selected_group,
+        "reference_target": reference_target,
+        "reference_profile_group": reference_group,
+        "reference_mode": reference_mode,
+        "latest_client_run": latest,
+        "counted_client_runs": counted_runs,
+        "recent_client_runs": records[:MINIMUM_MVP_REQUIRED_CLIENT_RUNS],
+        "failed_checks": failed_checks,
+        "blockers": blockers,
+        "next_actions": next_actions,
+        "truth_boundary": "Only customer-visible client real_no_submit runs count; tests, fixtures, audits, and standalone CLI commands are auxiliary evidence only.",
+        "no_ai_token_used": True,
+        "no_browser_started": True,
+        "no_submit": True,
     }
 
 
@@ -514,12 +840,152 @@ def run_session_path_for(session: dict) -> Path:
     return DATA_DIR / "runs" / f"{session_id}.json"
 
 
-def read_current_run_session() -> dict:
+def run_result_has_blocked_terminal(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    status = str(payload.get("status") or "").strip()
+    if status in {"blocked", "launch_failed", "headless_exited_immediately", "timeout_finalized"}:
+        return True
+    tail = payload.get("tail") if isinstance(payload.get("tail"), list) else []
+    joined = "\n".join(str(line) for line in tail[-120:])
+    return "BLOCK  campaign failed" in joined or "BLOCK  campaign not_started" in joined
+
+
+def correct_run_result_with_blocked_terminal(payload: dict | None) -> tuple[dict, bool]:
+    if not isinstance(payload, dict) or not payload:
+        return {}, False
+    if str(payload.get("status") or "").strip() != "completed":
+        return payload, False
+    if not run_result_has_blocked_terminal(payload):
+        return payload, False
+    corrected = dict(payload)
+    corrected["status"] = "blocked"
+    corrected["truth_correction"] = {
+        "schema_version": "reachops.run_result_truth_correction.v1",
+        "corrected_at": utc_now_iso(),
+        "reason": "blocked_terminal_log_overrides_completed_result",
+        "no_ai_token_used": True,
+    }
+    return corrected, True
+
+
+def run_session_path_from_result(payload: dict | None) -> Path | None:
+    if not isinstance(payload, dict):
+        return None
+    run_session = payload.get("run_session") if isinstance(payload.get("run_session"), dict) else {}
+    raw = str(run_session.get("path") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.is_file() else None
+
+
+def blocked_terminal_in_session(session: dict, result_payload: dict | None = None) -> bool:
+    if run_result_has_blocked_terminal(result_payload):
+        return True
+    if run_result_has_blocked_terminal(session.get("result") if isinstance(session.get("result"), dict) else {}):
+        return True
+    checkpoint = session.get("checkpoint") if isinstance(session.get("checkpoint"), dict) else {}
+    last_stage = str(checkpoint.get("last_stage") or "")
+    return "BLOCK  campaign failed" in last_stage or "BLOCK  campaign not_started" in last_stage
+
+
+def correct_completed_session_with_blocked_terminal(session: dict, result_payload: dict | None = None) -> tuple[dict, bool]:
+    if not session:
+        return {}, False
+    if str(session.get("state") or "") != "COMPLETED" and str(session.get("status") or "") != "completed":
+        return session, False
+    if not blocked_terminal_in_session(session, result_payload):
+        return session, False
+    payload = dict(session)
+    corrected_at = utc_now_iso()
+    payload["state"] = "BLOCKED"
+    payload["status"] = state_to_status("BLOCKED")
+    payload["updated_at"] = corrected_at
+    payload.setdefault("completed_at", corrected_at)
+    checkpoint = dict(payload.get("checkpoint") or {})
+    checkpoint["state"] = "BLOCKED"
+    checkpoint["terminal_seen"] = True
+    payload["checkpoint"] = checkpoint
+    result = dict(payload.get("result") or {})
+    if result:
+        result["status"] = "blocked"
+        result["truth_correction"] = {
+            "schema_version": "reachops.run_session_truth_correction.v1",
+            "corrected_at": corrected_at,
+            "reason": "blocked_terminal_log_overrides_completed_result",
+            "no_ai_token_used": True,
+        }
+        payload["result"] = result
+    history = [row for row in list(payload.get("state_history") or []) if isinstance(row, dict)]
+    history.append(
+        {
+            "at": corrected_at,
+            "state": "BLOCKED",
+            "from_state": "COMPLETED",
+            "to_state": "BLOCKED",
+            "valid_transition": True,
+            "status": "blocked",
+            "last_stage": str(checkpoint.get("last_stage") or "")[:500],
+            "runtime_state_inferred": str(checkpoint.get("runtime_state_inferred") or "BLOCKED"),
+            "log_line_count": int(checkpoint.get("log_line_count") or 0),
+            "terminal_seen": True,
+            "source": "run_session.truth_correction",
+            "reason": "blocked_terminal_log_overrides_completed_result",
+            "no_ai_token_used": True,
+        }
+    )
+    payload["state_history"] = history[-160:]
+    payload["state_transition_violations"] = [
+        row for row in list(payload.get("state_transition_violations") or []) if isinstance(row, dict)
+    ][-40:]
+    payload["state_machine_contract"] = {
+        "schema_version": "reachops.run_session_state_machine_contract.v1",
+        "from_state": "COMPLETED",
+        "to_state": "BLOCKED",
+        "valid_transition": True,
+        "violation_count": len(payload["state_transition_violations"]),
+        "terminal_states": sorted(TERMINAL_RUN_SESSION_STATES),
+        "truth_correction": "blocked_terminal_log_overrides_completed_result",
+        "no_ai_token_used": True,
+    }
+    payload["session_health"] = build_session_health(payload)
+    return payload, True
+
+
+def _current_run_session_candidate_paths() -> list[Path]:
+    result_payload = read_run_result_payload()
+    candidates: list[Path] = []
+    if run_is_active() and CURRENT_RUN_SESSION_PATH:
+        candidates.append(Path(CURRENT_RUN_SESSION_PATH))
+    result_path = run_session_path_from_result(result_payload)
+    if result_path is not None:
+        candidates.append(result_path)
     if CURRENT_RUN_SESSION_PATH:
-        payload = read_run_session(CURRENT_RUN_SESSION_PATH)
-        if payload:
-            return payload
-    return read_run_session(LATEST_RUN_SESSION_PATH)
+        candidates.append(Path(CURRENT_RUN_SESSION_PATH))
+    candidates.append(LATEST_RUN_SESSION_PATH)
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in candidates:
+        key = str(path)
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def read_current_run_session() -> dict:
+    result_payload, _changed = correct_run_result_with_blocked_terminal(read_run_result_payload())
+    for path in _current_run_session_candidate_paths():
+        payload = read_run_session(path)
+        if not payload:
+            continue
+        corrected, changed = correct_completed_session_with_blocked_terminal(payload, result_payload)
+        if changed:
+            write_run_session(corrected, path, LATEST_RUN_SESSION_PATH)
+        return corrected
+    return {}
 
 
 def persist_run_session(session: dict) -> dict:
@@ -851,6 +1317,126 @@ def safe_int(value, default: int = 0) -> int:
         return default
 
 
+def group_mapping_key(group: dict) -> str:
+    group_id = str((group or {}).get("group_id") or "").strip()
+    name = str((group or {}).get("name") or (group or {}).get("group_name") or "").strip()
+    return f"id:{group_id}" if group_id else (f"name:{name.lower()}" if name else "")
+
+
+def group_mapping_storage() -> GrowthStorage:
+    return GrowthStorage(str(GROUP_MAPPING_DB_PATH))
+
+
+def summarize_group_mapping(row: dict) -> dict:
+    return {
+        "schema_version": str(row.get("schema_version") or "reachops.ixbrowser_group_mapping.v1"),
+        "mapping_key": str(row.get("mapping_key") or ""),
+        "group_id": str(row.get("group_id") or ""),
+        "group_name": str(row.get("group_name") or ""),
+        "target_country": str(row.get("target_country") or ""),
+        "timezone": str(row.get("timezone") or ""),
+        "default_reply_language": str(row.get("default_reply_language") or "unknown"),
+        "allowed_action_types": list(row.get("allowed_action_types") or []),
+        "per_day_limit": safe_int(row.get("per_day_limit"), 0),
+        "per_hour_limit": safe_int(row.get("per_hour_limit"), 0),
+        "status": str(row.get("status") or "needs_operator_review"),
+        "requires_operator_review": bool(row.get("requires_operator_review", str(row.get("status") or "") != "ready")),
+        "no_submit": True,
+    }
+
+
+def attach_group_mappings(payload: dict) -> dict:
+    data = dict(payload or {})
+    groups = [dict(row) for row in (data.get("groups") or []) if isinstance(row, dict)]
+    if not groups:
+        data["group_mapping"] = {
+            "schema_version": "reachops.ixbrowser_group_mapping.v1",
+            "configured_count": 0,
+            "needs_operator_review_count": 0,
+            "no_browser_started": True,
+            "no_submit": True,
+        }
+        return data
+    try:
+        mappings = group_mapping_storage().ensure_ixbrowser_group_mappings(groups)
+        by_key = {str(row.get("mapping_key") or ""): row for row in mappings}
+        configured = 0
+        needs_review = 0
+        enriched = []
+        for group in groups:
+            mapping = summarize_group_mapping(by_key.get(group_mapping_key(group), {}))
+            group["mapping"] = mapping
+            group["mapping_status"] = mapping["status"]
+            group["mapping_requires_operator_review"] = bool(mapping["requires_operator_review"])
+            if mapping["status"] == "ready":
+                configured += 1
+            else:
+                needs_review += 1
+            enriched.append(group)
+        data["groups"] = enriched
+        data["group_mapping"] = {
+            "schema_version": "reachops.ixbrowser_group_mapping.v1",
+            "configured_count": configured,
+            "needs_operator_review_count": needs_review,
+            "editable_local_mapping": True,
+            "group_name_is_not_country_authority": True,
+            "no_browser_started": True,
+            "no_submit": True,
+        }
+    except Exception as exc:
+        data["groups"] = groups
+        data["group_mapping"] = {
+            "schema_version": "reachops.ixbrowser_group_mapping.v1",
+            "status": "unavailable",
+            "error": str(exc),
+            "no_browser_started": True,
+            "no_submit": True,
+        }
+    return data
+
+
+def build_group_mappings_payload() -> dict:
+    mappings = [summarize_group_mapping(row) for row in group_mapping_storage().list_ixbrowser_group_mappings()]
+    return {
+        "status": "ok",
+        "schema_version": "reachops.ixbrowser_group_mapping.v1",
+        "mappings": mappings,
+        "mapping_count": len(mappings),
+        "configured_count": len([row for row in mappings if row.get("status") == "ready"]),
+        "needs_operator_review_count": len([row for row in mappings if row.get("requires_operator_review")]),
+        "editable_local_mapping": True,
+        "group_name_is_not_country_authority": True,
+        "no_browser_started": True,
+        "no_submit": True,
+    }
+
+
+def save_group_mapping_from_payload(payload: dict) -> dict:
+    item = payload or {}
+    mapping = group_mapping_storage().upsert_ixbrowser_group_mapping(
+        group_id=str(item.get("group_id") or item.get("groupId") or ""),
+        group_name=str(item.get("group_name") or item.get("groupName") or item.get("name") or ""),
+        target_country=str(item.get("target_country") or item.get("targetCountry") or ""),
+        timezone=str(item.get("timezone") or ""),
+        default_reply_language=str(item.get("default_reply_language") or item.get("defaultReplyLanguage") or ""),
+        allowed_action_types=item.get("allowed_action_types", item.get("allowedActionTypes")),
+        per_day_limit=safe_int(item.get("per_day_limit", item.get("perDayLimit")), 0),
+        per_hour_limit=safe_int(item.get("per_hour_limit", item.get("perHourLimit")), 0),
+        source="web_ui",
+    )
+    append_web_log(
+        f"CONFIG group_mapping_saved group={mapping.get('group_name') or '-'} "
+        f"status={mapping.get('status') or '-'} no_browser_started=true no_submit=true"
+    )
+    return {
+        "status": "saved",
+        "schema_version": "reachops.ixbrowser_group_mapping.v1",
+        "mapping": summarize_group_mapping(mapping),
+        "no_browser_started": True,
+        "no_submit": True,
+    }
+
+
 def safe_report_download_path(raw_path: str) -> Path | None:
     try:
         path = Path(str(raw_path or "")).expanduser().resolve()
@@ -919,11 +1505,16 @@ def live_comment_activation_status() -> dict:
             {"profile_id": "web-live-comment-check", "group_name": "WEB"},
             feature="live_submit",
         )
-        activation_payload = build_activation_payload()
+        activation_payload = build_web_activation_payload()
+        activation_required = bool(activation_payload.get("activation_required"))
+        activation_ready = bool(activation_payload.get("ready")) and (
+            bool(activation_payload.get("activation_status_exists")) or not activation_required
+        )
         return {
-            "allowed": bool(decision.allowed),
-            "error_code": decision.error_code,
-            "error_message": decision.error_message,
+            "allowed": bool(decision.allowed) and activation_ready,
+            "error_code": decision.error_code or ("" if activation_ready else "LIVE_SUBMIT_NOT_AUTHORIZED"),
+            "error_message": decision.error_message
+            or ("" if activation_ready else "真实评论需要本地激活状态文件且 activation ready。"),
             "activation_status_path": str(activation_path),
             "evidence": decision.evidence,
             "next_actions": activation_payload.get("next_actions") or [],
@@ -939,6 +1530,30 @@ def live_comment_activation_status() -> dict:
             "next_actions": ["生成或放置真实激活状态文件，并设置 ActivationStatusPath。"],
             "failed_checks": ["activation_status_read_failed"],
         }
+
+
+def build_web_activation_payload() -> dict:
+    payload = dict(build_activation_payload())
+    failed_checks = list(payload.get("failed_checks") or [])
+    next_actions = list(payload.get("next_actions") or [])
+    activation_required = bool(payload.get("activation_required"))
+    if activation_required and not bool(payload.get("activation_status_exists")):
+        if "activation_status_file_exists" not in failed_checks:
+            failed_checks.append("activation_status_file_exists")
+        if not next_actions:
+            next_actions.append("生成或放置真实激活状态文件，并设置 ActivationStatusPath。")
+        payload["status"] = "blocked"
+        payload["ready"] = False
+        payload["development_bypass"] = False
+        payload["web_live_activation_requires_status_file"] = True
+    elif not activation_required and not bool(payload.get("activation_status_exists")):
+        payload["web_live_activation_requires_status_file"] = False
+        payload["development_bypass"] = True
+    payload["failed_checks"] = failed_checks
+    payload["next_actions"] = next_actions
+    payload["no_browser_started"] = True
+    payload["no_submit"] = True
+    return payload
 
 
 def build_activation_payload() -> dict:
@@ -1043,6 +1658,46 @@ def load_web_settings() -> dict:
 def write_web_settings(settings: dict):
     WEB_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     WEB_SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_selected_profile_group_setting() -> str:
+    settings = load_web_settings()
+    return str(settings.get("selected_profile_group") or "").strip()
+
+
+def persist_selected_profile_group_setting(group: str) -> dict:
+    group_name = str(group or "").strip()
+    if not group_name:
+        return {
+            "status": "rejected",
+            "error": "missing_profile_group",
+            "message": "账号分组不能为空。",
+            "no_browser_started": True,
+            "no_submit": True,
+        }
+    settings = load_web_settings()
+    settings["selected_profile_group"] = group_name
+    settings["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    write_web_settings(settings)
+    return {
+        "status": "saved",
+        "selected_profile_group": group_name,
+        "no_browser_started": True,
+        "no_submit": True,
+    }
+
+
+def build_web_settings_payload() -> dict:
+    settings = load_web_settings()
+    return {
+        "status": "ok",
+        "selected_profile_group": str(settings.get("selected_profile_group") or "").strip(),
+        "ixbrowser_api_port": str(settings.get("ixbrowser_api_port") or "").strip(),
+        "updated_at": str(settings.get("updated_at") or ""),
+        "path": str(WEB_SETTINGS_PATH),
+        "no_browser_started": True,
+        "no_submit": True,
+    }
 
 
 def write_latest_groups_payload(payload: dict):
@@ -1350,6 +2005,7 @@ def build_final_status_payload() -> dict:
         payload["handoff_bundle_size"] = int(handoff.get("size") or 0)
         payload["handoff_bundle_verification"] = verify_handoff_bundle(payload["handoff_bundle_path"])
         payload["mvp_acceptance"] = summarize_mvp_acceptance()
+        payload["minimum_mvp"] = build_minimum_mvp_gate_payload()
         payload["goal_delivery"] = summarize_goal_delivery()
         payload["two_phase_acceptance"] = summarize_two_phase_acceptance()
         goal_delivery = payload["goal_delivery"] if isinstance(payload.get("goal_delivery"), dict) else {}
@@ -1955,9 +2611,8 @@ def payload_from_execution_plan(plan: dict) -> dict:
 
 
 def build_current_run_session_payload() -> dict:
-    path = Path(CURRENT_RUN_SESSION_PATH) if CURRENT_RUN_SESSION_PATH else LATEST_RUN_SESSION_PATH
-    if not path.is_file() and LATEST_RUN_SESSION_PATH.is_file():
-        path = LATEST_RUN_SESSION_PATH
+    candidates = _current_run_session_candidate_paths()
+    path = candidates[0] if candidates else (Path(CURRENT_RUN_SESSION_PATH) if CURRENT_RUN_SESSION_PATH else LATEST_RUN_SESSION_PATH)
     if not path.is_file():
         return {
             "status": "missing",
@@ -1969,6 +2624,10 @@ def build_current_run_session_payload() -> dict:
         }
     try:
         session = read_run_session(path)
+        result_payload, _result_changed = correct_run_result_with_blocked_terminal(read_run_result_payload())
+        session, changed = correct_completed_session_with_blocked_terminal(session, result_payload)
+        if changed:
+            write_run_session(session, path, LATEST_RUN_SESSION_PATH)
         return {
             "status": "ok",
             "schema_version": session.get("schema_version", "reachops.run_session.v1"),
@@ -2313,6 +2972,8 @@ def external_headless_process_running() -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=1,
         )
         return result.returncode == 0 and bool(result.stdout.strip())
@@ -2467,11 +3128,12 @@ def html_page() -> bytes:
     .taskForm {{ display:grid; gap:12px; min-width:0; }}
     .taskForm label {{ min-width:0; }}
     .taskParams {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(176px,1fr)); gap:10px; align-items:end; min-width:0; }}
-    .taskActions {{ display:grid; grid-template-columns:minmax(180px,1fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
+    .taskActions {{ display:grid; grid-template-columns:minmax(140px,.9fr) repeat(3,minmax(86px,.42fr)); gap:10px; align-items:end; }}
     .secondaryActions {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding-top:2px; }}
     .secondaryActions button {{ height:32px; padding:0 10px; font-size:12px; color:var(--muted); background:#20262b; }}
     label {{ display:grid; gap:6px; color:var(--muted); font-size:12px; }}
     input, select {{ height:38px; border:1px solid var(--line); border-radius:7px; background:#2a3036; color:var(--text); padding:0 11px; font-size:14px; min-width:0; }}
+    .localeSelect {{ height:28px; border-radius:999px; padding:0 9px; font-size:12px; color:var(--text); background:#252b31; }}
     .groupControl {{ display:grid; grid-template-columns:minmax(0,1fr) 96px; gap:8px; align-items:center; }}
     .groupControl select {{ width:100%; }}
     .groupControl button {{ padding:0 9px; white-space:nowrap; }}
@@ -2500,6 +3162,11 @@ def html_page() -> bytes:
     .inlineConfig button {{ height:32px; padding:0 8px; }}
 	    .groupDetails {{ display:none; }}
 	    .groupDetails.hasContent {{ display:block; border:1px solid #2c3540; border-radius:8px; background:#15191d; padding:8px; }}
+	    .groupMapping {{ display:grid; gap:8px; border:1px solid #2c3540; border-radius:8px; background:#15191d; padding:9px; }}
+	    .groupMappingGrid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:8px; }}
+	    .groupMappingGrid label {{ display:grid; gap:4px; }}
+	    .groupMappingActions {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
+	    .groupMappingChecks {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:12px; }}
 	    .selectedGroupBar {{ display:grid; grid-template-columns:minmax(0,1.4fr) minmax(118px,.55fr) minmax(96px,.45fr); gap:8px; align-items:center; border:1px solid #314151; border-radius:8px; background:#151c22; padding:9px 10px; min-width:0; }}
 	    .selectedGroupBar .barLabel {{ color:var(--muted); font-size:11px; margin-bottom:3px; }}
 	    .selectedGroupBar b {{ display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
@@ -2699,23 +3366,27 @@ def html_page() -> bytes:
     <div class="brandBlock">
       <div class="brandMark">R</div>
       <div class="brandText">
-        <h1>ReachOps 本地客户端控制台 <span class="clientType">客户端外壳</span></h1>
-        <div class="sub">桌面入口 ReachOpsApp.py 启动本机 127.0.0.1 控制台；Mac / Windows 同一客户端，后端走本地真实执行链路</div>
+        <h1><span data-i18n="app.title">ReachOps 本地客户端控制台</span> <span class="clientType" data-i18n="app.client_shell">客户端外壳</span></h1>
+        <div class="sub" data-i18n="app.subtitle">Mac / Windows 同一客户端，后端走本地真实执行链路</div>
       </div>
     </div>
     <div class="headerStatus">
-      <div class="pill ok" id="accountGateState">账号门禁已启用</div>
+      <select class="localeSelect" id="localeSelect" aria-label="UI language">
+        <option value="zh-CN">中文</option>
+        <option value="en-US">English</option>
+      </select>
+      <div class="pill ok" id="accountGateState" data-i18n="status.account_gate_enabled">账号门禁已启用</div>
       <div class="pill versionPill" id="uiVersion" title="{WEB_UI_VERSION}">{CLIENT_DISPLAY_VERSION}</div>
       <div class="pill" id="runState">READY</div>
     </div>
   </header>
   <main>
     <nav>
-      <button class="tab active" data-page="task">获客任务</button>
-      <button class="tab" data-page="leads">线索分析</button>
-      <button class="tab" data-page="outreach">触达执行</button>
-      <button class="tab" data-page="accounts">账号诊断</button>
-      <button class="tab" data-page="reports">报告中心</button>
+      <button class="tab active" data-page="task" data-i18n="nav.task">获客任务</button>
+      <button class="tab" data-page="leads" data-i18n="nav.leads">线索分析</button>
+      <button class="tab" data-page="outreach" data-i18n="nav.outreach">触达执行</button>
+      <button class="tab" data-page="accounts" data-i18n="nav.accounts">账号诊断</button>
+      <button class="tab" data-page="reports" data-i18n="nav.reports">报告中心</button>
     </nav>
     <section class="work">
       <div class="clientRuntimeStrip" aria-label="客户端运行合同">
@@ -2726,81 +3397,99 @@ def html_page() -> bytes:
       </div>
       <div class="controlPanel">
         <div class="taskForm">
-          <label>推广目标
+          <label><span data-i18n="field.target">推广目标</span>
             <input id="target" value="{DEFAULT_TARGET}" placeholder="输入产品链接、关键词、达人主页、视频链接、话题或直播间" />
           </label>
-	          <label class="groupField">账号分组
+	          <label class="groupField"><span data-i18n="field.group">账号分组</span>
 	            <span class="groupControl">
 	              <select id="group"><option>United States</option></select>
-	              <button id="refreshGroupsInline">刷新</button>
+	              <button id="refreshGroupsInline" data-i18n="action.refresh">刷新</button>
 	            </span>
 	          </label>
 	          <div class="selectedGroupBar" id="selectedGroupBar">
-	            <div><div class="barLabel">当前账号分组</div><b id="selectedGroupName">United States</b></div>
-	            <div><div class="barLabel">可读取账号数</div><b class="count unknown" id="selectedGroupCount">未刷新</b></div>
+	            <div><div class="barLabel" data-i18n="field.current_group">当前账号分组</div><b id="selectedGroupName">United States</b></div>
+	            <div><div class="barLabel" data-i18n="field.readable_accounts">可读取账号数</div><b class="count unknown" id="selectedGroupCount">未刷新</b></div>
 	            <div><div class="barLabel">Group ID</div><b id="selectedGroupId">-</b></div>
 	          </div>
 	          <div class="groupDetails compact" id="groupDetails"></div>
-          <div class="taskParams">
-            <label>目标类型
+	          <div class="groupMapping compact" id="groupMappingPanel">
+	            <div class="groupMappingGrid">
+	              <label><span>目标国家</span><input id="groupTargetCountry" placeholder="US" /></label>
+	              <label><span>时区</span><input id="groupTimezone" placeholder="America/New_York" /></label>
+	              <label><span>默认回复语言</span><input id="groupDefaultLanguage" placeholder="en" /></label>
+	              <label><span>每日上限</span><input id="groupPerDayLimit" type="number" min="0" value="0" /></label>
+	              <label><span>每小时上限</span><input id="groupPerHourLimit" type="number" min="0" value="0" /></label>
+	            </div>
+	            <div class="groupMappingActions">
+	              <span class="groupMappingChecks">
+	                <label><input type="checkbox" id="groupAllowComment" checked /> 评论</label>
+	                <label><input type="checkbox" id="groupAllowFollow" /> 关注</label>
+	                <label><input type="checkbox" id="groupAllowDm" /> 私信</label>
+	              </span>
+	              <button id="saveGroupMapping">保存分组映射</button>
+	              <span class="sub" id="groupMappingState">分组名不作为国家依据；首次使用需运营配置。</span>
+	            </div>
+	          </div>
+	          <div class="taskParams">
+            <label><span data-i18n="field.source_type">目标类型</span>
               <select id="sourceType">
-                <option value="auto" selected>自动识别</option>
-                <option value="creator_url">达人主页</option>
-                <option value="content_url">视频链接</option>
-                <option value="live_room_url">直播间活跃用户</option>
-                <option value="keyword">关键词搜索</option>
-                <option value="topic">话题/趋势</option>
-                <option value="hashtag">标签</option>
-                <option value="product_url">商品页</option>
-                <option value="shop_url">店铺页</option>
+                <option value="auto" selected data-i18n="option.auto_detect">自动识别</option>
+                <option value="creator_url" data-i18n="option.creator_url">达人主页</option>
+                <option value="content_url" data-i18n="option.content_url">视频链接</option>
+                <option value="live_room_url" data-i18n="option.live_room_url">直播间活跃用户</option>
+                <option value="keyword" data-i18n="option.keyword">关键词搜索</option>
+                <option value="topic" data-i18n="option.topic">话题/趋势</option>
+                <option value="hashtag" data-i18n="option.hashtag">标签</option>
+                <option value="product_url" data-i18n="option.product_url">商品页</option>
+                <option value="shop_url" data-i18n="option.shop_url">店铺页</option>
               </select>
             </label>
-            <label>执行模式
+            <label><span data-i18n="field.mode">执行模式</span>
               <select id="mode">
-                <option value="preflight">采集 + 触达预检</option>
-                <option value="collect">只采集</option>
-                <option value="live_comment">采集 + 真实评论</option>
+                <option value="preflight" data-i18n="mode.preflight">采集 + 触达预检</option>
+                <option value="collect" data-i18n="mode.collect">只采集</option>
+                <option value="live_comment" data-i18n="mode.live_comment">授权真实评论</option>
               </select>
             </label>
-            <label>账号数
+            <label><span data-i18n="field.profile_count">账号数</span>
               <input id="profiles" value="3" />
             </label>
-            <label>目标数量
+            <label><span data-i18n="field.volume">目标数量</span>
               <select id="volume">
-                <option value="quick" selected>快速</option>
-                <option value="standard">标准</option>
-                <option value="stress">压测</option>
+                <option value="quick" selected data-i18n="volume.quick">快速</option>
+                <option value="standard" data-i18n="volume.standard">标准</option>
+                <option value="stress" data-i18n="volume.stress">压测</option>
               </select>
             </label>
-            <label class="checkLabel">真实评论确认
+            <label class="checkLabel"><span data-i18n="field.live_confirm">真实评论确认</span>
               <span><input id="liveConfirm" type="checkbox" />确认真实评论</span>
             </label>
-            <label class="checkLabel">账号修复确认
+            <label class="checkLabel"><span data-i18n="field.account_repair_confirm">账号修复确认</span>
               <span><input id="accountRepairConfirmed" type="checkbox" />已修复账号，允许重新预检</span>
             </label>
           </div>
-          <label>评论内容
+          <label><span data-i18n="field.comment_text">评论内容</span>
             <input id="commentText" value="" placeholder="留空自动生成；可填固定评论文案" />
           </label>
           <div class="runtimePreview" id="runtimePreview">
-            <div class="previewItem"><span>后端模式</span><b id="previewMode">采集 + 触达预检</b></div>
-            <div class="previewItem"><span>采集范围</span><b id="previewRange">3 视频 / 20 评论</b></div>
-            <div class="previewItem"><span>账号上限</span><b id="previewProfiles">3</b></div>
-            <div class="previewItem"><span>预计超时</span><b id="previewTimeout">900 秒</b></div>
-            <div class="previewItem"><span>提交策略</span><b id="previewSubmit">预检，不提交</b></div>
-            <div class="previewItem"><span>启动门禁</span><b id="previewGate">等待刷新</b></div>
-            <div class="previewItem"><span>执行计划</span><b id="previewPlan">等待生成</b></div>
+            <div class="previewItem"><span data-i18n="preview.mode">后端模式</span><b id="previewMode">采集 + 触达预检</b></div>
+            <div class="previewItem"><span data-i18n="preview.range">采集范围</span><b id="previewRange">3 视频 / 20 评论</b></div>
+            <div class="previewItem"><span data-i18n="preview.profiles">账号上限</span><b id="previewProfiles">3</b></div>
+            <div class="previewItem"><span data-i18n="preview.timeout">预计超时</span><b id="previewTimeout">900 秒</b></div>
+            <div class="previewItem"><span data-i18n="preview.submit">提交策略</span><b id="previewSubmit">预检，不提交</b></div>
+            <div class="previewItem"><span data-i18n="preview.gate">启动门禁</span><b id="previewGate">等待刷新</b></div>
+            <div class="previewItem"><span data-i18n="preview.plan">执行计划</span><b id="previewPlan">等待生成</b></div>
             <div class="previewItem wide" id="previewAutonomyBox">
-              <span>自治预判</span>
+              <span data-i18n="preview.autonomy">自治预判</span>
               <b id="previewAutonomy">等待 start-preview</b>
               <ul id="previewAutonomyList"><li>等待结构化预判合同。</li></ul>
             </div>
           </div>
 	          <div class="taskActions">
-	            <button class="primary" id="start" disabled>开始获客</button>
-	            <button class="warn" id="pause">暂停</button>
-	            <button class="okBtn" id="resume">继续</button>
-	            <button id="stop">停止</button>
+	            <button class="primary" id="start" disabled data-i18n="action.start">开始获客</button>
+	            <button class="warn" id="pause" data-i18n="action.pause">暂停</button>
+	            <button class="okBtn" id="resume" data-i18n="action.resume">继续</button>
+	            <button id="stop" data-i18n="action.stop">停止</button>
 	          </div>
 	          <div class="secondaryActions" aria-label="次级操作">
 	            <button id="previewPlanReplay">预检重放计划</button>
@@ -2904,6 +3593,10 @@ def html_page() -> bytes:
         <div class="metric"><span>采集数</span><b id="mCandidates">0</b></div>
         <div class="metric"><span>有效线索</span><b id="mQualified">0</b></div>
         <div class="metric"><span>高意向</span><b id="mHigh">0</b></div>
+        <div class="metric"><span>公开回复</span><b id="mPublicReplies">0</b></div>
+        <div class="metric"><span>合格回复</span><b id="mQualifiedReplies">0</b></div>
+        <div class="metric"><span>转化</span><b id="mConvertedLeads">0</b></div>
+        <div class="metric"><span>收入分</span><b id="mRevenueCents">0</b></div>
         <div class="metric"><span>入队数</span><b id="mActions">0</b></div>
         <div class="metric"><span>成功触达</span><b id="mTouchSuccess">0</b></div>
         <div class="metric"><span>失败</span><b id="mTouchFailed">0</b></div>
@@ -2960,15 +3653,8 @@ def html_page() -> bytes:
                 <strong>真实评论授权下一步</strong>
                 <ul id="activationActions"><li>等待激活状态检查。</li></ul>
               </div>
+              <div class="row"><span>最小MVP门禁</span><b id="minimumMvpState">未检查</b></div>
               <div class="row"><span>最终交付门禁</span><b id="finalStatusState">未检查</b></div>
-	              <div class="notice" id="finalStatusNotice">
-	                <strong>最终交付下一步</strong>
-	                <ul id="finalStatusActions"><li>等待最终验收状态。</li></ul>
-	              </div>
-	              <div class="notice" id="finalCommandNotice">
-	                <strong>最终复核命令</strong>
-	                <ul id="finalStatusCommands"><li>等待最终验收状态。</li></ul>
-	              </div>
 	              <div class="row"><span>评论文案</span><b id="currentCopyMode">自动识别生成</b></div>
               <div class="row"><span>目标数量</span><b id="currentVolume">快速</b></div>
               <div class="row"><span>最近批次</span><b id="batchId">-</b></div>
@@ -3013,7 +3699,17 @@ def html_page() -> bytes:
         <div class="panel"><h2>账号诊断</h2><div class="body"><table id="healthTable"></table></div></div>
       </div>
       <div id="reports" class="page">
-        <div class="panel"><h2>报告中心 <button id="refreshGoalDelivery">刷新目标报告</button> <button id="refreshMvpAcceptance">刷新MVP验收</button> <button id="initAcceptanceInputs">生成验收输入</button></h2><div class="body"><table id="reportTable"></table></div></div>
+        <div class="panel"><h2>报告中心 <button id="refreshGoalDelivery">刷新目标报告</button> <button id="refreshMvpAcceptance">刷新MVP验收</button> <button id="initAcceptanceInputs">生成验收输入</button></h2><div class="body">
+          <div class="notice" id="finalStatusNotice">
+            <strong>最终交付下一步</strong>
+            <ul id="finalStatusActions"><li>等待最终验收状态。</li></ul>
+          </div>
+          <div class="notice" id="finalCommandNotice">
+            <strong>最终复核命令</strong>
+            <ul id="finalStatusCommands"><li>等待最终验收状态。</li></ul>
+          </div>
+          <table id="reportTable"></table>
+        </div></div>
       </div>
     </section>
   </main>
@@ -3034,11 +3730,65 @@ def html_page() -> bytes:
 	    let accountRepairConfirmedGroup = '';
 	    let accountRepairSummary = null;
 		    let accountRepairApplyState = {{}};
+	    let liveActivationReady = false;
+	    let liveActivationPayload = {{}};
 	    let loadedGroups = [];
 	    let groupRefreshInFlight = false;
 	    let groupRefreshPollCount = 0;
 	    let hourglassData = {{}};
 	    let currentOfflinePolicyCandidate = null;
+	    let selectedProfileGroupSetting = '';
+	    const SELECTED_GROUP_STORAGE_KEY = 'reachops.selectedProfileGroup.v1';
+    const DEFAULT_UI_LOCALE = {json.dumps(DEFAULT_UI_LOCALE, ensure_ascii=False)};
+    const SUPPORTED_UI_LOCALES = {json.dumps(list(SUPPORTED_UI_LOCALES), ensure_ascii=False)};
+    const FALLBACK_UI_TEXT_RESOURCES = {json.dumps(UI_TEXT_RESOURCES, ensure_ascii=False)};
+    const UI_LOCALE_STORAGE_KEY = 'reachops.ui.locale';
+    let uiTextResources = FALLBACK_UI_TEXT_RESOURCES;
+    let currentUiLocale = DEFAULT_UI_LOCALE;
+    function normalizeLocale(locale) {{
+      return SUPPORTED_UI_LOCALES.includes(locale) ? locale : DEFAULT_UI_LOCALE;
+    }}
+    function t(key) {{
+      const bundle = uiTextResources[currentUiLocale] || uiTextResources[DEFAULT_UI_LOCALE] || {{}};
+      const fallback = uiTextResources[DEFAULT_UI_LOCALE] || {{}};
+      return bundle[key] || fallback[key] || key;
+    }}
+    function applyLocale(locale) {{
+      currentUiLocale = normalizeLocale(locale);
+      if (document.documentElement) document.documentElement.lang = currentUiLocale;
+      (document.querySelectorAll ? document.querySelectorAll('[data-i18n]') : []).forEach(el => {{
+        const key = el.dataset.i18n;
+        const value = t(key);
+        if (value) el.textContent = value;
+      }});
+      if ($('localeSelect')) $('localeSelect').value = currentUiLocale;
+      if ($('mode') && $('currentMode')) $('currentMode').textContent = $('mode').selectedOptions[0] ? $('mode').selectedOptions[0].textContent : t('mode.preflight');
+      if ($('mode') && $('previewMode')) $('previewMode').textContent = $('mode').selectedOptions[0] ? $('mode').selectedOptions[0].textContent : t('mode.preflight');
+      if ($('volume') && $('currentVolume')) $('currentVolume').textContent = $('volume').selectedOptions[0] ? $('volume').selectedOptions[0].textContent : t('volume.quick');
+      updateStartAvailability();
+      refreshStartPreview();
+    }}
+    async function loadLocales() {{
+      try {{
+        const res = await fetch('/api/locales');
+        const data = await res.json();
+        if (data && data.resources && typeof data.resources === 'object') uiTextResources = data.resources;
+      }} catch (_err) {{
+        uiTextResources = FALLBACK_UI_TEXT_RESOURCES;
+      }}
+      let saved = '';
+      try {{
+        saved = localStorage.getItem(UI_LOCALE_STORAGE_KEY) || '';
+      }} catch (_err) {{}}
+      applyLocale(saved || DEFAULT_UI_LOCALE);
+    }}
+    function setLocale(locale) {{
+      const normalized = normalizeLocale(locale);
+      try {{
+        localStorage.setItem(UI_LOCALE_STORAGE_KEY, normalized);
+      }} catch (_err) {{}}
+      applyLocale(normalized);
+    }}
     function classify(line) {{ return /ERROR|WARN|BLOCK|failed|失败|不可用/.test(line) ? 'bad' : (/DONE|READY|success|healthy/.test(line) ? 'ok' : ''); }}
     function apiNoticeActive() {{ return Date.now() < apiNoticeUntil; }}
     function isAccountRepairConfirmed() {{
@@ -3049,6 +3799,45 @@ def html_page() -> bytes:
     }}
     function normGroupName(value) {{
       return String(value || '').trim().toLowerCase();
+    }}
+    function rememberSelectedProfileGroup(groupName) {{
+      const value = String(groupName || '').trim();
+      if (!value) return;
+      selectedProfileGroupSetting = value;
+      try {{
+        localStorage.setItem(SELECTED_GROUP_STORAGE_KEY, value);
+      }} catch (_err) {{}}
+      postJson('/api/settings', {{selectedProfileGroup:value}}).catch(() => {{}});
+    }}
+    async function loadWebSettings() {{
+      try {{
+        const res = await fetch('/api/settings');
+        const data = await res.json();
+        selectedProfileGroupSetting = String((data && data.selected_profile_group) || '').trim();
+      }} catch (_err) {{
+        selectedProfileGroupSetting = '';
+      }}
+      if (!selectedProfileGroupSetting) {{
+        try {{
+          selectedProfileGroupSetting = String(localStorage.getItem(SELECTED_GROUP_STORAGE_KEY) || '').trim();
+        }} catch (_err) {{}}
+      }}
+      return selectedProfileGroupSetting;
+    }}
+    function preferredProfileGroupName(groups, currentValue) {{
+      const current = String(currentValue || '').trim();
+      let localSaved = '';
+      try {{
+        localSaved = String(localStorage.getItem(SELECTED_GROUP_STORAGE_KEY) || '').trim();
+      }} catch (_err) {{}}
+      const candidates = [selectedProfileGroupSetting, localSaved, current, accountGateBlockedGroup, accountGatePendingRecheckGroup, 'United States'];
+      for (const candidate of candidates) {{
+        const normalized = normGroupName(candidate);
+        if (!normalized) continue;
+        const matched = groups.find(g => normGroupName(g.name) === normalized);
+        if (matched) return matched.name;
+      }}
+      return groups[0] ? groups[0].name : '';
     }}
     function accountGateAppliesToCurrentGroup() {{
       const blockedGroup = normGroupName(accountGateBlockedGroup);
@@ -3062,6 +3851,7 @@ def html_page() -> bytes:
     }}
     function updateStartAvailability() {{
       const blockedByAccountGate = accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed();
+      const blockedByLiveActivation = $('mode') && $('mode').value === 'live_comment' && !liveActivationReady;
       const pendingAccountRecheck = accountGatePendingRecheckAppliesToCurrentGroup();
       const blockedGroupLabel = String(accountGateBlockedGroup || ($('group') ? $('group').value : '') || '当前分组').trim();
       const pendingGroupLabel = String(accountGatePendingRecheckGroup || blockedGroupLabel || '当前分组').trim();
@@ -3069,13 +3859,26 @@ def html_page() -> bytes:
         ? '请先刷新 ixBrowser 配置分组，并等待分组数量实时读取完成。'
         : blockedByAccountGate
           ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；点击后会重新读取分组并自动预检筛选有效账号。`
-          : '开始获客';
+          : blockedByLiveActivation
+            ? '真实评论授权未就绪；请先完成本地激活状态和授权输入。'
+            : t('action.start');
       if ($('start')) {{
-        $('start').disabled = !groupListReady;
+        $('start').disabled = !groupListReady || blockedByAccountGate || blockedByLiveActivation;
         $('start').title = startBlockedReason;
       }}
+      if ($('startFromPlan')) {{
+        $('startFromPlan').disabled = blockedByAccountGate;
+        $('startFromPlan').title = blockedByAccountGate
+          ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；先执行账号修复或勾选已修复账号后再重放计划。`
+          : '使用最近一次 ExecutionPlan 重新启动本地执行。';
+      }}
+      if ($('previewPlanReplay')) {{
+        $('previewPlanReplay').title = blockedByAccountGate
+          ? `${{blockedGroupLabel}} 账号阻断；预检只会解释阻断原因，不会启动浏览器。`
+          : '预检最近一次 ExecutionPlan 的启动门禁。';
+      }}
       if ($('accountGateState')) {{
-        $('accountGateState').textContent = blockedByAccountGate ? `${{blockedGroupLabel}} 账号阻断` : (pendingAccountRecheck ? `${{pendingGroupLabel}} 等待重新预检` : '账号门禁已启用');
+        $('accountGateState').textContent = blockedByAccountGate ? `${{blockedGroupLabel}} 账号阻断` : (pendingAccountRecheck ? `${{pendingGroupLabel}} 等待重新预检` : t('status.account_gate_enabled'));
         $('accountGateState').className = blockedByAccountGate ? 'pill danger' : (pendingAccountRecheck ? 'pill warn' : 'pill ok');
         $('accountGateState').title = blockedByAccountGate
           ? `${{blockedGroupLabel}} 最近一次预检没有可用账号；再次开始获客会重新读取分组并重新预检账号。`
@@ -3190,6 +3993,15 @@ def html_page() -> bytes:
       return result;
     }}
     async function startFromPlan() {{
+      if ($('startFromPlan') && $('startFromPlan').disabled) {{
+        showApiNotice(
+          '计划重放被门禁拦截',
+          {{status:'rejected', error:'account_repair_required', next_actions:['先执行账号修复计划，或勾选已修复账号后重新预检。'], no_browser_started:true, no_submit:true}},
+          'blocked',
+          12000
+        );
+        return;
+      }}
       const preview = await previewPlanReplay();
       const decision = preview.preflight_decision || {{}};
       if (decision.start_allowed !== true) return;
@@ -3912,31 +4724,47 @@ def html_page() -> bytes:
       const a = data.acceptance || {{}};
       const mvp = data.mvp_acceptance || {{}};
       const rows = [
-        ['本地验收输入模板', '可下载', {{text:'reachops_acceptance_inputs.example.ps1', href:'/api/acceptance-input-template'}}],
+        ['本地验收输入模板', '可下载', {{text:'reachops_acceptance_inputs.example.ps1', href:'/api/acceptance-input-template'}}, '按模板准备本地验收输入。'],
       ];
-      if (mvp.path) rows.push(['产品经理 MVP 验收摘要', mvp.mvp_local_ready ? '本地MVP通过' : (mvp.status || '未生成'), {{text:mvp.path, href:'/api/download?path=' + encodeURIComponent(mvp.path)}}]);
+      if (mvp.path) rows.push(['产品经理 MVP 验收摘要', mvp.mvp_local_ready ? '本地MVP通过' : (mvp.status || '未生成'), {{text:mvp.path, href:'/api/download?path=' + encodeURIComponent(mvp.path)}}, '查看摘要中的未通过项后继续复测。']);
       Object.entries(a.profile_error_summary || {{}}).forEach(([error, item]) => {{
         rows.push([
           '账号修复',
           error,
-          `count=${{item.count || 0}} profiles=${{(item.profile_ids || []).slice(0, 16).join(',') || '-'}}`
+          `count=${{item.count || 0}} profiles=${{(item.profile_ids || []).slice(0, 16).join(',') || '-'}}`,
+          accountRepairCustomerAction(error, item)
         ]);
       }});
       const report = data.remediation_report || {{}};
-      if (report.csv_path) rows.push(['修复清单 CSV', '已生成', {{text: report.csv_path, href: '/api/download?path=' + encodeURIComponent(report.csv_path)}}]);
-      if (report.json_path) rows.push(['修复清单 JSON', '已生成', {{text: report.json_path, href: '/api/download?path=' + encodeURIComponent(report.json_path)}}]);
-      if (report.markdown_path) rows.push(['验收报告 Markdown', '已生成', {{text: report.markdown_path, href: '/api/download?path=' + encodeURIComponent(report.markdown_path)}}]);
-      if (report.account_plan_markdown_path) rows.push(['账号修复计划 Markdown', '已生成', {{text: report.account_plan_markdown_path, href: '/api/download?path=' + encodeURIComponent(report.account_plan_markdown_path)}}]);
-      if (report.account_plan_json_path) rows.push(['账号修复计划 JSON', '已生成', {{text: report.account_plan_json_path, href: '/api/download?path=' + encodeURIComponent(report.account_plan_json_path)}}]);
-      if (report.guide_path) rows.push(['客户验收指南', '已生成', {{text: report.guide_path, href: '/api/download?path=' + encodeURIComponent(report.guide_path)}}]);
-      if (report.index_path) rows.push(['验收包首页 HTML', '已生成', {{text: report.index_path, href: '/api/download?path=' + encodeURIComponent(report.index_path)}}]);
-      if (report.manifest_path) rows.push(['验收包 Manifest', '已生成', {{text: report.manifest_path, href: '/api/download?path=' + encodeURIComponent(report.manifest_path)}}]);
-      if (report.latest_account_plan_markdown_path) rows.push(['最新账号修复计划', '已生成', {{text: report.latest_account_plan_markdown_path, href: '/api/download?path=' + encodeURIComponent(report.latest_account_plan_markdown_path)}}]);
-      if (report.latest_account_plan_json_path) rows.push(['最新账号修复计划 JSON', '已生成', {{text: report.latest_account_plan_json_path, href: '/api/download?path=' + encodeURIComponent(report.latest_account_plan_json_path)}}]);
-      if (report.latest_guide_path) rows.push(['最新验收指南', '已生成', {{text: report.latest_guide_path, href: '/api/download?path=' + encodeURIComponent(report.latest_guide_path)}}]);
-      if (report.latest_index_path) rows.push(['最新验收包首页', '已生成', {{text: report.latest_index_path, href: '/api/download?path=' + encodeURIComponent(report.latest_index_path)}}]);
-      if (report.latest_manifest_path) rows.push(['最新 Manifest', '已生成', {{text: report.latest_manifest_path, href: '/api/download?path=' + encodeURIComponent(report.latest_manifest_path)}}]);
+      if (report.csv_path) rows.push(['修复清单 CSV', '已生成', {{text: report.csv_path, href: '/api/download?path=' + encodeURIComponent(report.csv_path)}}, '下载后逐项核对账号。']);
+      if (report.json_path) rows.push(['修复清单 JSON', '已生成', {{text: report.json_path, href: '/api/download?path=' + encodeURIComponent(report.json_path)}}, '用于机器可读复核，不会自动执行账号操作。']);
+      if (report.markdown_path) rows.push(['验收报告 Markdown', '已生成', {{text: report.markdown_path, href: '/api/download?path=' + encodeURIComponent(report.markdown_path)}}, '查看本轮验收结论和剩余阻断。']);
+      if (report.account_plan_markdown_path) rows.push(['账号修复计划 Markdown', '已生成', {{text: report.account_plan_markdown_path, href: '/api/download?path=' + encodeURIComponent(report.account_plan_markdown_path)}}, '按计划人工修复账号后再重新预检。']);
+      if (report.account_plan_json_path) rows.push(['账号修复计划 JSON', '已生成', {{text: report.account_plan_json_path, href: '/api/download?path=' + encodeURIComponent(report.account_plan_json_path)}}, '用于复核账号修复计划，不会自动启动浏览器。']);
+      if (report.guide_path) rows.push(['客户验收指南', '已生成', {{text: report.guide_path, href: '/api/download?path=' + encodeURIComponent(report.guide_path)}}, '按指南执行本地客户验收。']);
+      if (report.index_path) rows.push(['验收包首页 HTML', '已生成', {{text: report.index_path, href: '/api/download?path=' + encodeURIComponent(report.index_path)}}, '打开首页查看完整验收包。']);
+      if (report.manifest_path) rows.push(['验收包 Manifest', '已生成', {{text: report.manifest_path, href: '/api/download?path=' + encodeURIComponent(report.manifest_path)}}, '核对验收包清单。']);
+      if (report.latest_account_plan_markdown_path) rows.push(['最新账号修复计划', '已生成', {{text: report.latest_account_plan_markdown_path, href: '/api/download?path=' + encodeURIComponent(report.latest_account_plan_markdown_path)}}, '优先按最新计划处理当前分组。']);
+      if (report.latest_account_plan_json_path) rows.push(['最新账号修复计划 JSON', '已生成', {{text: report.latest_account_plan_json_path, href: '/api/download?path=' + encodeURIComponent(report.latest_account_plan_json_path)}}, '用于确认最新账号修复范围。']);
+      if (report.latest_guide_path) rows.push(['最新验收指南', '已生成', {{text: report.latest_guide_path, href: '/api/download?path=' + encodeURIComponent(report.latest_guide_path)}}, '按最新指南继续客户验收。']);
+      if (report.latest_index_path) rows.push(['最新验收包首页', '已生成', {{text: report.latest_index_path, href: '/api/download?path=' + encodeURIComponent(report.latest_index_path)}}, '打开最新首页复核全部证据。']);
+      if (report.latest_manifest_path) rows.push(['最新 Manifest', '已生成', {{text: report.latest_manifest_path, href: '/api/download?path=' + encodeURIComponent(report.latest_manifest_path)}}, '核对最新验收包文件清单。']);
       return rows;
+    }}
+    function accountRepairCustomerAction(error, item) {{
+      const explicit = String((item && item.recommended_action) || '').trim();
+      if (explicit) return explicit;
+      const actions = {{
+        PAGE_OPEN_FAILED: '在 ixBrowser 手动打开这些 Profile，确认代理可用且 TikTok 页面能打开；不能打开的先移出执行分组。',
+        PROFILE_PREFLIGHT_TIMEOUT: '在 ixBrowser 手动打开这些 Profile，确认浏览器内核、代理和 TikTok 登录态稳定；超时账号先移出执行分组后再重新预检。',
+        LOGIN_REQUIRED: '手动完成 TikTok 登录后重新预检；无法登录的账号先移出执行分组。',
+        IXBROWSER_KERNEL_MISMATCH: '按 ixBrowser 提示更新或切换内核版本；无法修复的账号先移出执行分组。',
+        CAPTCHA_DETECTED: '人工处理验证码或风控；未解除前不要继续执行该账号。',
+        PROXY_FAILED: '修复或更换代理后重新预检；代理不可用的账号先移出执行分组。',
+        IXBROWSER_NETWORK_ERROR: '确认 ixBrowser Local API 和本机网络稳定后重试。',
+        IXBROWSER_SERVER_BUSY: '等待 ixBrowser 恢复空闲后重新预检。'
+      }};
+      return actions[String(error || '')] || '按账号修复计划处理后，勾选“已修复账号，允许重新预检”。';
     }}
     function statusChip(label, tone='') {{
       return {{html:`<span class="chip ${{esc(tone)}}">${{esc(label)}}</span>`}};
@@ -3956,6 +4784,13 @@ def html_page() -> bytes:
       const value = String(text || '').replace(/\\s+/g, ' ').trim();
       return value || fallback;
     }}
+    function localizedRowText(row, key, fallback='-') {{
+      const value = row && row[key + '_i18n'];
+      if (value && typeof value === 'object') {{
+        return value[currentUiLocale] || value[DEFAULT_UI_LOCALE] || row[key] || fallback;
+      }}
+      return row && row[key] ? row[key] : fallback;
+    }}
     function safeDownload(path) {{
       const value = String(path || '').trim();
       if (!value) return '';
@@ -3968,10 +4803,45 @@ def html_page() -> bytes:
       const label = String(group.count_label || (group.count_known ? `${{Number(group.count || 0)}}账号` : '数量未返回'));
       return `${{name}}（${{label}}）`;
     }}
-    function selectedGroupPayload(name) {{
-      const target = String(name || '').toLowerCase();
-      return (loadedGroups || []).find(g => String(g.name || '').toLowerCase() === target) || {{}};
-    }}
+	    function selectedGroupPayload(name) {{
+	      const target = String(name || '').toLowerCase();
+	      return (loadedGroups || []).find(g => String(g.name || '').toLowerCase() === target) || {{}};
+	    }}
+	    function selectedGroupMapping(group) {{
+	      return (group && group.mapping) || {{
+	        status:'needs_operator_review',
+	        target_country:'',
+	        timezone:'',
+	        default_reply_language:'unknown',
+	        allowed_action_types:['comment_reply'],
+	        per_day_limit:0,
+	        per_hour_limit:0
+	      }};
+	    }}
+	    function setCheckbox(id, checked) {{
+	      const el = $(id);
+	      if (el) el.checked = !!checked;
+	    }}
+	    function renderSelectedGroupMapping(group) {{
+	      const mapping = selectedGroupMapping(group);
+	      const actions = Array.isArray(mapping.allowed_action_types) ? mapping.allowed_action_types : [];
+	      if ($('groupTargetCountry')) $('groupTargetCountry').value = String(mapping.target_country || '');
+	      if ($('groupTimezone')) $('groupTimezone').value = String(mapping.timezone || '');
+	      if ($('groupDefaultLanguage')) $('groupDefaultLanguage').value = String(mapping.default_reply_language || 'unknown');
+	      if ($('groupPerDayLimit')) $('groupPerDayLimit').value = String(Number(mapping.per_day_limit || 0));
+	      if ($('groupPerHourLimit')) $('groupPerHourLimit').value = String(Number(mapping.per_hour_limit || 0));
+	      setCheckbox('groupAllowComment', actions.includes('comment_reply') || !actions.length);
+	      setCheckbox('groupAllowFollow', actions.includes('follow_review'));
+	      setCheckbox('groupAllowDm', actions.includes('dm_review'));
+	      if ($('groupMappingState')) {{
+	        const state = String(mapping.status || 'needs_operator_review');
+	        const country = String(mapping.target_country || '').trim();
+	        const lang = String(mapping.default_reply_language || 'unknown').trim();
+	        $('groupMappingState').textContent = state === 'ready'
+	          ? `映射已配置：${{country || '-'}} / ${{mapping.timezone || '-'}} / ${{lang || '-'}}`
+	          : '分组名不作为国家依据；首次使用需运营配置。';
+	      }}
+	    }}
 	    function updateSelectedGroupQuantity() {{
 	      const group = selectedGroupPayload($('group').value);
 	      const label = group && group.name ? groupOptionLabel(group) : ($('group').value || '-');
@@ -3984,6 +4854,7 @@ def html_page() -> bytes:
 	      $('selectedGroupCount').textContent = countLabel;
 	      $('selectedGroupCount').className = countKnown ? 'count' : 'count unknown';
 	      $('selectedGroupId').textContent = group && group.group_id ? String(group.group_id) : '-';
+	      renderSelectedGroupMapping(group);
 	    }}
     function formatGroupSummary(groups, data) {{
       const known = groups.filter(g => g.count_known).length;
@@ -4013,8 +4884,48 @@ def html_page() -> bytes:
 	    function renderGroupDetails(groups, selectedName='') {{
 	      const box = $('groupDetails');
 	      if (!box) return;
-	      box.classList.remove('hasContent');
-	      box.innerHTML = '';
+	      const rows = (groups || []).map(group => {{
+	        const selected = String(group.name || '').toLowerCase() === String(selectedName || '').toLowerCase();
+	        const countLabel = String(group.count_label || (group.count_known ? `${{Number(group.count || 0)}}账号` : '数量未返回'));
+	        const source = String(group.count_source || group.source || '');
+	        const status = String(group.count_status || (group.count_known ? 'known' : 'unknown'));
+	        return `<div class="groupDetailRow${{selected ? ' selected' : ''}}"><strong>${{esc(groupOptionLabel(group))}}</strong><span>${{esc(status)}}${{source ? ` / ${{esc(source)}}` : ''}}</span></div>`;
+	      }});
+	      if (!rows.length) {{
+	        box.classList.remove('hasContent');
+	        box.innerHTML = '';
+	        return;
+	      }}
+	      box.classList.add('hasContent');
+		      box.innerHTML = rows.join('');
+		    }}
+	    async function saveGroupMapping() {{
+	      const group = selectedGroupPayload($('group').value);
+	      if (!group || !group.name) {{
+	        showApiNotice('分组映射未保存', {{status:'rejected', message:'请先刷新并选择 ixBrowser 分组。'}}, 'blocked');
+	        return;
+	      }}
+	      const actions = [];
+	      if ($('groupAllowComment') && $('groupAllowComment').checked) actions.push('comment_reply');
+	      if ($('groupAllowFollow') && $('groupAllowFollow').checked) actions.push('follow_review');
+	      if ($('groupAllowDm') && $('groupAllowDm').checked) actions.push('dm_review');
+	      const result = await postJson('/api/group-mapping', {{
+	        group_id: group.group_id || '',
+	        group_name: group.name || '',
+	        target_country: $('groupTargetCountry') ? $('groupTargetCountry').value : '',
+	        timezone: $('groupTimezone') ? $('groupTimezone').value : '',
+	        default_reply_language: $('groupDefaultLanguage') ? $('groupDefaultLanguage').value : '',
+	        allowed_action_types: actions,
+	        per_day_limit: $('groupPerDayLimit') ? $('groupPerDayLimit').value : 0,
+	        per_hour_limit: $('groupPerHourLimit') ? $('groupPerHourLimit').value : 0
+	      }});
+	      if (result.http_ok && result.mapping) {{
+	        group.mapping = result.mapping;
+	        group.mapping_status = result.mapping.status;
+	        group.mapping_requires_operator_review = result.mapping.requires_operator_review;
+	        renderSelectedGroupMapping(group);
+	      }}
+	      showApiNotice(result.http_ok ? '分组映射已保存' : '分组映射保存失败', result, result.http_ok ? '' : 'blocked');
 	    }}
     function leadIntentChips(row) {{
       const labels = [];
@@ -4030,8 +4941,8 @@ def html_page() -> bytes:
     }}
     function statusTone(status) {{
       const value = String(status || '').toLowerCase();
-      if (['contacted','completed','success'].includes(value)) return 'ok';
-      if (['failed','needs_retry','retryable','skipped','rejected'].includes(value)) return value === 'skipped' ? 'warn' : 'bad';
+      if (['contacted','completed','success','reply_received','qualified','converted','won'].includes(value)) return 'ok';
+      if (['failed','needs_retry','retryable','skipped','rejected','lost','opted_out'].includes(value)) return value === 'skipped' ? 'warn' : 'bad';
       if (['queued','pending_review','approved','ready_to_execute','running'].includes(value)) return 'warn';
       return '';
     }}
@@ -4044,6 +4955,12 @@ def html_page() -> bytes:
         ready_to_execute:'待执行',
         queued:'已入队',
         contacted:'已触达',
+        reply_received:'收到回复',
+        qualified:'合格线索',
+        converted:'已转化',
+        won:'已成交',
+        lost:'已流失',
+        opted_out:'已退订',
         needs_retry:'失败待重试',
         rejected:'已跳过',
         skipped:'已跳过',
@@ -4069,10 +4986,10 @@ def html_page() -> bytes:
     }}
     function applyLeadFilter(rows) {{
       if (leadFilter === 'high') return rows.filter(row => Number(row.score || 0) >= 70);
-      if (leadFilter === 'untouched') return rows.filter(row => !['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
-      if (leadFilter === 'touched') return rows.filter(row => ['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
-      if (leadFilter === 'failed') return rows.filter(row => ['needs_retry','failed','retryable'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
-      if (leadFilter === 'skipped') return rows.filter(row => ['rejected','skipped'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'untouched') return rows.filter(row => !['contacted','completed','success','reply_received','qualified','converted','won','lost','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'touched') return rows.filter(row => ['contacted','completed','success','reply_received','qualified','converted','won'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'failed') return rows.filter(row => ['needs_retry','failed','retryable','lost','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
+      if (leadFilter === 'skipped') return rows.filter(row => ['rejected','skipped','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || '')));
       return rows;
     }}
     function applyOutreachFilter(rows) {{
@@ -4099,20 +5016,26 @@ def html_page() -> bytes:
       const counts = {{
         all: rows.length,
         high: rows.filter(row => Number(row.score || 0) >= 70).length,
-        untouched: rows.filter(row => !['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
-        touched: rows.filter(row => ['contacted','completed','success'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
-        failed: rows.filter(row => ['needs_retry','failed','retryable'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
-        skipped: rows.filter(row => ['rejected','skipped'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        untouched: rows.filter(row => !['contacted','completed','success','reply_received','qualified','converted','won','lost','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        touched: rows.filter(row => ['contacted','completed','success','reply_received','qualified','converted','won'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        failed: rows.filter(row => ['needs_retry','failed','retryable','lost','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
+        skipped: rows.filter(row => ['rejected','skipped','opted_out'].includes(String(row.current_status || row.lifecycle_stage || row.status || ''))).length,
       }};
       filterButtons('leadFilters', leadFilter, counts, 'lead-filter');
       const filtered = applyLeadFilter(rows);
-      $('leadPanelSummary').textContent = `有效 ${{counts.all}} / 高意向 ${{counts.high}} / 已触达 ${{counts.touched}}`;
+      const publicReplies = Number((ops.counts || {{}}).public_replies || 0);
+      const qualifiedReplies = Number((ops.counts || {{}}).qualified_replies || 0);
+      const convertedLeads = Number((ops.counts || {{}}).converted_leads || 0);
+      const revenueCents = Number((ops.counts || {{}}).revenue_cents || 0);
+      $('leadPanelSummary').textContent = `有效 ${{counts.all}} / 高意向 ${{counts.high}} / 回复 ${{publicReplies}} / 合格 ${{qualifiedReplies}} / 转化 ${{convertedLeads}} / 收入分 ${{revenueCents}}`;
       $('leadTableMeta').textContent = `显示 ${{filtered.length}} / ${{rows.length}} 条`;
-      table('leadTable', ['用户', '评分', '意图', '命中原因', '来源视频', '推荐触达', '当前状态'], filtered.slice(0, 80).map(row => [
+      table('leadTable', ['用户', '评分', '意图', '命中原因', '公开回复', '转化', '来源视频', '推荐触达', '当前状态'], filtered.slice(0, 80).map(row => [
         row.username || '-',
         row.score || 0,
         leadIntentChips(row),
         {{html:`<div class="reasonText">${{esc(compactText(row.reason || row.comment_text || row.matched_reason))}}</div>`}},
+        {{html:`<div class="reasonText">${{esc(compactText(row.reply_summary || '无公开回复'))}}</div>`}},
+        {{html:`<div class="reasonText">${{esc(compactText(row.conversion_summary || '未记录转化'))}}</div>`}},
         actionLink(row.source_label || '查看来源', row.source_url || row.source_path),
         chipList((row.recommended_actions || []).map(label => ({{label}}))),
         leadStatusLabel(row),
@@ -4140,8 +5063,8 @@ def html_page() -> bytes:
         outreachStatusLabel(row),
         {{html:`<div class="copyText">${{esc(compactText(row.suggested_text || row.executed_text || row.message))}}</div>`}},
         actionLink(row.evidence_label || '查看证据', safeDownload(row.evidence_path)),
-        row.risk_gate_summary || (['failed','retryable','skipped'].includes(String(row.status || '')) ? (row.failure_reason || row.error_message || row.last_error_message || '-') : '-'),
-        row.next_step || '-',
+        localizedRowText(row, 'language_gate_summary', '') || row.risk_gate_summary || (['failed','retryable','skipped'].includes(String(row.status || '')) ? (row.failure_reason || row.error_message || row.last_error_message || '-') : '-'),
+        localizedRowText(row, 'next_step'),
       ]));
     }}
     function renderOperations(data) {{
@@ -4155,6 +5078,10 @@ def html_page() -> bytes:
       $('mCandidates').textContent = counts.candidates || 0;
       $('mQualified').textContent = counts.qualified_leads || 0;
       $('mHigh').textContent = counts.high_intent || 0;
+      $('mPublicReplies').textContent = counts.public_replies || 0;
+      $('mQualifiedReplies').textContent = counts.qualified_replies || 0;
+      $('mConvertedLeads').textContent = counts.converted_leads || 0;
+      $('mRevenueCents').textContent = counts.revenue_cents || 0;
       $('mActions').textContent = counts.actions || 0;
       $('mTouchSuccess').textContent = counts.touch_success || 0;
       $('mTouchFailed').textContent = counts.touch_failed || 0;
@@ -4298,14 +5225,9 @@ def html_page() -> bytes:
       $('acceptanceState').textContent = `验收状态：${{label}} / ${{mvpLabel}} / ${{goalLabel}} / 客户端门禁：${{gate.status || '-'}}`;
       $('acceptanceState').className = (a.readiness === 'pass' && gateReady) ? 'ok' : (['blocked_by_accounts','blocked_by_environment','failed'].includes(a.readiness) || gate.status === 'failed' ? 'bad' : 'warn');
       $('acceptanceMeta').textContent = `批次：${{batch.id || '-'}} / 状态：${{batch.status || '-'}} / 账号：checked=${{p.checked || 0}} available=${{p.available || 0}} / local_mvp_ready=${{goal.local_mvp_ready === true ? 'true' : 'false'}} / windows_build_ready=${{goal.windows_build_ready === true ? 'true' : 'false'}} / windows_preflight=${{winPreflight.status || '-'}} / final_delivery_ready=${{gateReady ? 'true' : 'false'}}`;
-      const gateFailures = (gate.failed_checks || []).map(x => '客户端门禁失败：' + x);
       const mvpFailures = (mvp.failed_checks || []).map(x => 'MVP验收失败：' + x);
-      const goalFailures = (goal.failed_checks || []).map(x => '目标门禁失败：' + x);
-      const goalBlockers = (goal.blockers || []).map(x => '目标阻断：' + x);
-      const winMissing = (winPreflight.missing_final_artifacts || []).length ? ['Windows缺失最终产物：' + winPreflight.missing_final_artifacts.join(', ')] : [];
-      const winContract = winPreflight.skip_installer_is_non_final ? ['Windows构建合同：-SkipInstaller 仅为非最终 EXE-only 构建。'] : [];
       const accountRepairActions = accountGateBlocked ? [...accountRepairApplyItems(repairApply), ...accountRepairActionItems(accountRepairSummary)] : [];
-      $('acceptanceBlockers').innerHTML = listItems([...(a.blockers || []), ...accountRepairActions, ...goalBlockers, ...winMissing, ...winContract, ...mvpFailures, ...goalFailures, ...gateFailures, ...(a.next_actions || []).map(x => '下一步：' + x)]);
+      $('acceptanceBlockers').innerHTML = listItems([...(a.blockers || []), ...accountRepairActions, ...mvpFailures, ...(a.next_actions || []).map(x => '下一步：' + x)]);
       renderDecision(data);
       renderFunnelFromAcceptance(data);
       renderProfileLaunchList(data);
@@ -4318,8 +5240,8 @@ def html_page() -> bytes:
 	      if (twoPhase.markdown_path) goalRows.push(['两阶段验收矩阵 Markdown', twoPhase.status || '-', {{text: twoPhase.markdown_path, href: safeDownload(twoPhase.markdown_path)}}]);
 	      if (winPreflight.preflight_report_path) goalRows.push(['Windows打包前置门禁', winPreflight.status || '-', {{text: winPreflight.preflight_report_path, href: safeDownload(winPreflight.preflight_report_path)}}]);
 	      if (mvp.path) goalRows.push(['MVP验收摘要', mvp.status || '-', {{text: mvp.path, href: safeDownload(mvp.path)}}]);
-      if (rows.length) table('healthTable', ['类型', '错误/状态', '账号/路径'], rows);
-      if (goalRows.length || rows.length) table('reportTable', ['类型', '状态', '路径'], [...goalRows, ...rows]);
+      if (rows.length) table('healthTable', ['类型', '错误/状态', '账号/路径', '客户动作'], rows);
+      if (goalRows.length || rows.length) table('reportTable', ['类型', '状态', '路径'], [...goalRows, ...rows.map(row => row.slice(0, 3))]);
     }}
     async function refreshLogs() {{
       let data = {{}};
@@ -4435,11 +5357,12 @@ def html_page() -> bytes:
 	      loadedGroups = groups;
 		      const completeGroupCounts = data.all_group_counts_known === true || data.live_all_group_counts_known === true || data.counts_resolved === true;
 		      groupListReady = groups.length > 0 && !data.error && data.stale_cache !== true && (data.background_refresh !== true || completeGroupCounts);
+	      const previousGroupValue = $('group') ? $('group').value : '';
 	      $('group').innerHTML = groups.length
 	        ? groups.map(g => `<option value="${{esc(g.name)}}">${{esc(groupOptionLabel(g))}}</option>`).join('')
 	        : '<option value="">请先刷新账号分组</option>';
-	      const selected = groups.find(g => String(g.name).toLowerCase() === 'united states') || groups[0];
-	      if (selected) $('group').value = selected.name;
+	      const preferredGroup = preferredProfileGroupName(groups, previousGroupValue);
+	      if (preferredGroup) $('group').value = preferredGroup;
 	      if (data.error && !groups.length) {{
 	        renderGroupError(data);
 	      }} else if (!groups.length) {{
@@ -4485,11 +5408,13 @@ def html_page() -> bytes:
 	        await postJson('/api/client-event', {{event, ...payload}});
 	      }} catch (_err) {{}}
 	    }}
-	    async function refreshActivation() {{
+    async function refreshActivation() {{
       try {{
         const res = await fetch('/api/activation');
         const data = await res.json();
         const ready = data.ready === true;
+        liveActivationReady = ready;
+        liveActivationPayload = data || {{}};
         const exists = data.activation_status_exists === true;
         const status = data.status || (ready ? 'ready' : 'blocked');
         const path = data.activation_status_path || '-';
@@ -4500,12 +5425,16 @@ def html_page() -> bytes:
         $('activationState').title = (data.failed_checks || []).join(', ') || path;
         $('activationNotice').className = ready ? 'notice ready' : 'notice blocked';
         $('activationActions').innerHTML = listItems((data.next_actions || []).length ? data.next_actions : [ready ? '激活状态已就绪。' : '生成或放置真实激活状态文件，并设置 ActivationStatusPath。']);
+        updateStartAvailability();
       }} catch (err) {{
+        liveActivationReady = false;
+        liveActivationPayload = {{status:'failed', error:'activation_status_read_failed', message:String(err), next_actions:['激活状态读取失败：' + String(err)]}};
         $('activationState').textContent = '读取失败';
         $('activationState').className = 'bad';
         $('activationState').title = String(err);
         $('activationNotice').className = 'notice blocked';
         $('activationActions').innerHTML = listItems(['激活状态读取失败：' + String(err)]);
+        updateStartAvailability();
       }}
     }}
     async function refreshIxBrowserStatus() {{
@@ -4549,6 +5478,7 @@ def html_page() -> bytes:
         const data = await res.json();
         const ready = data.final_delivery_ready === true;
         const mvp = data.mvp_acceptance || {{}};
+        const minimumMvp = data.minimum_mvp || {{}};
         const goal = data.goal_delivery || {{}};
         const twoPhase = data.two_phase_acceptance || {{}};
         const winPreflight = goal.windows_package_preflight || {{}};
@@ -4590,7 +5520,12 @@ def html_page() -> bytes:
 		          (stage.blockers || []).forEach(item => planRows.push(`  阻断：${{item}}`));
 		          (stage.actions || []).forEach(item => planRows.push(`  动作：${{item}}`));
 		        }});
-		        const mvpRows = mvp.mvp_local_ready ? ['本地MVP已验收：' + (mvp.status || 'passed')] : [];
+		        const mvpRows = [];
+	        if (minimumMvp.schema_version) {{
+	          mvpRows.push(`最小MVP门禁：${{minimumMvp.status || '-'}} / minimum_mvp_ready=${{minimumMvp.minimum_mvp_ready === true ? 'true' : 'false'}} / 连续客户端no-submit=${{minimumMvp.consecutive_client_real_no_submit_passes || 0}}/${{minimumMvp.required_consecutive_client_runs || 5}}`);
+	          (minimumMvp.blockers || []).slice(0, 4).forEach(item => mvpRows.push('最小MVP阻断：' + item));
+	        }}
+	        if (mvp.mvp_local_ready) mvpRows.push('本地MVP已验收：' + (mvp.status || 'passed'));
 	        const goalRows = goal.status ? [`目标模式：${{goal.status}} / 本地MVP=${{goal.local_mvp_ready === true ? 'true' : 'false'}} / Windows构建输入=${{goal.windows_build_ready === true ? 'true' : 'false'}} / 最终交付=${{goal.final_delivery_ready === true ? 'true' : 'false'}}`] : [];
 	        const boundary = goal.delivery_boundary || {{}};
 	        const localProductBoundary = data.delivery_boundary || {{}};
@@ -4639,6 +5574,14 @@ def html_page() -> bytes:
 	        const operatorCommandRows = (data.operator_commands || []).map(item => '操作命令：' + item);
 	        const failedSummary = failedChecks.length ? [`失败检查摘要：${{failedChecks.length}} 项，见最终复核命令输出。`] : [];
 	        const commands = data.verification_commands || [];
+	        if ($('minimumMvpState')) {{
+	          const minReady = minimumMvp.minimum_mvp_ready === true;
+	          const minCount = minimumMvp.consecutive_client_real_no_submit_passes || 0;
+	          const minRequired = minimumMvp.required_consecutive_client_runs || 5;
+	          $('minimumMvpState').textContent = minReady ? `passed / ${{minCount}}/${{minRequired}}` : `blocked / ${{minCount}}/${{minRequired}}`;
+	          $('minimumMvpState').className = minReady ? 'ok' : 'bad';
+	          $('minimumMvpState').title = (minimumMvp.failed_checks || []).join(', ') || (minimumMvp.blockers || []).join(' / ') || '等待客户客户端真实 no-submit 验收。';
+	        }}
 	        $('finalStatusState').textContent = ready ? 'passed / 可最终交付' : `${{status}} / 不可最终交付`;
 	        $('finalStatusState').className = ready ? 'ok' : 'bad';
 	        $('finalStatusState').title = failed || blocked || '等待最终验收证据';
@@ -4649,6 +5592,10 @@ def html_page() -> bytes:
 	      }} catch (err) {{
 	        $('finalStatusState').textContent = '读取失败';
 	        $('finalStatusState').className = 'bad';
+	        if ($('minimumMvpState')) {{
+	          $('minimumMvpState').textContent = '读取失败';
+	          $('minimumMvpState').className = 'bad';
+	        }}
 	        $('finalStatusState').title = String(err);
 	        $('finalStatusNotice').className = 'notice blocked';
 	        $('finalStatusActions').innerHTML = listItems(['最终验收状态读取失败：' + String(err)]);
@@ -4745,19 +5692,25 @@ def html_page() -> bytes:
 	        );
 	        return;
       }}
-      if (accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed()) {{
-        showApiNotice(
-          '重新预检账号',
-          {{
-            status:'ready_for_account_recheck',
-            message:'当前分组上次账号预检未通过；本次会重新读取 ixBrowser 分组并自动筛选有效登录账号。',
-            account_repair_apply: accountRepairApplyState || {{}},
-            next_actions:['系统会跳过未登录、内核不匹配、代理异常账号。','如果仍无可用账号，本轮会生成新的阻断证据。']
-          }},
-          'warning',
-          12000
-        );
-      }}
+	      if (accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed()) {{
+	        const staleAccountRepair = accountRepairApplyState && accountRepairApplyState.stale === true;
+	        showApiNotice(
+	          staleAccountRepair ? '账号修复后再启动' : '账号池无可执行账号，已禁止重复启动',
+	          {{
+	            status:'blocked_by_accounts',
+	            error:'account_gate_requires_repair_confirmation',
+	            message: staleAccountRepair
+	              ? '旧账号修复结果已失效；请按最新账号修复计划处理当前失败账号后再启动。'
+	              : '当前分组最近一次账号预检没有可用账号；请先隔离坏账号或确认已完成账号修复后再重新预检。',
+	            account_repair_apply: accountRepairApplyState || {{}},
+	            account_repair_summary: accountRepairSummary || {{}},
+	            next_actions:[...accountRepairApplyItems(accountRepairApplyState || {{}}), '先处理账号阻断，再勾选“已修复账号，允许重新预检”。']
+	          }},
+	          'blocked',
+	          12000
+	        );
+	        return;
+	      }}
 	      if ($('liveConfirm').checked && $('mode').value !== 'live_comment') {{
 	        $('mode').value = 'live_comment';
 	        $('currentMode').textContent = $('mode').selectedOptions[0].textContent;
@@ -4773,6 +5726,29 @@ def html_page() -> bytes:
 	        logClientEvent('start_blocked', {{reason:'live_comment_confirmation_required', target:$('target').value, group:$('group').value}});
 	        return;
 		      }}
+	      if ($('mode').value === 'live_comment' && !liveActivationReady) {{
+	        await refreshActivation();
+	        if (!liveActivationReady) {{
+	          const payload = liveActivationPayload || {{}};
+	          showApiNotice(
+	            '真实评论授权未就绪',
+	            {{
+	              status:'rejected',
+	              error:'LIVE_SUBMIT_NOT_AUTHORIZED',
+	              message:payload.message || payload.error_message || '真实评论需要本地激活状态文件且 activation ready。',
+	              activation_status_path:payload.activation_status_path,
+	              failed_checks:payload.failed_checks || ['activation_status_file_exists'],
+	              next_actions:payload.next_actions || ['生成或放置真实激活状态文件，并设置 ActivationStatusPath。'],
+	              no_browser_started:true,
+	              no_submit:true
+	            }},
+	            'blocked',
+	            30000
+	          );
+	          logClientEvent('start_blocked', {{reason:'LIVE_SUBMIT_NOT_AUTHORIZED', target:$('target').value, group:$('group').value, mode:'live_comment'}});
+	          return;
+	        }}
+	      }}
 	      $('start').disabled = true;
 	      updateSelectedGroupQuantity();
 	      $('currentMode').textContent = $('mode').selectedOptions[0].textContent;
@@ -4916,6 +5892,7 @@ def html_page() -> bytes:
 	    $('refresh').onclick = () => {{ refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus(); }};
 	    $('refreshGroups').onclick = refreshGroups;
 	    $('refreshGroupsInline').onclick = () => {{ refreshIxBrowserStatus(); refreshGroups(); }};
+	    $('saveGroupMapping').onclick = saveGroupMapping;
 	    $('applyIxBrowserPort').onclick = applyIxBrowserPort;
 	    $('initAcceptanceInputs').onclick = initAcceptanceInputs;
 	    $('refreshMvpAcceptance').onclick = refreshMvpAcceptance;
@@ -4926,6 +5903,7 @@ def html_page() -> bytes:
 	    $('aiConsoleProductCapability').onclick = () => sendAiConsoleMessage('产品能力矩阵现在做到哪了');
 	    $('approveOfflinePolicyCandidate').onclick = () => reviewOfflinePolicyCandidate('approved');
 	    $('rejectOfflinePolicyCandidate').onclick = () => reviewOfflinePolicyCandidate('rejected');
+	    $('localeSelect').onchange = () => setLocale($('localeSelect').value);
 	    $('aiConsoleInput').onkeydown = event => {{
 	      if (event.key === 'Enter' && !event.shiftKey) {{
 	        event.preventDefault();
@@ -4961,6 +5939,7 @@ def html_page() -> bytes:
 	      refreshStartPreview();
 	    }};
 	    $('group').onchange = () => {{
+	      rememberSelectedProfileGroup($('group').value);
 	      if ($('accountRepairConfirmed') && $('accountRepairConfirmed').checked && normGroupName(accountRepairConfirmedGroup) !== normGroupName($('group').value)) {{
 	        $('accountRepairConfirmed').checked = false;
 	        accountRepairConfirmedGroup = '';
@@ -4990,7 +5969,7 @@ def html_page() -> bytes:
 	    }});
 	    $('sourceType').onchange = () => {{ $('targetType').textContent = $('sourceType').selectedOptions[0].textContent; refreshStartPreview(); }};
     setInterval(refreshLogs, 2000); setInterval(refreshSnapshot, 5000); setInterval(refreshAcceptance, 5000); setInterval(refreshProductCapability, 10000); setInterval(refreshIxBrowserStatus, 10000); setInterval(refreshActivation, 10000); setInterval(refreshFinalStatus, 10000);
-	    updateCopyModeNotice(); refreshStartPreview(); refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshProductCapability(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus(); refreshGroups();
+	    loadLocales(); loadWebSettings().finally(() => refreshGroups()); updateCopyModeNotice(); refreshStartPreview(); refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshProductCapability(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus();
   </script>
 </body>
 </html>""".encode("utf-8")
@@ -5065,9 +6044,14 @@ def build_snapshot_payload() -> dict:
 
 
 def summarize_account_repair_plan(path_value: str | Path) -> dict:
-    path = Path(str(path_value or ""))
+    raw = str(path_value or "").strip()
+    if not raw:
+        return {"status": "not_available", "path": "", "reason": "account_repair_plan_not_generated"}
+    path = Path(raw)
     if not path.exists():
-        return {}
+        return {"status": "not_available", "path": str(path), "reason": "account_repair_plan_not_found"}
+    if not path.is_file():
+        return {"status": "not_available", "path": str(path), "reason": "account_repair_plan_not_file"}
     try:
         plan = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -5292,6 +6276,7 @@ def build_acceptance_payload() -> dict:
                 } if ix_metadata else {},
             },
             "mvp_acceptance": summarize_mvp_acceptance(),
+            "minimum_mvp": build_minimum_mvp_gate_payload(),
             "goal_delivery": summarize_goal_delivery(),
             "two_phase_acceptance": summarize_two_phase_acceptance(),
             "operations": operations,
@@ -5387,6 +6372,8 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "profile_queue": [],
         "lead_view": [],
         "outreach_view": [],
+        "public_reply_events": [],
+        "conversion_events": [],
     }
     counts = {
         "candidates": 0,
@@ -5397,38 +6384,46 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "touch_skipped": 0,
         "high_intent": 0,
         "qualified_leads": 0,
+        "public_replies": 0,
+        "qualified_replies": 0,
+        "conversion_events": 0,
+        "converted_leads": 0,
+        "revenue_cents": 0,
     }
     if db_path.exists() and batch_id:
+        conn = None
         try:
-            with sqlite3.connect(str(db_path)) as conn:
-                conn.row_factory = sqlite3.Row
-                count_row = conn.execute(
-                    "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=?",
-                    (batch_id,),
-                ).fetchone()
-                counts["candidates"] = safe_int(count_row["count"] if count_row else 0, 0)
-                high_row = conn.execute(
-                    "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=? AND qualify_score>=50",
-                    (batch_id,),
-                ).fetchone()
-                counts["high_intent"] = safe_int(high_row["count"] if high_row else 0, 0)
-                rows["collection_tasks"] = [
-                    dict(row)
-                    for row in conn.execute(
-                        """
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            public_reply_table_exists = sqlite_table_exists(conn, "public_reply_events")
+            conversion_table_exists = sqlite_table_exists(conn, "conversion_events")
+            count_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=?",
+                (batch_id,),
+            ).fetchone()
+            counts["candidates"] = safe_int(count_row["count"] if count_row else 0, 0)
+            high_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM candidate_users WHERE batch_id=? AND qualify_score>=50",
+                (batch_id,),
+            ).fetchone()
+            counts["high_intent"] = safe_int(high_row["count"] if high_row else 0, 0)
+            rows["collection_tasks"] = [
+                dict(row)
+                for row in conn.execute(
+                    """
                         SELECT source_type, source_value, profile_id, status, error_code, error_message, updated_at
                         FROM collection_tasks
                         WHERE batch_id=?
                         ORDER BY created_at ASC, rowid ASC
                         LIMIT 80
                         """,
-                        (batch_id,),
-                    ).fetchall()
-                ]
-                rows["action_queue"] = [
-                    dict(row)
-                    for row in conn.execute(
-                        """
+                    (batch_id,),
+                ).fetchall()
+            ]
+            rows["action_queue"] = [
+                dict(row)
+                for row in conn.execute(
+                    """
                         SELECT aq.id, aq.lead_id, aq.target_username, aq.action_type, aq.target_url,
                                aq.suggested_text, aq.reason, aq.status, aq.risk_level,
                                aq.last_error_code, aq.last_error_message, aq.last_executed_at,
@@ -5439,13 +6434,13 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                         ORDER BY aq.created_at DESC, aq.rowid DESC
                         LIMIT 80
                         """,
-                        (batch_id,),
-                    ).fetchall()
-                ]
-                rows["outreach_executions"] = [
-                    dict(row)
-                    for row in conn.execute(
-                        """
+                    (batch_id,),
+                ).fetchall()
+            ]
+            rows["outreach_executions"] = [
+                dict(row)
+                for row in conn.execute(
+                    """
                         SELECT oe.id, oe.action_id, oe.target_username, oe.action_type, oe.profile_id,
                                oe.status, oe.evidence_path, oe.error_code, oe.error_message,
                                oe.risk_gate_json, oe.completed_at, oe.created_at,
@@ -5459,17 +6454,75 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
                         ORDER BY oe.created_at DESC, oe.rowid DESC
                         LIMIT 80
                         """,
+                    (batch_id,),
+                ).fetchall()
+            ]
+            rows["lead_view"] = load_operator_lead_rows(
+                conn,
+                batch_id,
+                include_public_replies=public_reply_table_exists,
+                include_conversions=conversion_table_exists,
+            )
+            if not rows["lead_view"]:
+                rows["lead_view"] = load_candidate_lead_rows(conn, batch_id)
+            rows["outreach_view"] = build_operator_outreach_rows(rows["action_queue"], rows["outreach_executions"], config)
+            if public_reply_table_exists:
+                rows["public_reply_events"] = [
+                    dict(row)
+                    for row in conn.execute(
+                        """
+                            SELECT id, campaign_id, run_id, batch_id, lead_id, action_id, execution_id,
+                                   target_username, reply_author_username, reply_text, reply_language,
+                                   source_url, replied_at, intent_confirmed, qualification_state,
+                                   confidence, verified_contact, evidence_id, classifier_version, created_at
+                            FROM public_reply_events
+                            WHERE batch_id=?
+                            ORDER BY created_at DESC, rowid DESC
+                            LIMIT 80
+                            """,
                         (batch_id,),
                     ).fetchall()
                 ]
-                rows["lead_view"] = load_operator_lead_rows(conn, batch_id)
-                if not rows["lead_view"]:
-                    rows["lead_view"] = load_candidate_lead_rows(conn, batch_id)
-                rows["outreach_view"] = build_operator_outreach_rows(rows["action_queue"], rows["outreach_executions"], config)
-                rows["profile_queue"] = load_profile_queue_rows(conn, batch_id)
+            if conversion_table_exists:
+                rows["conversion_events"] = [
+                    dict(row)
+                    for row in conn.execute(
+                        """
+                            SELECT id, campaign_id, run_id, batch_id, lead_id, action_id, public_reply_event_id,
+                                   conversion_type, conversion_state, amount_cents, currency, source,
+                                   notes, idempotency_key, recorded_at, created_by, created_at
+                            FROM conversion_events
+                            WHERE batch_id=?
+                            ORDER BY recorded_at DESC, created_at DESC, rowid DESC
+                            LIMIT 80
+                            """,
+                        (batch_id,),
+                    ).fetchall()
+                ]
+            rows["profile_queue"] = load_profile_queue_rows(conn, batch_id)
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
     counts["qualified_leads"] = len([row for row in rows["lead_view"] if safe_int(row.get("score") or row.get("qualify_score"), 0) >= 50])
+    counts["public_replies"] = len(rows["public_reply_events"])
+    counts["qualified_replies"] = len(
+        [row for row in rows["public_reply_events"] if str(row.get("qualification_state") or "") == "qualified"]
+    )
+    counts["conversion_events"] = len(rows["conversion_events"])
+    counts["converted_leads"] = len(
+        {
+            str(row.get("lead_id") or "")
+            for row in rows["conversion_events"]
+            if str(row.get("conversion_state") or "") in {"converted", "revenue_recorded", "won"}
+        }
+    )
+    counts["revenue_cents"] = sum(
+        safe_int(row.get("amount_cents"), 0)
+        for row in rows["conversion_events"]
+        if str(row.get("conversion_state") or "") in {"revenue_recorded", "won"}
+    )
     counts["actions"] = len(rows["action_queue"])
     counts["touched"] = len(rows["outreach_executions"])
     counts["touch_success"] = len([row for row in rows["outreach_executions"] if str(row.get("status") or "") in {"success", "completed"}])
@@ -5492,27 +6545,100 @@ def build_operations_payload(db_path: Path, batch: dict, acceptance: dict, log_l
         "outreach_executions": rows["outreach_executions"],
         "lead_view": rows["lead_view"],
         "outreach_view": rows["outreach_view"],
+        "public_reply_events": rows["public_reply_events"],
+        "conversion_events": rows["conversion_events"],
         "profile_queue": rows["profile_queue"],
     }
 
 
-def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
+def sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (str(table_name or ""),),
+    ).fetchone()
+    return bool(row)
+
+
+def load_operator_lead_rows(
+    conn: sqlite3.Connection,
+    batch_id: str,
+    include_public_replies: bool = True,
+    include_conversions: bool = True,
+) -> list[dict]:
+    public_reply_select = """
+               COUNT(DISTINCT pre.id) AS public_reply_count,
+               COUNT(DISTINCT CASE WHEN pre.qualification_state='qualified' THEN pre.id END) AS qualified_reply_count,
+               (
+                   SELECT latest_pre.reply_text
+                   FROM public_reply_events latest_pre
+                   WHERE latest_pre.lead_id=ol.id AND latest_pre.batch_id=ol.batch_id
+                   ORDER BY latest_pre.created_at DESC, latest_pre.rowid DESC
+                   LIMIT 1
+               ) AS latest_reply_text,
+               (
+                   SELECT latest_pre.qualification_state
+                   FROM public_reply_events latest_pre
+                   WHERE latest_pre.lead_id=ol.id AND latest_pre.batch_id=ol.batch_id
+                   ORDER BY latest_pre.created_at DESC, latest_pre.rowid DESC
+                   LIMIT 1
+               ) AS latest_reply_state,
+               (
+                   SELECT latest_pre.verified_contact
+                   FROM public_reply_events latest_pre
+                   WHERE latest_pre.lead_id=ol.id AND latest_pre.batch_id=ol.batch_id
+                   ORDER BY latest_pre.created_at DESC, latest_pre.rowid DESC
+                   LIMIT 1
+               ) AS latest_reply_verified_contact
+    """ if include_public_replies else """
+               0 AS public_reply_count,
+               0 AS qualified_reply_count,
+               '' AS latest_reply_text,
+               '' AS latest_reply_state,
+               0 AS latest_reply_verified_contact
+    """
+    public_reply_join = (
+        "LEFT JOIN public_reply_events pre ON pre.lead_id = ol.id AND pre.batch_id = ol.batch_id"
+        if include_public_replies
+        else ""
+    )
+    conversion_select = """
+               (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.batch_id=ol.batch_id) AS conversion_event_count,
+               (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.batch_id=ol.batch_id AND ce.conversion_state IN ('converted','revenue_recorded','won')) AS converted_count,
+               (SELECT COUNT(*) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.batch_id=ol.batch_id AND ce.conversion_state='won') AS won_count,
+               (SELECT COALESCE(SUM(ce.amount_cents), 0) FROM conversion_events ce WHERE ce.lead_id=ol.id AND ce.batch_id=ol.batch_id AND ce.conversion_state IN ('revenue_recorded','won')) AS revenue_cents,
+               (
+                   SELECT latest_ce.conversion_state
+                   FROM conversion_events latest_ce
+                   WHERE latest_ce.lead_id=ol.id AND latest_ce.batch_id=ol.batch_id
+                   ORDER BY latest_ce.recorded_at DESC, latest_ce.created_at DESC, latest_ce.rowid DESC
+                   LIMIT 1
+               ) AS latest_conversion_state
+    """ if include_conversions else """
+               0 AS conversion_event_count,
+               0 AS converted_count,
+               0 AS won_count,
+               0 AS revenue_cents,
+               '' AS latest_conversion_state
+    """
     rows = conn.execute(
-        """
+        f"""
         SELECT ol.id, ol.candidate_user_id, ol.lead_type, ol.priority, ol.score, ol.reason,
                ol.lifecycle_stage, ol.status, ol.source_path, ol.created_at, ol.updated_at,
                cu.username, cu.profile_url, cu.comment_text, cu.qualify_score, cu.intent_tags,
                cu.source_path AS candidate_source_path,
                dc.video_url, dc.video_id, dc.caption,
-               COUNT(aq.id) AS action_count,
+               COUNT(DISTINCT aq.id) AS action_count,
                GROUP_CONCAT(aq.action_type) AS action_types,
-               SUM(CASE WHEN aq.status IN ('completed','success') THEN 1 ELSE 0 END) AS success_action_count,
-               SUM(CASE WHEN aq.status IN ('failed','retryable') THEN 1 ELSE 0 END) AS failed_action_count,
-               SUM(CASE WHEN aq.status='skipped' OR aq.status='rejected' THEN 1 ELSE 0 END) AS skipped_action_count
+               COUNT(DISTINCT CASE WHEN aq.status IN ('completed','success') THEN aq.id END) AS success_action_count,
+               COUNT(DISTINCT CASE WHEN aq.status IN ('failed','retryable') THEN aq.id END) AS failed_action_count,
+               COUNT(DISTINCT CASE WHEN aq.status='skipped' OR aq.status='rejected' THEN aq.id END) AS skipped_action_count,
+               {public_reply_select},
+               {conversion_select}
         FROM operation_leads ol
         LEFT JOIN candidate_users cu ON cu.id = ol.candidate_user_id
         LEFT JOIN discovered_contents dc ON dc.id = cu.content_id
         LEFT JOIN action_queue aq ON aq.lead_id = ol.id
+        {public_reply_join}
         WHERE ol.batch_id=?
         GROUP BY ol.id
         ORDER BY ol.score DESC, ol.updated_at DESC, ol.created_at DESC
@@ -5533,6 +6659,8 @@ def load_operator_lead_rows(conn: sqlite3.Connection, batch_id: str) -> list[dic
         item["intent_confidence"] = extract_intent_confidence(tags)
         item["matched_reason"] = item.get("reason") or item.get("comment_text") or item.get("caption") or ""
         item["recommended_actions"] = [human_action_type(value) for value in compact_csv(item.get("action_types"))]
+        item["reply_summary"] = human_reply_summary(item)
+        item["conversion_summary"] = human_conversion_summary(item)
         item["current_status"] = operator_lead_status(item)
         result.append(item)
     return result
@@ -5567,6 +6695,8 @@ def load_candidate_lead_rows(conn: sqlite3.Connection, batch_id: str) -> list[di
         item["intent_confidence"] = extract_intent_confidence(tags)
         item["matched_reason"] = item.get("comment_text") or item.get("caption") or "采集候选用户，等待线索入队"
         item["recommended_actions"] = ["评论回复"] if score >= 50 else ["继续观察"]
+        item["reply_summary"] = "无公开回复"
+        item["conversion_summary"] = "未记录转化"
         item["current_status"] = "new"
         result.append(item)
     return result
@@ -5589,9 +6719,12 @@ def build_operator_outreach_rows(action_rows: list[dict], execution_rows: list[d
         row["execution_mode_label"] = mode_label
         row["failure_reason"] = human_failure_reason(row)
         row["risk_gate"] = extract_risk_gate(row)
+        row["language_gate_summary"] = human_language_gate_summary(row)
+        row["language_gate_summary_i18n"] = language_gate_summary_i18n(row)
         row["risk_gate_summary"] = human_risk_gate_summary(row)
         row["evidence_label"] = "查看证据" if row.get("evidence_path") and not str(row.get("evidence_path")).startswith("evidence://") else ""
         row["next_step"] = outreach_next_step(row)
+        row["next_step_i18n"] = outreach_next_step_i18n(row)
         result.append(row)
     for execution in execution_rows:
         action_id = str(execution.get("action_id") or "")
@@ -5603,9 +6736,12 @@ def build_operator_outreach_rows(action_rows: list[dict], execution_rows: list[d
         row["execution_mode_label"] = mode_label
         row["failure_reason"] = human_failure_reason(row)
         row["risk_gate"] = extract_risk_gate(row)
+        row["language_gate_summary"] = human_language_gate_summary(row)
+        row["language_gate_summary_i18n"] = language_gate_summary_i18n(row)
         row["risk_gate_summary"] = human_risk_gate_summary(row)
         row["evidence_label"] = "查看证据" if row.get("evidence_path") and not str(row.get("evidence_path")).startswith("evidence://") else ""
         row["next_step"] = outreach_next_step(row)
+        row["next_step_i18n"] = outreach_next_step_i18n(row)
         result.append(row)
     return sorted(result, key=lambda item: str(item.get("created_at") or item.get("last_executed_at") or ""), reverse=True)[:120]
 
@@ -5706,6 +6842,15 @@ def human_execution_mode(mode: str) -> str:
 
 
 def operator_lead_status(row: dict) -> str:
+    latest_conversion = str(row.get("latest_conversion_state") or "").strip()
+    if latest_conversion in {"won", "lost", "opted_out"}:
+        return latest_conversion
+    if safe_int(row.get("converted_count"), 0) > 0:
+        return "converted"
+    if safe_int(row.get("qualified_reply_count"), 0) > 0:
+        return "qualified"
+    if safe_int(row.get("public_reply_count"), 0) > 0:
+        return "reply_received"
     if safe_int(row.get("success_action_count"), 0) > 0:
         return "contacted"
     if safe_int(row.get("failed_action_count"), 0) > 0:
@@ -5715,6 +6860,44 @@ def operator_lead_status(row: dict) -> str:
     if safe_int(row.get("action_count"), 0) > 0:
         return "queued"
     return str(row.get("lifecycle_stage") or row.get("status") or "new")
+
+
+def human_reply_summary(row: dict) -> str:
+    reply_count = safe_int(row.get("public_reply_count"), 0)
+    if reply_count <= 0:
+        return "无公开回复"
+    qualified_count = safe_int(row.get("qualified_reply_count"), 0)
+    latest = str(row.get("latest_reply_text") or "").strip()
+    state = str(row.get("latest_reply_state") or "").strip()
+    verified = safe_int(row.get("latest_reply_verified_contact"), 0) == 1
+    label = "合格回复" if qualified_count > 0 or state == "qualified" else "收到回复"
+    suffix = " / 已验证触达" if verified else " / 未验证触达"
+    if latest:
+        return f"{label} {qualified_count}/{reply_count}{suffix}: {latest[:80]}"
+    return f"{label} {qualified_count}/{reply_count}{suffix}"
+
+
+def human_conversion_summary(row: dict) -> str:
+    total = safe_int(row.get("conversion_event_count"), 0)
+    if total <= 0:
+        return "未记录转化"
+    converted = safe_int(row.get("converted_count"), 0)
+    won = safe_int(row.get("won_count"), 0)
+    revenue = safe_int(row.get("revenue_cents"), 0)
+    latest = str(row.get("latest_conversion_state") or "").strip()
+    label = {
+        "won": "已成交",
+        "lost": "已流失",
+        "opted_out": "已退订",
+        "revenue_recorded": "已记收入",
+        "converted": "已转化",
+    }.get(latest, "已记录")
+    parts = [f"{label} {converted}/{total}"]
+    if won:
+        parts.append(f"成交 {won}")
+    if revenue:
+        parts.append(f"收入分 {revenue}")
+    return " / ".join(parts)
 
 
 def outreach_operator_status(action: dict, execution: dict) -> str:
@@ -5764,7 +6947,63 @@ def human_risk_gate_summary(row: dict) -> str:
     return " / ".join(parts)
 
 
+def human_language_gate_summary(row: dict) -> str:
+    return language_gate_summary_i18n(row).get("zh-CN", "")
+
+
+def language_gate_summary_i18n(row: dict) -> dict:
+    status = str(row.get("language_gate_status") or "").strip()
+    if not status or status == "ready":
+        return {}
+    comment_language = str(row.get("comment_language") or "unknown").strip() or "unknown"
+    group_language = str(row.get("group_default_language") or "unknown").strip() or "unknown"
+    note = str(row.get("language_gate_note") or "").strip()
+    zh_mapping = {
+        "language_conflict_with_group_default": "语言冲突阻断",
+        "architecture_supported_requires_operator_confirmation": "语言未正式验收",
+        "requires_operator_confirmation": "语言需人工确认",
+    }
+    en_mapping = {
+        "language_conflict_with_group_default": "Language conflict blocked",
+        "architecture_supported_requires_operator_confirmation": "Language not formally acceptance-tested",
+        "requires_operator_confirmation": "Language requires operator confirmation",
+    }
+    zh_parts = [zh_mapping.get(status, "语言门控阻断"), f"评论={comment_language}", f"分组={group_language}"]
+    en_parts = [en_mapping.get(status, "Language gate blocked"), f"comment={comment_language}", f"group={group_language}"]
+    if note:
+        zh_parts.append(note)
+        en_parts.append(note)
+    return {"zh-CN": " / ".join(zh_parts), "en-US": " / ".join(en_parts)}
+
+
 def outreach_next_step(row: dict) -> str:
+    i18n = outreach_next_step_i18n(row)
+    if i18n:
+        return i18n.get("zh-CN", "")
+    return outreach_next_step_default(row)
+
+
+def outreach_next_step_i18n(row: dict) -> dict:
+    language_status = str(row.get("language_gate_status") or "").strip()
+    if language_status and language_status != "ready":
+        if language_status == "language_conflict_with_group_default":
+            return {
+                "zh-CN": "确认评论语言和分组默认语言；冲突解除前不能真实提交",
+                "en-US": "Confirm the comment language and group default language; do not live-submit until the conflict is resolved",
+            }
+        if language_status == "architecture_supported_requires_operator_confirmation":
+            return {
+                "zh-CN": "人工确认未正式验收语言后再决定是否执行",
+                "en-US": "Manually confirm this not-formally-tested language before deciding whether to execute",
+            }
+        return {
+            "zh-CN": "人工确认评论语言和回复语言后再执行",
+            "en-US": "Manually confirm the comment and reply language before execution",
+        }
+    return {}
+
+
+def outreach_next_step_default(row: dict) -> str:
     risk_gate = extract_risk_gate(row)
     risk_actions = risk_gate.get("risk_actions") if isinstance(risk_gate, dict) else []
     if isinstance(risk_actions, list) and risk_actions:
@@ -6168,6 +7407,7 @@ def load_groups(refresh: bool = False, *, allow_async: bool = False) -> dict:
             "stale_cache": False,
             "background_refresh": False,
         })
+        GROUP_CACHE = attach_group_mappings(GROUP_CACHE)
         write_latest_groups_payload(GROUP_CACHE)
         return GROUP_CACHE
     except Exception as exc:
@@ -6189,23 +7429,6 @@ def validate_profile_group_for_start(profile_group: str) -> tuple[bool, dict]:
             groups = retry_groups
             error = ""
         else:
-            cached_names = {str(row.get("name") or "").strip().lower(): row for row in retry_groups or groups}
-            cached_selected = cached_names.get(profile_group.strip().lower())
-            api_health = build_ixbrowser_status_payload()
-            if cached_selected and (cached_selected.get("count_known") or api_health.get("ready")):
-                append_web_log(
-                    f"WARN   profile_group_live_refresh_degraded group={profile_group} "
-                    f"error={retry_error or error} policy=allow_cached_group_with_headless_start_gate"
-                )
-                return True, {
-                    "group": cached_selected,
-                    "status": "ready_with_cached_group_after_refresh_retry",
-                    "warning": "profile_group_live_refresh_required",
-                    "group_error": retry_error or error,
-                    "stale_cache": bool(retry_payload.get("stale_cache", group_payload.get("stale_cache"))),
-                    "ixbrowser_status": api_health.get("status"),
-                    "next_actions": ["已用缓存分组启动，执行器会继续校验 ixBrowser Local API 和账号可用性。"],
-                }
             return False, {
                 "status": "rejected",
                 "error": "profile_group_live_refresh_required",
@@ -6295,21 +7518,21 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
         account_repair_summary = summarize_account_repair_plan(plan_paths[3] or plan_paths[1])
         stale_repair = account_repair_apply.get("stale") is True
         append_web_log(
-            f"WARN   web_ui_account_gate_stale_recheck group={profile_group} "
-            "policy=allow_start_with_forced_account_recheck"
+            f"WARN   web_ui_account_gate_blocked group={profile_group} "
+            "policy=require_operator_account_repair_confirmation"
         )
-        return True, {
-            "status": "ready_for_account_recheck",
+        return False, {
+            "status": "rejected",
             "error": "account_repair_required",
             "message": (
-                "旧账号修复结果已失效；本次启动将重新读取 ixBrowser 分组并重新预检账号。"
+                "旧账号修复结果已失效；请先复核最新账号修复计划，确认已修复账号后再重新预检。"
                 if stale_repair
-                else "当前分组最近一次预检没有可用账号；本次启动将重新读取 ixBrowser 分组并重新预检账号。"
+                else "当前分组最近一次预检没有可用账号；请先修复账号或确认已修复账号后再重新预检。"
             ),
             "profile_group": profile_group,
             "profile_available": profile_available,
             "same_group": same_group,
-            "force_account_recheck": True,
+            "force_account_recheck": False,
             "blockers": blockers,
             "next_actions": next_actions
             or [
@@ -6331,7 +7554,18 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
             f"WARN   web_ui_account_recheck_confirmed group={profile_group} "
             "policy=operator_confirmed_account_repair"
         )
-    return True, {"status": status, "profile_available": profile_available, "same_group": same_group}
+    force_account_recheck = bool(account_repair_confirmed and same_group)
+    if force_account_recheck and not blocked:
+        append_web_log(
+            f"WARN   web_ui_account_recheck_confirmed group={profile_group} "
+            "policy=operator_confirmed_same_group_recheck"
+        )
+    return True, {
+        "status": status,
+        "profile_available": profile_available,
+        "same_group": same_group,
+        "force_account_recheck": force_account_recheck,
+    }
 
 
 def run_is_active() -> bool:
@@ -6530,6 +7764,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/version":
             self._send_json(build_version_payload())
             return
+        if parsed.path == "/api/locales":
+            self._send_json(build_locales_payload())
+            return
+        if parsed.path == "/api/settings":
+            self._send_json(build_web_settings_payload())
+            return
         if parsed.path == "/api/heartbeat":
             self._send_json(build_runtime_heartbeat_payload())
             return
@@ -6539,14 +7779,29 @@ class Handler(BaseHTTPRequestHandler):
                 RUN_PAUSED = False
             all_lines = read_lines(LOG_PATH)
             lines = all_lines[RUN_LOG_OFFSET:] if RUN_LOG_OFFSET and RUN_LOG_OFFSET <= len(all_lines) else all_lines[-80:]
+            if not lines and all_lines:
+                lines = all_lines[-80:]
             last_stage = ""
             for line in reversed(lines):
                 if line.startswith(("CHECK ", "START ", "PLAN ", "BLOCK ", "DONE ", "FAST ")) or any(
-                    marker in line for marker in (" CHECK ", " START ", " PLAN ", " BLOCK ", " DONE ", " FAST ")
+                    marker in line
+                    for marker in (
+                        " CHECK ",
+                        " START ",
+                        " PLAN ",
+                        " BLOCK ",
+                        " DONE ",
+                        " FAST ",
+                        " WARN   web_ui_start_rejected",
+                        " WARN   web_ui_start_rejected_account_gate",
+                    )
                 ):
                     last_stage = line[:240]
                     break
             run_result = read_run_result_payload()
+            run_result, result_truth_corrected = correct_run_result_with_blocked_terminal(run_result)
+            if result_truth_corrected:
+                write_run_result_payload(run_result)
             run_result_status = str(run_result.get("status") or "")
             exit_code = None if RUN_PROCESS is None else RUN_PROCESS.poll()
             run_session = read_current_run_session()
@@ -6654,8 +7909,11 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/acceptance":
             self._send_json(build_acceptance_payload())
             return
+        if parsed.path == "/api/minimum-mvp":
+            self._send_json(build_minimum_mvp_gate_payload())
+            return
         if parsed.path == "/api/activation":
-            self._send_json(build_activation_payload())
+            self._send_json(build_web_activation_payload())
             return
         if parsed.path == "/api/ixbrowser-status":
             self._send_json(build_ixbrowser_status_payload())
@@ -6687,6 +7945,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = load_groups(refresh=refresh, allow_async="background=1" in parsed.query)
             append_group_refresh_log(payload, refresh=refresh)
             self._send_json(payload)
+            return
+        if parsed.path == "/api/group-mappings":
+            self._send_json(build_group_mappings_payload())
             return
         if parsed.path.startswith("/api/"):
             self._send_json({"status": "rejected", "error": "unknown_api"}, 404)
@@ -6785,6 +8046,33 @@ class Handler(BaseHTTPRequestHandler):
                 return
             result = apply_ixbrowser_api_port((payload or {}).get("port"))
             self._send_json(result, 200 if result.get("status") == "saved" else 400)
+            return
+        if parsed.path == "/api/settings":
+            payload, error = self._read_json_payload()
+            if error:
+                self._send_json({"status": "rejected", "error": error}, 400)
+                return
+            selected_group = (payload or {}).get("selected_profile_group", (payload or {}).get("selectedProfileGroup"))
+            result = persist_selected_profile_group_setting(str(selected_group or ""))
+            append_web_log(
+                f"CONFIG selected_profile_group status={result.get('status')} "
+                f"group={result.get('selected_profile_group') or '-'} no_browser_started=true no_submit=true"
+            )
+            self._send_json(result, 200 if result.get("status") == "saved" else 400)
+            return
+        if parsed.path == "/api/group-mapping":
+            payload, error = self._read_json_payload()
+            if error:
+                self._send_json({"status": "rejected", "error": error}, 400)
+                return
+            try:
+                result = save_group_mapping_from_payload(payload or {})
+                self._send_json(result, 200)
+            except ValueError as exc:
+                self._send_json({"status": "rejected", "error": "invalid_group_mapping", "message": str(exc)}, 400)
+            except Exception as exc:
+                append_web_log(f"ERROR  group_mapping_save_failed error={exc}")
+                self._send_json({"status": "failed", "error": "group_mapping_save_failed", "message": str(exc)}, 500)
             return
         if parsed.path == "/api/account-repair-apply":
             payload, error = self._read_json_payload()
@@ -6985,6 +8273,38 @@ class Handler(BaseHTTPRequestHandler):
             status_code = 200 if result.get("status") == "review_recorded" else 400
             self._send_json(result, status_code)
             return
+        if parsed.path == "/api/conversion-event":
+            payload, error = self._read_json_payload()
+            if error:
+                self._send_json({"status": "rejected", "error": error}, 400)
+                return
+            try:
+                storage = GrowthStorage(str(DATA_DIR / "data/growth_intelligence/growth_intelligence.db"))
+                event_id, inserted = storage.record_conversion_event(
+                    lead_id=str((payload or {}).get("lead_id") or ""),
+                    conversion_type=str((payload or {}).get("conversion_type") or "conversion"),
+                    conversion_state=str((payload or {}).get("conversion_state") or ""),
+                    amount_cents=safe_int((payload or {}).get("amount_cents"), 0),
+                    currency=str((payload or {}).get("currency") or ""),
+                    notes=str((payload or {}).get("notes") or ""),
+                    action_id=str((payload or {}).get("action_id") or ""),
+                    public_reply_event_id=str((payload or {}).get("public_reply_event_id") or ""),
+                    idempotency_key=str((payload or {}).get("idempotency_key") or ""),
+                    recorded_at=str((payload or {}).get("recorded_at") or ""),
+                    created_by=str((payload or {}).get("created_by") or "operator"),
+                )
+                event = storage.get_conversion_event(event_id) or {}
+                append_web_log(
+                    f"CHECK  conversion_event_recorded lead_id={event.get('lead_id') or '-'} "
+                    f"state={event.get('conversion_state') or '-'} inserted={str(bool(inserted)).lower()} no_submit=true"
+                )
+                self._send_json({"status": "recorded", "inserted": bool(inserted), "event": event})
+            except ValueError as exc:
+                self._send_json({"status": "rejected", "error": "invalid_conversion_event", "message": str(exc)}, 400)
+            except Exception as exc:
+                append_web_log(f"ERROR  conversion_event_failed error={exc}")
+                self._send_json({"status": "failed", "error": "conversion_event_failed", "message": str(exc)}, 500)
+            return
         start_from_plan = parsed.path == "/api/start-from-plan"
         if parsed.path not in {"/api/start", "/api/start-from-plan"}:
             self._send_json({"status": "rejected", "error": "unknown_api"}, 404)
@@ -7028,8 +8348,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         volume = normalize_volume(str(payload.get("volume") or "quick"))
         mode = normalize_mode(str(payload.get("mode") or "preflight"))
+        source_type = str(payload.get("source_type") or payload.get("sourceType") or "auto")
+        profile_group = str(payload.get("group") or "United States")
+        comment_text = str(payload.get("comment_text") or payload.get("commentText") or "")
+        account_repair_confirmed = truthy(
+            payload.get("account_repair_confirmed", payload.get("accountRepairConfirmed"))
+        )
         if mode == "live_comment" and not truthy(payload.get("live_confirm", payload.get("liveConfirm"))):
-            append_web_log("WARN   web_ui_start_rejected error=live_comment_confirmation_required mode=live_comment")
+            append_web_log(
+                f"WARN   web_ui_start_rejected error=live_comment_confirmation_required mode=live_comment "
+                f"group={profile_group} target_present=true"
+            )
             self._send_json(
                 {
                     "status": "rejected",
@@ -7043,7 +8372,8 @@ class Handler(BaseHTTPRequestHandler):
             activation = live_comment_activation_status()
             if not activation.get("allowed"):
                 append_web_log(
-                    f"WARN   web_ui_start_rejected error={activation.get('error_code') or 'LIVE_SUBMIT_NOT_AUTHORIZED'} mode=live_comment"
+                    f"WARN   web_ui_start_rejected error={activation.get('error_code') or 'LIVE_SUBMIT_NOT_AUTHORIZED'} "
+                    f"mode=live_comment group={profile_group} target_present=true"
                 )
                 self._send_json(
                     {
@@ -7062,12 +8392,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
         profile_limit = normalize_profile_limit(payload.get("profiles"))
         max_videos, max_comments = volume_limits(volume)
-        source_type = str(payload.get("source_type") or payload.get("sourceType") or "auto")
-        profile_group = str(payload.get("group") or "United States")
-        comment_text = str(payload.get("comment_text") or payload.get("commentText") or "")
-        account_repair_confirmed = truthy(
-            payload.get("account_repair_confirmed", payload.get("accountRepairConfirmed"))
-        )
         append_web_log(
             f"START  web_ui_start_request target_present=true source_type={source_type} group={profile_group} "
             f"mode={mode} volume={volume} profiles={profile_limit} "
@@ -7111,6 +8435,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             self._send_json(account_check, 409)
             return
+        if not load_selected_profile_group_setting():
+            persist_selected_profile_group_setting(profile_group)
         force_account_recheck = truthy(account_check.get("force_account_recheck")) or (
             account_repair_confirmed
             and account_check.get("same_group") is True
@@ -7256,6 +8582,13 @@ class Handler(BaseHTTPRequestHandler):
                 env["REACHOPS_FORCE_ACCOUNT_RECHECK"] = "1"
             try:
                 clear_cooperative_control()
+                for runtime_path in (HEARTBEAT_PATH, PROGRESS_PATH):
+                    try:
+                        runtime_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    except Exception:
+                        append_web_log(f"WARN   web_ui_runtime_state_cleanup_failed path={runtime_path}")
                 process = subprocess.Popen(
                     cmd,
                     cwd=str(ROOT_DIR),

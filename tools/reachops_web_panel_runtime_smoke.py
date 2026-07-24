@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import signal
+import shutil
 import sys
 import tempfile
 import threading
@@ -109,6 +111,15 @@ def _raw_request(url: str) -> tuple[int, bytes, dict[str, str]]:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(url, timeout=5) as response:
         return response.status, response.read(), dict(response.headers.items())
+
+
+@contextlib.contextmanager
+def _temporary_directory_ignore_cleanup_errors(prefix: str):
+    tmpdir = tempfile.mkdtemp(prefix=prefix)
+    try:
+        yield tmpdir
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def seed_snapshot_risk_gate_execution(data_dir: Path) -> dict:
@@ -221,7 +232,7 @@ def run_runtime_smoke() -> dict:
     checks: dict[str, bool] = {}
     diagnostics: dict[str, object] = {}
 
-    with tempfile.TemporaryDirectory(prefix="reachops-web-panel-smoke-", ignore_cleanup_errors=True) as tmpdir:
+    with _temporary_directory_ignore_cleanup_errors(prefix="reachops-web-panel-smoke-") as tmpdir:
         try:
             reachops_web_ui.DATA_DIR = Path(tmpdir)
             reachops_web_ui.WEB_SETTINGS_PATH = Path(tmpdir) / "config" / "reachops_web_settings.json"
@@ -616,6 +627,51 @@ def run_runtime_smoke() -> dict:
                 and version.get("no_browser_started") is True
                 and version.get("no_submit") is True
             )
+            status, locales = _json_request(base + "/api/locales")
+            resources = locales.get("resources") if isinstance(locales.get("resources"), dict) else {}
+            zh_resources = resources.get("zh-CN") if isinstance(resources.get("zh-CN"), dict) else {}
+            en_resources = resources.get("en-US") if isinstance(resources.get("en-US"), dict) else {}
+            required_locale_keys = {
+                "app.title",
+                "app.client_shell",
+                "nav.task",
+                "action.refresh_groups",
+                "action.start",
+                "field.target",
+                "field.group",
+                "field.mode",
+                "status.final_gate",
+                "status.no_submit",
+                "mode.preflight",
+                "mode.live_comment",
+                "preview.gate",
+            }
+            checks["locales_endpoint_exposes_zh_cn_and_en_us_without_side_effects"] = (
+                status == 200
+                and locales.get("status") == "ok"
+                and locales.get("schema_version") == "reachops.web_ui_locales.v1"
+                and locales.get("default_locale") == "zh-CN"
+                and locales.get("supported_locales") == ["zh-CN", "en-US"]
+                and required_locale_keys.issubset(set(zh_resources))
+                and required_locale_keys.issubset(set(en_resources))
+                and zh_resources.get("app.title") == "ReachOps 本地客户端控制台"
+                and en_resources.get("app.title") == "ReachOps Local Client Console"
+                and locales.get("no_browser_started") is True
+                and locales.get("no_submit") is True
+            )
+            checks["first_viewport_locale_switching_is_wired_without_submit_side_effects"] = (
+                "id=\"localeSelect\"" in html
+                and "data-i18n=\"app.title\"" in html
+                and "data-i18n=\"field.target\"" in html
+                and "data-i18n=\"action.start\"" in html
+                and "function applyLocale(locale)" in html
+                and "async function loadLocales()" in html
+                and "localStorage.setItem(UI_LOCALE_STORAGE_KEY" in html
+                and "fetch('/api/locales')" in html
+                and "Start acquisition" in html
+                and "Authorized live comment" in html
+                and "no_submit" in html
+            )
             app_entry = (ROOT_DIR / "ReachOpsApp.py").read_text(encoding="utf-8")
             launcher_source = (ROOT_DIR / "ReachOps" / "launcher.py").read_text(encoding="utf-8")
             local_client_command = (ROOT_DIR / "启动ReachOps本地客户端.command").read_text(encoding="utf-8")
@@ -993,11 +1049,19 @@ def run_runtime_smoke() -> dict:
                 status == 400 and unconfirmed_live.get("error") == "live_comment_confirmation_required" and not captured.get("cmd")
             )
 
-            status, unauthorized_live = _json_request(
-                base + "/api/start",
-                {"target": "anti aging serum", "mode": "live_comment", "liveConfirm": True},
-                expect_error=403,
-            )
+            old_activation_required = reachops_web_ui.os.environ.get("REACHOPS_REQUIRE_ACTIVATION")
+            reachops_web_ui.os.environ["REACHOPS_REQUIRE_ACTIVATION"] = "1"
+            try:
+                status, unauthorized_live = _json_request(
+                    base + "/api/start",
+                    {"target": "anti aging serum", "mode": "live_comment", "liveConfirm": True},
+                    expect_error=403,
+                )
+            finally:
+                if old_activation_required is None:
+                    reachops_web_ui.os.environ.pop("REACHOPS_REQUIRE_ACTIVATION", None)
+                else:
+                    reachops_web_ui.os.environ["REACHOPS_REQUIRE_ACTIVATION"] = old_activation_required
             checks["start_rejects_live_comment_without_activation"] = (
                 status == 403 and unauthorized_live.get("error") == "LIVE_SUBMIT_NOT_AUTHORIZED" and not captured.get("cmd")
             )
@@ -1401,6 +1465,29 @@ def run_runtime_smoke() -> dict:
                 and logs.get("run_session_state") in {"PRECHECK", "PROFILE_OPENING", "COLLECTING", "SCORING", "ACTION_PLANNING", "REPAIRING"}
             )
             logs_bundle = logs.get("evidence_bundle") or {}
+            diagnostics["logs_evidence_bundle"] = {
+                "status": logs_bundle.get("status"),
+                "schema_version": logs_bundle.get("schema_version"),
+                "plan_id": logs_bundle.get("plan_id"),
+                "session_id": logs_bundle.get("session_id"),
+                "error": logs_bundle.get("error"),
+                "summary": logs_bundle.get("summary") or {},
+                "page_state_summary": logs_bundle.get("page_state_summary") or {},
+                "repair_summary": logs_bundle.get("repair_summary") or {},
+                "risk_summary": logs_bundle.get("risk_summary") or {},
+                "account_health_summary": logs_bundle.get("account_health_summary") or {},
+                "run_session_health": logs_bundle.get("run_session_health") or {},
+                "autonomous_execution_summary": logs_bundle.get("autonomous_execution_summary") or {},
+                "autonomous_preflight_reconciliation": logs_bundle.get("autonomous_preflight_reconciliation") or {},
+                "autonomy_readiness_summary": logs_bundle.get("autonomy_readiness_summary") or {},
+                "product_capability_summary": logs_bundle.get("product_capability_summary") or {},
+                "page_state_repair_coverage": logs_bundle.get("page_state_repair_coverage") or {},
+                "plan_runtime_contract": logs_bundle.get("plan_runtime_contract") or {},
+                "execution_runtime_contract": logs_bundle.get("execution_runtime_contract") or {},
+                "ai_usage_summary": logs_bundle.get("ai_usage_summary") or {},
+                "artifact_count": len(logs_bundle.get("artifacts") or []) if isinstance(logs_bundle.get("artifacts"), list) else -1,
+                "keys": sorted(logs_bundle.keys()) if isinstance(logs_bundle, dict) else [],
+            }
             checks["logs_expose_evidence_bundle_contract"] = (
                 status == 200
                 and logs_bundle.get("schema_version") == "reachops.evidence_bundle.v1"
@@ -1469,6 +1556,24 @@ def run_runtime_smoke() -> dict:
 
             status, evidence_bundle = _json_request(base + "/api/evidence-bundle")
             operator_risk_summary = evidence_bundle.get("operator_risk_gate_summary") or {}
+            diagnostics["evidence_bundle_endpoint"] = {
+                "status": evidence_bundle.get("status"),
+                "schema_version": evidence_bundle.get("schema_version"),
+                "plan_id": evidence_bundle.get("plan_id"),
+                "session_id": evidence_bundle.get("session_id"),
+                "error": evidence_bundle.get("error"),
+                "timeline_is_list": isinstance(evidence_bundle.get("timeline"), list),
+                "artifacts_is_list": isinstance(evidence_bundle.get("artifacts"), list),
+                "operator_summary": evidence_bundle.get("operator_summary") or {},
+                "repair_summary": evidence_bundle.get("repair_summary") or {},
+                "risk_summary": evidence_bundle.get("risk_summary") or {},
+                "account_health_summary": evidence_bundle.get("account_health_summary") or {},
+                "run_session_health": evidence_bundle.get("run_session_health") or {},
+                "run_recovery_summary": evidence_bundle.get("run_recovery_summary") or {},
+                "autonomous_execution_summary": evidence_bundle.get("autonomous_execution_summary") or {},
+                "operator_risk_gate_summary": operator_risk_summary,
+                "keys": sorted(evidence_bundle.keys()) if isinstance(evidence_bundle, dict) else [],
+            }
             checks["evidence_bundle_endpoint_returns_auditable_run_index"] = (
                 status == 200
                 and evidence_bundle.get("schema_version") == "reachops.evidence_bundle.v1"

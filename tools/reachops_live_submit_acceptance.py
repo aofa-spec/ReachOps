@@ -205,6 +205,13 @@ def local_evidence_file_detail(
             return {}
         if sidecar.get("comment_visible_confirmed") is not True:
             return {}
+    if expected_action_type == "follow_review" and sidecar.get("follow_state_confirmed") is not True:
+        return {}
+    if expected_action_type == "dm_review":
+        if sidecar.get("dm_entry_confirmed") is not True:
+            return {}
+        if expected_comment_text and str(sidecar.get("dm_submitted_text") or "") != str(expected_comment_text or ""):
+            return {}
     return {
         "path": str(file_path),
         "size": len(data),
@@ -301,7 +308,10 @@ def run_acceptance(args, platform_executor=None) -> dict[str, Any]:
                     local_evidence_file_detail(
                         path,
                         expected_action_type=action_type,
-                        expected_comment_text=str(args.comment_text or ""),
+                        expected_comment_text={
+                            "comment_reply": str(args.comment_text or ""),
+                            "dm_review": str(args.dm_text or ""),
+                        }.get(action_type, ""),
                         expected_action_ids=action_ids_by_type.get(action_type, set()),
                         expected_profile_ids=expected_profile_ids,
                         expected_target_url={

@@ -8,15 +8,15 @@ from ReachOps import launcher
 
 
 class ReachOpsLauncherTests(unittest.TestCase):
-    def test_default_entry_starts_native_tk_client(self):
+    def test_default_entry_starts_unified_web_client(self):
         with patch.object(launcher, "_launch_web_client", return_value=7) as web_client, patch.object(
             launcher, "_launch_legacy_tk_client", return_value=3
         ) as legacy_client:
-            self.assertEqual(launcher.main([]), 3)
-        web_client.assert_not_called()
-        legacy_client.assert_called_once_with()
+            self.assertEqual(launcher.main([]), 7)
+        web_client.assert_called_once_with()
+        legacy_client.assert_not_called()
 
-    def test_web_client_requires_explicit_flag(self):
+    def test_web_flag_remains_unified_web_client_alias(self):
         with patch.object(launcher, "_launch_web_client", return_value=7) as web_client, patch.object(
             launcher, "_launch_legacy_tk_client", return_value=3
         ) as legacy_client:
@@ -39,7 +39,7 @@ class ReachOpsLauncherTests(unittest.TestCase):
             self.assertEqual(launcher.main(["--help"]), 0)
         web_client.assert_not_called()
         legacy_client.assert_not_called()
-        self.assertIn("Start the native Tk client", stdout.getvalue())
+        self.assertIn("Start the unified Web console", stdout.getvalue())
 
     def test_unknown_argument_does_not_start_any_client(self):
         with patch.object(launcher, "_launch_web_client", return_value=7) as web_client, patch.object(
@@ -59,7 +59,7 @@ class ReachOpsLauncherTests(unittest.TestCase):
                 self.assertEqual(launcher._launch_web_client(), 2)
         legacy_client.assert_not_called()
         self.assertIn("Web 控制台启动器不存在", stderr.getvalue())
-        self.assertIn("python ReachOpsApp.py", stderr.getvalue())
+        self.assertIn("不会静默回退", stderr.getvalue())
 
 
 if __name__ == "__main__":

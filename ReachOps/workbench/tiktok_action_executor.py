@@ -307,10 +307,10 @@ class TikTokSeleniumActionExecutor:
 
     def _browser_manager_driver_factory(self, profile: dict) -> tuple[Any, Any, str]:
         try:
-            from ReachOps.adapters.browser_manager import get_workbench_browser_adapter
+            from ReachOps.adapters.browser_manager import WorkbenchBrowserAdapter, get_workbench_browser_adapter
 
             profile_id = str(profile.get("profile_id") or profile.get("id") or "")
-            manager = get_workbench_browser_adapter()
+            manager: WorkbenchBrowserAdapter = get_workbench_browser_adapter()
             inst = manager.acquire(
                 account_id=profile_id,
                 profile_id=profile_id,
@@ -1395,6 +1395,9 @@ class TikTokSeleniumActionExecutor:
                 "preflight_only": bool(self.config.preflight_only),
                 "submitted_text": expected_text if action_type == "comment_reply" and not self.config.preflight_only else "",
                 "comment_visible_confirmed": bool(comment_visible_confirmed) and not self.config.preflight_only,
+                "follow_state_confirmed": action_type == "follow_review" and not bool(code) and not self.config.preflight_only,
+                "dm_entry_confirmed": action_type == "dm_review" and not bool(code) and not self.config.preflight_only,
+                "dm_submitted_text": expected_text if action_type == "dm_review" and not bool(code) and not self.config.preflight_only else "",
                 "screenshot_path": path,
                 "screenshot_size": len(data),
                 "screenshot_sha256": hashlib.sha256(data).hexdigest() if data else "",

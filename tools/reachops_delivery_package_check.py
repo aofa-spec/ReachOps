@@ -131,7 +131,11 @@ def _check_manifest(root: Path, manifest_path: Path, installer_path: Path) -> tu
         return failures, detail
 
     installer = manifest.get("installer") if isinstance(manifest.get("installer"), dict) else {}
+    runtime_policy = manifest.get("runtime_policy") if isinstance(manifest.get("runtime_policy"), dict) else {}
+    raw_installer_path = str(installer.get("path") or "")
+    installer_file_name = str(installer.get("file_name") or "")
     manifest_installer = _manifest_installer_path(root, manifest_path, manifest)
+    expected_installer_name = installer_path.name
     expected_sha = str(installer.get("sha256") or "")
     expected_size = int(installer.get("size_bytes") or 0)
     actual_installer = installer_path if installer_path.exists() else manifest_installer
@@ -140,9 +144,19 @@ def _check_manifest(root: Path, manifest_path: Path, installer_path: Path) -> tu
             "product_id": manifest.get("product_id"),
             "version": manifest.get("version"),
             "platform": manifest.get("platform"),
+            "installer_path_raw": raw_installer_path,
+            "installer_file_name": installer_file_name,
+            "expected_installer_name": expected_installer_name,
+            "manifest_installer_path": str(manifest_installer),
+            "installer_path_is_portable": not Path(raw_installer_path).is_absolute() if raw_installer_path else True,
             "installer_path": str(actual_installer),
             "expected_sha256": expected_sha,
             "expected_size": expected_size,
+            "runtime_policy": {
+                "preserve_config": bool(runtime_policy.get("preserve_config")),
+                "preserve_data": bool(runtime_policy.get("preserve_data")),
+                "preserve_activation_status": bool(runtime_policy.get("preserve_activation_status")),
+            },
         }
     )
 
@@ -152,6 +166,26 @@ def _check_manifest(root: Path, manifest_path: Path, installer_path: Path) -> tu
         failures.append("manifest_version_mismatch")
     if str(manifest.get("platform") or "") != "windows":
         failures.append("manifest_platform_mismatch")
+    if not installer_file_name:
+        failures.append("manifest_installer_file_name_missing")
+    if not raw_installer_path:
+        failures.append("manifest_installer_path_missing")
+    if raw_installer_path and Path(raw_installer_path).is_absolute():
+        failures.append("manifest_installer_path_not_portable")
+    if installer_file_name and installer_file_name != expected_installer_name:
+        failures.append("manifest_installer_file_name_mismatch")
+    if raw_installer_path and Path(raw_installer_path).name != expected_installer_name:
+        failures.append("manifest_installer_path_name_mismatch")
+    if manifest_installer.name != expected_installer_name:
+        failures.append("manifest_installer_resolved_name_mismatch")
+    if not runtime_policy:
+        failures.append("manifest_runtime_policy_missing")
+    if not bool(runtime_policy.get("preserve_config")):
+        failures.append("manifest_preserve_config_missing")
+    if not bool(runtime_policy.get("preserve_data")):
+        failures.append("manifest_preserve_data_missing")
+    if not bool(runtime_policy.get("preserve_activation_status")):
+        failures.append("manifest_preserve_activation_status_missing")
     if not actual_installer.exists():
         failures.append("manifest_installer_missing")
         return failures, detail
@@ -180,6 +214,7 @@ def _report_sections(summary: dict[str, Any], final_required: bool, require_fina
         "live_validation",
         "repository_cleanliness",
         "windows_package_preflight",
+        "windows_credential_manager_validation",
         "client_delivery",
         "live_readiness",
         "live_preflight",
@@ -463,6 +498,10 @@ def check_delivery_package(
                 "final_acceptance_gate_not_passed",
                 "final_acceptance_gate_not_ready",
                 "final_acceptance_gate_failed_checks",
+                "final_acceptance_gate_json_mismatch:status",
+                "final_acceptance_gate_json_mismatch:final_delivery_ready",
+                "final_acceptance_gate_json_mismatch:failed_checks",
+                "final_acceptance_gate_json_checks_failed",
             }
         ]
     if acceptance_path.exists():

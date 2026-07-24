@@ -132,6 +132,29 @@ class RiskGate:
                 ["人工修复账号登录/验证状态后再解除冷却。"],
             )
 
+        language_gate_status = str(action.get("language_gate_status") or "ready")
+        if live_submit and language_gate_status != "ready":
+            language_code = {
+                "language_conflict_with_group_default": "LANGUAGE_CONFLICT_WITH_GROUP_DEFAULT",
+                "architecture_supported_requires_operator_confirmation": "LANGUAGE_NOT_FORMALLY_ACCEPTANCE_TESTED",
+            }.get(language_gate_status, "LANGUAGE_CONFIRMATION_REQUIRED")
+            return self._blocked(
+                language_code,
+                str(action.get("language_gate_note") or "comment language requires operator confirmation"),
+                "high",
+                {
+                    **base,
+                    "requires_human_review": True,
+                    "evidence": {
+                        "comment_language": str(action.get("comment_language") or "unknown"),
+                        "group_default_language": str(action.get("group_default_language") or "unknown"),
+                        "language_gate_status": language_gate_status,
+                        "language_gate_note": str(action.get("language_gate_note") or ""),
+                    },
+                },
+                ["确认评论语言和回复语言；冲突或不确定语言不能自动真实提交。"],
+            )
+
         if live_submit and require_action_review:
             if str(action.get("status") or "") != "approved":
                 return self._blocked(

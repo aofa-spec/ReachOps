@@ -175,6 +175,10 @@ def terminal_seen(lines: list[str], mode: str) -> bool:
     return collection_terminal_seen(lines) and action_terminal_seen(lines)
 
 
+def blocked_terminal_seen(lines: list[str]) -> bool:
+    return any("BLOCK  campaign failed" in line or "BLOCK  campaign not_started" in line for line in lines)
+
+
 def write_json_atomic(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -669,12 +673,16 @@ def main() -> int:
         else:
             print(result)
         return 2
+    update_run_session("PROFILE_PREFLIGHT", last_stage="headless_profile_preflight_started")
     try:
         app.refresh_profile_groups(show_message=False)
     except Exception as exc:
         app._log(f"WARN   headless_refresh_profiles_failed error={exc}")
     app.start_collection_from_console()
-    update_run_session("PROFILE_PREFLIGHT", last_stage="headless_profile_preflight_started")
+    update_run_session("COLLECTING",
+        last_stage="headless_collection_started",
+        checkpoint_update={"headless_started_collection": True, "no_ai_token_used": True},
+    )
 
     deadline = time.monotonic() + max(30, int(args.timeout))
     lines: list[str] = []
@@ -695,8 +703,10 @@ def main() -> int:
         lines = lines_after_marker(latest_log_lines(log_path), marker)
         update_runtime_checkpoint(lines, running=False, last_stage="headless_timeout_finalized")
 
+    blocked_terminal = blocked_terminal_seen(lines)
+    result_status = "blocked" if blocked_terminal else ("completed" if not timed_out else "timeout_finalized")
     result = {
-        "status": "completed" if not timed_out else "timeout_finalized",
+        "status": result_status,
         "generated_at": utc_now(),
         "log_path": str(log_path),
         "target": args.target,

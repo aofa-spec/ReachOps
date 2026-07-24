@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from ReachOps.updater import ReachOpsUpdateManager
 from ReachOps.version import VERSION
 from ReachOps.intelligence import GrowthIntelligenceService
 from ReachOps.intelligence.ai_strategy import HTTPAcquisitionIntelligenceProvider
+from ReachOps.intelligence.public_reply_monitor import PublicReplyMonitor
 from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.action_router import ActionRouterConfig, FixtureActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
@@ -59,6 +61,11 @@ def write_local_action_evidence(base_dir: str, action_type: str, profile_id: str
     if action_type == "comment_reply":
         sidecar["submitted_text"] = expected_text
         sidecar["comment_visible_confirmed"] = True
+    if action_type == "follow_review":
+        sidecar["follow_state_confirmed"] = True
+    if action_type == "dm_review":
+        sidecar["dm_entry_confirmed"] = True
+        sidecar["dm_submitted_text"] = expected_text
     Path(f"{path}.json").write_text(json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(path)
 
@@ -104,6 +111,8 @@ def run_fixture_collection(base_dir: str, target: str):
             max_comments_per_video=3,
             task_delay_min_seconds=30,
             task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
             test_mode=True,
             intent_keywords=["where", "link", "buy", "app", "free", "name"],
             exclude_keywords=["spam", "bot"],
@@ -330,7 +339,7 @@ def run_live_submit_acceptance_fixture() -> dict:
     evidence_paths = {
         "comment_reply": write_local_action_evidence(base_dir, "comment_reply", "10001", "comment-1", args.comment_text),
         "follow_review": write_local_action_evidence(base_dir, "follow_review", "10001", "follow-1"),
-        "dm_review": write_local_action_evidence(base_dir, "dm_review", "10001", "dm-1"),
+        "dm_review": write_local_action_evidence(base_dir, "dm_review", "10001", "dm-1", args.dm_text),
     }
     return run_live_submit_acceptance(
         args,
@@ -373,6 +382,111 @@ def run_live_submit_acceptance_block_fixture() -> dict:
     )
 
 
+def run_public_reply_monitor_fixture(target: str) -> dict:
+    base_dir = tempfile.mkdtemp(prefix="reachops-audit-public-reply-")
+    service = build_service(base_dir)
+    plan = service.create_campaign_plan(target, max_sources=1)
+    campaign_id = str((plan.get("campaign") or {}).get("id") or "")
+    service.run_collection(
+        [{"type": "keyword", "value": target}],
+        [{"profile_id": "reply-discovery-1", "group_name": "AUDIT"}],
+        GrowthTaskConfig(
+            campaign_id=campaign_id,
+            max_videos_per_creator=1,
+            max_comments_per_video=5,
+            default_reply_language="en",
+            group_default_reply_language="en",
+            test_mode=True,
+        ),
+    )
+    action = next(
+        (row for row in service.storage.list_action_queue(limit=1000) if str(row.get("action_type") or "") == "comment_reply"),
+        {},
+    )
+    if not action:
+        return {"status": "failed", "reason": "comment_action_missing"}
+    execution_id = service.storage.create_outreach_execution(
+        str(action.get("id") or ""),
+        str(action.get("action_type") or ""),
+        str(action.get("target_username") or ""),
+        status="success",
+        profile_id="reply-exec-1",
+        evidence_path=str(Path(base_dir) / "verified-reply-comment.png"),
+        execution_mode="live",
+        submission_state="verified_success",
+        verification_state="verified",
+        evidence_verified=True,
+    )
+    service.storage.record_action_execution_result(str(action.get("id") or ""), execution_id, "completed")
+    monitor = PublicReplyMonitor(service.storage)
+    first = monitor.ingest_replay_rows(
+        [
+            {
+                "campaign_id": campaign_id,
+                "run_id": str(action.get("run_id") or ""),
+                "batch_id": str(action.get("batch_id") or ""),
+                "lead_id": str(action.get("lead_id") or ""),
+                "action_id": str(action.get("id") or ""),
+                "execution_id": execution_id,
+                "target_username": str(action.get("target_username") or ""),
+                "reply_author_username": str(action.get("target_username") or ""),
+                "reply_text": "Can you send me the link and price?",
+                "reply_language": "en",
+                "source_url": str(action.get("target_url") or ""),
+                "replied_at": "2026-07-20T10:00:00Z",
+            }
+        ]
+    )
+    second = monitor.ingest_replay_rows(
+        [
+            {
+                "campaign_id": campaign_id,
+                "run_id": str(action.get("run_id") or ""),
+                "batch_id": str(action.get("batch_id") or ""),
+                "lead_id": str(action.get("lead_id") or ""),
+                "action_id": str(action.get("id") or ""),
+                "execution_id": execution_id,
+                "reply_text": "Can you send me the link and price?",
+                "replied_at": "2026-07-20T10:00:00Z",
+            }
+        ]
+    )
+    lead = next(
+        (row for row in service.storage.list_operation_leads(limit=1000) if str(row.get("id") or "") == str(action.get("lead_id") or "")),
+        {},
+    )
+    events = service.storage.list_public_reply_events(str(action.get("lead_id") or ""))
+    return {
+        "status": "passed" if lead.get("lifecycle_stage") == "qualified" and len(events) == 1 else "failed",
+        "first": first,
+        "second": second,
+        "lead_stage": lead.get("lifecycle_stage"),
+        "qualified_reply_count": lead.get("qualified_reply_count"),
+        "event_count": len(events),
+        "event": events[0] if events else {},
+    }
+
+
+def inspect_public_reply_ui_surface() -> dict:
+    web_ui = (ROOT_DIR / "tools" / "reachops_web_ui.py").read_text(encoding="utf-8")
+    return {
+        "kpi_public_replies": "mPublicReplies" in web_ui and "public_replies" in web_ui,
+        "kpi_qualified_replies": "mQualifiedReplies" in web_ui and "qualified_replies" in web_ui,
+        "kpi_conversions": "mConvertedLeads" in web_ui and "converted_leads" in web_ui,
+        "kpi_revenue": "mRevenueCents" in web_ui and "revenue_cents" in web_ui,
+        "operations_public_reply_events": "\"public_reply_events\"" in web_ui and "FROM public_reply_events" in web_ui,
+        "operations_conversion_events": "\"conversion_events\"" in web_ui and "FROM conversion_events" in web_ui,
+        "lead_reply_summary": "reply_summary" in web_ui and "公开回复" in web_ui,
+        "lead_conversion_summary": "conversion_summary" in web_ui and "转化" in web_ui,
+        "lead_status_reply_received": "reply_received:'收到回复'" in web_ui,
+        "lead_status_qualified": "qualified:'合格线索'" in web_ui,
+        "lead_status_converted": "converted:'已转化'" in web_ui,
+        "conversion_api_no_submit": "/api/conversion-event" in web_ui and "no_submit=true" in web_ui,
+        "qualified_state_priority": "qualified_reply_count" in web_ui and 'return "qualified"' in web_ui,
+        "converted_state_priority": "converted_count" in web_ui and 'return "converted"' in web_ui,
+    }
+
+
 def run_packaging_update_fixture() -> dict:
     base_dir = Path(tempfile.mkdtemp(prefix="reachops-audit-packaging-"))
     installer = base_dir / "ReachOps-Setup.exe"
@@ -402,6 +516,8 @@ def run_web_panel_runtime_smoke_with_retry(attempts: int = 3) -> dict:
                 cwd=str(ROOT_DIR),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 check=False,
                 env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
@@ -504,6 +620,7 @@ def run_web_local_api_architecture_fixture() -> dict:
     headless = (ROOT_DIR / "tools" / "run_reachops_headless_macos.py").read_text(encoding="utf-8")
     standalone = (ROOT_DIR / "ReachOps" / "workbench" / "standalone_app.py").read_text(encoding="utf-8")
     action_router = (ROOT_DIR / "ReachOps" / "workbench" / "action_router.py").read_text(encoding="utf-8")
+    execution_guard = (ROOT_DIR / "ReachOps" / "workbench" / "execution_guard.py").read_text(encoding="utf-8")
     router = (ROOT_DIR / "ReachOps" / "intelligence" / "growth_task_router.py").read_text(encoding="utf-8")
     action_executor = (ROOT_DIR / "ReachOps" / "workbench" / "tiktok_action_executor.py").read_text(encoding="utf-8")
     browser_manager = (ROOT_DIR / "ReachOps" / "adapters" / "browser_manager.py").read_text(encoding="utf-8")
@@ -525,12 +642,24 @@ def run_web_local_api_architecture_fixture() -> dict:
     repair_policy_engine = (ROOT_DIR / "ReachOps" / "workbench" / "repair_policy_engine.py").read_text(encoding="utf-8")
     risk_gate = (ROOT_DIR / "ReachOps" / "workbench" / "risk_gate.py").read_text(encoding="utf-8")
     ai_console = (ROOT_DIR / "ReachOps" / "ai_console.py").read_text(encoding="utf-8")
+    operator_console = (ROOT_DIR / "ReachOps" / "workbench" / "console.py").read_text(encoding="utf-8")
+    ai_strategy = (ROOT_DIR / "ReachOps" / "intelligence" / "ai_strategy.py").read_text(encoding="utf-8")
+    credential_store = (ROOT_DIR / "ReachOps" / "security" / "credential_store.py").read_text(encoding="utf-8")
+    credential_manager_check = (ROOT_DIR / "tools" / "reachops_windows_credential_manager_check.py").read_text(encoding="utf-8")
+    acceptance_summary_verifier = (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+    backup_contract = (ROOT_DIR / "ReachOps" / "security" / "backup.py").read_text(encoding="utf-8")
+    license_refresh_client = (ROOT_DIR / "ReachOps" / "workbench" / "license_refresh_client.py").read_text(encoding="utf-8")
+    growth_storage = (ROOT_DIR / "ReachOps" / "intelligence" / "storage.py").read_text(encoding="utf-8")
+    growth_reporter = (ROOT_DIR / "ReachOps" / "intelligence" / "growth_reporter.py").read_text(encoding="utf-8")
+    growth_task_router = (ROOT_DIR / "ReachOps" / "intelligence" / "growth_task_router.py").read_text(encoding="utf-8")
+    operation_lead_manager = (ROOT_DIR / "ReachOps" / "intelligence" / "operation_lead_manager.py").read_text(encoding="utf-8")
     evidence_bundle = (ROOT_DIR / "ReachOps" / "evidence_bundle.py").read_text(encoding="utf-8")
     workflow_service = (ROOT_DIR / "ReachOps" / "workbench" / "workflow_service.py").read_text(encoding="utf-8")
     offline_learning = (ROOT_DIR / "ReachOps" / "workbench" / "offline_learning_ledger.py").read_text(encoding="utf-8")
     checks = {
         "web_api_start_endpoint": "\"/api/start\"" in web_ui and "postJson('/api/start'" in web_ui,
         "web_api_version_endpoint_identifies_current_ui": 'parsed.path == "/api/version"' in web_ui and "build_version_payload" in web_ui and "WEB_UI_VERSION" in web_ui and "CLIENT_DISPLAY_VERSION" in web_ui and "\"display_version\": CLIENT_DISPLAY_VERSION" in web_ui and "\"client_surface\": \"local_client_console\"" in web_ui and "\"display_name\": \"ReachOps Local Client Console\"" in web_ui and "\"loopback_host\": \"127.0.0.1\"" in web_ui and "ReachOps 本地客户端控制台" in web_ui and "127.0.0.1 控制台" in web_ui and "no_browser_started" in web_ui and "no_submit" in web_ui,
+        "web_ui_locales_api_exposes_zh_cn_en_us": 'parsed.path == "/api/locales"' in web_ui and "build_locales_payload" in web_ui and "SUPPORTED_UI_LOCALES = (\"zh-CN\", \"en-US\")" in web_ui and "\"schema_version\": \"reachops.web_ui_locales.v1\"" in web_ui and "\"app.title\": \"ReachOps 本地客户端控制台\"" in web_ui and "\"app.title\": \"ReachOps Local Client Console\"" in web_ui and "\"action.start\": \"开始获客\"" in web_ui and "\"action.start\": \"Start acquisition\"" in web_ui and "\"app.client_shell\": \"Client shell\"" in web_ui and "\"field.target\": \"Promotion target\"" in web_ui and "\"mode.live_comment\": \"Authorized live comment\"" in web_ui and "id=\"localeSelect\"" in web_ui and "data-i18n=\"app.title\"" in web_ui and "data-i18n=\"field.target\"" in web_ui and "function applyLocale(locale)" in web_ui and "async function loadLocales()" in web_ui and "localStorage.setItem(UI_LOCALE_STORAGE_KEY" in web_ui and "fetch('/api/locales')" in web_ui and "\"status.no_submit\"" in web_ui and "no_browser_started" in web_ui and "no_submit" in web_ui,
         "client_entrypoints_default_to_unified_web_console": "from ReachOps.launcher import main" in app_entry and "return _launch_web_client()" in launcher and "legacy_requested = \"--legacy-tk\" in args or os.environ.get(\"REACHOPS_LEGACY_TK\") == \"1\"" in launcher and "Start the unified Web console" in launcher and "Start the legacy Tk diagnostic client" in launcher and "旧 Tk 仅作为诊断入口保留" in launcher and "exec ./启动ReachOps统一WebUI.command" in local_client_command and "tools/reachops_mac_self_check.py --start-web" in unified_web_command and "ReachOps 客户端入口已统一到本地客户端控制台" in native_mac_command and "REACHOPS_LEGACY_TK=1" in native_mac_command and "ReachOpsApp.py --legacy-tk" in native_mac_command and "test_default_entry_starts_unified_web_client" in (ROOT_DIR / "tests" / "test_launcher.py").read_text(encoding="utf-8") and "test_missing_web_launcher_does_not_silently_fallback_to_legacy_tk" in (ROOT_DIR / "tests" / "test_launcher.py").read_text(encoding="utf-8"),
         "web_api_start_rejects_empty_target": "target_required" in web_ui and "status\": \"rejected\"" in web_ui,
         "web_api_rejects_invalid_json": "_read_json_payload" in web_ui and "invalid_json" in web_ui,
@@ -557,7 +686,24 @@ def run_web_local_api_architecture_fixture() -> dict:
         "web_start_preview_exposes_autonomous_preflight_forecast": "attach_autonomous_preflight_forecast" in web_ui and "build_autonomous_preflight_forecast" in web_ui and "autonomous_preflight_forecast" in web_ui and "reachops.autonomous_preflight_forecast.v1" in execution_plan and "predicted_state_sequence" in execution_plan and "repair_routes" in execution_plan and "risk_gates" in execution_plan and "runtime_invariants" in execution_plan,
         "web_ui_renders_autonomous_preflight_forecast": "previewAutonomy" in web_ui and "previewAutonomyList" in web_ui and "状态链：" in web_ui and "自修复：" in web_ui and "证据要求：" in web_ui and "运行约束：0 token" in web_ui,
         "web_api_requires_live_comment_activation": "live_comment_activation_status" in web_ui and "LiveSubmitAuthorizationGate" in web_ui and "LIVE_SUBMIT_NOT_AUTHORIZED" in web_ui,
+        "windows_credential_manager_secret_contract": "reachops.credential_storage.v1" in credential_store and "win32cred" in credential_store and "CredWrite" in credential_store and "CredRead" in credential_store and "CRED_TYPE_GENERIC" in credential_store and "BACKEND_NON_WINDOWS_UNAVAILABLE" in credential_store and "secret_persistence_allowed" in credential_store and "ReachOps persists secrets only in Windows Credential Manager" in credential_store and "get_secret_if_available(\"ai_api_key\")" in ai_strategy and "ReachOpsCredentialStore().set_secret(\"ai_api_key\", key)" in operator_console and "os.environ[\"REACHOPS_AI_API_KEY\"] = key" not in operator_console and "reachops.windows_credential_manager_validation.v1" in credential_manager_check and "secret_readback_matched" in credential_manager_check and "secret_delete_succeeded" in credential_manager_check and "secret_value_included" in credential_manager_check and "customer_data_uploaded" in credential_manager_check and "windows_credential_manager_validation_json_invalid" in acceptance_summary_verifier and "windows_credential_manager_validation_json_mismatch" in acceptance_summary_verifier,
+        "minimal_license_refresh_client_contract": "reachops.license_refresh.v1" in license_refresh_client and "ALLOWED_REQUEST_KEYS" in license_refresh_client and "FORBIDDEN_REFRESH_TOKENS" in license_refresh_client and "endpoint must use https" in license_refresh_client and "refresh_license_status" in license_refresh_client and "normalize_license_refresh_response" in license_refresh_client and "evaluate_license_state" in license_refresh_client and "os.replace" in license_refresh_client and "customer_data_uploaded\": False" in license_refresh_client and "no_browser_started\": True" in license_refresh_client and "no_submit\": True" in license_refresh_client,
+        "p1_runtime_observation_ledger_contract": "CREATE TABLE IF NOT EXISTS campaign_runs" in growth_storage and "CREATE TABLE IF NOT EXISTS source_observations" in growth_storage and "CREATE TABLE IF NOT EXISTS content_observations" in growth_storage and "CREATE TABLE IF NOT EXISTS comment_observations" in growth_storage and "CREATE TABLE IF NOT EXISTS candidate_observations" in growth_storage and "CREATE TABLE IF NOT EXISTS evidence_artifacts" in growth_storage and "CREATE TABLE IF NOT EXISTS lead_decisions" in growth_storage and "LEAD_DECISION_SCHEMA_VERSION" in growth_storage and "decision_fingerprint" in growth_storage and "decision_version" in growth_storage and "list_lead_decisions" in growth_storage and "legacy rows must not be assigned a fabricated run_id" in growth_storage and "runtime_traceability_summary" in growth_storage and "list_observations_for_run" in growth_storage and "legacy_run_id_fabricated\": False" in growth_storage and "record_source_observation" in growth_storage and "record_content_observation" in growth_storage and "record_comment_observation" in growth_storage and "record_candidate_observation" in growth_storage and "record_evidence_artifact" in growth_storage and "record_lead_decision" in growth_storage and "create_campaign_run" in growth_task_router and "bind_collection_batch_run" in growth_task_router and "active_run_id" in growth_task_router and "build_report(campaign_id=campaign_id, run_id=active_run_id, batch_id=batch_id)" in growth_task_router and "record_candidate_observation" in operation_lead_manager and "record_evidence_artifact" in operation_lead_manager and "record_lead_decision" in operation_lead_manager and "reachops.runtime_traceability_report.v1" in growth_reporter and "_resolve_runtime_scope" in growth_reporter and "runtime_traceability" in growth_reporter and "legacy_rows_preserved" in growth_reporter and "\"run_id\"" in growth_reporter and "\"campaign_id\"" in growth_reporter and "start_contract_current_evidence_complete" in (ROOT_DIR / "tools" / "reachops_goal_delivery_runner.py").read_text(encoding="utf-8"),
+        "encrypted_backup_restore_contract": "reachops.backup.v1" in backup_contract and ".reachops-backup" in backup_contract and "pbkdf2_hmac" in backup_contract and "hmac_sha256" in backup_contract and "preview_backup" in backup_contract and "restore_backup" in backup_contract and "rollback_on_failure" in backup_contract and "secret_or_activation_state_excluded" in backup_contract and "credential_manager_secrets_never_exported" in backup_contract and "ixbrowser_cookies_sessions_and_login_state_never_exported" in backup_contract and "\"full\"" in backup_contract and "include_evidence_files" in backup_contract and "selected_evidence_file" in backup_contract and "full_backup_includes_only_selected_evidence_files" in backup_contract and "symlink_file_excluded" in backup_contract and ".is_symlink()" in backup_contract and "customer_data_uploaded\": False" in backup_contract,
         "web_api_reports_already_running_pid": "already_running" in web_ui and "\"pid\": RUN_PROCESS.pid" in web_ui,
+        "acceptance_summary_verifies_audit_and_pressure_payloads": "delivery_audit_json_invalid" in acceptance_summary_verifier and "delivery_audit_json_mismatch" in acceptance_summary_verifier and "operator_pressure_json_invalid" in acceptance_summary_verifier and "operator_pressure_json_mismatch" in acceptance_summary_verifier,
+        "acceptance_summary_verifies_installer_smoke_payload": "installer_smoke_json_invalid" in acceptance_summary_verifier and "installer_smoke_json_mismatch" in acceptance_summary_verifier and '"data_in_install_dir"' in acceptance_summary_verifier,
+        "acceptance_summary_verifies_repository_cleanliness_payload": "repository_cleanliness_json_invalid" in acceptance_summary_verifier and "repository_cleanliness_json_mismatch" in acceptance_summary_verifier and '"forbidden_count"' in acceptance_summary_verifier,
+        "acceptance_summary_verifies_client_delivery_payload": "client_delivery_json_invalid" in acceptance_summary_verifier and "client_delivery_json_mismatch" in acceptance_summary_verifier and "client_delivery_json_mismatch:failed_checks" in acceptance_summary_verifier,
+        "acceptance_summary_verifies_windows_preflight_payload": "windows_package_preflight_json_invalid" in acceptance_summary_verifier and "windows_package_preflight_json_mismatch" in acceptance_summary_verifier and "windows_package_preflight_json_mismatch:build_contract" in acceptance_summary_verifier,
+        "acceptance_summary_verifies_live_readiness_payload": "live_readiness_json_invalid" in acceptance_summary_verifier and "live_readiness_json_mismatch" in acceptance_summary_verifier and '"no_browser_started"' in acceptance_summary_verifier and '"no_submit"' in acceptance_summary_verifier,
+        "acceptance_summary_verifies_activation_status_payload": "activation_status_json_invalid" in acceptance_summary_verifier and "activation_status_json_mismatch" in acceptance_summary_verifier and '"current_device_id"' in acceptance_summary_verifier and '"activation_status_exists"' in acceptance_summary_verifier,
+        "acceptance_summary_verifies_live_validation_payload": "live_validation_json_invalid" in acceptance_summary_verifier and "live_validation_json_mismatch" in acceptance_summary_verifier and "live_validation_json_mismatch:selected_profile_ids" in acceptance_summary_verifier and "live_validation_profile_ids_missing" in acceptance_summary_verifier,
+        "acceptance_summary_verifies_live_acceptance_payload": "live_acceptance_status_json_invalid" in acceptance_summary_verifier and "live_acceptance_status_json_mismatch" in acceptance_summary_verifier and "live_acceptance_status_json_mismatch:live_validation.selected_profile_ids" in acceptance_summary_verifier,
+        "acceptance_summary_verifies_live_preflight_and_submit_payloads": "live_preflight_json_invalid" in acceptance_summary_verifier and "live_preflight_json_mismatch" in acceptance_summary_verifier and "live_submit_json_invalid" in acceptance_summary_verifier and "live_submit_json_mismatch" in acceptance_summary_verifier,
+        "acceptance_summary_verifies_goal_status_payload": "goal_status_json_invalid" in acceptance_summary_verifier and "goal_status_json_mismatch" in acceptance_summary_verifier and "goal_status_json_mismatch:pending_external_validation" in acceptance_summary_verifier,
+        "acceptance_summary_verifies_final_gate_payload": "final_acceptance_gate_json_invalid" in acceptance_summary_verifier and "final_acceptance_gate_json_mismatch" in acceptance_summary_verifier and "final_acceptance_gate_json_mismatch:failed_checks" in acceptance_summary_verifier and "final_acceptance_gate_json_checks_missing" in acceptance_summary_verifier and "final_acceptance_gate_json_checks_failed" in acceptance_summary_verifier,
+        "acceptance_summary_verifies_authorization_handoff_payload": "authorization_handoff_json_invalid" in acceptance_summary_verifier and "authorization_handoff_json_mismatch" in acceptance_summary_verifier and '"readiness_status"' in acceptance_summary_verifier and "authorization_handoff_bundle_file_missing" in acceptance_summary_verifier and "authorization_handoff_bundle_outside_summary_dir" in acceptance_summary_verifier and "authorization_handoff_bundle_verification_failed" in acceptance_summary_verifier,
         "web_api_closes_parent_stdout_handle": "finally:" in web_ui and "out.close()" in web_ui and "RUN_PROCESS = process" in web_ui,
         "web_api_passes_runtime_dir_to_headless": "\"--base-dir\"" in web_ui and "str(DATA_DIR)" in web_ui,
         "execution_plan_schema_exists": "PLAN_SCHEMA_VERSION" in execution_plan and "EXECUTION_PLAN_JSON_SCHEMA" in execution_plan and "validate_execution_plan" in execution_plan and "limits_{key}_required" in execution_plan and "max_comments" in execution_plan and "authorization_live_confirmed_required" in execution_plan and "risk_policy_no_ai_token_required" in execution_plan and "UNKNOWN_PAGE_STATE" in execution_plan and "reachops.execution_plan_parameter_mapping.v1" in execution_plan and "runtime_contract" in execution_plan and "reachops.execution_runtime_contract.v1" in execution_plan and "\"executor\": \"local_program\"" in execution_plan and "\"control_surface\": \"local_client_console\"" in execution_plan and "\"ai_console_is_execution_dependency\": False" in execution_plan and "\"execution_phase_ai_calls_allowed\": False" in execution_plan and "runtime_contract_no_ai_token_required" in execution_plan and "runtime_contract_execution_ai_calls_disallowed_required" in execution_plan and "plan_fingerprint_sha256" in execution_plan and "plan_id_mismatch" in execution_plan and "build_execution_plan_runtime_contract" in execution_plan and "adversarial_cli_args_for_contract_preview" in execution_plan and "build_autonomous_preflight_forecast" in execution_plan and "attach_autonomous_preflight_forecast" in execution_plan,
@@ -585,8 +731,10 @@ def run_web_local_api_architecture_fixture() -> dict:
         "repair_policy_covers_all_page_states": "PAGE_STATE_REPAIR_COVERAGE_SCHEMA_VERSION" in repair_policy_engine and "build_page_state_repair_coverage" in repair_policy_engine and "all_page_states_covered" in repair_policy_engine and "continue_execution" in repair_policy_engine and "COMMENT_BOX_MISSING" in repair_policy_engine and "UNKNOWN_PAGE_STATE" in repair_policy_engine,
         "action_router_uses_repair_policy_engine": "RepairPolicyEngine" in action_router and "action_router_repair_decision" in action_router and "retry_same_profile" in action_router and "repair_decision" in action_router and "executable_steps" in action_router and "_execute_repair_steps" in action_router and "repair_step_results" in action_router and "requires_browser_executor" in action_router and "requires_human_review" in action_router,
         "risk_gate_unifies_account_authorization_and_quota": "RiskGate" in risk_gate and "block_precheck" in risk_gate and "PUBLISH_PROFILE_BLOCKED" in risk_gate and "HIGH_RISK_REVIEW_NOTE_REQUIRED" in risk_gate and "DAILY_QUOTA_EXCEEDED" in risk_gate and "DUPLICATE_ACTION_TEXT" in risk_gate and "profile_group_" in risk_gate and "rewrite_or_rotate_message" in risk_gate and "risk_actions" in risk_gate and "risk_decision_id" in risk_gate and "risk_category" in risk_gate and "terminal_outcome" in risk_gate and "block_execution" in risk_gate and "no_ai_token_used" in risk_gate,
+        "language_gate_blocks_unsafe_live_submit": "comment_language TEXT DEFAULT 'unknown'" in growth_storage and "group_default_language TEXT DEFAULT 'unknown'" in growth_storage and "language_gate_status TEXT DEFAULT 'requires_operator_confirmation'" in growth_storage and "language_gate_status" in operation_lead_manager and "language_conflict_with_group_default" in operation_lead_manager and "FORMALLY_ACCEPTED_REPLY_LANGUAGES" in operation_lead_manager and "LANGUAGE_CONFLICT_WITH_GROUP_DEFAULT" in risk_gate and "LANGUAGE_CONFIRMATION_REQUIRED" in risk_gate and "LANGUAGE_NOT_FORMALLY_ACCEPTANCE_TESTED" in risk_gate and "确认评论语言和回复语言" in risk_gate and "LANGUAGE_CONFIRMATION_REQUIRED" in execution_guard and "default_reply_language=group_language" in standalone and "group_default_reply_language=group_language" in standalone,
         "action_router_uses_risk_gate_before_execution": "RiskGate" in action_router and "self.risk_gate.evaluate" in action_router and "\"risk_gate\"" in action_router and "live_submit_authorization_blocked" in action_router and "_duplicate_text_status" in action_router and "risk_gate_duplicate_text_blocked" in action_router,
         "web_operator_outreach_rows_explain_risk_gate": "risk_gate_json" in web_ui and "extract_risk_gate" in web_ui and "human_risk_gate_summary" in web_ui and "风险/失败原因" in web_ui and "风险门禁阻断" in web_ui and "风险门禁通过" in web_ui and "改写或轮换话术后重试" in web_ui and "等待人工授权后再执行" in web_ui,
+        "web_operator_outreach_rows_explain_language_gate": "language_gate_summary" in web_ui and "language_gate_summary_i18n" in web_ui and "localizedRowText(row, 'language_gate_summary'" in web_ui and "human_language_gate_summary" in web_ui and "Language conflict blocked" in web_ui and "语言冲突阻断" in web_ui and "语言需人工确认" in web_ui and "do not live-submit" in web_ui and "冲突解除前不能真实提交" in web_ui and "row.risk_gate_summary" in web_ui,
         "runtime_smoke_verifies_operator_risk_gate_snapshot": "snapshot_outreach_view_explains_risk_gate_to_operator" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "seed_snapshot_risk_gate_execution" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "DUPLICATE_ACTION_TEXT" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8") and "风险门禁阻断" in (ROOT_DIR / "tools" / "reachops_web_panel_runtime_smoke.py").read_text(encoding="utf-8"),
         "local_ai_console_maps_text_to_execution_plan_without_tokens": "LocalAIConsole" in ai_console and "AI_CONSOLE_SCHEMA_VERSION" in ai_console and "build_execution_plan" in ai_console and "no_ai_token_used" in ai_console and "只采集" in ai_console and "为什么" in ai_console,
         "local_ai_console_explains_status_from_evidence_bundle": "def explain_status" in ai_console and "operator_summary" in ai_console and "page_state_summary" in ai_console and "risk_summary" in ai_console and "run_session_health" in ai_console and "run_recovery_summary" in ai_console and "会话健康" in ai_console and "运行控制记录" in ai_console and "中断恢复" in ai_console and "machine_actions" in ai_console and "timeline_summary" in ai_console and "时间线显示" in ai_console and "autonomous_preflight_reconciliation" in ai_console and "预判对账" in ai_console,
@@ -641,6 +789,7 @@ def run_web_local_api_architecture_fixture() -> dict:
         "evidence_bundle_indexes_offline_policy_candidates": "offline_policy_candidate_count" in evidence_bundle and "offline_policy_review_count" in evidence_bundle and "offline_policy_approved_count" in evidence_bundle and "offline_policy_runtime_auto_apply_count" in evidence_bundle and "offline_policy_release_ready_count" in evidence_bundle and "offline_policy_release_runtime_auto_apply_count" in evidence_bundle and "offline_learning_artifact_count" in evidence_bundle and "offline_learning_evidence" in evidence_bundle and "Offline Policy Candidates" in evidence_bundle and "policy_release_proposal" in evidence_bundle and "Release runtime auto apply" in evidence_bundle,
         "local_ai_console_explains_offline_policy_candidates": "policy_candidates" in ai_console and "policy_review_summary" in ai_console and "policy_release_proposal" in ai_console and "runtime_auto_apply=0" in ai_console and "策略发布建议" in ai_console and "evidence_path_count" in ai_console and "可核对证据文件" in ai_console and "候选规则" in ai_console and "不会自动绕过 RiskGate" in ai_console,
         "web_groups_endpoint_refreshes_profile_registry": "parsed.path == \"/api/groups\"" in web_ui and "load_groups(refresh=refresh, allow_async=\"background=1\" in parsed.query)" in web_ui and "append_group_refresh_log(payload, refresh=refresh)" in web_ui and "refresh_groups source=web_ui" in web_ui and "include_profiles=False" in web_ui and "StandaloneProfileRegistry().refresh" in web_ui and "resolve_ixbrowser_group_counts" in web_ui,
+        "ixbrowser_group_mapping_contract": "CREATE TABLE IF NOT EXISTS ixbrowser_group_mappings" in growth_storage and "IXBROWSER_GROUP_MAPPING_SCHEMA_VERSION" in growth_storage and "ensure_ixbrowser_group_mappings" in growth_storage and "upsert_ixbrowser_group_mapping" in growth_storage and "parsed.path == \"/api/group-mappings\"" in web_ui and "parsed.path == \"/api/group-mapping\"" in web_ui and "attach_group_mappings" in web_ui and "group_name_is_not_country_authority" in web_ui and "id=\"groupMappingPanel\"" in web_ui and "id=\"saveGroupMapping\"" in web_ui and "saveGroupMapping" in web_ui and "no_browser_started\": True" in web_ui and "no_submit\": True" in web_ui,
         "web_groups_endpoint_has_ixbrowser_timeout": "GROUP_REFRESH_TIMEOUT_SECONDS" in web_ui and "GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS" in web_ui and "future.result(timeout=GROUP_REFRESH_TIMEOUT_SECONDS)" in web_ui and "profile_group_list_timeout_after_" in web_ui and "executor.shutdown(wait=False, cancel_futures=True)" in web_ui,
         "web_ixbrowser_status_visible_to_operator": "parsed.path == \"/api/ixbrowser-status\"" in web_ui and "build_ixbrowser_status_payload" in web_ui and "ixbrowserApiState" in web_ui and "ixbrowserStatusActions" in web_ui and "refreshIxBrowserStatus" in web_ui and "no_browser_started" in web_ui and "no_submit" in web_ui and "ixbrowser_status_next_actions" in web_ui and "开启 Local API" in web_ui,
         "web_ixbrowser_port_configurable_by_operator": "parsed.path == \"/api/ixbrowser-config\"" in web_ui and "apply_ixbrowser_api_port" in web_ui and "applyIxBrowserPort" in web_ui and "ixbrowserApiPort" in web_ui and "REACHOPS_IXBROWSER_API_PORT" in web_ui and "GROUP_CACHE" in web_ui and "reachops_web_settings.json" in web_ui and "initialize_ixbrowser_api_port_from_settings" in web_ui,
@@ -717,7 +866,8 @@ def run_web_local_api_architecture_fixture() -> dict:
         "headless_refreshes_profile_groups_before_start": "refresh_profile_groups(show_message=False)" in headless and "headless_refresh_profiles_failed" in headless and "start_collection_from_console()" in headless,
         "headless_uses_service_layer": "GrowthIntelligenceService" in headless and "GrowthWorkflowService" in headless,
         "headless_reuses_collection_entrypoint": "start_collection_from_console()" in headless,
-        "headless_recheck_keeps_hard_failure_exclusion": "REACHOPS_FORCE_ACCOUNT_RECHECK" in web_ui and "live_recheck_keep_hard_failure_exclusion" in standalone and "_exclude_recent_hard_failed_profiles(candidate_profiles)" in standalone and "selected = list(candidate_profiles or [])[:limit]" not in standalone,
+        "headless_recheck_keeps_hard_failure_exclusion": "REACHOPS_FORCE_ACCOUNT_RECHECK" in web_ui and "live_recheck_keep_hard_failure_exclusion" in standalone and "exclude_repeated_transient=not force_account_recheck" in standalone and "policy={'hard_failed_only' if force_account_recheck else 'hard_failed_or_repeated_transient'}" in standalone and "force_recheck_transient_backfill" in standalone and "force_recheck_transient_health_bypass" in standalone and "selected = list(candidate_profiles or [])[:limit]" not in standalone,
+        "profile_preflight_covers_small_group_before_instability_block": "continue_small_group_coverage" in standalone and "action=continue_backfill_to_cover_remaining_profiles" in standalone and "total_candidates <= max_checked_profiles" in standalone,
         "headless_live_comment_sets_real_submit_mode": "live_comment = str(args.mode) == \"live_comment\"" in headless and "DummyVar(\"真实提交\" if live_comment else \"预检，不提交\")" in headless and "action_execution_live_confirm_var = DummyVar(live_comment)" in headless,
         "headless_collect_mode_does_not_wait_for_action_submit": "if str(mode) == \"collect\":" in headless and "return collection_terminal_seen(lines)" in headless,
         "standalone_routes_actions_through_workflow": "self.workflow.run_action_router" in standalone and "TikTokSeleniumActionExecutor" in standalone,
@@ -880,6 +1030,7 @@ def run_authorization_gate_matrix_fixture() -> dict:
             "allowed": decision.allowed,
             "error_code": decision.error_code,
             "error_message": decision.error_message,
+            "license_state": (decision.evidence or {}).get("license_state") or {},
         }
 
     active_payload = {
@@ -892,6 +1043,8 @@ def run_authorization_gate_matrix_fixture() -> dict:
     allowed = decide(active_payload)
     device_mismatch = decide({**active_payload, "device_id": "another-device"})
     expired = decide({**active_payload, "expires_at": "2000-01-01T00:00:00Z"})
+    revoked = decide({**active_payload, "revoked": True, "subscription_status": "revoked"})
+    grace = decide({**active_payload, "subscription_status": "past_due", "last_verified_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")})
     disabled_action = decide(
         {
             **active_payload,
@@ -903,6 +1056,8 @@ def run_authorization_gate_matrix_fixture() -> dict:
         "allowed": allowed,
         "device_mismatch": device_mismatch,
         "expired": expired,
+        "revoked": revoked,
+        "grace": grace,
         "disabled_action": disabled_action,
     }
 
@@ -1274,16 +1429,61 @@ def run_campaign_funnel_isolation_fixture(target: str) -> dict:
             max_comments_per_video=3,
             task_delay_min_seconds=30,
             task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
             test_mode=True,
         ),
     )
     old_batch = service.storage.latest_collection_batch_for_campaign(old_plan["campaign"]["id"]) or {}
-    workflow.run_action_router(
-        [{"profile_id": "audit-old-action", "group_name": "US"}],
-        config=ActionRouterConfig(max_workers=1, per_profile_action_limit=10, action_types=["comment_reply"], dry_run=True),
-        campaign_id=old_plan["campaign"]["id"],
-        export_report=False,
+    os.makedirs(os.path.dirname(service.paths.activation_status_path), exist_ok=True)
+    with open(service.paths.activation_status_path, "w", encoding="utf-8") as fh:
+        json.dump(
+            {
+                "active": True,
+                "expires_at": "2999-01-01T00:00:00Z",
+                "license_tier": "enterprise",
+                "capabilities": {"live_submit": True, "comment_reply": True},
+            },
+            fh,
+        )
+    old_comment_action = next(
+        (
+            row
+            for row in service.storage.list_action_queue(limit=1000, batch_id=str(old_batch.get("id") or ""))
+            if str(row.get("action_type") or "") == "comment_reply"
+        ),
+        {},
     )
+    old_comment_evidence = write_local_action_evidence(
+        base_dir,
+        "comment_reply",
+        "audit-old-action",
+        str(old_comment_action.get("id") or "comment-1"),
+        str(old_comment_action.get("suggested_text") or ""),
+    )
+    previous_override = os.environ.get("REACHOPS_ALLOW_TEST_FIXTURE_LIVE")
+    os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = "1"
+    try:
+        workflow.run_action_router(
+            [{"profile_id": "audit-old-action", "group_name": "US"}],
+            config=ActionRouterConfig(
+                max_workers=1,
+                per_profile_action_limit=10,
+                action_types=["comment_reply"],
+                dry_run=False,
+                allow_live_submit=True,
+                live_preflight_only=False,
+                per_profile_video_hour_limit=99,
+            ),
+            campaign_id=old_plan["campaign"]["id"],
+            fixture_outcomes=[{"action_type": "comment_reply", "status": "success", "evidence_path": old_comment_evidence}],
+            export_report=False,
+        )
+    finally:
+        if previous_override is None:
+            os.environ.pop("REACHOPS_ALLOW_TEST_FIXTURE_LIVE", None)
+        else:
+            os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = previous_override
 
     new_plan = service.create_campaign_plan(f"{target} new audience", max_sources=1)
     service.run_collection(
@@ -1295,6 +1495,8 @@ def run_campaign_funnel_isolation_fixture(target: str) -> dict:
             max_comments_per_video=3,
             task_delay_min_seconds=30,
             task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
             test_mode=True,
         ),
     )
@@ -1384,7 +1586,13 @@ def run_collection_error_state_fixture() -> dict:
     page_fail_result = page_fail_service.run_collection(
         [{"type": "creator_url", "value": "https://www.tiktok.com/@audit_creator"}],
         [{"profile_id": "audit-page-fail", "group_name": "US"}],
-        GrowthTaskConfig(test_mode=True, task_delay_min_seconds=30, task_delay_max_seconds=30),
+        GrowthTaskConfig(
+            test_mode=True,
+            task_delay_min_seconds=30,
+            task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
+        ),
     )
     page_fail_tasks = page_fail_service.storage.list_collection_tasks(limit=20)
 
@@ -1403,7 +1611,13 @@ def run_collection_error_state_fixture() -> dict:
     empty_comment_result = empty_comment_service.run_collection(
         [{"type": "creator_url", "value": "https://www.tiktok.com/@audit_creator"}],
         [{"profile_id": "audit-empty-comments", "group_name": "US"}],
-        GrowthTaskConfig(test_mode=True, task_delay_min_seconds=30, task_delay_max_seconds=30),
+        GrowthTaskConfig(
+            test_mode=True,
+            task_delay_min_seconds=30,
+            task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
+        ),
     )
     empty_comment_tasks = empty_comment_service.storage.list_collection_tasks(limit=20)
 
@@ -1481,16 +1695,24 @@ def inspect_exported_campaign_artifacts(
     customers_csv: str,
     actions_csv: str,
     executions_csv: str,
+    public_replies_csv: str,
+    conversions_csv: str,
     action_report: str,
 ) -> dict:
     payload = {}
     customer_header = []
     action_header = []
     execution_header = []
+    public_reply_header = []
+    conversion_header = []
     execution_csv_rows_data = []
+    public_reply_csv_rows_data = []
+    conversion_csv_rows_data = []
     customer_rows = 0
     action_rows = 0
     execution_rows = 0
+    public_reply_rows = 0
+    conversion_rows = 0
     action_report_payload = {}
     if campaign_report and Path(campaign_report).exists():
         with open(campaign_report, "r", encoding="utf-8") as fh:
@@ -1511,6 +1733,18 @@ def inspect_exported_campaign_artifacts(
             execution_header = list(reader.fieldnames or [])
             execution_csv_rows_data = list(reader)
             execution_rows = len(execution_csv_rows_data)
+    if public_replies_csv and Path(public_replies_csv).exists():
+        with open(public_replies_csv, "r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            public_reply_header = list(reader.fieldnames or [])
+            public_reply_csv_rows_data = list(reader)
+            public_reply_rows = len(public_reply_csv_rows_data)
+    if conversions_csv and Path(conversions_csv).exists():
+        with open(conversions_csv, "r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            conversion_header = list(reader.fieldnames or [])
+            conversion_csv_rows_data = list(reader)
+            conversion_rows = len(conversion_csv_rows_data)
     if action_report and Path(action_report).exists():
         with open(action_report, "r", encoding="utf-8") as fh:
             action_report_payload = json.load(fh)
@@ -1529,9 +1763,40 @@ def inspect_exported_campaign_artifacts(
         "risk_gate_next_step",
         "created_at",
     }
+    required_public_reply_columns = {
+        "campaign_id",
+        "run_id",
+        "batch_id",
+        "lead_id",
+        "action_id",
+        "execution_id",
+        "reply_text",
+        "intent_confirmed",
+        "qualification_state",
+        "verified_contact",
+        "classifier_version",
+    }
+    required_conversion_columns = {
+        "campaign_id",
+        "run_id",
+        "batch_id",
+        "lead_id",
+        "action_id",
+        "public_reply_event_id",
+        "conversion_type",
+        "conversion_state",
+        "amount_cents",
+        "currency",
+        "idempotency_key",
+        "recorded_at",
+    }
     funnel = payload.get("funnel") or {}
     execution_summary = payload.get("execution_summary") if isinstance(payload.get("execution_summary"), dict) else {}
     outreach_executions = payload.get("outreach_executions") if isinstance(payload.get("outreach_executions"), list) else []
+    public_reply_events = payload.get("public_reply_events") if isinstance(payload.get("public_reply_events"), list) else []
+    public_reply_summary = payload.get("public_reply_summary") if isinstance(payload.get("public_reply_summary"), dict) else {}
+    conversion_events = payload.get("conversion_events") if isinstance(payload.get("conversion_events"), list) else []
+    conversion_summary = payload.get("conversion_summary") if isinstance(payload.get("conversion_summary"), dict) else {}
     json_execution_risk_fields_present = bool(outreach_executions) and all(
         "risk_gate_reason_code" in row and "risk_gate_summary" in row and "risk_gate_next_step" in row
         for row in outreach_executions
@@ -1547,6 +1812,27 @@ def inspect_exported_campaign_artifacts(
         str((row or {}).get("risk_gate_summary") or "").strip()
         or str((row or {}).get("risk_gate_next_step") or "").strip()
         for row in execution_csv_rows_data
+    )
+    public_reply_json_traceability_present = bool(public_reply_events) and all(
+        str((row or {}).get("campaign_id") or "").strip()
+        and str((row or {}).get("run_id") or "").strip()
+        and str((row or {}).get("batch_id") or "").strip()
+        and str((row or {}).get("lead_id") or "").strip()
+        and str((row or {}).get("action_id") or "").strip()
+        and str((row or {}).get("execution_id") or "").strip()
+        for row in public_reply_events
+        if isinstance(row, dict)
+    )
+    conversion_json_traceability_present = bool(conversion_events) and all(
+        str((row or {}).get("campaign_id") or "").strip()
+        and str((row or {}).get("run_id") or "").strip()
+        and str((row or {}).get("batch_id") or "").strip()
+        and str((row or {}).get("lead_id") or "").strip()
+        and str((row or {}).get("action_id") or "").strip()
+        and str((row or {}).get("public_reply_event_id") or "").strip()
+        and str((row or {}).get("conversion_state") or "").strip()
+        for row in conversion_events
+        if isinstance(row, dict)
     )
     return {
         "campaign_report_exists": bool(payload),
@@ -1564,6 +1850,16 @@ def inspect_exported_campaign_artifacts(
         "execution_summary_total_matches": int(execution_summary.get("total") or 0) == len(outreach_executions),
         "execution_summary_has_errors": isinstance(execution_summary.get("error_counts"), dict),
         "execution_summary_has_switches": "account_switched" in execution_summary,
+        "public_reply_events_present": isinstance(payload.get("public_reply_events"), list),
+        "public_reply_summary_present": bool(public_reply_summary),
+        "public_reply_summary_total_matches": int(public_reply_summary.get("total") or 0) == len(public_reply_events),
+        "public_reply_summary_has_qualified": int(public_reply_summary.get("qualified") or 0) > 0,
+        "public_reply_json_traceability_present": public_reply_json_traceability_present,
+        "conversion_events_present": isinstance(payload.get("conversion_events"), list),
+        "conversion_summary_present": bool(conversion_summary),
+        "conversion_summary_total_matches": int(conversion_summary.get("total") or 0) == len(conversion_events),
+        "conversion_summary_has_revenue": int(conversion_summary.get("revenue_cents") or 0) > 0,
+        "conversion_json_traceability_present": conversion_json_traceability_present,
         "execution_export_has_risk_gate_fields": {
             "risk_gate_reason_code",
             "risk_gate_summary",
@@ -1575,12 +1871,18 @@ def inspect_exported_campaign_artifacts(
         "customer_csv_rows": customer_rows,
         "action_csv_rows": action_rows,
         "execution_csv_rows": execution_rows,
+        "public_reply_csv_rows": public_reply_rows,
+        "conversion_csv_rows": conversion_rows,
         "customer_header": customer_header,
         "action_header": action_header,
         "execution_header": execution_header,
+        "public_reply_header": public_reply_header,
+        "conversion_header": conversion_header,
         "customer_columns_ok": required_customer_columns.issubset(set(customer_header)),
         "action_columns_ok": required_action_columns.issubset(set(action_header)),
         "execution_columns_ok": required_execution_columns.issubset(set(execution_header)),
+        "public_reply_columns_ok": required_public_reply_columns.issubset(set(public_reply_header)),
+        "conversion_columns_ok": required_conversion_columns.issubset(set(conversion_header)),
         "action_report_exists": bool(action_report_payload),
         "action_report_has_summary": bool((action_report_payload.get("summary") or {}).get("total") is not None),
         "action_report_has_errors": isinstance((action_report_payload.get("summary") or {}).get("error_counts"), dict),
@@ -1637,6 +1939,8 @@ def run_audit(args) -> dict:
             max_comments_per_video=3,
             task_delay_min_seconds=30,
             task_delay_max_seconds=30,
+            default_reply_language="en",
+            group_default_reply_language="en",
             test_mode=True,
             intent_keywords=["where", "link", "buy", "app", "free", "name"],
             exclude_keywords=["spam", "bot"],
@@ -1654,6 +1958,51 @@ def run_audit(args) -> dict:
         ),
         export_report=True,
     )
+    export_action = next((row for row in service.storage.list_action_queue(limit=1000, batch_id=batch_id) if row.get("lead_id")), {})
+    if export_action:
+        export_execution_id = service.storage.create_outreach_execution(
+            str(export_action.get("id") or ""),
+            str(export_action.get("action_type") or ""),
+            str(export_action.get("target_username") or ""),
+            status="success",
+            profile_id="audit-export-reply-1",
+            evidence_path=str(Path(base_dir) / "verified-export-reply.png"),
+            execution_mode="live",
+            submission_state="verified_success",
+            verification_state="verified",
+            evidence_verified=True,
+        )
+        service.storage.record_action_execution_result(str(export_action.get("id") or ""), export_execution_id, "completed")
+        reply_result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+            [
+                {
+                    "campaign_id": campaign_id,
+                    "run_id": str(export_action.get("run_id") or ""),
+                    "batch_id": str(export_action.get("batch_id") or ""),
+                    "lead_id": str(export_action.get("lead_id") or ""),
+                    "action_id": str(export_action.get("id") or ""),
+                    "execution_id": export_execution_id,
+                    "target_username": str(export_action.get("target_username") or ""),
+                    "reply_author_username": str(export_action.get("target_username") or ""),
+                    "reply_text": "Can you send me the link and price?",
+                    "reply_language": "en",
+                    "source_url": str(export_action.get("target_url") or ""),
+                    "replied_at": "2026-07-20T10:10:00Z",
+                }
+            ]
+        )
+        reply_event_id = str(((reply_result.get("events") or [{}])[0] or {}).get("id") or "")
+        service.storage.record_conversion_event(
+            lead_id=str(export_action.get("lead_id") or ""),
+            action_id=str(export_action.get("id") or ""),
+            public_reply_event_id=reply_event_id,
+            conversion_type="revenue",
+            amount_cents=12900,
+            currency="USD",
+            notes="redacted audit fixture revenue",
+            idempotency_key="delivery-audit-conversion",
+            recorded_at="2026-07-20T10:30:00Z",
+        )
     artifacts = workflow.export_campaign_artifacts(campaign_id=campaign_id)
     funnel = workflow.build_campaign_funnel(campaign_id=campaign_id, batch_id=batch_id)
     candidates = service.storage.list_candidates_with_content(batch_id=batch_id)
@@ -1666,12 +2015,22 @@ def run_audit(args) -> dict:
     customers_csv = artifacts.get("customers_csv_path", "")
     actions_csv = artifacts.get("actions_csv_path", "")
     executions_csv = artifacts.get("executions_csv_path", "")
+    public_replies_csv = artifacts.get("public_replies_csv_path", "")
+    conversions_csv = artifacts.get("conversions_csv_path", "")
     action_report = (action_result.get("report") or {}).get("json_path", "")
     exported_campaign_payload = {}
     if campaign_report and Path(campaign_report).exists():
         with open(campaign_report, "r", encoding="utf-8") as fh:
             exported_campaign_payload = json.load(fh)
-    export_artifact_inspection = inspect_exported_campaign_artifacts(campaign_report, customers_csv, actions_csv, executions_csv, action_report)
+    export_artifact_inspection = inspect_exported_campaign_artifacts(
+        campaign_report,
+        customers_csv,
+        actions_csv,
+        executions_csv,
+        public_replies_csv,
+        conversions_csv,
+        action_report,
+    )
     live_fixture = run_live_authorized_fixture(args.target)
     runtime_evidence_guard = run_runtime_evidence_guard_fixture(args.target)
     switch_fixture = run_switch_profile_fixture(args.target)
@@ -1679,6 +2038,8 @@ def run_audit(args) -> dict:
     ai_fallback_fixture = run_ai_fallback_fixture(args.target)
     live_submit_acceptance_fixture = run_live_submit_acceptance_fixture()
     live_submit_block_fixture = run_live_submit_acceptance_block_fixture()
+    public_reply_monitor_fixture = run_public_reply_monitor_fixture(args.target)
+    public_reply_ui_surface = inspect_public_reply_ui_surface()
     packaging_update_fixture = run_packaging_update_fixture()
     client_delivery_gate = run_client_delivery_gate_fixture()
     web_local_api_architecture = run_web_local_api_architecture_fixture()
@@ -2023,6 +2384,21 @@ def run_audit(args) -> dict:
             },
         ),
         check(
+            "公开回复监控只在验证触达后确认合格线索",
+            public_reply_monitor_fixture.get("status") == "passed"
+            and int(public_reply_monitor_fixture.get("event_count") or 0) == 1
+            and str(public_reply_monitor_fixture.get("lead_stage") or "") == "qualified"
+            and int(public_reply_monitor_fixture.get("qualified_reply_count") or 0) == 1
+            and int((public_reply_monitor_fixture.get("first") or {}).get("created") or 0) == 1
+            and int((public_reply_monitor_fixture.get("second") or {}).get("updated") or 0) == 1,
+            public_reply_monitor_fixture,
+        ),
+        check(
+            "本地客户端展示公开回复和合格回复状态",
+            all(bool(value) for value in public_reply_ui_surface.values()),
+            public_reply_ui_surface,
+        ),
+        check(
             "授权门覆盖设备绑定、过期和能力限制",
             bool(
                 (authorization_gate_matrix.get("allowed") or {}).get("allowed")
@@ -2030,6 +2406,10 @@ def run_audit(args) -> dict:
                 and (authorization_gate_matrix.get("device_mismatch") or {}).get("error_code") == "LIVE_SUBMIT_DEVICE_MISMATCH"
                 and not (authorization_gate_matrix.get("expired") or {}).get("allowed")
                 and (authorization_gate_matrix.get("expired") or {}).get("error_code") == "LIVE_SUBMIT_LICENSE_EXPIRED"
+                and not (authorization_gate_matrix.get("revoked") or {}).get("allowed")
+                and (authorization_gate_matrix.get("revoked") or {}).get("error_code") == "LIVE_SUBMIT_LICENSE_REVOKED"
+                and not (authorization_gate_matrix.get("grace") or {}).get("allowed")
+                and ((authorization_gate_matrix.get("grace") or {}).get("license_state") or {}).get("state") == "grace"
                 and not (authorization_gate_matrix.get("disabled_action") or {}).get("allowed")
                 and (authorization_gate_matrix.get("disabled_action") or {}).get("error_code") == "LIVE_SUBMIT_NOT_AUTHORIZED"
             ),
@@ -2055,12 +2435,18 @@ def run_audit(args) -> dict:
         check("全程有错误码和证据", bool(events), {"event_count": len(events), "error_counts": errors}),
         check(
             "可导出客户名单和执行报告",
-            all(Path(path).exists() for path in [campaign_report, customers_csv, actions_csv, executions_csv, action_report] if path),
+            all(
+                Path(path).exists()
+                for path in [campaign_report, customers_csv, actions_csv, executions_csv, public_replies_csv, conversions_csv, action_report]
+                if path
+            ),
             {
                 "campaign_report": campaign_report,
                 "customers_csv": customers_csv,
                 "actions_csv": actions_csv,
                 "executions_csv": executions_csv,
+                "public_replies_csv": public_replies_csv,
+                "conversions_csv": conversions_csv,
                 "action_report": action_report,
             },
         ),
@@ -2081,15 +2467,29 @@ def run_audit(args) -> dict:
                 and export_artifact_inspection.get("execution_summary_total_matches")
                 and export_artifact_inspection.get("execution_summary_has_errors")
                 and export_artifact_inspection.get("execution_summary_has_switches")
+                and export_artifact_inspection.get("public_reply_events_present")
+                and export_artifact_inspection.get("public_reply_summary_present")
+                and export_artifact_inspection.get("public_reply_summary_total_matches")
+                and export_artifact_inspection.get("public_reply_summary_has_qualified")
+                and export_artifact_inspection.get("public_reply_json_traceability_present")
+                and export_artifact_inspection.get("conversion_events_present")
+                and export_artifact_inspection.get("conversion_summary_present")
+                and export_artifact_inspection.get("conversion_summary_total_matches")
+                and export_artifact_inspection.get("conversion_summary_has_revenue")
+                and export_artifact_inspection.get("conversion_json_traceability_present")
                 and export_artifact_inspection.get("execution_export_has_risk_gate_fields")
                 and export_artifact_inspection.get("json_execution_risk_fields_present")
                 and export_artifact_inspection.get("json_execution_risk_values_present")
                 and export_artifact_inspection.get("csv_execution_risk_values_present")
                 and int(export_artifact_inspection.get("customer_csv_rows") or 0) > 0
                 and int(export_artifact_inspection.get("action_csv_rows") or 0) > 0
+                and int(export_artifact_inspection.get("public_reply_csv_rows") or 0) > 0
+                and int(export_artifact_inspection.get("conversion_csv_rows") or 0) > 0
                 and export_artifact_inspection.get("execution_columns_ok")
                 and export_artifact_inspection.get("customer_columns_ok")
                 and export_artifact_inspection.get("action_columns_ok")
+                and export_artifact_inspection.get("public_reply_columns_ok")
+                and export_artifact_inspection.get("conversion_columns_ok")
                 and export_artifact_inspection.get("action_report_exists")
                 and export_artifact_inspection.get("action_report_has_summary")
                 and export_artifact_inspection.get("action_report_has_errors")
@@ -2107,10 +2507,19 @@ def run_audit(args) -> dict:
                 and 'loopback_host = "127.0.0.1"' in (ROOT_DIR / "tools" / "start_reachops_ui_windows.ps1").read_text(encoding="utf-8")
                 and "client_surface_not_local_console" in (ROOT_DIR / "tools" / "run_reachops_ui_startup_smoke_windows.ps1").read_text(encoding="utf-8")
                 and "loopback_host_not_local" in (ROOT_DIR / "tools" / "run_reachops_ui_startup_smoke_windows.ps1").read_text(encoding="utf-8")
+                and "no_browser_started = $true" in (ROOT_DIR / "tools" / "run_reachops_ui_startup_smoke_windows.ps1").read_text(encoding="utf-8")
+                and "no_submit = $true" in (ROOT_DIR / "tools" / "run_reachops_ui_startup_smoke_windows.ps1").read_text(encoding="utf-8")
+                and "ui_startup_loopback_not_local" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_started_browser" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_submitted_action" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_json_missing" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_json_invalid" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
+                and "ui_startup_json_mismatch" in (ROOT_DIR / "tools" / "verify_reachops_acceptance_summary.py").read_text(encoding="utf-8")
             ),
             {
                 "launcher": "tools/start_reachops_ui_windows.ps1",
                 "startup_smoke": "tools/run_reachops_ui_startup_smoke_windows.ps1",
+                "acceptance_summary_verifier": "tools/verify_reachops_acceptance_summary.py",
                 "client_surface": "local_client_console",
             },
         ),

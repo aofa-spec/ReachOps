@@ -5,10 +5,10 @@ import json
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 
 from .device_identity import DeviceIdentity
+from .license_state import evaluate_license_state
 
 
 @dataclass
@@ -62,8 +62,15 @@ class LiveSubmitAuthorizationGate:
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status not found", evidence)
         if bool(status.get("template_only")):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation status is a template", evidence)
-        if not bool(status.get("active")):
-            return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", "activation is inactive", evidence)
+        license_state = evaluate_license_state(status)
+        evidence = {**evidence, "license_state": license_state}
+        if not bool(license_state.get("live_submit_ready")):
+            error_code = "LIVE_SUBMIT_NOT_AUTHORIZED"
+            if license_state.get("state") == "expired":
+                error_code = "LIVE_SUBMIT_LICENSE_EXPIRED"
+            elif license_state.get("state") == "revoked":
+                error_code = "LIVE_SUBMIT_LICENSE_REVOKED"
+            return AuthorizationDecision(False, error_code, str(license_state.get("reason") or "license is not ready for live submit"), evidence)
         bound_device_id = str(status.get("device_id") or "").strip()
         if bound_device_id and bound_device_id != evidence["current_device_id"]:
             return AuthorizationDecision(
@@ -73,8 +80,6 @@ class LiveSubmitAuthorizationGate:
                 {**evidence, "bound_device_id": bound_device_id},
             )
         expires_at = str(status.get("expires_at") or "").strip()
-        if expires_at and self._is_expired(expires_at):
-            return AuthorizationDecision(False, "LIVE_SUBMIT_LICENSE_EXPIRED", "activation has expired", {**evidence, "expires_at": expires_at})
         capabilities = status.get("capabilities") if isinstance(status.get("capabilities"), dict) else {}
         if not bool(capabilities.get(feature)):
             return AuthorizationDecision(False, "LIVE_SUBMIT_NOT_AUTHORIZED", f"feature not enabled: {feature}", evidence)
@@ -106,13 +111,3 @@ class LiveSubmitAuthorizationGate:
     @classmethod
     def runtime_mode(cls) -> str:
         return "packaged" if cls.is_packaged_runtime() else "development"
-
-    def _is_expired(self, expires_at: str) -> bool:
-        value = expires_at.replace("Z", "+00:00")
-        try:
-            expires = datetime.fromisoformat(value)
-            if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=timezone.utc)
-            return expires <= datetime.now(timezone.utc)
-        except Exception:
-            return True

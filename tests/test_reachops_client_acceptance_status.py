@@ -19,6 +19,7 @@ from tools.reachops_client_acceptance_status import (
     build_acceptance_manifest,
     build_account_repair_plan,
     derive_acceptance,
+    extract_profile_preflight_summary,
     extract_profile_preflight_details,
     dedupe_profile_remediation_details,
     recommended_profile_action,
@@ -47,7 +48,7 @@ from tools.reachops_client_delivery_check import (
 from tools.reachops_apply_account_repair_plan import apply_account_repair_plan
 from tools.reachops_web_panel_dom_smoke import run_dom_smoke
 from tools.reachops_web_panel_runtime_smoke import run_runtime_smoke
-from tools.run_reachops_headless_macos import DummyRoot
+from tools.run_reachops_headless_macos import DummyRoot, blocked_terminal_seen
 from tools.reachops_web_ui import (
     DEFAULT_TARGET,
     MAX_JSON_PAYLOAD_BYTES,
@@ -70,6 +71,14 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
 
         self.assertEqual(calls, ["refresh"])
 
+    def test_headless_blocked_campaign_terminal_is_not_completed_success(self):
+        lines = [
+            "2026-07-24 16:03:45  CHECK  profile_preflight checked=9 available=0",
+            "2026-07-24 16:03:45  BLOCK  campaign failed reason=无可用账号 error=INSUFFICIENT_LOGGED_IN_PROFILES",
+        ]
+
+        self.assertTrue(blocked_terminal_seen(lines))
+
     def test_native_mac_ui_uses_full_operator_tabs_not_blank_fallback(self):
         root = Path(__file__).resolve().parents[1]
         standalone = (root / "ReachOps" / "workbench" / "standalone_app.py").read_text(encoding="utf-8")
@@ -77,8 +86,8 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
 
         self.assertIn("self.console = GrowthOpsConsole(", standalone)
         self.assertNotIn("console_cls = MacQuickConsole", standalone)
-        self.assertIn('OPERATOR_VIEW_NAMES = ["获客任务", "线索分析", "触达执行", "账号诊断", "报告中心"]', console)
-        for view_name in ["获客任务", "线索分析", "触达执行", "账号诊断", "报告中心"]:
+        self.assertIn('OPERATOR_VIEW_NAMES = ["获客任务", "信息沙漏", "线索分析", "触达执行", "账号诊断", "报告中心"]', console)
+        for view_name in ["获客任务", "信息沙漏", "线索分析", "触达执行", "账号诊断", "报告中心"]:
             self.assertIn(view_name, console)
         self.assertIn("page_header = tk.Frame(", console)
         self.assertIn("textvariable=self.page_title_var", console)
@@ -214,6 +223,68 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertEqual(result["profile_error_summary"]["PROFILE_START_FAILED"]["profile_ids"], ["45"])
         self.assertTrue(any("Canada" in item for item in result["next_actions"]))
         self.assertTrue(any("45" in item for item in result["next_actions"]))
+
+    def test_current_batch_log_preflight_overrides_unscoped_database_summary(self):
+        batch = {
+            "id": "gb_current",
+            "campaign_id": "acq_current",
+            "status": "failed",
+            "profile_group": "获客分组测试",
+            "config_json": (
+                '{"planned_sources":[{"source_type":"keyword","source_value":"skin care"}],'
+                '"quick_send":{"detected_type":"keyword","mode_label":"采集 + 触达预检","volume":"快速"}}'
+            ),
+        }
+        stale_db_preflight = {
+            "checked": 7,
+            "available": 0,
+            "unavailable": 7,
+            "errors": {"PAGE_OPEN_FAILED": 1, "PROFILE_PREFLIGHT_TIMEOUT": 6},
+            "created_at": "2026-07-24T15:30:36Z",
+        }
+        logs = [
+            "PLAN   campaign id=acq_current input_type=keyword product=skin care",
+            "START  campaign id=acq_current batch=gb_current status=pending stage=profile_preflight",
+            "CONFIG selected_profiles group=获客分组测试 requested=11 candidates=5 selected=5 excluded=0",
+            "CHECK  profile_preflight stage=collection reason=initial profiles=5 profile_ids=18981,13742,13737,13712,13685",
+            "CHECK  profile_preflight checked=5 available=0 unavailable=5 errors=LOGIN_REQUIRED=1, PROFILE_PREFLIGHT_TIMEOUT=3, PROFILE_START_FAILED=1",
+            "CHECK  profile_preflight_detail stage=collection profile=13742 status=不可用 error=LOGIN_REQUIRED evidence=/tmp/login.png message=TikTok login popup/page visible",
+        ]
+
+        result = derive_acceptance(batch, stale_db_preflight, logs)
+
+        self.assertEqual(result["profile_preflight_summary"]["checked"], 5)
+        self.assertEqual(
+            result["profile_preflight_summary"]["errors"],
+            {"LOGIN_REQUIRED": 1, "PROFILE_PREFLIGHT_TIMEOUT": 3, "PROFILE_START_FAILED": 1},
+        )
+        self.assertEqual(result["selected_profile_summary"]["selected"], 5)
+
+    def test_profile_preflight_summary_uses_last_terminal_log_line(self):
+        logs = [
+            "CHECK  profile_preflight checked=7 available=0 unavailable=7 errors=PAGE_OPEN_FAILED=1, PROFILE_PREFLIGHT_TIMEOUT=6",
+            "CHECK  profile_preflight checked=5 available=0 unavailable=5 errors=LOGIN_REQUIRED=1, PROFILE_PREFLIGHT_TIMEOUT=3, PROFILE_START_FAILED=1",
+        ]
+
+        result = extract_profile_preflight_summary(logs)
+
+        self.assertEqual(result["checked"], 5)
+        self.assertEqual(
+            result["errors"],
+            {"LOGIN_REQUIRED": 1, "PROFILE_PREFLIGHT_TIMEOUT": 3, "PROFILE_START_FAILED": 1},
+        )
+
+    def test_not_started_next_actions_start_client_not_account_repair(self):
+        batch = {"id": "", "campaign_id": "", "status": "", "profile_group": "United States", "config_json": "{}"}
+        preflight = {"checked": 0, "available": 0, "errors": {}}
+
+        result = derive_acceptance(batch, preflight, [])
+
+        self.assertEqual(result["readiness"], "not_started")
+        self.assertIn("未看到 PLAN campaign", result["blockers"][0])
+        self.assertTrue(any("启动 ReachOps 本地客户端" in item for item in result["next_actions"]))
+        self.assertTrue(any("tools\\start_reachops_ui_windows.ps1" in item for item in result["next_actions"]))
+        self.assertFalse(any("手动打开 United States" in item for item in result["next_actions"]))
 
     def test_pass_requires_collection_and_action_in_scoped_batch(self):
         batch = {"id": "gb_2", "campaign_id": "acq_2", "status": "completed", "profile_group": "US", "config_json": "{}"}
@@ -652,6 +723,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertIn("volume:$('volume').value", html)
         self.assertIn('placeholder="输入产品链接、关键词、达人主页、视频链接、话题或直播间"', html)
         self.assertIn("function remediationRows", html)
+        self.assertIn("function accountRepairCustomerAction", html)
+        self.assertIn("['类型', '错误/状态', '账号/路径', '客户动作']", html)
+        self.assertIn("PAGE_OPEN_FAILED: '在 ixBrowser 手动打开这些 Profile，确认代理可用且 TikTok 页面能打开", html)
+        self.assertIn("PROFILE_PREFLIGHT_TIMEOUT: '在 ixBrowser 手动打开这些 Profile，确认浏览器内核、代理和 TikTok 登录态稳定", html)
+        self.assertIn("LOGIN_REQUIRED: '手动完成 TikTok 登录后重新预检", html)
         self.assertIn("修复清单 CSV", html)
         self.assertIn("验收报告 Markdown", html)
         self.assertIn("客户验收指南", html)
@@ -713,6 +789,13 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertIn('id="finalStatusCommands"', html)
         self.assertIn("最终交付下一步", html)
         self.assertIn("最终复核命令", html)
+        self.assertLess(html.index('id="task"'), html.index('id="reports"'))
+        self.assertGreater(html.index('id="finalStatusActions"'), html.index('id="reports"'))
+        self.assertGreater(html.index('id="finalStatusCommands"'), html.index('id="reports"'))
+        self.assertIn(
+            "$('acceptanceBlockers').innerHTML = listItems([...(a.blockers || []), ...accountRepairActions, ...mvpFailures, ...(a.next_actions || []).map(x => '下一步：' + x)]);",
+            html,
+        )
         self.assertIn("async function refreshActivation()", html)
         self.assertIn("async function refreshFinalStatus()", html)
         self.assertIn("fetch('/api/activation')", html)
@@ -1007,6 +1090,184 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(payload["client_delivery"]["failed_checks"], ["acceptance:ready"])
         self.assertTrue(delivery_check_exists)
 
+    def test_web_settings_http_endpoint_persists_selected_profile_group_without_browser_or_submit(self):
+        with TemporaryDirectory() as tmpdir:
+            old_settings_path = reachops_web_ui.WEB_SETTINGS_PATH
+            old_log_path = reachops_web_ui.LOG_PATH
+            server = None
+            thread = None
+            try:
+                reachops_web_ui.WEB_SETTINGS_PATH = Path(tmpdir) / "config" / "reachops_web_settings.json"
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.write_web_settings({"ixbrowser_api_port": 53201})
+                server = reachops_web_ui.ThreadingHTTPServer(("127.0.0.1", 0), reachops_web_ui.Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+
+                host, port = server.server_address
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                request = urllib.request.Request(
+                    f"http://{host}:{port}/api/settings",
+                    data=json.dumps({"selectedProfileGroup": "获客分组测试"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with opener.open(request, timeout=5) as response:
+                    saved = json.loads(response.read().decode("utf-8"))
+                with opener.open(f"http://{host}:{port}/api/settings", timeout=5) as response:
+                    loaded = json.loads(response.read().decode("utf-8"))
+                persisted = json.loads(reachops_web_ui.WEB_SETTINGS_PATH.read_text(encoding="utf-8"))
+            finally:
+                if server is not None:
+                    server.shutdown()
+                    server.server_close()
+                if thread is not None:
+                    thread.join(timeout=2)
+                reachops_web_ui.WEB_SETTINGS_PATH = old_settings_path
+                reachops_web_ui.LOG_PATH = old_log_path
+
+        self.assertEqual(saved["status"], "saved")
+        self.assertEqual(saved["selected_profile_group"], "获客分组测试")
+        self.assertTrue(saved["no_browser_started"])
+        self.assertTrue(saved["no_submit"])
+        self.assertEqual(loaded["selected_profile_group"], "获客分组测试")
+        self.assertTrue(loaded["no_browser_started"])
+        self.assertTrue(loaded["no_submit"])
+        self.assertEqual(persisted["selected_profile_group"], "获客分组测试")
+        self.assertEqual(persisted["ixbrowser_api_port"], 53201)
+
+    def test_web_ui_prefers_saved_profile_group_before_united_states_default(self):
+        body = html_page().decode("utf-8")
+
+        self.assertIn("loadWebSettings().finally(() => refreshGroups())", body)
+        self.assertIn("const candidates = [selectedProfileGroupSetting, localSaved, current, accountGateBlockedGroup", body)
+        self.assertIn("rememberSelectedProfileGroup($('group').value)", body)
+
+    def _write_minimum_mvp_run(
+        self,
+        root: Path,
+        index: int,
+        *,
+        passed: bool = True,
+        target: str = "demo",
+        profile_group: str = "获客分组测试",
+    ):
+        runs_dir = root / "runs"
+        bundles_dir = root / "evidence_bundles"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        bundles_dir.mkdir(parents=True, exist_ok=True)
+        run_id = f"run_minimum_mvp_{index:02d}"
+        bundle_json = bundles_dir / f"{run_id}.json"
+        bundle_md = bundles_dir / f"{run_id}.md"
+        if passed:
+            bundle_json.write_text(json.dumps({"schema_version": "reachops.evidence_bundle.v1"}), encoding="utf-8")
+            bundle_md.write_text("# evidence\n", encoding="utf-8")
+        tail = [
+            f"RUN    web_headless_start target={target} source_type=keyword group={profile_group} mode=preflight volume=quick",
+            f"START  campaign id=acq_demo batch=gb_demo status=pending stage=profile_preflight target={target} group={profile_group}",
+            "CHECK  profile_preflight checked=1 available=1 unavailable=0 errors=",
+        ]
+        if passed:
+            tail.extend(["DONE   collection batch=gb_demo candidates=2", "DONE   action_preflight batch=gb_demo no_submit=true"])
+        else:
+            tail.append("BLOCK  campaign failed reason=无可用账号 error=INSUFFICIENT_LOGGED_IN_PROFILES")
+        payload = {
+            "session_id": run_id,
+            "created_at": f"2026-07-24T08:{index:02d}:00Z",
+            "updated_at": f"2026-07-24T08:{index:02d}:01Z",
+            "state": "COMPLETED",
+            "status": "completed",
+            "result": {
+                "status": "completed",
+                "target": target,
+                "profile_group": profile_group,
+                "execution_plan": {"source": "execution_plan"},
+                "execution_plan_contract": {
+                    "cli_args_ignored_for_plan_fields": True,
+                    "after": {"mode": "preflight", "profile_group": profile_group, "target": target},
+                },
+                "tail": tail,
+                "evidence_bundle": {
+                    "schema_version": "reachops.evidence_bundle.v1",
+                    "path": str(bundle_json),
+                    "markdown_path": str(bundle_md),
+                },
+            },
+        }
+        (runs_dir / f"{run_id}.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    def test_minimum_mvp_gate_rejects_latest_blocked_client_run(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_minimum_mvp_run(root, 1, passed=True)
+            self._write_minimum_mvp_run(root, 2, passed=False)
+
+            payload = reachops_web_ui.build_minimum_mvp_gate_payload(root, selected_profile_group="获客分组测试")
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertFalse(payload["minimum_mvp_ready"])
+        self.assertEqual(payload["consecutive_client_real_no_submit_passes"], 0)
+        self.assertIn("minimum_mvp:latest_client_run_not_passed", payload["failed_checks"])
+        self.assertEqual(payload["latest_client_run"]["state"], "BLOCKED")
+        self.assertEqual(payload["latest_client_run"]["status"], "blocked")
+        self.assertEqual(payload["latest_client_run"]["result_status"], "blocked")
+        self.assertTrue(payload["latest_client_run"]["truth_corrected"])
+        self.assertEqual(
+            payload["latest_client_run"]["truth_correction"]["reason"],
+            "blocked_terminal_log_overrides_completed_result",
+        )
+        self.assertIn("missing_collection_done", payload["latest_client_run"]["failed_reasons"])
+        self.assertTrue(payload["latest_client_run"]["browser_started"])
+        self.assertFalse(payload["latest_client_run"]["no_browser_started"])
+
+    def test_minimum_mvp_gate_requires_five_consecutive_client_no_submit_runs(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for index in range(1, 6):
+                self._write_minimum_mvp_run(root, index, passed=True)
+
+            payload = reachops_web_ui.build_minimum_mvp_gate_payload(root, selected_profile_group="获客分组测试")
+
+        self.assertEqual(payload["status"], "passed")
+        self.assertTrue(payload["minimum_mvp_ready"])
+        self.assertEqual(payload["consecutive_client_real_no_submit_passes"], 5)
+        self.assertEqual(payload["failed_checks"], [])
+        self.assertTrue(all(row["passed"] for row in payload["recent_client_runs"]))
+        self.assertTrue(all(row["browser_started"] for row in payload["recent_client_runs"]))
+        self.assertTrue(all(not row["no_browser_started"] for row in payload["recent_client_runs"]))
+
+    def test_minimum_mvp_gate_rejects_mixed_targets_or_profile_groups(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for index in range(1, 5):
+                self._write_minimum_mvp_run(root, index, passed=True, target="demo-a")
+            self._write_minimum_mvp_run(root, 5, passed=True, target="demo-b")
+
+            mixed_target = reachops_web_ui.build_minimum_mvp_gate_payload(
+                root,
+                selected_profile_group="获客分组测试",
+            )
+
+        self.assertEqual(mixed_target["status"], "blocked")
+        self.assertFalse(mixed_target["minimum_mvp_ready"])
+        self.assertEqual(mixed_target["consecutive_client_real_no_submit_passes"], 1)
+        self.assertIn("minimum_mvp:mixed_target_group_or_mode", mixed_target["failed_checks"])
+
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for index in range(1, 6):
+                self._write_minimum_mvp_run(root, index, passed=True, profile_group="United States")
+
+            mixed_group = reachops_web_ui.build_minimum_mvp_gate_payload(
+                root,
+                selected_profile_group="获客分组测试",
+            )
+
+        self.assertEqual(mixed_group["status"], "blocked")
+        self.assertFalse(mixed_group["minimum_mvp_ready"])
+        self.assertEqual(mixed_group["consecutive_client_real_no_submit_passes"], 0)
+        self.assertIn("minimum_mvp:selected_profile_group_mismatch", mixed_group["failed_checks"])
+
     def test_logs_http_endpoint_exposes_structured_headless_failure_result(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
@@ -1071,6 +1332,57 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(payload["run_result_status"], "timeout_finalized")
         self.assertEqual(payload["run_result"]["timeout_finalization"]["reason"], "HEADLESS_TIMEOUT")
         self.assertIn("HEADLESS_TIMEOUT", payload["last_stage"])
+
+    def test_logs_http_endpoint_surfaces_latest_web_start_rejection(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_log_path = reachops_web_ui.LOG_PATH
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            old_started_at = reachops_web_ui.RUN_STARTED_AT
+            old_offset = reachops_web_ui.RUN_LOG_OFFSET
+            server = None
+            thread = None
+            try:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RESULT_PATH = Path(tmpdir) / "reachops_web_ui_last_run.json"
+                reachops_web_ui.RUN_PROCESS = None
+                reachops_web_ui.RUN_STARTED_AT = 0.0
+                reachops_web_ui.RUN_LOG_OFFSET = 0
+                reachops_web_ui.LOG_PATH.parent.mkdir(parents=True)
+                reachops_web_ui.LOG_PATH.write_text(
+                    "\n".join(
+                        [
+                            "2026-07-24 23:29:33  START  campaign id=acq_old batch=gb_old status=pending stage=profile_preflight",
+                            "2026-07-25 01:44:12  WARN   web_ui_start_rejected error=LIVE_SUBMIT_NOT_AUTHORIZED mode=live_comment group=获客分组测试 target_present=true",
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                server = reachops_web_ui.ThreadingHTTPServer(("127.0.0.1", 0), reachops_web_ui.Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+
+                host, port = server.server_address
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open(f"http://{host}:{port}/api/logs", timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                if server is not None:
+                    server.shutdown()
+                    server.server_close()
+                if thread is not None:
+                    thread.join(timeout=2)
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.LOG_PATH = old_log_path
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.RUN_PROCESS = old_process
+                reachops_web_ui.RUN_STARTED_AT = old_started_at
+                reachops_web_ui.RUN_LOG_OFFSET = old_offset
+
+        self.assertIn("LIVE_SUBMIT_NOT_AUTHORIZED", payload["last_stage"])
+        self.assertIn("group=获客分组测试", payload["last_stage"])
 
     def test_logs_http_endpoint_extracts_json_result_from_mixed_headless_output(self):
         with TemporaryDirectory() as tmpdir:
@@ -1247,7 +1559,7 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(payload["status"], "rejected")
         self.assertEqual(payload["error"], "unknown_api")
 
-    def test_activation_http_endpoint_reports_no_browser_no_submit_state(self):
+    def test_activation_http_endpoint_reports_development_bypass_no_browser_no_submit_state(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
             old_log_path = reachops_web_ui.LOG_PATH
@@ -1262,8 +1574,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
 
                 host, port = server.server_address
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                with opener.open(f"http://{host}:{port}/api/activation", timeout=5) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
+                with patch.dict(os.environ, {"REACHOPS_REQUIRE_ACTIVATION": "0"}, clear=False):
+                    with opener.open(f"http://{host}:{port}/api/activation", timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
             finally:
                 if server is not None:
                     server.shutdown()
@@ -1273,8 +1586,12 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                 reachops_web_ui.DATA_DIR = old_data_dir
                 reachops_web_ui.LOG_PATH = old_log_path
 
-        self.assertEqual(payload["status"], "blocked")
-        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["status"], "ready")
+        self.assertTrue(payload["ready"])
+        self.assertFalse(payload["activation_status_exists"])
+        self.assertFalse(payload["activation_required"])
+        self.assertTrue(payload["development_bypass"])
+        self.assertFalse(payload["web_live_activation_requires_status_file"])
         self.assertTrue(payload["no_browser_started"])
         self.assertTrue(payload["no_submit"])
         self.assertIn("activation_status_path", payload)
@@ -1349,6 +1666,7 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             old_process = reachops_web_ui.RUN_PROCESS
             server = None
             thread = None
+            log_messages = []
             try:
                 reachops_web_ui.DATA_DIR = Path(tmpdir)
                 reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
@@ -1485,6 +1803,7 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             old_process = reachops_web_ui.RUN_PROCESS
             server = None
             thread = None
+            log_messages = []
             try:
                 reachops_web_ui.DATA_DIR = Path(tmpdir)
                 reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
@@ -1502,9 +1821,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
-                    with self.assertRaises(urllib.error.HTTPError) as raised:
-                        opener.open(request, timeout=5)
+                with patch.dict(os.environ, {"REACHOPS_REQUIRE_ACTIVATION": "1"}, clear=False):
+                    with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
+                        with patch("tools.reachops_web_ui.append_web_log", side_effect=log_messages.append):
+                            with self.assertRaises(urllib.error.HTTPError) as raised:
+                                opener.open(request, timeout=5)
                 payload = json.loads(raised.exception.read().decode("utf-8"))
             finally:
                 if server is not None:
@@ -1527,6 +1848,85 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertTrue(any("激活状态文件" in item for item in payload["next_actions"]))
         popen.assert_not_called()
         self.assertFalse(Path(tmpdir, "reachops_web_ui_last_run.json").exists())
+        log_text = "\n".join(log_messages)
+        self.assertIn("error=LIVE_SUBMIT_NOT_AUTHORIZED", log_text)
+        self.assertIn("mode=live_comment", log_text)
+        self.assertIn("group=United States", log_text)
+
+    def test_start_handler_allows_live_comment_activation_bypass_in_development(self):
+        class StartedProcess:
+            pid = 24680
+
+            def poll(self):
+                return None
+
+        with TemporaryDirectory() as tmpdir:
+            body = json.dumps(
+                {
+                    "target": "anti aging serum",
+                    "mode": "live_comment",
+                    "liveConfirm": True,
+                    "group": "United States",
+                    "profiles": 1,
+                }
+            ).encode("utf-8")
+            headers = Message()
+            headers["Host"] = "127.0.0.1:8769"
+            headers["Content-Type"] = "application/json"
+            headers["Content-Length"] = str(len(body))
+            handler = object.__new__(reachops_web_ui.Handler)
+            handler.path = "/api/start"
+            handler.headers = headers
+            handler.rfile = BytesIO(body)
+            captured = {}
+
+            def capture_json(payload, status=200):
+                captured["payload"] = payload
+                captured["status"] = status
+
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_log_path = reachops_web_ui.LOG_PATH
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_latest_plan_path = reachops_web_ui.LATEST_EXECUTION_PLAN_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            try:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RESULT_PATH = Path(tmpdir) / "reachops_web_ui_last_run.json"
+                reachops_web_ui.LATEST_EXECUTION_PLAN_PATH = Path(tmpdir) / "plans" / "latest_execution_plan.json"
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = Path(tmpdir) / "run_sessions" / "current_run_session.json"
+                reachops_web_ui.RUN_PROCESS = None
+                handler._send_json = capture_json
+                with patch.dict(os.environ, {"REACHOPS_REQUIRE_ACTIVATION": "0"}, clear=False):
+                    with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                        with patch(
+                            "tools.reachops_web_ui.validate_account_repair_for_start",
+                            return_value=(True, {"status": "ready", "same_group": True, "profile_available": 1}),
+                        ):
+                            with patch("tools.reachops_web_ui.subprocess.Popen", return_value=StartedProcess()) as popen:
+                                with patch("tools.reachops_web_ui.STARTUP_HEALTHCHECK_SECONDS", 0):
+                                    reachops_web_ui.Handler.do_POST(handler)
+                                    latest_plan_exists = Path(tmpdir, "plans", "latest_execution_plan.json").is_file()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.LOG_PATH = old_log_path
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.LATEST_EXECUTION_PLAN_PATH = old_latest_plan_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "started")
+        self.assertEqual(captured["payload"]["pid"], 24680)
+        self.assertEqual(captured["payload"]["profile_limit"], 1)
+        popen.assert_called_once()
+        command = popen.call_args.args[0]
+        self.assertIn("--mode", command)
+        self.assertIn("live_comment", command)
+        env = popen.call_args.kwargs["env"]
+        self.assertEqual(env["REACHOPS_REQUIRE_ACTIVATION"], "0")
+        self.assertTrue(latest_plan_exists)
 
     def test_start_handler_rejects_account_gate_without_launching_process(self):
         body = json.dumps(
@@ -1569,8 +1969,70 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                         },
                     ),
                 ) as account_gate:
-                    with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
-                        reachops_web_ui.Handler.do_POST(handler)
+                    with patch("tools.reachops_web_ui.persist_selected_profile_group_setting") as persist_group:
+                        with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
+                            reachops_web_ui.Handler.do_POST(handler)
+        finally:
+            reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(captured["status"], 409)
+        self.assertEqual(captured["payload"]["status"], "rejected")
+        self.assertEqual(captured["payload"]["error"], "account_repair_required")
+        self.assertTrue(captured["payload"]["no_browser_started"])
+        self.assertTrue(captured["payload"]["no_submit"])
+        account_gate.assert_called_once_with("United States", False)
+        persist_group.assert_not_called()
+        popen.assert_not_called()
+
+    def test_start_from_plan_handler_rejects_account_gate_without_launching_process(self):
+        body = json.dumps({}).encode("utf-8")
+        headers = Message()
+        headers["Host"] = "127.0.0.1:8769"
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(body))
+        handler = object.__new__(reachops_web_ui.Handler)
+        handler.path = "/api/start-from-plan"
+        handler.headers = headers
+        handler.rfile = BytesIO(body)
+        captured = {}
+
+        def capture_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        plan = {
+            "schema_version": "reachops.execution_plan.v1",
+            "plan_id": "plan_blocked_accounts",
+            "target": "anti aging serum",
+            "source_type": "auto",
+            "profile_group": "United States",
+            "mode": "preflight",
+            "volume": "quick",
+            "limits": {"profile_limit": 3},
+            "authorization": {"live_confirmed": False, "account_repair_confirmed": False},
+            "ui": {},
+        }
+        handler._send_json = capture_json
+        old_process = reachops_web_ui.RUN_PROCESS
+        try:
+            reachops_web_ui.RUN_PROCESS = None
+            with patch("tools.reachops_web_ui.read_execution_plan", return_value=plan):
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch(
+                        "tools.reachops_web_ui.validate_account_repair_for_start",
+                        return_value=(
+                            False,
+                            {
+                                "status": "rejected",
+                                "error": "account_repair_required",
+                                "message": "账号未修复",
+                                "no_browser_started": True,
+                                "no_submit": True,
+                            },
+                        ),
+                    ) as account_gate:
+                        with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
+                            reachops_web_ui.Handler.do_POST(handler)
         finally:
             reachops_web_ui.RUN_PROCESS = old_process
 
@@ -1581,6 +2043,22 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertTrue(captured["payload"]["no_submit"])
         account_gate.assert_called_once_with("United States", False)
         popen.assert_not_called()
+
+    def test_web_ui_disables_start_from_plan_when_account_gate_is_blocked(self):
+        html = html_page().decode("utf-8")
+
+        self.assertIn("$('startFromPlan').disabled = blockedByAccountGate", html)
+        self.assertIn("计划重放被门禁拦截", html)
+        self.assertIn("账号阻断；预检只会解释阻断原因，不会启动浏览器。", html)
+
+    def test_web_ui_blocks_live_comment_start_when_activation_is_not_ready(self):
+        html = html_page().decode("utf-8")
+
+        self.assertIn("let liveActivationReady = false", html)
+        self.assertIn("const blockedByLiveActivation = $('mode') && $('mode').value === 'live_comment' && !liveActivationReady", html)
+        self.assertIn("$('start').disabled = !groupListReady || blockedByAccountGate || blockedByLiveActivation", html)
+        self.assertIn("真实评论授权未就绪", html)
+        self.assertIn("LIVE_SUBMIT_NOT_AUTHORIZED", html)
 
     def test_account_repair_gate_blocks_only_matching_group(self):
         delivery = {
@@ -1757,8 +2235,13 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                             {"status": "blocked_by_accounts", "profile_available": 0, "same_group": False},
                         ),
                     ) as account_gate:
-                        with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                            reachops_web_ui.Handler.do_POST(handler)
+                        with patch(
+                            "tools.reachops_web_ui.load_selected_profile_group_setting",
+                            return_value="获客分组测试",
+                        ) as load_selected_group:
+                            with patch("tools.reachops_web_ui.persist_selected_profile_group_setting") as persist_group:
+                                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                                    reachops_web_ui.Handler.do_POST(handler)
         finally:
             reachops_web_ui.DATA_DIR = old_data_dir
             reachops_web_ui.LOG_PATH = old_log_path
@@ -1768,7 +2251,87 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(captured["status"], 200)
         self.assertEqual(captured["payload"]["status"], "started")
         account_gate.assert_called_once_with("Canada", True)
+        load_selected_group.assert_called_once()
+        persist_group.assert_not_called()
         self.assertNotIn("REACHOPS_FORCE_ACCOUNT_RECHECK", popen_kwargs["env"])
+
+    def test_start_handler_forces_account_recheck_for_matching_group_confirmation(self):
+        body = json.dumps(
+            {
+                "target": "anti aging serum",
+                "mode": "preflight",
+                "group": "获客分组测试",
+                "profiles": 11,
+                "accountRepairConfirmed": True,
+            }
+        ).encode("utf-8")
+        headers = Message()
+        headers["Host"] = "127.0.0.1:8769"
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(body))
+        handler = object.__new__(reachops_web_ui.Handler)
+        handler.path = "/api/start"
+        handler.headers = headers
+        handler.rfile = BytesIO(body)
+        captured = {}
+
+        def capture_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        class FakeProcess:
+            pid = 43211
+
+            def poll(self):
+                return None
+
+        popen_kwargs = {}
+
+        def fake_popen(_cmd, **kwargs):
+            popen_kwargs.update(kwargs)
+            return FakeProcess()
+
+        handler._send_json = capture_json
+        old_data_dir = reachops_web_ui.DATA_DIR
+        old_log_path = reachops_web_ui.LOG_PATH
+        old_result_path = reachops_web_ui.RESULT_PATH
+        old_process = reachops_web_ui.RUN_PROCESS
+        try:
+            with TemporaryDirectory() as tmpdir:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RESULT_PATH = Path(tmpdir) / "reachops_web_ui_last_run.json"
+                reachops_web_ui.RUN_PROCESS = None
+                with patch(
+                    "tools.reachops_web_ui.validate_profile_group_for_start",
+                    return_value=(True, {"group": {"name": "获客分组测试"}}),
+                ):
+                    with patch(
+                        "tools.reachops_web_ui.validate_account_repair_for_start",
+                        return_value=(
+                            True,
+                            {
+                                "status": "blocked_by_accounts",
+                                "profile_available": 0,
+                                "same_group": True,
+                                "force_account_recheck": True,
+                            },
+                        ),
+                    ) as account_gate:
+                        with patch("tools.reachops_web_ui.load_selected_profile_group_setting", return_value="获客分组测试"):
+                            with patch("tools.reachops_web_ui.persist_selected_profile_group_setting"):
+                                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                                    reachops_web_ui.Handler.do_POST(handler)
+        finally:
+            reachops_web_ui.DATA_DIR = old_data_dir
+            reachops_web_ui.LOG_PATH = old_log_path
+            reachops_web_ui.RESULT_PATH = old_result_path
+            reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "started")
+        account_gate.assert_called_once_with("获客分组测试", True)
+        self.assertEqual(popen_kwargs["env"]["REACHOPS_FORCE_ACCOUNT_RECHECK"], "1")
 
     def test_start_http_endpoint_rejects_invalid_json_without_crashing(self):
         with TemporaryDirectory() as tmpdir:
@@ -2396,10 +2959,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.append_web_log") as append_log:
-                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=OSError("python missing")):
-                        with self.assertRaises(urllib.error.HTTPError) as raised:
-                            opener.open(request, timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.append_web_log") as append_log:
+                        with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=OSError("python missing")):
+                            with self.assertRaises(urllib.error.HTTPError) as raised:
+                                opener.open(request, timeout=5)
                 log_calls = [str(call.args[0]) for call in append_log.call_args_list]
                 payload = json.loads(raised.exception.read().decode("utf-8"))
                 persisted = json.loads(reachops_web_ui.RESULT_PATH.read_text(encoding="utf-8"))
@@ -2466,10 +3030,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.append_web_log") as append_log:
-                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                        with self.assertRaises(urllib.error.HTTPError) as raised:
-                            opener.open(request, timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.append_web_log") as append_log:
+                        with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                            with self.assertRaises(urllib.error.HTTPError) as raised:
+                                opener.open(request, timeout=5)
                 payload = json.loads(raised.exception.read().decode("utf-8"))
                 log_calls = [str(call.args[0]) for call in append_log.call_args_list]
                 current_process = reachops_web_ui.RUN_PROCESS
@@ -2531,9 +3096,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
-                    with self.assertRaises(urllib.error.HTTPError) as raised:
-                        opener.open(request, timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
+                        with self.assertRaises(urllib.error.HTTPError) as raised:
+                            opener.open(request, timeout=5)
                 payload = json.loads(raised.exception.read().decode("utf-8"))
             finally:
                 if server is not None:
@@ -2587,9 +3153,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with opener.open(request, timeout=5) as response:
-                        started = json.loads(response.read().decode("utf-8"))
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with opener.open(request, timeout=5) as response:
+                            started = json.loads(response.read().decode("utf-8"))
 
                 duplicate_request = urllib.request.Request(
                     f"http://{host}:{port}/api/start",
@@ -2668,16 +3235,17 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     except Exception as exc:
                         errors.append(exc)
 
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    first = threading.Thread(target=post_start, args=("anti aging serum",))
-                    second = threading.Thread(target=post_start, args=("retinol serum",))
-                    first.start()
-                    self.assertTrue(popen_entered.wait(timeout=3))
-                    second.start()
-                    time.sleep(0.05)
-                    release_popen.set()
-                    first.join(timeout=5)
-                    second.join(timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        first = threading.Thread(target=post_start, args=("anti aging serum",))
+                        second = threading.Thread(target=post_start, args=("retinol serum",))
+                        first.start()
+                        self.assertTrue(popen_entered.wait(timeout=3))
+                        second.start()
+                        time.sleep(0.05)
+                        release_popen.set()
+                        first.join(timeout=5)
+                        second.join(timeout=5)
             finally:
                 release_popen.set()
                 if server is not None:
@@ -2757,23 +3325,24 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     except Exception as exc:
                         errors.append(exc)
 
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with patch("tools.reachops_web_ui.os.killpg", return_value=None):
-                        start_thread = threading.Thread(
-                            target=post_json,
-                            args=("start", "/api/start", {"target": "anti aging serum"}),
-                        )
-                        stop_thread = threading.Thread(
-                            target=post_json,
-                            args=("stop", "/api/control", {"action": "stop"}),
-                        )
-                        start_thread.start()
-                        self.assertTrue(popen_entered.wait(timeout=3))
-                        stop_thread.start()
-                        time.sleep(0.05)
-                        release_popen.set()
-                        start_thread.join(timeout=5)
-                        stop_thread.join(timeout=5)
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with patch("tools.reachops_web_ui.os.killpg", return_value=None):
+                            start_thread = threading.Thread(
+                                target=post_json,
+                                args=("start", "/api/start", {"target": "anti aging serum"}),
+                            )
+                            stop_thread = threading.Thread(
+                                target=post_json,
+                                args=("stop", "/api/control", {"action": "stop"}),
+                            )
+                            start_thread.start()
+                            self.assertTrue(popen_entered.wait(timeout=3))
+                            stop_thread.start()
+                            time.sleep(0.05)
+                            release_popen.set()
+                            start_thread.join(timeout=5)
+                            stop_thread.join(timeout=5)
                     process_after_stop = reachops_web_ui.RUN_PROCESS
             finally:
                 release_popen.set()
@@ -2832,9 +3401,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with opener.open(request, timeout=5) as response:
-                        payload = json.loads(response.read().decode("utf-8"))
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with opener.open(request, timeout=5) as response:
+                            payload = json.loads(response.read().decode("utf-8"))
             finally:
                 if server is not None:
                     server.shutdown()
@@ -2907,9 +3477,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with opener.open(request, timeout=5) as response:
-                        payload = json.loads(response.read().decode("utf-8"))
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with opener.open(request, timeout=5) as response:
+                            payload = json.loads(response.read().decode("utf-8"))
             finally:
                 if server is not None:
                     server.shutdown()
@@ -2967,9 +3538,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                    with opener.open(request, timeout=5) as response:
-                        payload = json.loads(response.read().decode("utf-8"))
+                with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                    with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                        with opener.open(request, timeout=5) as response:
+                            payload = json.loads(response.read().decode("utf-8"))
             finally:
                 if server is not None:
                     server.shutdown()
@@ -2987,6 +3559,156 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(captured["cmd"][base_dir_index], tmpdir)
         self.assertEqual(captured["cmd"][profile_limit_index], str(MAX_START_PROFILE_LIMIT))
         self.assertTrue(captured["stdout"].closed)
+
+    def test_watchdog_ignores_stale_heartbeat_from_different_run_session(self):
+        class FakeProcess:
+            pid = 43217
+
+            def poll(self):
+                return None
+
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_heartbeat_path = reachops_web_ui.HEARTBEAT_PATH
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            old_started_at = reachops_web_ui.RUN_STARTED_AT
+            try:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.HEARTBEAT_PATH = Path(tmpdir) / "reachops_web_ui_heartbeat.json"
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = Path(tmpdir) / "runs" / "latest_run_session.json"
+                current_session_path = Path(tmpdir) / "runs" / "run_current.json"
+                current_session_path.parent.mkdir(parents=True, exist_ok=True)
+                current_session = {
+                    "schema_version": "reachops.run_session.v1",
+                    "session_id": "run_current",
+                    "state": "RUNNING",
+                    "started_at": "2026-07-24T08:00:00Z",
+                    "updated_at": "2026-07-24T08:00:00Z",
+                }
+                current_session_path.write_text(json.dumps(current_session), encoding="utf-8")
+                reachops_web_ui.LATEST_RUN_SESSION_PATH.write_text(json.dumps(current_session), encoding="utf-8")
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = str(current_session_path)
+                reachops_web_ui.HEARTBEAT_PATH.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "reachops.runtime_heartbeat.v1",
+                            "heartbeat_at": "2026-07-19T21:19:04Z",
+                            "run_session_path": str(Path(tmpdir) / "runs" / "run_old.json"),
+                            "running": False,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                reachops_web_ui.RUN_PROCESS = FakeProcess()
+                reachops_web_ui.RUN_STARTED_AT = time.time()
+
+                heartbeat = reachops_web_ui.build_runtime_heartbeat_payload()
+                with patch("tools.reachops_web_ui.signal_run_process") as signal_process:
+                    with patch("tools.reachops_web_ui.mark_run_session_blocked_by_watchdog") as mark_blocked:
+                        tick = reachops_web_ui.watchdog_tick()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.HEARTBEAT_PATH = old_heartbeat_path
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RUN_PROCESS = old_process
+                reachops_web_ui.RUN_STARTED_AT = old_started_at
+
+        self.assertEqual(heartbeat["status"], "mismatched")
+        self.assertFalse(heartbeat["heartbeat_matches_current_run"])
+        self.assertFalse(heartbeat["stale"])
+        self.assertIsNone(heartbeat["age_seconds"])
+        self.assertTrue(tick["running"])
+        self.assertFalse(tick["heartbeat"]["stale"])
+        signal_process.assert_not_called()
+        mark_blocked.assert_not_called()
+
+    def test_run_session_payload_prefers_result_session_and_corrects_blocked_terminal(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            try:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.RESULT_PATH = Path(tmpdir) / "reachops_web_ui_last_run.json"
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = Path(tmpdir) / "runs" / "latest_run_session.json"
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = str(Path(tmpdir) / "runs" / "run_noise.json")
+                Path(tmpdir, "runs").mkdir(parents=True, exist_ok=True)
+                reachops_web_ui.RUN_PROCESS = None
+
+                blocked_tail = [
+                    "CHECK  profile_preflight checked=9 available=0",
+                    "BLOCK  campaign failed reason=无可用账号 error=INSUFFICIENT_LOGGED_IN_PROFILES",
+                ]
+                target_session = {
+                    "schema_version": "reachops.run_session.v1",
+                    "session_id": "run_target",
+                    "plan_id": "plan_target",
+                    "state": "COMPLETED",
+                    "status": "completed",
+                    "created_at": "2026-07-24T08:00:00Z",
+                    "updated_at": "2026-07-24T08:01:00Z",
+                    "completed_at": "2026-07-24T08:01:00Z",
+                    "checkpoint": {
+                        "state": "COMPLETED",
+                        "last_stage": blocked_tail[-1],
+                        "log_line_count": 2,
+                    },
+                    "state_history": [
+                        {
+                            "at": "2026-07-24T08:01:00Z",
+                            "state": "COMPLETED",
+                            "status": "completed",
+                            "source": "test",
+                        }
+                    ],
+                    "result": {"status": "completed", "tail": blocked_tail},
+                }
+                target_path = Path(tmpdir) / "runs" / "run_target.json"
+                target_path.write_text(json.dumps(target_session, ensure_ascii=False), encoding="utf-8")
+                noise_session = dict(target_session)
+                noise_session["session_id"] = "run_noise"
+                noise_session["plan_id"] = "plan_noise"
+                noise_session["result"] = {"status": "completed", "tail": ["DONE  action_preflight"]}
+                Path(reachops_web_ui.CURRENT_RUN_SESSION_PATH).write_text(
+                    json.dumps(noise_session, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                reachops_web_ui.LATEST_RUN_SESSION_PATH.write_text(
+                    json.dumps(noise_session, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                reachops_web_ui.RESULT_PATH.write_text(
+                    json.dumps(
+                        {
+                            "status": "completed",
+                            "run_session": {"path": str(target_path)},
+                            "tail": blocked_tail,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+
+                payload = reachops_web_ui.build_current_run_session_payload()
+                corrected = json.loads(target_path.read_text(encoding="utf-8"))
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(payload["path"], str(target_path))
+        self.assertEqual(payload["summary"]["state"], "BLOCKED")
+        self.assertEqual(payload["summary"]["status"], "blocked")
+        self.assertEqual(payload["run_session"]["result"]["status"], "blocked")
+        self.assertEqual(corrected["state"], "BLOCKED")
+        self.assertEqual(corrected["result"]["truth_correction"]["reason"], "blocked_terminal_log_overrides_completed_result")
 
     def test_control_http_endpoint_rejects_invalid_json_without_crashing(self):
         with TemporaryDirectory() as tmpdir:

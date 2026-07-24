@@ -142,6 +142,7 @@ class DiscoveredCreator:
     source_path: str = ""
     raw_meta: Dict[str, Any] = field(default_factory=dict)
     batch_id: str = ""
+    run_id: str = ""
     status: str = "active"
     last_checked_at: Optional[str] = None
     created_at: str = field(default_factory=utc_now_iso)
@@ -165,6 +166,7 @@ class DiscoveredContent:
     source_path: str = ""
     raw_meta: Dict[str, Any] = field(default_factory=dict)
     batch_id: str = ""
+    run_id: str = ""
     published_at: Optional[str] = None
     collected_at: str = field(default_factory=utc_now_iso)
 
@@ -187,6 +189,7 @@ class CandidateUser:
     repeat_seen_count: int = 1
     raw_meta: Dict[str, Any] = field(default_factory=dict)
     batch_id: str = ""
+    run_id: str = ""
     status: str = "new"
     created_at: str = field(default_factory=utc_now_iso)
 
@@ -222,6 +225,8 @@ class TopicContent:
     likes: int = 0
     comments: int = 0
     shares: int = 0
+    batch_id: str = ""
+    run_id: str = ""
     collected_at: str = field(default_factory=utc_now_iso)
 
 
@@ -262,6 +267,7 @@ class OperationLead:
     lifecycle_stage: str = "new"
     source_path: str = ""
     batch_id: str = ""
+    run_id: str = ""
     status: str = "new"
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
@@ -278,6 +284,10 @@ class ActionQueueItem:
     reason: str = ""
     status: str = "pending_review"
     risk_level: str = "medium"
+    comment_language: str = "unknown"
+    group_default_language: str = "unknown"
+    language_gate_status: str = "ready"
+    language_gate_note: str = "manual_action_no_language_gate"
     created_at: str = field(default_factory=utc_now_iso)
 
 
@@ -342,6 +352,7 @@ class OutreachExecution:
 class CollectionBatch:
     id: str
     campaign_id: str = ""
+    run_id: str = ""
     status: str = "running"
     total_sources: int = 0
     processed_sources: int = 0
@@ -553,6 +564,9 @@ class GrowthTaskConfig:
     profile_group: str = ""
     campaign_id: str = ""
     active_batch_id: str = ""
+    active_run_id: str = ""
+    default_reply_language: str = "unknown"
+    group_default_reply_language: str = "unknown"
     intent_keywords: List[str] = field(default_factory=list)
     exclude_keywords: List[str] = field(default_factory=list)
     test_mode: bool = False

@@ -6,12 +6,15 @@ else
   PYTHON_BIN="python3"
 fi
 export PYTHONPYCACHEPREFIX="/private/tmp/reachops_pycache"
+export REACHOPS_LEGACY_TK=1
 
-echo "ReachOps 原生客户端 UI 启动中。"
-echo "该入口不会打开 Web 控制台。"
+echo "ReachOps 客户端入口已统一到本地客户端控制台。"
+echo "旧 Tk 仅作为诊断入口保留；该入口显式启动原生 Tk 兼容客户端，不打开 Web 控制台。"
+echo "默认本地客户端入口请运行：./启动ReachOps本地客户端.command"
+echo "ReachOps 本地客户端控制台实际地址由统一 WebUI 入口打印。"
 echo ""
 
-"$PYTHON_BIN" ReachOpsApp.py
+"$PYTHON_BIN" ReachOpsApp.py --legacy-tk
 STATUS=$?
 echo ""
 if [ "$STATUS" -ne 0 ]; then

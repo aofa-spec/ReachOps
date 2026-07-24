@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.authorization_gate import LiveSubmitAuthorizationGate
 from ReachOps.workbench.device_identity import DeviceIdentity
+from ReachOps.workbench.license_state import evaluate_license_state
 
 
 def load_status(path: Path) -> tuple[dict[str, Any], str]:
@@ -36,7 +37,7 @@ def action_probe(action_type: str) -> dict[str, Any]:
     }
 
 
-def check_activation_status(path: str | Path = "") -> dict[str, Any]:
+def check_activation_status(path: str | Path = "", *, require_status_file: bool = False) -> dict[str, Any]:
     status_path = Path(path).expanduser() if str(path or "").strip() else Path(RuntimePaths.build().activation_status_path)
     current_device_id = DeviceIdentity.current_device_id()
     result: dict[str, Any] = {
@@ -49,12 +50,17 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
         "current_device_id": current_device_id,
         "runtime_mode": LiveSubmitAuthorizationGate.runtime_mode(),
         "activation_required": LiveSubmitAuthorizationGate.activation_required(),
+        "status_file_required": bool(require_status_file),
         "development_bypass": not LiveSubmitAuthorizationGate.activation_required(),
         "checks": [],
     }
 
     def add(name: str, passed: bool, **evidence):
         result["checks"].append({"name": name, "passed": bool(passed), "evidence": evidence})
+
+    if require_status_file and not result["activation_status_exists"]:
+        add("activation_status_file_exists", False, activation_status_path=str(status_path), status_file_required=True)
+        return result
 
     if not LiveSubmitAuthorizationGate.activation_required() and not result["activation_status_exists"]:
         profile = {"profile_id": "activation-check", "group_name": "ACTIVATION_CHECK"}
@@ -101,9 +107,11 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
         return result
 
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+    license_state = evaluate_license_state(payload)
     bound_device_id = str(payload.get("device_id") or "").strip()
     add("activation_not_template", not bool(payload.get("template_only")), template_only=bool(payload.get("template_only")))
     add("activation_active", bool(payload.get("active")), active=bool(payload.get("active")))
+    add("license_state_live_submit_ready", bool(license_state.get("live_submit_ready")), license_state=license_state)
     add("device_binding_matches", not bound_device_id or bound_device_id == current_device_id, bound_device_id=bound_device_id, current_device_id=current_device_id)
     add("live_submit_capability_enabled", bool(capabilities.get("live_submit")), capabilities=capabilities)
     for capability in ["comment_reply", "follow_review", "dm_review"]:
@@ -130,6 +138,7 @@ def check_activation_status(path: str | Path = "") -> dict[str, Any]:
     result["status"] = "ready" if ready else "blocked"
     result["license_tier"] = str(payload.get("license_tier") or "")
     result["expires_at"] = str(payload.get("expires_at") or "")
+    result["license_state"] = license_state
     result["capabilities"] = capabilities
     return result
 

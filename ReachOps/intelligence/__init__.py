@@ -29,6 +29,7 @@ from .live_room_user_collector import LiveRoomUserCollector
 from .ai_strategy import AcquisitionIntelligenceProvider, RuleBasedAcquisitionIntelligenceProvider
 from .comment_intent import CommentIntentClassifier, CommentIntentResult, RuleBasedCommentIntentClassifier
 from .outreach_copy import OutreachCopyRecommender, OutreachCopySuggestion, RuleBasedOutreachCopyRecommender
+from .public_reply_monitor import PublicReplyClassification, PublicReplyMonitor
 
 __all__ = [
     "AcquisitionIntelligenceProvider",
@@ -58,6 +59,8 @@ __all__ = [
     "ActionQueueItem",
     "OutreachExecution",
     "ProfileHealth",
+    "PublicReplyClassification",
+    "PublicReplyMonitor",
     "ScheduledScan",
     "GrowthIntelligenceService",
     "LiveRoomUserCollector",

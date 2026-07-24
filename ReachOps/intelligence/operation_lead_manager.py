@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+
 from .schemas import ActionQueueItem, utc_now_iso
 from .storage import GrowthStorage, new_id
 from ReachOps.collectors.normalizer import normalize_language_text
@@ -43,6 +45,9 @@ PURCHASE_INTENT = {
     "valor": "问价格",
 }
 
+FORMALLY_ACCEPTED_REPLY_LANGUAGES = {"en", "es", "pt", "zh"}
+UNCERTAIN_REPLY_LANGUAGES = {"", "unknown", "auto", "latin"}
+
 
 class OperationLeadManager:
     def __init__(self, storage: GrowthStorage, copy_recommender: OutreachCopyRecommender | None = None):
@@ -55,6 +60,9 @@ class OperationLeadManager:
         for row in rows:
             score = int(row.get("qualify_score") or 0)
             intent_type, confidence, evidence = self.detect_intent(row, config)
+            observation = self._record_runtime_observation(row, config)
+            if observation:
+                self._record_runtime_lead_decision(row, config, observation, intent_type, confidence, evidence)
             if intent_type:
                 _, created = self.storage.upsert_audience_intent(row["id"], row["content_id"], intent_type, confidence, evidence)
                 if created:
@@ -80,6 +88,87 @@ class OperationLeadManager:
             if getattr(config, "enable_action_queue", True):
                 stats["actions"] += self._create_actions(lead_id, row, lead_type, priority, config)
         return stats
+
+    def _record_runtime_observation(self, row: dict, config) -> dict:
+        campaign_id = str(getattr(config, "campaign_id", "") or row.get("campaign_id") or "").strip()
+        run_id = str(getattr(config, "active_run_id", "") or row.get("run_id") or "").strip()
+        if not campaign_id or not run_id:
+            return {}
+        candidate_id = str(row.get("id") or "").strip()
+        if not candidate_id:
+            return {}
+        source_path = str(row.get("source_path") or row.get("content_source_path") or row.get("video_url") or "")
+        evidence = self.storage.record_evidence_artifact(
+            campaign_id=campaign_id,
+            run_id=run_id,
+            entity_type="candidate_observation",
+            entity_id=candidate_id,
+            local_path=source_path,
+            sidecar={
+                "candidate_user_id": candidate_id,
+                "content_id": str(row.get("content_id") or ""),
+                "source_id": str(row.get("source_id") or ""),
+                "no_submit": True,
+            },
+        )
+        return self.storage.record_candidate_observation(
+            campaign_id=campaign_id,
+            run_id=run_id,
+            candidate_user_id=candidate_id,
+            content_id=str(row.get("content_id") or ""),
+            source_id=str(row.get("source_id") or ""),
+            evidence_id=evidence["id"],
+            collector_version=str(row.get("collector_level") or "collector_runtime"),
+            classifier_version="operation_lead_manager.v1",
+            feature_snapshot={
+                "qualify_score": int(row.get("qualify_score") or 0),
+                "intent_tags": self._intent_tags(row),
+                "comment_language": str(row.get("comment_language") or ""),
+                "source_path": source_path,
+            },
+            batch_id=str(getattr(config, "active_batch_id", "") or row.get("batch_id") or ""),
+        )
+
+    def _record_runtime_lead_decision(self, row: dict, config, observation: dict, intent_type: str, confidence: int, evidence: str) -> dict:
+        campaign_id = str(getattr(config, "campaign_id", "") or "").strip()
+        run_id = str(getattr(config, "active_run_id", "") or "").strip()
+        observation_id = str((observation or {}).get("id") or "").strip()
+        if not campaign_id or not run_id or not observation_id:
+            return {}
+        score = int(row.get("qualify_score") or 0)
+        tags = self._intent_tags(row)
+        return self.storage.record_lead_decision(
+            campaign_id=campaign_id,
+            run_id=run_id,
+            candidate_observation_id=observation_id,
+            intent_type=str(intent_type or "engaged_commenter"),
+            intent_score=max(score, int(confidence or 0)),
+            product_fit_score=score,
+            contactability_score=50 if str(row.get("profile_url") or "") else 0,
+            source_quality_score=min(100, int(row.get("views") or 0) // 1000 + int(row.get("video_comments") or 0)),
+            total_lead_score=max(score, int(confidence or 0)),
+            confidence=int(confidence or 0),
+            reason_codes=[tag for tag in tags if tag] + ([evidence] if evidence else []),
+            feature_snapshot={
+                "qualify_score": score,
+                "intent_tags": tags,
+                "comment_language": str(row.get("comment_language") or ""),
+            },
+            classifier_provider_version="operation_lead_manager.v1",
+            decision_key=str(row.get("id") or ""),
+        )
+
+    def _intent_tags(self, row: dict) -> list[str]:
+        raw = row.get("intent_tags")
+        if isinstance(raw, list):
+            return [str(item) for item in raw if str(item or "").strip()]
+        try:
+            parsed = json.loads(raw or "[]")
+        except Exception:
+            parsed = []
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if str(item or "").strip()]
+        return []
 
     def detect_intent(self, row: dict, config=None) -> tuple[str, int, str]:
         raw_text = str(row.get("comment_text") or "")
@@ -127,6 +216,7 @@ class OperationLeadManager:
         username = str(row.get("username") or "")
         profile_url = str(row.get("profile_url") or "")
         comment_target_url = str(row.get("source_path") or row.get("video_url") or profile_url)
+        language_gate = self._language_gate(row, config)
         actions = []
         if getattr(config, "enable_comment_queue", True):
             suggestion = self.copy_recommender.recommend("comment_reply", row, lead_type, priority, config)
@@ -140,12 +230,20 @@ class OperationLeadManager:
             suggestion = self.copy_recommender.recommend("dm_review", row, lead_type, priority, config)
             actions.append(("dm_review", profile_url, suggestion.text, dm_risk, suggestion))
         for action_type, target_url, text, risk, suggestion in actions:
+            action_language_gate = dict(language_gate)
+            if action_type != "comment_reply" and action_language_gate["status"] == "ready":
+                action_language_gate["note"] = "non_reply_action_comment_language_recorded"
+            effective_risk = "high" if action_language_gate["status"] != "ready" else risk
             reason = " | ".join(
                 item
                 for item in [
                     f"lead_type={lead_type}",
                     f"copy_provider={getattr(suggestion, 'provider', '')}",
                     f"copy_angle={getattr(suggestion, 'angle', '')}",
+                    f"comment_language={action_language_gate['comment_language']}",
+                    f"group_default_language={action_language_gate['group_default_language']}",
+                    f"language_gate={action_language_gate['status']}",
+                    f"language_gate_note={action_language_gate['note']}",
                 ]
                 if item and not item.endswith("=")
             )
@@ -156,8 +254,12 @@ class OperationLeadManager:
                 target_username=username,
                 target_url=target_url,
                 suggested_text=text,
-                risk_level=risk,
+                risk_level=effective_risk,
                 reason=reason,
+                comment_language=action_language_gate["comment_language"],
+                group_default_language=action_language_gate["group_default_language"],
+                language_gate_status=action_language_gate["status"],
+                language_gate_note=action_language_gate["note"],
                 created_at=utc_now_iso(),
             )
             _, created = self.storage.upsert_action_queue_item(item)
@@ -175,6 +277,51 @@ class OperationLeadManager:
                 created_count += 1
                 self.storage.log_event("action_queue_created", item.id, {"action_type": action_type, "username": username})
         return created_count
+
+    def _normalize_reply_language(self, value: str) -> str:
+        language = str(value or "").strip().lower().replace("_", "-")
+        aliases = {
+            "english": "en",
+            "spanish": "es",
+            "portuguese": "pt",
+            "chinese": "zh",
+            "zh-cn": "zh",
+            "zh-hans": "zh",
+            "zh-hant": "zh",
+        }
+        return aliases.get(language, language)
+
+    def _language_gate(self, row: dict, config) -> dict:
+        comment_language = self._normalize_reply_language(str(row.get("comment_language") or "unknown"))
+        group_default = self._normalize_reply_language(
+            str(
+                getattr(config, "group_default_reply_language", "")
+                or getattr(config, "default_reply_language", "")
+                or "unknown"
+            )
+        )
+        if comment_language in UNCERTAIN_REPLY_LANGUAGES:
+            status = "requires_operator_confirmation"
+            note = "comment_language_uncertain"
+        elif group_default in UNCERTAIN_REPLY_LANGUAGES:
+            status = "requires_operator_confirmation"
+            note = "group_default_language_unconfigured"
+        elif comment_language != group_default:
+            status = "language_conflict_with_group_default"
+            note = "comment_language_conflicts_with_group_default"
+        elif comment_language not in FORMALLY_ACCEPTED_REPLY_LANGUAGES:
+            status = "architecture_supported_requires_operator_confirmation"
+            note = "language_not_formally_acceptance_tested"
+        else:
+            status = "ready"
+            note = "comment_language_matches_group_default"
+        return {
+            "comment_language": comment_language or "unknown",
+            "group_default_language": group_default or "unknown",
+            "status": status,
+            "note": note,
+            "no_submit": status != "ready",
+        }
 
     def _render_template(self, action_type: str, values: dict, fallback: str) -> str:
         body = self.storage.get_action_template_body(action_type, fallback)

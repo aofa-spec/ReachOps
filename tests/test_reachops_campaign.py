@@ -10,6 +10,7 @@ import zipfile
 from collections import Counter
 from contextlib import redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,8 +24,10 @@ from ReachOps.intelligence.comment_intent import CommentIntentResult, RuleBasedC
 from ReachOps.intelligence.growth_task_router import GrowthTaskRouter
 from ReachOps.intelligence.operation_lead_manager import OperationLeadManager
 from ReachOps.intelligence.outreach_copy import OutreachCopySuggestion
+from ReachOps.intelligence.public_reply_monitor import PublicReplyMonitor
 from ReachOps.intelligence.schemas import ActionQueueItem, CampaignFunnel, CandidateUser, DiscoveredContent, DiscoveredCreator
 from ReachOps.intelligence.source_planner import CampaignAnalyzer
+from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.runtime_paths import RuntimePaths
 from ReachOps.workbench.action_router import ActionRouterConfig
 from ReachOps.workbench.action_router import FixtureActionExecutor
@@ -36,6 +39,7 @@ from ReachOps.workbench.standalone_app import GrowthIntelligenceStandaloneApp, g
 from ReachOps.workbench.tiktok_action_executor import TikTokActionExecutorConfig, TikTokSeleniumActionExecutor
 from ReachOps.workbench.workflow_service import GrowthWorkflowService
 from ReachOps.workbench.risk_gate import RiskGate
+from ReachOps.workbench.license_state import evaluate_license_state
 from tools.reachops_action_preflight_existing_batch import run_preflight as run_reachops_action_preflight_existing_batch
 from ReachOps.collectors.normalizer import is_comment_noise_text
 from ReachOps.collectors.collector_runtime import CollectorRuntime
@@ -51,6 +55,7 @@ from tools.init_reachops_acceptance_inputs import main as init_reachops_acceptan
 from tools.reachops_goal_status_report import build_goal_status_report
 from tools.reachops_goal_status_report import main as reachops_goal_status_main
 from tools.reachops_operator_pressure import run_pressure as run_reachops_operator_pressure
+from tools.reachops_web_ui import build_operator_outreach_rows
 from tools.reachops_visual_collection_preflight import build_operator_diagnosis as visual_preflight_operator_diagnosis
 from tools.reachops_visual_collection_preflight import source_from_plan as visual_preflight_source_from_plan
 from tools.reachops_live_validation_manifest import build_manifest as build_reachops_live_validation_manifest
@@ -80,6 +85,32 @@ from tools.reachops_goal_delivery_runner import render_markdown_summary as rende
 from tools.reachops_repository_cleanliness_check import scan_repository_cleanliness
 from tools.reachops_windows_package_preflight import build_preflight as build_reachops_windows_package_preflight
 from tools.write_reachops_update_manifest import build_manifest
+
+
+def write_minimal_authorization_handoff_bundle(path):
+    manifest = {
+        "no_browser_started": True,
+        "no_submit": True,
+        "operator_commands": ["powershell -ExecutionPolicy Bypass -File tools\\init_reachops_acceptance_inputs_windows.ps1 -Json"],
+        "excluded_sensitive_files": ["tools/reachops_acceptance_inputs.local.ps1"],
+    }
+    readiness = {"status": "passed", "final_delivery_ready": False}
+    phase2 = {"live_readiness": {"local_inputs": {"usable": True}}}
+    commands = "\n".join(
+        [
+            "powershell -ExecutionPolicy Bypass -File tools\\init_reachops_acceptance_inputs_windows.ps1 -Json",
+            "python tools\\reachops_final_acceptance_gate.py --json",
+        ]
+    )
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("README_AUTHORIZATION_HANDOFF.md", "# ReachOps Authorization Handoff Bundle\n")
+        zf.writestr("latest_live_acceptance_readiness.md", "# ReachOps Live Acceptance Readiness\n")
+        zf.writestr("latest_live_acceptance_readiness.json", json.dumps(readiness))
+        zf.writestr("latest_phase2_handoff_check.md", "# ReachOps Phase 2 Handoff Check\n")
+        zf.writestr("latest_phase2_handoff_check.json", json.dumps(phase2))
+        zf.writestr("authorization_handoff_commands.txt", commands)
+        zf.writestr("authorization_handoff_manifest.json", json.dumps(manifest))
+        zf.writestr("reachops_acceptance_inputs.example.ps1", "# safe example only\n")
 
 
 class FakeDriver:
@@ -688,6 +719,7 @@ def final_package_check_payload():
             "live_validation": {"exists": True, "size": 1},
             "repository_cleanliness": {"exists": True, "size": 1},
             "windows_package_preflight": {"exists": True, "size": 1},
+            "windows_credential_manager_validation": {"exists": True, "size": 1},
             "client_delivery": {"exists": True, "size": 1},
             "live_readiness": {"exists": True, "size": 1},
             "live_preflight": {"exists": True, "size": 1},
@@ -770,6 +802,31 @@ class ReachOpsCampaignTests(unittest.TestCase):
             os.environ.pop("REACHOPS_ALLOW_TEST_FIXTURE_LIVE", None)
         else:
             os.environ["REACHOPS_ALLOW_TEST_FIXTURE_LIVE"] = self._previous_live_fixture_override
+
+    def _create_reply_monitor_fixture(self, tmp: str, evidence_verified: bool = True):
+        service = make_reachops_service(tmp)
+        plan = service.create_campaign_plan("https://www.tiktok.com/@beauty_creator", max_sources=1)
+        service.run_collection(
+            [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+            [{"profile_id": "discovery-1", "group_name": "US"}],
+            GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+        )
+        action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "comment_reply")
+        execution_id = service.storage.create_outreach_execution(
+            action["id"],
+            action["action_type"],
+            action["target_username"],
+            status="success",
+            profile_id="exec-1",
+            evidence_path=str(Path(tmp) / "verified-comment.png"),
+            execution_mode="live",
+            submission_state="verified_success" if evidence_verified else "submitted_unverified",
+            verification_state="verified" if evidence_verified else "pending",
+            evidence_verified=evidence_verified,
+        )
+        if evidence_verified:
+            service.storage.record_action_execution_result(action["id"], execution_id, "completed")
+        return service, plan, action, execution_id
 
     def test_reachops_version_info_is_standalone_product_metadata(self):
         info = version_info()
@@ -958,9 +1015,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(export_evidence["execution_summary_present"])
         self.assertTrue(export_evidence["execution_summary_total_matches"])
         self.assertTrue(export_evidence["execution_summary_has_switches"])
+        self.assertTrue(export_evidence["public_reply_events_present"])
+        self.assertTrue(export_evidence["public_reply_summary_present"])
+        self.assertTrue(export_evidence["public_reply_summary_total_matches"])
+        self.assertTrue(export_evidence["public_reply_summary_has_qualified"])
+        self.assertTrue(export_evidence["public_reply_json_traceability_present"])
         self.assertTrue(export_evidence["execution_columns_ok"])
+        self.assertTrue(export_evidence["public_reply_columns_ok"])
         self.assertGreater(export_evidence["customer_csv_rows"], 0)
         self.assertGreater(export_evidence["action_csv_rows"], 0)
+        self.assertGreater(export_evidence["public_reply_csv_rows"], 0)
         self.assertGreaterEqual(
             checks["真实执行成功必须有有效证据"]["evidence"]["result"]["errors"]["LIVE_SUBMIT_EVIDENCE_MISSING"],
             1,
@@ -1113,6 +1177,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "status": "ok",
                 "process_running": True,
                 "interactive_task": True,
+                "client_surface": "local_client_console",
+                "loopback_host": "127.0.0.1",
+                "no_browser_started": True,
+                "no_submit": True,
+                "json_path": "reports/reachops_acceptance/current/ui_startup_payload.json",
             },
             "live_validation": {
                 "status": "blocked",
@@ -1196,14 +1265,36 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(failed_ui["passed"])
         self.assertIn("ui_startup_failed", failed_ui["failures"])
 
+        remote_ui_summary = json.loads(json.dumps(base_summary))
+        remote_ui_summary["ui_startup"]["loopback_host"] = "0.0.0.0"
+        remote_ui = verify_reachops_acceptance_summary(remote_ui_summary, allow_external_pending=True)
+        self.assertFalse(remote_ui["passed"])
+        self.assertIn("ui_startup_loopback_not_local", remote_ui["failures"])
+
+        browser_started_ui_summary = json.loads(json.dumps(base_summary))
+        browser_started_ui_summary["ui_startup"]["no_browser_started"] = False
+        browser_started_ui = verify_reachops_acceptance_summary(browser_started_ui_summary, allow_external_pending=True)
+        self.assertFalse(browser_started_ui["passed"])
+        self.assertIn("ui_startup_started_browser", browser_started_ui["failures"])
+
+        submitted_ui_summary = json.loads(json.dumps(base_summary))
+        submitted_ui_summary["ui_startup"]["no_submit"] = False
+        submitted_ui = verify_reachops_acceptance_summary(submitted_ui_summary, allow_external_pending=True)
+        self.assertFalse(submitted_ui["passed"])
+        self.assertIn("ui_startup_submitted_action", submitted_ui["failures"])
+
         passed_summary = json.loads(json.dumps(base_summary))
         passed_summary["status"] = "passed"
         passed_summary["delivery_audit"]["resolved_external_validation"] = 1
         passed_summary["delivery_audit"]["effective_pending_external_validation"] = 0
+        passed_summary["delivery_audit"]["json_path"] = "reports/reachops_acceptance/current/delivery_audit_payload.json"
+        passed_summary["operator_pressure"]["json_path"] = "reports/reachops_acceptance/current/operator_pressure_payload.json"
+        passed_summary["installer_smoke"]["json_path"] = "reports/reachops_acceptance/current/installer_smoke_payload.json"
         passed_summary["goal_status"] = {
             "status": "passed",
             "summary": {"stages_passed": 5, "stages_pending_external_validation": 0, "stages_failed": 0},
             "pending_external_validation": [],
+            "json_path": "reports/reachops_acceptance/current/goal_status_report.json",
         }
         passed_summary["repository_cleanliness"] = {
             "status": "passed",
@@ -1220,6 +1311,23 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "skip_installer_is_non_final": True,
             },
             "json_path": "reports/reachops_acceptance/current/windows_package_preflight.json",
+        }
+        passed_summary["windows_credential_manager_validation"] = {
+            "status": "passed",
+            "passed": True,
+            "backend": "windows_credential_manager",
+            "no_browser_started": True,
+            "no_submit": True,
+            "customer_data_uploaded": False,
+            "secret_value_included": False,
+            "checks": {
+                "windows_credential_manager_available": True,
+                "secret_write_succeeded": True,
+                "secret_readback_matched": True,
+                "secret_delete_succeeded": True,
+                "output_excludes_secret_value": True,
+            },
+            "json_path": "reports/reachops_acceptance/current/windows_credential_manager_validation.json",
         }
         passed_summary["client_delivery"] = {
             "status": "passed",
@@ -1239,13 +1347,33 @@ class ReachOpsCampaignTests(unittest.TestCase):
         passed_summary["live_readiness"] = {
             "status": "ready",
             "ready": True,
-            "no_browser_started": False,
+            "no_browser_started": True,
             "no_submit": True,
+            "json_path": "reports/reachops_acceptance/current/live_readiness_payload.json",
+        }
+        passed_summary["activation_status"] = {
+            "status": "ready",
+            "ready": True,
+            "no_browser_started": True,
+            "no_submit": True,
+            "activation_status_exists": True,
+            "current_device_id": "device-a",
+            "json_path": "reports/reachops_acceptance/current/activation_status_payload.json",
+        }
+        passed_summary["live_validation"] = {
+            "status": "ready",
+            "no_browser_started": True,
+            "no_submit": True,
+            "missing_inputs": [],
+            "selected_profile_ids": ["profile-a"],
+            "json_path": "reports/reachops_acceptance/current/live_validation_manifest.json",
         }
         passed_summary["live_acceptance_status"] = {
             "status": "passed",
             "final_delivery_ready": True,
             "ready_for_live_submit": True,
+            "no_browser_started": True,
+            "no_submit": True,
             "failed_checks": [],
             "local_inputs": {"usable": True},
             "activation": {"ready": True},
@@ -1253,6 +1381,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "missing_inputs": [],
                 "selected_profile_ids": ["profile-a"],
             },
+            "json_path": "reports/reachops_acceptance/current/live_acceptance_status_payload.json",
         }
         passed_summary["authorization_handoff"] = {
             "status": "created",
@@ -1272,16 +1401,27 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "dm_review": [{"status": "success"}],
             },
             "missing_preflight_action_types": [],
+            "no_submit": True,
+            "json_path": "reports/reachops_acceptance/current/live_preflight_payload.json",
         }
         png_sha = hashlib.sha256(b"png").hexdigest()
         def sidecar(action_type):
-            return {
+            payload = {
                 "screenshot_sha256": png_sha,
                 "action_type": action_type,
                 "profile_id": "profile-a",
                 "action_id": f"{action_type}-1",
                 "current_url": "https://www.tiktok.com/@creator/video/123",
             }
+            if action_type == "comment_reply":
+                payload["submitted_text"] = "authorized comment"
+                payload["comment_visible_confirmed"] = True
+            if action_type == "follow_review":
+                payload["follow_state_confirmed"] = True
+            if action_type == "dm_review":
+                payload["dm_entry_confirmed"] = True
+                payload["dm_submitted_text"] = "authorized dm"
+            return payload
         passed_summary["live_submit"] = {
             "status": "completed",
             "executor_mode": "platform_selenium",
@@ -1314,12 +1454,19 @@ class ReachOpsCampaignTests(unittest.TestCase):
             },
             "missing_evidence_action_types": [],
             "missing_local_evidence_file_action_types": [],
+            "json_path": "reports/reachops_acceptance/current/live_submit_payload.json",
         }
         passed = verify_reachops_acceptance_summary(passed_summary)
         self.assertTrue(passed["passed"])
         self.assertEqual(passed["delivery_audit"]["pending_external_validation"], 1)
         self.assertEqual(passed["delivery_audit"]["effective_pending_external_validation"], 0)
         self.assertEqual(passed["goal_status"]["status"], "passed")
+        self.assertTrue(passed["goal_status"]["json_path"].endswith("goal_status_report.json"))
+        self.assertEqual(passed["ui_startup"]["client_surface"], "local_client_console")
+        self.assertEqual(passed["ui_startup"]["loopback_host"], "127.0.0.1")
+        self.assertTrue(passed["ui_startup"]["no_browser_started"])
+        self.assertTrue(passed["ui_startup"]["no_submit"])
+        self.assertTrue(passed["ui_startup"]["json_path"].endswith("ui_startup_payload.json"))
         self.assertEqual(passed["repository_cleanliness"]["status"], "passed")
         self.assertEqual(passed["repository_cleanliness"]["forbidden_count"], 0)
         self.assertTrue(passed["repository_cleanliness"]["json_path"].endswith("repository_cleanliness_payload.json"))
@@ -1328,6 +1475,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(passed["windows_package_preflight"]["default_build_requires_installer"])
         self.assertTrue(passed["windows_package_preflight"]["skip_installer_is_non_final"])
         self.assertTrue(passed["windows_package_preflight"]["json_path"].endswith("windows_package_preflight.json"))
+        self.assertEqual(passed["windows_credential_manager_validation"]["status"], "passed")
+        self.assertTrue(passed["windows_credential_manager_validation"]["passed"])
+        self.assertEqual(passed["windows_credential_manager_validation"]["backend"], "windows_credential_manager")
+        self.assertTrue(passed["windows_credential_manager_validation"]["checks"]["windows_credential_manager_available"])
+        self.assertTrue(passed["windows_credential_manager_validation"]["checks"]["output_excludes_secret_value"])
+        self.assertTrue(passed["windows_credential_manager_validation"]["json_path"].endswith("windows_credential_manager_validation.json"))
         self.assertEqual(passed["client_delivery"]["status"], "passed")
         self.assertEqual(passed["client_delivery"]["readiness"], "pass")
         self.assertTrue(passed["client_delivery"]["final_delivery_ready"])
@@ -1341,6 +1494,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(passed["live_acceptance_status"]["local_inputs_usable"])
         self.assertTrue(passed["live_acceptance_status"]["activation_ready"])
         self.assertEqual(passed["live_acceptance_status"]["selected_profile_ids"], ["profile-a"])
+        self.assertEqual(passed["activation_status"]["status"], "ready")
+        self.assertTrue(passed["activation_status"]["ready"])
+        self.assertTrue(passed["activation_status"]["activation_status_exists"])
+        self.assertEqual(passed["activation_status"]["current_device_id"], "device-a")
+        self.assertTrue(passed["activation_status"]["json_path"].endswith("activation_status_payload.json"))
+        self.assertEqual(passed["live_validation"]["status"], "ready")
+        self.assertEqual(passed["live_validation"]["selected_profile_ids"], ["profile-a"])
+        self.assertEqual(passed["live_validation"]["missing_inputs"], [])
+        self.assertTrue(passed["live_validation"]["json_path"].endswith("live_validation_manifest.json"))
         self.assertEqual(passed["authorization_handoff"]["status"], "created")
         self.assertTrue(passed["authorization_handoff"]["exists"])
         self.assertTrue(passed["authorization_handoff"]["no_browser_started"])
@@ -1376,6 +1538,56 @@ class ReachOpsCampaignTests(unittest.TestCase):
         missing_live_acceptance_status = verify_reachops_acceptance_summary(missing_live_acceptance_status_summary)
         self.assertFalse(missing_live_acceptance_status["passed"])
         self.assertIn("live_acceptance_status_missing", missing_live_acceptance_status["failures"])
+
+        missing_activation_status_summary = json.loads(json.dumps(passed_summary))
+        missing_activation_status_summary.pop("activation_status")
+        missing_activation_status = verify_reachops_acceptance_summary(missing_activation_status_summary)
+        self.assertFalse(missing_activation_status["passed"])
+        self.assertIn("activation_status_missing", missing_activation_status["failures"])
+
+        bad_activation_status_summary = json.loads(json.dumps(passed_summary))
+        bad_activation_status_summary["activation_status"] = {
+            "status": "blocked",
+            "ready": False,
+            "no_browser_started": False,
+            "no_submit": False,
+            "activation_status_exists": False,
+            "current_device_id": "",
+            "json_path": "",
+        }
+        bad_activation_status = verify_reachops_acceptance_summary(bad_activation_status_summary)
+        self.assertFalse(bad_activation_status["passed"])
+        self.assertIn("activation_status_not_ready", bad_activation_status["failures"])
+        self.assertIn("activation_status_ready_false", bad_activation_status["failures"])
+        self.assertIn("activation_status_file_missing", bad_activation_status["failures"])
+        self.assertIn("activation_status_started_browser", bad_activation_status["failures"])
+        self.assertIn("activation_status_submitted_action", bad_activation_status["failures"])
+        self.assertIn("activation_status_device_id_missing", bad_activation_status["failures"])
+        self.assertIn("activation_status_json_path_missing", bad_activation_status["failures"])
+
+        missing_live_validation_summary = json.loads(json.dumps(passed_summary))
+        missing_live_validation_summary.pop("live_validation")
+        missing_live_validation = verify_reachops_acceptance_summary(missing_live_validation_summary)
+        self.assertFalse(missing_live_validation["passed"])
+        self.assertIn("live_validation_missing", missing_live_validation["failures"])
+
+        bad_live_validation_summary = json.loads(json.dumps(passed_summary))
+        bad_live_validation_summary["live_validation"] = {
+            "status": "blocked",
+            "no_browser_started": False,
+            "no_submit": False,
+            "missing_inputs": ["有效激活状态文件"],
+            "selected_profile_ids": [],
+            "json_path": "",
+        }
+        bad_live_validation = verify_reachops_acceptance_summary(bad_live_validation_summary)
+        self.assertFalse(bad_live_validation["passed"])
+        self.assertIn("live_validation_not_ready", bad_live_validation["failures"])
+        self.assertIn("live_validation_started_browser", bad_live_validation["failures"])
+        self.assertIn("live_validation_submitted_action", bad_live_validation["failures"])
+        self.assertIn("live_validation_missing_inputs", bad_live_validation["failures"])
+        self.assertIn("live_validation_profile_ids_missing", bad_live_validation["failures"])
+        self.assertIn("live_validation_json_path_missing", bad_live_validation["failures"])
 
         blocked_live_acceptance_summary = json.loads(json.dumps(passed_summary))
         blocked_live_acceptance_summary["live_acceptance_status"] = {
@@ -1449,6 +1661,45 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(missing_windows_preflight_path["passed"])
         self.assertIn("windows_package_preflight_json_path_missing", missing_windows_preflight_path["failures"])
 
+        missing_credential_validation_summary = json.loads(json.dumps(passed_summary))
+        missing_credential_validation_summary.pop("windows_credential_manager_validation")
+        missing_credential_validation = verify_reachops_acceptance_summary(missing_credential_validation_summary)
+        self.assertFalse(missing_credential_validation["passed"])
+        self.assertIn("windows_credential_manager_validation_missing", missing_credential_validation["failures"])
+
+        bad_credential_validation_summary = json.loads(json.dumps(passed_summary))
+        bad_credential_validation_summary["windows_credential_manager_validation"] = {
+            "status": "blocked_external_validation",
+            "passed": False,
+            "backend": "non_windows_unavailable",
+            "no_browser_started": False,
+            "no_submit": False,
+            "customer_data_uploaded": True,
+            "secret_value_included": True,
+            "checks": {
+                "windows_credential_manager_available": False,
+                "secret_write_succeeded": False,
+                "secret_readback_matched": False,
+                "secret_delete_succeeded": False,
+                "output_excludes_secret_value": False,
+            },
+        }
+        bad_credential_validation = verify_reachops_acceptance_summary(bad_credential_validation_summary)
+        self.assertFalse(bad_credential_validation["passed"])
+        self.assertIn("windows_credential_manager_validation_not_passed", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_failed", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_backend_invalid", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_unavailable", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_write_failed", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_readback_failed", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_delete_failed", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_output_leaked_secret", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_opened_browser", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_submitted_action", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_uploaded_customer_data", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_included_secret_value", bad_credential_validation["failures"])
+        self.assertIn("windows_credential_manager_validation_json_path_missing", bad_credential_validation["failures"])
+
         missing_client_delivery_summary = json.loads(json.dumps(passed_summary))
         missing_client_delivery_summary.pop("client_delivery")
         missing_client_delivery = verify_reachops_acceptance_summary(missing_client_delivery_summary)
@@ -1491,90 +1742,834 @@ class ReachOpsCampaignTests(unittest.TestCase):
             report_dir = Path(tmp) / "acceptance"
             report_dir.mkdir()
             summary_path = report_dir / "acceptance_summary.json"
-            (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
-            (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
-            (report_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
-            (report_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
-            (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
             path_checked_summary = json.loads(json.dumps(passed_summary))
+            path_checked_summary["delivery_audit"]["json_path"] = "delivery_audit_payload.json"
+            path_checked_summary["operator_pressure"]["json_path"] = "operator_pressure_payload.json"
+            path_checked_summary["installer_smoke"]["json_path"] = "installer_smoke_payload.json"
+            path_checked_summary["ui_startup"]["json_path"] = "ui_startup_payload.json"
             path_checked_summary["repository_cleanliness"]["json_path"] = "repository_cleanliness_payload.json"
             path_checked_summary["windows_package_preflight"]["json_path"] = "windows_package_preflight.json"
+            path_checked_summary["windows_credential_manager_validation"]["json_path"] = "windows_credential_manager_validation.json"
             path_checked_summary["client_delivery"]["json_path"] = "client_delivery.json"
+            path_checked_summary["live_readiness"]["json_path"] = "live_readiness_payload.json"
+            path_checked_summary["activation_status"]["json_path"] = "activation_status_payload.json"
+            path_checked_summary["live_validation"]["json_path"] = "live_validation_manifest.json"
+            path_checked_summary["live_acceptance_status"]["json_path"] = "live_acceptance_status_payload.json"
+            path_checked_summary["live_preflight"]["json_path"] = "live_preflight_payload.json"
+            path_checked_summary["live_submit"]["json_path"] = "live_submit_payload.json"
+            path_checked_summary["goal_status"]["json_path"] = "goal_status_report.json"
             path_checked_summary["final_acceptance_gate"]["json_path"] = "final_acceptance_gate.json"
             path_checked_summary["authorization_handoff"]["json_path"] = "authorization_handoff_payload.json"
+            path_checked_summary["authorization_handoff"]["bundle_path"] = "latest_reachops_authorization_handoff.zip"
+            path_checked_summary["final_acceptance_gate"]["checks"] = final_acceptance_gate_payload()["checks"]
+            delivery_audit_payload = {
+                "status": path_checked_summary["delivery_audit"]["status"],
+                "summary": {
+                    "passed": path_checked_summary["delivery_audit"]["passed"],
+                    "pending_external_validation": path_checked_summary["delivery_audit"]["pending_external_validation"],
+                    "failed": path_checked_summary["delivery_audit"]["failed"],
+                },
+            }
+            operator_pressure_payload = {
+                "status": path_checked_summary["operator_pressure"]["status"],
+                "campaign_count": path_checked_summary["operator_pressure"]["campaign_count"],
+                "summary": {
+                    "content_found": path_checked_summary["operator_pressure"]["content_found"],
+                    "comment_users": path_checked_summary["operator_pressure"]["comment_users"],
+                    "customer_leads": path_checked_summary["operator_pressure"]["customer_leads"],
+                    "outreach_actions": path_checked_summary["operator_pressure"]["outreach_actions"],
+                    "execution_success": path_checked_summary["operator_pressure"]["execution_success"],
+                    "account_switched": path_checked_summary["operator_pressure"]["account_switched"],
+                },
+            }
+            (report_dir / "delivery_audit_payload.json").write_text(
+                json.dumps(delivery_audit_payload),
+                encoding="utf-8",
+            )
+            (report_dir / "operator_pressure_payload.json").write_text(
+                json.dumps(operator_pressure_payload),
+                encoding="utf-8",
+            )
+            (report_dir / "installer_smoke_payload.json").write_text(
+                json.dumps(passed_summary["installer_smoke"]),
+                encoding="utf-8",
+            )
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps(passed_summary["repository_cleanliness"]),
+                encoding="utf-8",
+            )
+            (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
+            (report_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(path_checked_summary["windows_package_preflight"]),
+                encoding="utf-8",
+            )
+            (report_dir / "ui_startup_payload.json").write_text(
+                json.dumps(
+                    {
+                        "status": path_checked_summary["ui_startup"]["status"],
+                        "process_running": path_checked_summary["ui_startup"]["process_running"],
+                        "interactive_task": path_checked_summary["ui_startup"]["interactive_task"],
+                        "client_surface": path_checked_summary["ui_startup"]["client_surface"],
+                        "loopback_host": path_checked_summary["ui_startup"]["loopback_host"],
+                        "no_browser_started": path_checked_summary["ui_startup"]["no_browser_started"],
+                        "no_submit": path_checked_summary["ui_startup"]["no_submit"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(path_checked_summary["windows_credential_manager_validation"]),
+                encoding="utf-8",
+            )
+            (report_dir / "client_delivery.json").write_text(
+                json.dumps(path_checked_summary["client_delivery"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_readiness_payload.json").write_text(
+                json.dumps(path_checked_summary["live_readiness"]),
+                encoding="utf-8",
+            )
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(path_checked_summary["activation_status"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_validation_manifest.json").write_text(
+                json.dumps(path_checked_summary["live_validation"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_acceptance_status_payload.json").write_text(
+                json.dumps(path_checked_summary["live_acceptance_status"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_preflight_payload.json").write_text(
+                json.dumps(path_checked_summary["live_preflight"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_submit_payload.json").write_text(
+                json.dumps(path_checked_summary["live_submit"]),
+                encoding="utf-8",
+            )
+            (report_dir / "goal_status_report.json").write_text(
+                json.dumps(path_checked_summary["goal_status"]),
+                encoding="utf-8",
+            )
+            (report_dir / "final_acceptance_gate.json").write_text(
+                json.dumps(path_checked_summary["final_acceptance_gate"]),
+                encoding="utf-8",
+            )
+            (report_dir / "authorization_handoff_payload.json").write_text(
+                json.dumps(path_checked_summary["authorization_handoff"]),
+                encoding="utf-8",
+            )
+            write_minimal_authorization_handoff_bundle(report_dir / "latest_reachops_authorization_handoff.zip")
             path_checked = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertTrue(path_checked["passed"])
+            self.assertTrue(path_checked["delivery_audit"]["json_exists"])
+            self.assertTrue(path_checked["delivery_audit"]["json_loaded"])
+            self.assertTrue(path_checked["operator_pressure"]["json_exists"])
+            self.assertTrue(path_checked["operator_pressure"]["json_loaded"])
+            self.assertTrue(path_checked["installer_smoke"]["json_exists"])
+            self.assertTrue(path_checked["installer_smoke"]["json_loaded"])
+            self.assertTrue(path_checked["ui_startup"]["json_exists"])
+            self.assertTrue(path_checked["ui_startup"]["json_loaded"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_exists"])
+            self.assertTrue(path_checked["repository_cleanliness"]["json_loaded"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_exists"])
+            self.assertTrue(path_checked["windows_package_preflight"]["json_loaded"])
+            self.assertTrue(path_checked["windows_credential_manager_validation"]["json_exists"])
+            self.assertTrue(path_checked["windows_credential_manager_validation"]["json_loaded"])
             self.assertTrue(path_checked["client_delivery"]["json_exists"])
+            self.assertTrue(path_checked["client_delivery"]["json_loaded"])
+            self.assertTrue(path_checked["live_readiness"]["json_exists"])
+            self.assertTrue(path_checked["live_readiness"]["json_loaded"])
+            self.assertTrue(path_checked["activation_status"]["json_exists"])
+            self.assertTrue(path_checked["activation_status"]["json_loaded"])
+            self.assertTrue(path_checked["live_validation"]["json_exists"])
+            self.assertTrue(path_checked["live_validation"]["json_loaded"])
+            self.assertTrue(path_checked["live_acceptance_status"]["json_exists"])
+            self.assertTrue(path_checked["live_acceptance_status"]["json_loaded"])
+            self.assertTrue(path_checked["live_preflight"]["json_exists"])
+            self.assertTrue(path_checked["live_preflight"]["json_loaded"])
+            self.assertTrue(path_checked["live_submit"]["json_exists"])
+            self.assertTrue(path_checked["live_submit"]["json_loaded"])
+            self.assertTrue(path_checked["goal_status"]["json_exists"])
+            self.assertTrue(path_checked["goal_status"]["json_loaded"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_exists"])
+            self.assertTrue(path_checked["final_acceptance_gate"]["json_loaded"])
             self.assertTrue(path_checked["authorization_handoff"]["json_exists"])
+            self.assertTrue(path_checked["authorization_handoff"]["json_loaded"])
+            self.assertTrue(path_checked["authorization_handoff"]["bundle_exists"])
+            self.assertTrue(path_checked["authorization_handoff"]["bundle_inside_summary_dir"])
+            self.assertTrue(path_checked["authorization_handoff"]["bundle_verification_passed"])
+            self.assertEqual(path_checked["authorization_handoff"]["bundle_verification_failures"], [])
+            self.assertTrue(path_checked["delivery_audit"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["operator_pressure"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["installer_smoke"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["ui_startup"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["repository_cleanliness"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["windows_package_preflight"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["windows_credential_manager_validation"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["client_delivery"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["live_readiness"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["live_acceptance_status"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["live_preflight"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["live_submit"]["json_inside_summary_dir"])
+            self.assertTrue(path_checked["goal_status"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["final_acceptance_gate"]["json_inside_summary_dir"])
             self.assertTrue(path_checked["authorization_handoff"]["json_inside_summary_dir"])
 
+            (report_dir / "delivery_audit_payload.json").unlink()
+            missing_audit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_audit_file["passed"])
+            self.assertIn("delivery_audit_json_missing", missing_audit_file["failures"])
+
+            (report_dir / "delivery_audit_payload.json").write_text("", encoding="utf-8")
+            empty_audit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_audit_file["passed"])
+            self.assertIn("delivery_audit_json_empty", empty_audit_file["failures"])
+
+            (report_dir / "delivery_audit_payload.json").write_text("{", encoding="utf-8")
+            invalid_audit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_audit_file["passed"])
+            self.assertIn("delivery_audit_json_invalid", invalid_audit_file["failures"])
+
+            mismatched_audit_payload = json.loads(json.dumps(delivery_audit_payload))
+            mismatched_audit_payload["summary"]["failed"] = 1
+            (report_dir / "delivery_audit_payload.json").write_text(
+                json.dumps(mismatched_audit_payload),
+                encoding="utf-8",
+            )
+            mismatched_audit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_audit_file["passed"])
+            self.assertIn("delivery_audit_json_mismatch:failed", mismatched_audit_file["failures"])
+
+            (report_dir / "delivery_audit_payload.json").write_text(
+                json.dumps(delivery_audit_payload),
+                encoding="utf-8",
+            )
+            (report_dir / "operator_pressure_payload.json").unlink()
+            missing_pressure_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_pressure_file["passed"])
+            self.assertIn("operator_pressure_json_missing", missing_pressure_file["failures"])
+
+            (report_dir / "operator_pressure_payload.json").write_text("", encoding="utf-8")
+            empty_pressure_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_pressure_file["passed"])
+            self.assertIn("operator_pressure_json_empty", empty_pressure_file["failures"])
+
+            (report_dir / "operator_pressure_payload.json").write_text("{", encoding="utf-8")
+            invalid_pressure_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_pressure_file["passed"])
+            self.assertIn("operator_pressure_json_invalid", invalid_pressure_file["failures"])
+
+            mismatched_pressure_payload = json.loads(json.dumps(operator_pressure_payload))
+            mismatched_pressure_payload["summary"]["customer_leads"] = 0
+            (report_dir / "operator_pressure_payload.json").write_text(
+                json.dumps(mismatched_pressure_payload),
+                encoding="utf-8",
+            )
+            mismatched_pressure_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_pressure_file["passed"])
+            self.assertIn("operator_pressure_json_mismatch:customer_leads", mismatched_pressure_file["failures"])
+
+            (report_dir / "operator_pressure_payload.json").write_text(
+                json.dumps(operator_pressure_payload),
+                encoding="utf-8",
+            )
+            (report_dir / "installer_smoke_payload.json").unlink()
+            missing_installer_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_installer_file["passed"])
+            self.assertIn("installer_smoke_json_missing", missing_installer_file["failures"])
+
+            (report_dir / "installer_smoke_payload.json").write_text("", encoding="utf-8")
+            empty_installer_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_installer_file["passed"])
+            self.assertIn("installer_smoke_json_empty", empty_installer_file["failures"])
+
+            (report_dir / "installer_smoke_payload.json").write_text("{", encoding="utf-8")
+            invalid_installer_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_installer_file["passed"])
+            self.assertIn("installer_smoke_json_invalid", invalid_installer_file["failures"])
+
+            mismatched_installer_payload = json.loads(json.dumps(path_checked_summary["installer_smoke"]))
+            mismatched_installer_payload["data_in_install_dir"] = True
+            (report_dir / "installer_smoke_payload.json").write_text(
+                json.dumps(mismatched_installer_payload),
+                encoding="utf-8",
+            )
+            mismatched_installer_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_installer_file["passed"])
+            self.assertIn("installer_smoke_json_mismatch:data_in_install_dir", mismatched_installer_file["failures"])
+
+            (report_dir / "installer_smoke_payload.json").write_text(
+                json.dumps(path_checked_summary["installer_smoke"]),
+                encoding="utf-8",
+            )
+            (report_dir / "ui_startup_payload.json").unlink()
+            missing_ui_startup_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_ui_startup_file["passed"])
+            self.assertIn("ui_startup_json_missing", missing_ui_startup_file["failures"])
+
+            (report_dir / "ui_startup_payload.json").write_text("{", encoding="utf-8")
+            invalid_ui_startup_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_ui_startup_file["passed"])
+            self.assertIn("ui_startup_json_invalid", invalid_ui_startup_file["failures"])
+
+            mismatched_ui_payload = {
+                "status": "ok",
+                "process_running": True,
+                "interactive_task": True,
+                "client_surface": "local_client_console",
+                "loopback_host": "0.0.0.0",
+                "no_browser_started": True,
+                "no_submit": True,
+            }
+            (report_dir / "ui_startup_payload.json").write_text(json.dumps(mismatched_ui_payload), encoding="utf-8")
+            mismatched_ui_startup_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_ui_startup_file["passed"])
+            self.assertIn("ui_startup_json_mismatch:loopback_host", mismatched_ui_startup_file["failures"])
+
+            mismatched_ui_payload["loopback_host"] = "127.0.0.1"
+            (report_dir / "ui_startup_payload.json").write_text(json.dumps(mismatched_ui_payload), encoding="utf-8")
             (report_dir / "repository_cleanliness_payload.json").unlink()
             missing_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_report_file["passed"])
             self.assertIn("repository_cleanliness_json_missing", missing_report_file["failures"])
 
-            (report_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (report_dir / "repository_cleanliness_payload.json").write_text("{", encoding="utf-8")
+            invalid_cleanliness_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_cleanliness_file["passed"])
+            self.assertIn("repository_cleanliness_json_invalid", invalid_cleanliness_file["failures"])
+
+            mismatched_cleanliness_payload = json.loads(json.dumps(path_checked_summary["repository_cleanliness"]))
+            mismatched_cleanliness_payload["forbidden_count"] = 1
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps(mismatched_cleanliness_payload),
+                encoding="utf-8",
+            )
+            mismatched_cleanliness_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_cleanliness_file["passed"])
+            self.assertIn("repository_cleanliness_json_mismatch:forbidden_count", mismatched_cleanliness_file["failures"])
+
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps(path_checked_summary["repository_cleanliness"]),
+                encoding="utf-8",
+            )
             (report_dir / "windows_package_preflight.json").unlink()
             missing_preflight_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_preflight_report_file["passed"])
             self.assertIn("windows_package_preflight_json_missing", missing_preflight_report_file["failures"])
 
-            (report_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
+            (report_dir / "windows_package_preflight.json").write_text("", encoding="utf-8")
+            empty_preflight_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_preflight_report_file["passed"])
+            self.assertIn("windows_package_preflight_json_empty", empty_preflight_report_file["failures"])
+
+            (report_dir / "windows_package_preflight.json").write_text("{", encoding="utf-8")
+            invalid_preflight_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_preflight_report_file["passed"])
+            self.assertIn("windows_package_preflight_json_invalid", invalid_preflight_report_file["failures"])
+
+            mismatched_preflight_payload = json.loads(json.dumps(path_checked_summary["windows_package_preflight"]))
+            mismatched_preflight_payload["ready_for_windows_build"] = False
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(mismatched_preflight_payload),
+                encoding="utf-8",
+            )
+            mismatched_preflight_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_preflight_report_file["passed"])
+            self.assertIn("windows_package_preflight_json_mismatch:ready_for_windows_build", mismatched_preflight_report_file["failures"])
+
+            mismatched_preflight_contract = json.loads(json.dumps(path_checked_summary["windows_package_preflight"]))
+            mismatched_preflight_contract["build_contract"]["skip_installer_is_non_final"] = False
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(mismatched_preflight_contract),
+                encoding="utf-8",
+            )
+            mismatched_preflight_contract_report = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_preflight_contract_report["passed"])
+            self.assertIn(
+                "windows_package_preflight_json_mismatch:build_contract.skip_installer_is_non_final",
+                mismatched_preflight_contract_report["failures"],
+            )
+
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(path_checked_summary["windows_package_preflight"]),
+                encoding="utf-8",
+            )
+            (report_dir / "windows_credential_manager_validation.json").unlink()
+            missing_credential_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_credential_report_file["passed"])
+            self.assertIn("windows_credential_manager_validation_json_missing", missing_credential_report_file["failures"])
+
+            (report_dir / "windows_credential_manager_validation.json").write_text("{", encoding="utf-8")
+            invalid_credential_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_credential_report_file["passed"])
+            self.assertIn("windows_credential_manager_validation_json_invalid", invalid_credential_report_file["failures"])
+
+            mismatched_credential_payload = json.loads(json.dumps(path_checked_summary["windows_credential_manager_validation"]))
+            mismatched_credential_payload["backend"] = "non_windows_unavailable"
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(mismatched_credential_payload),
+                encoding="utf-8",
+            )
+            mismatched_credential_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_credential_report_file["passed"])
+            self.assertIn("windows_credential_manager_validation_json_mismatch:backend", mismatched_credential_report_file["failures"])
+
+            mismatched_credential_payload = json.loads(json.dumps(path_checked_summary["windows_credential_manager_validation"]))
+            mismatched_credential_payload["checks"]["output_excludes_secret_value"] = False
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(mismatched_credential_payload),
+                encoding="utf-8",
+            )
+            mismatched_credential_check_report = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_credential_check_report["passed"])
+            self.assertIn(
+                "windows_credential_manager_validation_json_mismatch:checks.output_excludes_secret_value",
+                mismatched_credential_check_report["failures"],
+            )
+
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(path_checked_summary["windows_credential_manager_validation"]),
+                encoding="utf-8",
+            )
             (report_dir / "client_delivery.json").unlink()
             missing_client_delivery_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_client_delivery_report_file["passed"])
             self.assertIn("client_delivery_json_missing", missing_client_delivery_report_file["failures"])
 
-            (report_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
+            (report_dir / "client_delivery.json").write_text("{", encoding="utf-8")
+            invalid_client_delivery_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_client_delivery_report_file["passed"])
+            self.assertIn("client_delivery_json_invalid", invalid_client_delivery_report_file["failures"])
+
+            mismatched_client_delivery_payload = json.loads(json.dumps(path_checked_summary["client_delivery"]))
+            mismatched_client_delivery_payload["status"] = "blocked_by_accounts"
+            (report_dir / "client_delivery.json").write_text(
+                json.dumps(mismatched_client_delivery_payload),
+                encoding="utf-8",
+            )
+            mismatched_client_delivery_report_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_client_delivery_report_file["passed"])
+            self.assertIn("client_delivery_json_mismatch:status", mismatched_client_delivery_report_file["failures"])
+
+            mismatched_client_delivery_payload = json.loads(json.dumps(path_checked_summary["client_delivery"]))
+            mismatched_client_delivery_payload["failed_checks"] = ["acceptance:ready"]
+            (report_dir / "client_delivery.json").write_text(
+                json.dumps(mismatched_client_delivery_payload),
+                encoding="utf-8",
+            )
+            mismatched_client_delivery_checks = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_client_delivery_checks["passed"])
+            self.assertIn("client_delivery_json_mismatch:failed_checks", mismatched_client_delivery_checks["failures"])
+
+            (report_dir / "client_delivery.json").write_text(
+                json.dumps(path_checked_summary["client_delivery"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_readiness_payload.json").unlink()
+            missing_live_readiness_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_live_readiness_file["passed"])
+            self.assertIn("live_readiness_json_missing", missing_live_readiness_file["failures"])
+
+            (report_dir / "live_readiness_payload.json").write_text("", encoding="utf-8")
+            empty_live_readiness_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_live_readiness_file["passed"])
+            self.assertIn("live_readiness_json_empty", empty_live_readiness_file["failures"])
+
+            (report_dir / "live_readiness_payload.json").write_text("{", encoding="utf-8")
+            invalid_live_readiness_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_live_readiness_file["passed"])
+            self.assertIn("live_readiness_json_invalid", invalid_live_readiness_file["failures"])
+
+            mismatched_live_readiness_payload = json.loads(json.dumps(path_checked_summary["live_readiness"]))
+            mismatched_live_readiness_payload["no_submit"] = False
+            (report_dir / "live_readiness_payload.json").write_text(
+                json.dumps(mismatched_live_readiness_payload),
+                encoding="utf-8",
+            )
+            mismatched_live_readiness_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_live_readiness_file["passed"])
+            self.assertIn("live_readiness_json_mismatch:no_submit", mismatched_live_readiness_file["failures"])
+
+            (report_dir / "live_readiness_payload.json").write_text(
+                json.dumps(path_checked_summary["live_readiness"]),
+                encoding="utf-8",
+            )
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(path_checked_summary["activation_status"]),
+                encoding="utf-8",
+            )
+            (report_dir / "activation_status_payload.json").unlink()
+            missing_activation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_activation_file["passed"])
+            self.assertIn("activation_status_json_missing", missing_activation_file["failures"])
+
+            (report_dir / "activation_status_payload.json").write_text("", encoding="utf-8")
+            empty_activation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_activation_file["passed"])
+            self.assertIn("activation_status_json_empty", empty_activation_file["failures"])
+
+            (report_dir / "activation_status_payload.json").write_text("{", encoding="utf-8")
+            invalid_activation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_activation_file["passed"])
+            self.assertIn("activation_status_json_invalid", invalid_activation_file["failures"])
+
+            mismatched_activation_payload = json.loads(json.dumps(path_checked_summary["activation_status"]))
+            mismatched_activation_payload["current_device_id"] = "device-b"
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(mismatched_activation_payload),
+                encoding="utf-8",
+            )
+            mismatched_activation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_activation_file["passed"])
+            self.assertIn("activation_status_json_mismatch:current_device_id", mismatched_activation_file["failures"])
+
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(path_checked_summary["activation_status"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_validation_manifest.json").unlink()
+            missing_live_validation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_live_validation_file["passed"])
+            self.assertIn("live_validation_json_missing", missing_live_validation_file["failures"])
+
+            (report_dir / "live_validation_manifest.json").write_text("", encoding="utf-8")
+            empty_live_validation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_live_validation_file["passed"])
+            self.assertIn("live_validation_json_empty", empty_live_validation_file["failures"])
+
+            (report_dir / "live_validation_manifest.json").write_text("{", encoding="utf-8")
+            invalid_live_validation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_live_validation_file["passed"])
+            self.assertIn("live_validation_json_invalid", invalid_live_validation_file["failures"])
+
+            mismatched_live_validation_payload = json.loads(json.dumps(path_checked_summary["live_validation"]))
+            mismatched_live_validation_payload["selected_profile_ids"] = ["profile-b"]
+            (report_dir / "live_validation_manifest.json").write_text(
+                json.dumps(mismatched_live_validation_payload),
+                encoding="utf-8",
+            )
+            mismatched_live_validation_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_live_validation_file["passed"])
+            self.assertIn("live_validation_json_mismatch:selected_profile_ids", mismatched_live_validation_file["failures"])
+
+            (report_dir / "live_validation_manifest.json").write_text(
+                json.dumps(path_checked_summary["live_validation"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_acceptance_status_payload.json").unlink()
+            missing_live_acceptance_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_live_acceptance_file["passed"])
+            self.assertIn("live_acceptance_status_json_missing", missing_live_acceptance_file["failures"])
+
+            (report_dir / "live_acceptance_status_payload.json").write_text("{", encoding="utf-8")
+            invalid_live_acceptance_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_live_acceptance_file["passed"])
+            self.assertIn("live_acceptance_status_json_invalid", invalid_live_acceptance_file["failures"])
+
+            mismatched_live_acceptance_payload = json.loads(json.dumps(path_checked_summary["live_acceptance_status"]))
+            mismatched_live_acceptance_payload["ready_for_live_submit"] = False
+            (report_dir / "live_acceptance_status_payload.json").write_text(
+                json.dumps(mismatched_live_acceptance_payload),
+                encoding="utf-8",
+            )
+            mismatched_live_acceptance_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_live_acceptance_file["passed"])
+            self.assertIn("live_acceptance_status_json_mismatch:ready_for_live_submit", mismatched_live_acceptance_file["failures"])
+
+            mismatched_live_acceptance_payload = json.loads(json.dumps(path_checked_summary["live_acceptance_status"]))
+            mismatched_live_acceptance_payload["live_validation"]["selected_profile_ids"] = ["profile-b"]
+            (report_dir / "live_acceptance_status_payload.json").write_text(
+                json.dumps(mismatched_live_acceptance_payload),
+                encoding="utf-8",
+            )
+            mismatched_live_acceptance_profiles = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_live_acceptance_profiles["passed"])
+            self.assertIn(
+                "live_acceptance_status_json_mismatch:live_validation.selected_profile_ids",
+                mismatched_live_acceptance_profiles["failures"],
+            )
+
+            (report_dir / "live_acceptance_status_payload.json").write_text(
+                json.dumps(path_checked_summary["live_acceptance_status"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_preflight_payload.json").unlink()
+            missing_live_preflight_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_live_preflight_file["passed"])
+            self.assertIn("live_preflight_json_missing", missing_live_preflight_file["failures"])
+
+            (report_dir / "live_preflight_payload.json").write_text("", encoding="utf-8")
+            empty_live_preflight_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_live_preflight_file["passed"])
+            self.assertIn("live_preflight_json_empty", empty_live_preflight_file["failures"])
+
+            (report_dir / "live_preflight_payload.json").write_text("{", encoding="utf-8")
+            invalid_live_preflight_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_live_preflight_file["passed"])
+            self.assertIn("live_preflight_json_invalid", invalid_live_preflight_file["failures"])
+
+            mismatched_live_preflight_payload = json.loads(json.dumps(path_checked_summary["live_preflight"]))
+            mismatched_live_preflight_payload["missing_preflight_action_types"] = ["comment_reply"]
+            (report_dir / "live_preflight_payload.json").write_text(
+                json.dumps(mismatched_live_preflight_payload),
+                encoding="utf-8",
+            )
+            mismatched_live_preflight_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_live_preflight_file["passed"])
+            self.assertIn(
+                "live_preflight_json_mismatch:missing_preflight_action_types",
+                mismatched_live_preflight_file["failures"],
+            )
+
+            (report_dir / "live_preflight_payload.json").write_text(
+                json.dumps(path_checked_summary["live_preflight"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_submit_payload.json").unlink()
+            missing_live_submit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_live_submit_file["passed"])
+            self.assertIn("live_submit_json_missing", missing_live_submit_file["failures"])
+
+            (report_dir / "live_submit_payload.json").write_text("", encoding="utf-8")
+            empty_live_submit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_live_submit_file["passed"])
+            self.assertIn("live_submit_json_empty", empty_live_submit_file["failures"])
+
+            (report_dir / "live_submit_payload.json").write_text("{", encoding="utf-8")
+            invalid_live_submit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_live_submit_file["passed"])
+            self.assertIn("live_submit_json_invalid", invalid_live_submit_file["failures"])
+
+            mismatched_live_submit_payload = json.loads(json.dumps(path_checked_summary["live_submit"]))
+            mismatched_live_submit_payload["summary"]["success"] = 2
+            (report_dir / "live_submit_payload.json").write_text(
+                json.dumps(mismatched_live_submit_payload),
+                encoding="utf-8",
+            )
+            mismatched_live_submit_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_live_submit_file["passed"])
+            self.assertIn("live_submit_json_mismatch:summary.success", mismatched_live_submit_file["failures"])
+
+            (report_dir / "live_submit_payload.json").write_text(
+                json.dumps(path_checked_summary["live_submit"]),
+                encoding="utf-8",
+            )
+            (report_dir / "goal_status_report.json").unlink()
+            missing_goal_status_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_goal_status_file["passed"])
+            self.assertIn("goal_status_json_missing", missing_goal_status_file["failures"])
+
+            (report_dir / "goal_status_report.json").write_text("", encoding="utf-8")
+            empty_goal_status_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_goal_status_file["passed"])
+            self.assertIn("goal_status_json_empty", empty_goal_status_file["failures"])
+
+            (report_dir / "goal_status_report.json").write_text("{", encoding="utf-8")
+            invalid_goal_status_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_goal_status_file["passed"])
+            self.assertIn("goal_status_json_invalid", invalid_goal_status_file["failures"])
+
+            mismatched_goal_status_payload = json.loads(json.dumps(path_checked_summary["goal_status"]))
+            mismatched_goal_status_payload["summary"]["stages_pending_external_validation"] = 1
+            (report_dir / "goal_status_report.json").write_text(
+                json.dumps(mismatched_goal_status_payload),
+                encoding="utf-8",
+            )
+            mismatched_goal_status_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_goal_status_file["passed"])
+            self.assertIn("goal_status_json_mismatch:summary.stages_pending_external_validation", mismatched_goal_status_file["failures"])
+
+            (report_dir / "goal_status_report.json").write_text(
+                json.dumps(path_checked_summary["goal_status"]),
+                encoding="utf-8",
+            )
             (report_dir / "final_acceptance_gate.json").write_text("", encoding="utf-8")
             empty_final_gate_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(empty_final_gate_file["passed"])
             self.assertIn("final_acceptance_gate_json_empty", empty_final_gate_file["failures"])
 
-            (report_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
+            (report_dir / "final_acceptance_gate.json").write_text("{", encoding="utf-8")
+            invalid_final_gate_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_final_gate_file["passed"])
+            self.assertIn("final_acceptance_gate_json_invalid", invalid_final_gate_file["failures"])
+
+            mismatched_final_gate_payload = json.loads(json.dumps(path_checked_summary["final_acceptance_gate"]))
+            mismatched_final_gate_payload["status"] = "not_ready"
+            (report_dir / "final_acceptance_gate.json").write_text(
+                json.dumps(mismatched_final_gate_payload),
+                encoding="utf-8",
+            )
+            mismatched_final_gate_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_final_gate_file["passed"])
+            self.assertIn("final_acceptance_gate_json_mismatch:status", mismatched_final_gate_file["failures"])
+
+            mismatched_final_gate_payload = json.loads(json.dumps(path_checked_summary["final_acceptance_gate"]))
+            mismatched_final_gate_payload["failed_checks"] = ["delivery_package:passed"]
+            (report_dir / "final_acceptance_gate.json").write_text(
+                json.dumps(mismatched_final_gate_payload),
+                encoding="utf-8",
+            )
+            mismatched_final_gate_checks = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_final_gate_checks["passed"])
+            self.assertIn("final_acceptance_gate_json_mismatch:failed_checks", mismatched_final_gate_checks["failures"])
+
+            missing_final_gate_checks_payload = json.loads(json.dumps(path_checked_summary["final_acceptance_gate"]))
+            missing_final_gate_checks_payload["checks"] = []
+            (report_dir / "final_acceptance_gate.json").write_text(
+                json.dumps(missing_final_gate_checks_payload),
+                encoding="utf-8",
+            )
+            missing_final_gate_checks = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_final_gate_checks["passed"])
+            self.assertIn("final_acceptance_gate_json_checks_missing", missing_final_gate_checks["failures"])
+
+            failed_final_gate_check_payload = json.loads(json.dumps(path_checked_summary["final_acceptance_gate"]))
+            failed_final_gate_check_payload["checks"][2]["ok"] = False
+            (report_dir / "final_acceptance_gate.json").write_text(
+                json.dumps(failed_final_gate_check_payload),
+                encoding="utf-8",
+            )
+            failed_final_gate_check = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(failed_final_gate_check["passed"])
+            self.assertIn("final_acceptance_gate_json_checks_failed", failed_final_gate_check["failures"])
+
+            (report_dir / "final_acceptance_gate.json").write_text(
+                json.dumps(path_checked_summary["final_acceptance_gate"]),
+                encoding="utf-8",
+            )
+            (report_dir / "latest_reachops_authorization_handoff.zip").unlink()
+            missing_handoff_bundle_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(missing_handoff_bundle_file["passed"])
+            self.assertIn("authorization_handoff_bundle_file_missing", missing_handoff_bundle_file["failures"])
+
+            (report_dir / "latest_reachops_authorization_handoff.zip").write_bytes(b"")
+            empty_handoff_bundle_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(empty_handoff_bundle_file["passed"])
+            self.assertIn("authorization_handoff_bundle_file_empty", empty_handoff_bundle_file["failures"])
+
+            write_minimal_authorization_handoff_bundle(report_dir / "latest_reachops_authorization_handoff.zip")
+            with zipfile.ZipFile(report_dir / "latest_reachops_authorization_handoff.zip", "w") as zf:
+                zf.writestr("reachops_acceptance_inputs.local.ps1", "real values must not be bundled")
+            invalid_handoff_bundle_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_handoff_bundle_file["passed"])
+            self.assertIn("authorization_handoff_bundle_verification_failed", invalid_handoff_bundle_file["failures"])
+            self.assertFalse(invalid_handoff_bundle_file["authorization_handoff"]["bundle_verification_passed"])
+            self.assertIn(
+                "forbidden_sensitive_files_included",
+                invalid_handoff_bundle_file["authorization_handoff"]["bundle_verification_failures"],
+            )
+
+            write_minimal_authorization_handoff_bundle(report_dir / "latest_reachops_authorization_handoff.zip")
             (report_dir / "authorization_handoff_payload.json").unlink()
             missing_handoff_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
             self.assertFalse(missing_handoff_file["passed"])
             self.assertIn("authorization_handoff_json_missing", missing_handoff_file["failures"])
 
+            (report_dir / "authorization_handoff_payload.json").write_text("{", encoding="utf-8")
+            invalid_handoff_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(invalid_handoff_file["passed"])
+            self.assertIn("authorization_handoff_json_invalid", invalid_handoff_file["failures"])
+
+            mismatched_handoff_payload = json.loads(json.dumps(path_checked_summary["authorization_handoff"]))
+            mismatched_handoff_payload["readiness_status"] = "blocked"
+            (report_dir / "authorization_handoff_payload.json").write_text(
+                json.dumps(mismatched_handoff_payload),
+                encoding="utf-8",
+            )
+            mismatched_handoff_file = verify_reachops_acceptance_summary(path_checked_summary, summary_path=summary_path)
+            self.assertFalse(mismatched_handoff_file["passed"])
+            self.assertIn("authorization_handoff_json_mismatch:readiness_status", mismatched_handoff_file["failures"])
+
             outside_dir = Path(tmp) / "outside"
             outside_dir.mkdir()
+            (outside_dir / "delivery_audit_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "operator_pressure_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "installer_smoke_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "repository_cleanliness_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "ui_startup_payload.json").write_text("{}", encoding="utf-8")
             (outside_dir / "windows_package_preflight.json").write_text("{}", encoding="utf-8")
             (outside_dir / "client_delivery.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "live_readiness_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "activation_status_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "live_validation_manifest.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "live_acceptance_status_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "live_preflight_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "live_submit_payload.json").write_text("{}", encoding="utf-8")
+            (outside_dir / "goal_status_report.json").write_text("{}", encoding="utf-8")
             (outside_dir / "final_acceptance_gate.json").write_text("{}", encoding="utf-8")
             (outside_dir / "authorization_handoff_payload.json").write_text("{}", encoding="utf-8")
+            write_minimal_authorization_handoff_bundle(outside_dir / "latest_reachops_authorization_handoff.zip")
             outside_summary = json.loads(json.dumps(path_checked_summary))
+            outside_summary["delivery_audit"]["json_path"] = "../outside/delivery_audit_payload.json"
+            outside_summary["operator_pressure"]["json_path"] = "../outside/operator_pressure_payload.json"
+            outside_summary["installer_smoke"]["json_path"] = "../outside/installer_smoke_payload.json"
+            outside_summary["ui_startup"]["json_path"] = "../outside/ui_startup_payload.json"
             outside_summary["repository_cleanliness"]["json_path"] = str(outside_dir / "repository_cleanliness_payload.json")
             outside_summary["windows_package_preflight"]["json_path"] = "../outside/windows_package_preflight.json"
             outside_summary["client_delivery"]["json_path"] = "../outside/client_delivery.json"
+            outside_summary["live_readiness"]["json_path"] = "../outside/live_readiness_payload.json"
+            outside_summary["activation_status"]["json_path"] = "../outside/activation_status_payload.json"
+            outside_summary["live_validation"]["json_path"] = "../outside/live_validation_manifest.json"
+            outside_summary["live_acceptance_status"]["json_path"] = "../outside/live_acceptance_status_payload.json"
+            outside_summary["live_preflight"]["json_path"] = "../outside/live_preflight_payload.json"
+            outside_summary["live_submit"]["json_path"] = "../outside/live_submit_payload.json"
+            outside_summary["goal_status"]["json_path"] = "../outside/goal_status_report.json"
             outside_summary["final_acceptance_gate"]["json_path"] = "../outside/final_acceptance_gate.json"
             outside_summary["authorization_handoff"]["json_path"] = "../outside/authorization_handoff_payload.json"
+            outside_summary["authorization_handoff"]["bundle_path"] = "../outside/latest_reachops_authorization_handoff.zip"
             outside_report_file = verify_reachops_acceptance_summary(outside_summary, summary_path=summary_path)
             self.assertFalse(outside_report_file["passed"])
+            self.assertIn("delivery_audit_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("operator_pressure_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("installer_smoke_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("ui_startup_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("repository_cleanliness_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("windows_package_preflight_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("client_delivery_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("live_readiness_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("activation_status_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("live_validation_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("live_acceptance_status_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("live_preflight_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("live_submit_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("goal_status_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("final_acceptance_gate_json_outside_summary_dir", outside_report_file["failures"])
             self.assertIn("authorization_handoff_json_outside_summary_dir", outside_report_file["failures"])
+            self.assertIn("authorization_handoff_bundle_outside_summary_dir", outside_report_file["failures"])
+            self.assertFalse(outside_report_file["delivery_audit"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["operator_pressure"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["installer_smoke"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["ui_startup"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["repository_cleanliness"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["windows_package_preflight"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["client_delivery"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["live_readiness"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["activation_status"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["live_validation"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["live_acceptance_status"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["live_preflight"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["live_submit"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["goal_status"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["final_acceptance_gate"]["json_inside_summary_dir"])
             self.assertFalse(outside_report_file["authorization_handoff"]["json_inside_summary_dir"])
+            self.assertFalse(outside_report_file["authorization_handoff"]["bundle_inside_summary_dir"])
 
         missing_readiness_summary = json.loads(json.dumps(passed_summary))
         missing_readiness_summary["live_readiness"] = {"status": "skipped", "ready": False, "no_submit": True}
         missing_readiness = verify_reachops_acceptance_summary(missing_readiness_summary, allow_external_pending=True)
         self.assertFalse(missing_readiness["passed"])
         self.assertIn("live_readiness_not_ready", missing_readiness["failures"])
+
+        browser_started_readiness_summary = json.loads(json.dumps(passed_summary))
+        browser_started_readiness_summary["live_readiness"]["no_browser_started"] = False
+        browser_started_readiness = verify_reachops_acceptance_summary(browser_started_readiness_summary, allow_external_pending=True)
+        self.assertFalse(browser_started_readiness["passed"])
+        self.assertIn("live_readiness_started_browser", browser_started_readiness["failures"])
+        self.assertFalse(browser_started_readiness["live_readiness"]["no_browser_started"])
 
         missing_preflight_summary = json.loads(json.dumps(passed_summary))
         missing_preflight_summary["live_preflight"] = {"status": "skipped"}
@@ -1644,6 +2639,36 @@ class ReachOpsCampaignTests(unittest.TestCase):
         stale_sidecar = verify_reachops_acceptance_summary(stale_sidecar_summary, allow_external_pending=True)
         self.assertFalse(stale_sidecar["passed"])
         self.assertIn("live_submit_evidence_file_details_invalid", stale_sidecar["failures"])
+
+        missing_submitted_text_summary = json.loads(json.dumps(passed_summary))
+        missing_submitted_text_summary["live_submit"]["evidence_file_details"]["comment_reply"][0]["sidecar"].pop("submitted_text", None)
+        missing_submitted_text = verify_reachops_acceptance_summary(missing_submitted_text_summary, allow_external_pending=True)
+        self.assertFalse(missing_submitted_text["passed"])
+        self.assertIn("live_submit_evidence_file_details_invalid", missing_submitted_text["failures"])
+
+        unconfirmed_comment_summary = json.loads(json.dumps(passed_summary))
+        unconfirmed_comment_summary["live_submit"]["evidence_file_details"]["comment_reply"][0]["sidecar"]["comment_visible_confirmed"] = False
+        unconfirmed_comment = verify_reachops_acceptance_summary(unconfirmed_comment_summary, allow_external_pending=True)
+        self.assertFalse(unconfirmed_comment["passed"])
+        self.assertIn("live_submit_evidence_file_details_invalid", unconfirmed_comment["failures"])
+
+        unconfirmed_follow_summary = json.loads(json.dumps(passed_summary))
+        unconfirmed_follow_summary["live_submit"]["evidence_file_details"]["follow_review"][0]["sidecar"].pop(
+            "follow_state_confirmed",
+            None,
+        )
+        unconfirmed_follow = verify_reachops_acceptance_summary(unconfirmed_follow_summary, allow_external_pending=True)
+        self.assertFalse(unconfirmed_follow["passed"])
+        self.assertIn("live_submit_evidence_file_details_invalid", unconfirmed_follow["failures"])
+
+        unconfirmed_dm_summary = json.loads(json.dumps(passed_summary))
+        unconfirmed_dm_summary["live_submit"]["evidence_file_details"]["dm_review"][0]["sidecar"].pop(
+            "dm_entry_confirmed",
+            None,
+        )
+        unconfirmed_dm = verify_reachops_acceptance_summary(unconfirmed_dm_summary, allow_external_pending=True)
+        self.assertFalse(unconfirmed_dm["passed"])
+        self.assertIn("live_submit_evidence_file_details_invalid", unconfirmed_dm["failures"])
 
         missing_result_identity_summary = json.loads(json.dumps(passed_summary))
         for row in missing_result_identity_summary["live_submit"]["summary"]["results"]:
@@ -1911,13 +2936,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertTrue(report["files"]["acceptance_inputs_template"]["exists"])
         self.assertTrue(report["files"]["live_acceptance_status"]["exists"])
         self.assertTrue(report["files"]["authorization_handoff_bundle"]["exists"])
+        self.assertTrue(report["files"]["execution_acceptance_audit"]["exists"])
+        self.assertTrue(report["files"]["windows_credential_manager_check"]["exists"])
         self.assertTrue(report["contract_checks"]["tools/build_reachops_windows.ps1"]["ok"])
         self.assertTrue(report["contract_checks"]["tools/run_reachops_acceptance_windows.ps1"]["ok"])
         self.assertTrue(report["build_contract"]["default_build_requires_installer"])
         self.assertTrue(report["build_contract"]["skip_installer_is_non_final"])
         self.assertTrue(report["build_contract"]["preflight_report_path"].endswith("windows_package_preflight.json"))
-        self.assertIn("exe", report["missing_final_artifacts"])
-        self.assertIn("installer", report["missing_final_artifacts"])
+        self.assertIn("exe", report["final_artifacts"])
+        self.assertIn("installer", report["final_artifacts"])
+        self.assertIn("manifest", report["final_artifacts"])
         self.assertIn("acceptance_summary", report["missing_final_artifacts"])
 
     def test_reachops_goal_delivery_report_summarizes_pm_boundary(self):
@@ -1950,9 +2978,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("required_artifacts", final_blockers["windows_final_artifacts"])
         self.assertIn("required_evidence", final_blockers["external_authorized_execution"])
         windows_blocker = next(row for row in report["blockers"] if row["scope"] == "windows_final_artifacts")
+        self.assertNotEqual(windows_blocker.get("status"), "passed")
+        self.assertTrue(windows_blocker.get("missing_artifacts") or windows_blocker.get("failures"))
         remediation = windows_blocker["remediation_plan"]
-        self.assertIn("exe", remediation["artifact_actions"])
-        self.assertIn("acceptance_summary", remediation["artifact_actions"])
+        artifact_actions = remediation.get("artifact_actions") or {}
+        if windows_blocker.get("missing_artifacts"):
+            for artifact_name in windows_blocker["missing_artifacts"]:
+                self.assertIn(artifact_name, artifact_actions)
         self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(remediation["commands"]))
         self.assertIn("tools\\reachops_final_acceptance_gate.py --json", "\n".join(remediation["commands"]))
         self.assertIn("mvp_acceptance", report["sections"])
@@ -2016,8 +3048,9 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertFalse(index["final_acceptance_gate"]["ready"])
         self.assertFalse(index["authorized_live_submit"]["ready"])
         self.assertEqual(index["windows_final_package"]["blocking_scope"], "windows_final_artifacts")
-        self.assertIn("exe", index["windows_final_package"]["missing_artifacts"])
-        self.assertIn("acceptance_summary", index["windows_final_package"]["missing_artifacts"])
+        self.assertTrue(index["windows_final_package"]["missing_artifacts"] or index["windows_final_package"]["failures"])
+        if index["windows_final_package"]["missing_artifacts"]:
+            self.assertIn("acceptance_summary", index["windows_final_package"]["missing_artifacts"])
         self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(index["windows_final_package"]["remediation_plan"]["commands"]))
         self.assertIn("tools\\reachops_authorization_handoff_bundle.py --verify", "\n".join(index["windows_final_package"]["remediation_plan"]["commands"]))
         markdown = render_reachops_goal_delivery_summary(report)
@@ -2088,6 +3121,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 "live_validation_manifest.json",
                 "repository_cleanliness_payload.json",
                 "windows_package_preflight.json",
+                "windows_credential_manager_validation.json",
                 "client_delivery.json",
                 "live_readiness_payload.json",
                 "live_preflight_payload.json",
@@ -2099,13 +3133,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
             png_sha = hashlib.sha256(b"png").hexdigest()
 
             def sidecar(action_type):
-                return {
+                payload = {
                     "screenshot_sha256": png_sha,
                     "action_type": action_type,
                     "profile_id": "profile-a",
                     "action_id": f"{action_type}-1",
                     "current_url": "https://www.tiktok.com/@creator/video/123",
                 }
+                if action_type == "comment_reply":
+                    payload["submitted_text"] = "authorized comment"
+                    payload["comment_visible_confirmed"] = True
+                if action_type == "follow_review":
+                    payload["follow_state_confirmed"] = True
+                if action_type == "dm_review":
+                    payload["dm_entry_confirmed"] = True
+                    payload["dm_submitted_text"] = "authorized dm"
+                return payload
 
             summary = {
                 "status": "passed",
@@ -2140,6 +3183,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "status": "ok",
                     "process_running": True,
                     "interactive_task": True,
+                    "client_surface": "local_client_console",
+                    "loopback_host": "127.0.0.1",
+                    "no_browser_started": True,
+                    "no_submit": True,
                     "json_path": str(report_dir / "ui_startup_payload.json"),
                 },
                 "activation_status": {
@@ -2182,6 +3229,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "status": "ready",
                     "no_browser_started": True,
                     "no_submit": True,
+                    "missing_inputs": [],
+                    "selected_profile_ids": ["profile-a"],
                     "json_path": str(report_dir / "live_validation_manifest.json"),
                 },
                 "repository_cleanliness": {
@@ -2199,6 +3248,23 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         "skip_installer_is_non_final": True,
                     },
                     "json_path": str(report_dir / "windows_package_preflight.json"),
+                },
+                "windows_credential_manager_validation": {
+                    "status": "passed",
+                    "passed": True,
+                    "backend": "windows_credential_manager",
+                    "no_browser_started": True,
+                    "no_submit": True,
+                    "customer_data_uploaded": False,
+                    "secret_value_included": False,
+                    "checks": {
+                        "windows_credential_manager_available": True,
+                        "secret_write_succeeded": True,
+                        "secret_readback_matched": True,
+                        "secret_delete_succeeded": True,
+                        "output_excludes_secret_value": True,
+                    },
+                    "json_path": str(report_dir / "windows_credential_manager_validation.json"),
                 },
                 "client_delivery": {
                     "status": "passed",
@@ -2224,6 +3290,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         "dm_review": [{"status": "success"}],
                     },
                     "missing_preflight_action_types": [],
+                    "no_submit": True,
                     "json_path": str(report_dir / "live_preflight_payload.json"),
                 },
                 "live_submit": {
@@ -2273,7 +3340,100 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "json_path": str(report_dir / "final_acceptance_gate.json"),
                 },
             }
+            (report_dir / "delivery_audit_payload.json").write_text(
+                json.dumps(
+                    {
+                        "status": summary["delivery_audit"]["status"],
+                        "summary": {
+                            "passed": summary["delivery_audit"]["passed"],
+                            "pending_external_validation": summary["delivery_audit"]["pending_external_validation"],
+                            "failed": summary["delivery_audit"]["failed"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "operator_pressure_payload.json").write_text(
+                json.dumps(
+                    {
+                        "status": summary["operator_pressure"]["status"],
+                        "campaign_count": summary["operator_pressure"]["campaign_count"],
+                        "summary": {
+                            "content_found": summary["operator_pressure"]["content_found"],
+                            "comment_users": summary["operator_pressure"]["comment_users"],
+                            "customer_leads": summary["operator_pressure"]["customer_leads"],
+                            "outreach_actions": summary["operator_pressure"]["outreach_actions"],
+                            "execution_success": summary["operator_pressure"]["execution_success"],
+                            "account_switched": summary["operator_pressure"]["account_switched"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "ui_startup_payload.json").write_text(
+                json.dumps(
+                    {
+                        "status": summary["ui_startup"]["status"],
+                        "process_running": summary["ui_startup"]["process_running"],
+                        "interactive_task": summary["ui_startup"]["interactive_task"],
+                        "client_surface": summary["ui_startup"]["client_surface"],
+                        "loopback_host": summary["ui_startup"]["loopback_host"],
+                        "no_browser_started": summary["ui_startup"]["no_browser_started"],
+                        "no_submit": summary["ui_startup"]["no_submit"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "installer_smoke_payload.json").write_text(
+                json.dumps(summary["installer_smoke"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_acceptance_status_payload.json").write_text(
+                json.dumps(summary["live_acceptance_status"]),
+                encoding="utf-8",
+            )
+            (report_dir / "windows_credential_manager_validation.json").write_text(
+                json.dumps(summary["windows_credential_manager_validation"]),
+                encoding="utf-8",
+            )
             (report_dir / "client_delivery.json").write_text(json.dumps(summary["client_delivery"]), encoding="utf-8")
+            (report_dir / "live_readiness_payload.json").write_text(
+                json.dumps(summary["live_readiness"]),
+                encoding="utf-8",
+            )
+            (report_dir / "activation_status_payload.json").write_text(
+                json.dumps(summary["activation_status"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_validation_manifest.json").write_text(
+                json.dumps(summary["live_validation"]),
+                encoding="utf-8",
+            )
+            (report_dir / "repository_cleanliness_payload.json").write_text(
+                json.dumps(summary["repository_cleanliness"]),
+                encoding="utf-8",
+            )
+            (report_dir / "windows_package_preflight.json").write_text(
+                json.dumps(summary["windows_package_preflight"]),
+                encoding="utf-8",
+            )
+            (report_dir / "authorization_handoff_payload.json").write_text(
+                json.dumps(summary["authorization_handoff"]),
+                encoding="utf-8",
+            )
+            write_minimal_authorization_handoff_bundle(report_dir / "latest_reachops_authorization_handoff.zip")
+            (report_dir / "live_preflight_payload.json").write_text(
+                json.dumps(summary["live_preflight"]),
+                encoding="utf-8",
+            )
+            (report_dir / "live_submit_payload.json").write_text(
+                json.dumps(summary["live_submit"]),
+                encoding="utf-8",
+            )
+            (report_dir / "goal_status_report.json").write_text(
+                json.dumps(summary["goal_status"]),
+                encoding="utf-8",
+            )
             (report_dir / "final_acceptance_gate.json").write_text(json.dumps(summary["final_acceptance_gate"]), encoding="utf-8")
             acceptance_summary = report_dir / "acceptance_summary.json"
             acceptance_summary.write_text(json.dumps(summary), encoding="utf-8")
@@ -2291,6 +3451,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["artifacts"]["installer"]["pe_header_signature_valid"])
             self.assertTrue(result["report_files"]["repository_cleanliness"]["exists"])
             self.assertTrue(result["report_files"]["windows_package_preflight"]["exists"])
+            self.assertTrue(result["report_files"]["windows_credential_manager_validation"]["exists"])
             self.assertTrue(result["report_files"]["client_delivery"]["exists"])
             self.assertTrue(result["report_files"]["final_acceptance_gate"]["exists"])
             self.assertEqual(result["final_gate_report"]["status"], "passed")
@@ -2388,6 +3549,13 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertFalse(missing_preflight["passed"])
             self.assertIn("windows_package_preflight_json_path_missing", missing_preflight["failures"])
 
+            missing_credential_report = json.loads(json.dumps(summary))
+            missing_credential_report["windows_credential_manager_validation"] = {"status": "skipped"}
+            acceptance_summary.write_text(json.dumps(missing_credential_report), encoding="utf-8")
+            missing_credential = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(missing_credential["passed"])
+            self.assertIn("windows_credential_manager_validation_json_path_missing", missing_credential["failures"])
+
             missing_final_gate_summary = json.loads(json.dumps(summary))
             missing_final_gate_summary.pop("final_acceptance_gate", None)
             acceptance_summary.write_text(json.dumps(missing_final_gate_summary), encoding="utf-8")
@@ -2412,6 +3580,70 @@ class ReachOpsCampaignTests(unittest.TestCase):
             broken = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
             self.assertFalse(broken["passed"])
             self.assertIn("manifest_sha256_mismatch", broken["failures"])
+
+            absolute_path_manifest = json.loads(json.dumps(manifest))
+            absolute_path_manifest["installer"]["path"] = str(installer.resolve())
+            manifest_path.write_text(json.dumps(absolute_path_manifest), encoding="utf-8")
+            absolute_path_result = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(absolute_path_result["passed"])
+            self.assertIn("manifest_installer_path_not_portable", absolute_path_result["failures"])
+            self.assertFalse(absolute_path_result["artifacts"]["manifest"]["installer_path_is_portable"])
+            self.assertEqual(absolute_path_result["artifacts"]["manifest"]["installer_path_raw"], str(installer.resolve()))
+
+            wrong_file_name_manifest = json.loads(json.dumps(manifest))
+            wrong_file_name_manifest["installer"]["file_name"] = "ReachOps-Setup-old.exe"
+            wrong_file_name_manifest["installer"]["path"] = "ReachOps-Setup-old.exe"
+            manifest_path.write_text(json.dumps(wrong_file_name_manifest), encoding="utf-8")
+            wrong_file_name = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(wrong_file_name["passed"])
+            self.assertIn("manifest_installer_file_name_mismatch", wrong_file_name["failures"])
+            self.assertIn("manifest_installer_path_name_mismatch", wrong_file_name["failures"])
+            self.assertIn("manifest_installer_resolved_name_mismatch", wrong_file_name["failures"])
+            self.assertEqual(
+                wrong_file_name["artifacts"]["manifest"]["expected_installer_name"],
+                "ReachOps-Setup-0.4.0.exe",
+            )
+            self.assertEqual(
+                wrong_file_name["artifacts"]["manifest"]["installer_file_name"],
+                "ReachOps-Setup-old.exe",
+            )
+
+            missing_installer_locator_manifest = json.loads(json.dumps(manifest))
+            missing_installer_locator_manifest["installer"].pop("file_name", None)
+            missing_installer_locator_manifest["installer"].pop("path", None)
+            manifest_path.write_text(json.dumps(missing_installer_locator_manifest), encoding="utf-8")
+            missing_installer_locator = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(missing_installer_locator["passed"])
+            self.assertIn("manifest_installer_file_name_missing", missing_installer_locator["failures"])
+            self.assertIn("manifest_installer_path_missing", missing_installer_locator["failures"])
+
+            missing_runtime_policy_manifest = json.loads(json.dumps(manifest))
+            missing_runtime_policy_manifest.pop("runtime_policy", None)
+            manifest_path.write_text(json.dumps(missing_runtime_policy_manifest), encoding="utf-8")
+            missing_runtime_policy = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(missing_runtime_policy["passed"])
+            self.assertIn("manifest_runtime_policy_missing", missing_runtime_policy["failures"])
+            self.assertIn("manifest_preserve_config_missing", missing_runtime_policy["failures"])
+            self.assertIn("manifest_preserve_data_missing", missing_runtime_policy["failures"])
+            self.assertIn("manifest_preserve_activation_status_missing", missing_runtime_policy["failures"])
+            self.assertEqual(
+                missing_runtime_policy["artifacts"]["manifest"]["runtime_policy"],
+                {
+                    "preserve_config": False,
+                    "preserve_data": False,
+                    "preserve_activation_status": False,
+                },
+            )
+
+            destructive_runtime_policy_manifest = json.loads(json.dumps(manifest))
+            destructive_runtime_policy_manifest["runtime_policy"]["preserve_data"] = False
+            manifest_path.write_text(json.dumps(destructive_runtime_policy_manifest), encoding="utf-8")
+            destructive_runtime_policy = check_reachops_delivery_package(root=root, acceptance_summary_path=acceptance_summary)
+            self.assertFalse(destructive_runtime_policy["passed"])
+            self.assertIn("manifest_preserve_data_missing", destructive_runtime_policy["failures"])
+            self.assertTrue(destructive_runtime_policy["artifacts"]["manifest"]["runtime_policy"]["preserve_config"])
+            self.assertFalse(destructive_runtime_policy["artifacts"]["manifest"]["runtime_policy"]["preserve_data"])
+            self.assertTrue(destructive_runtime_policy["artifacts"]["manifest"]["runtime_policy"]["preserve_activation_status"])
 
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             exe.write_bytes(b"not a PE executable")
@@ -2500,15 +3732,18 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("installer", result["missing_artifacts"])
             self.assertIn("manifest", result["missing_artifacts"])
             self.assertIn("acceptance_summary", result["missing_artifacts"])
-            self.assertTrue(result["artifacts"]["acceptance_summary"]["path"].endswith("reports/reachops_acceptance/acceptance_summary.json"))
+            acceptance_summary_path = result["artifacts"]["acceptance_summary"]["path"].replace("\\", "/")
+            self.assertTrue(acceptance_summary_path.endswith("reports/reachops_acceptance/acceptance_summary.json"))
             remediation = result["remediation_plan"]
             self.assertIn("Windows 最终交付包未闭环", remediation["summary"])
             self.assertIn("exe", remediation["artifact_actions"])
             self.assertIn("installer", remediation["artifact_actions"])
             self.assertIn("manifest", remediation["artifact_actions"])
             self.assertIn("acceptance_summary", remediation["artifact_actions"])
-            self.assertTrue(remediation["artifact_actions"]["exe"]["expected_path"].endswith("dist/ReachOps/ReachOps.exe"))
-            self.assertTrue(remediation["artifact_actions"]["acceptance_summary"]["expected_path"].endswith("reports/reachops_acceptance/acceptance_summary.json"))
+            exe_path = remediation["artifact_actions"]["exe"]["expected_path"].replace("\\", "/")
+            summary_path = remediation["artifact_actions"]["acceptance_summary"]["expected_path"].replace("\\", "/")
+            self.assertTrue(exe_path.endswith("dist/ReachOps/ReachOps.exe"))
+            self.assertTrue(summary_path.endswith("reports/reachops_acceptance/acceptance_summary.json"))
             self.assertIn("tools\\build_reachops_windows.ps1", "\n".join(remediation["commands"]))
             self.assertIn("tools\\run_reachops_acceptance_windows.ps1 -InputFile tools\\reachops_acceptance_inputs.local.ps1 -RunLiveSubmit -ConfirmAuthorizedTargets", "\n".join(remediation["commands"]))
             self.assertIn("-InputFile tools\\reachops_acceptance_inputs.local.ps1", "\n".join(remediation["commands"]))
@@ -2599,6 +3834,22 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("client_delivery.final_delivery_ready=true", plan_items["client_delivery_gate"]["proof_fields"])
         self.assertIn("delivery_package.final_delivery_ready=true", plan_items["windows_final_artifacts"]["proof_fields"])
         self.assertIn("dist\\ReachOps\\ReachOps.exe", plan_items["windows_final_artifacts"]["required_artifacts"])
+        self.assertIn(
+            "reports\\reachops_acceptance\\<timestamp>\\authorization_handoff_payload.json",
+            plan_items["windows_final_artifacts"]["required_artifacts"],
+        )
+        self.assertIn(
+            "reports\\reachops_acceptance\\<timestamp>\\latest_reachops_authorization_handoff.zip",
+            plan_items["windows_final_artifacts"]["required_artifacts"],
+        )
+        self.assertIn(
+            "reports\\reachops_acceptance\\<timestamp>\\windows_credential_manager_validation.json",
+            plan_items["windows_final_artifacts"]["required_artifacts"],
+        )
+        self.assertIn(
+            "reports\\reachops_acceptance\\<timestamp>\\final_acceptance_gate.json",
+            blockers["windows_final_artifacts"]["required_artifacts"],
+        )
         self.assertTrue(any("Windows 实机生成" in item for item in gate["next_actions"]))
 
     def test_reachops_final_acceptance_gate_passes_only_when_all_final_evidence_is_ready(self):
@@ -2847,6 +4098,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
     def test_reachops_final_acceptance_gate_rejects_package_missing_required_report_file(self):
         package_check = final_package_check_payload()
         package_check["report_files"].pop("live_submit")
+        package_check["report_files"].pop("authorization_handoff")
+        package_check["report_files"].pop("windows_credential_manager_validation")
         package_check["report_files"]["live_preflight"]["size"] = 0
         with tempfile.TemporaryDirectory() as tmp:
             client_path = Path(tmp) / "latest_delivery_check.json"
@@ -2867,6 +4120,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("delivery_package:passed", gate["failed_checks"])
         package_evidence = {row["name"]: row for row in gate["checks"]}["delivery_package:passed"]["evidence"]
         self.assertNotIn("live_submit", package_evidence["report_files"])
+        self.assertNotIn("authorization_handoff", package_evidence["report_files"])
+        self.assertNotIn("windows_credential_manager_validation", package_evidence["report_files"])
         self.assertEqual(package_evidence["report_files"]["live_preflight"]["size"], 0)
 
     def test_reachops_final_acceptance_gate_rejects_bootstrap_package_check(self):
@@ -3570,6 +4825,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     {
                         "active": True,
                         "expires_at": "2999-01-01T00:00:00Z",
+                        "subscription_status": "current",
                         "license_tier": "enterprise",
                         "capabilities": {"live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},
                     }
@@ -3586,8 +4842,83 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(result["current_device_id"])
             checks = {item["name"]: item for item in result["checks"]}
             self.assertTrue(checks["activation_active"]["passed"])
+            self.assertTrue(checks["license_state_live_submit_ready"]["passed"])
+            self.assertEqual(result["license_state"]["schema_version"], "reachops.license_state.v1")
+            self.assertEqual(result["license_state"]["state"], "active_current")
             self.assertTrue(checks["device_binding_matches"]["passed"])
             self.assertTrue(checks["authorization_allows_live_actions"]["passed"])
+
+    def test_reachops_license_state_grace_does_not_authorize_live_submit(self):
+        state = evaluate_license_state(
+            {
+                "active": True,
+                "subscription_status": "past_due",
+                "last_verified_at": "2026-07-15T00:00:00Z",
+                "expires_at": "2999-01-01T00:00:00Z",
+            },
+            now=datetime(2026, 7, 19, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(state["schema_version"], "reachops.license_state.v1")
+        self.assertEqual(state["state"], "grace")
+        self.assertTrue(state["license_ready"])
+        self.assertTrue(state["grace_active"])
+        self.assertFalse(state["live_submit_ready"])
+        self.assertFalse(state["customer_data_uploaded"])
+        self.assertTrue(state["no_browser_started"])
+        self.assertTrue(state["no_submit"])
+
+    def test_reachops_activation_status_check_reports_grace_as_not_live_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            activation_path = Path(tmp) / "reachops_activation_status.json"
+            last_verified_at = (datetime.now(timezone.utc) - timedelta(days=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            activation_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "subscription_status": "past_due",
+                        "last_verified_at": last_verified_at,
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = check_reachops_activation_status(activation_path)
+
+            self.assertFalse(result["ready"])
+            checks = {item["name"]: item for item in result["checks"]}
+            self.assertFalse(checks["license_state_live_submit_ready"]["passed"])
+            self.assertEqual(result["license_state"]["state"], "grace")
+            decisions = checks["authorization_allows_live_actions"]["evidence"]["decisions"]
+            self.assertTrue(all(item["error_code"] == "LIVE_SUBMIT_NOT_AUTHORIZED" for item in decisions))
+
+    def test_reachops_activation_status_check_blocks_revoked_license(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            activation_path = Path(tmp) / "reachops_activation_status.json"
+            activation_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "revoked": True,
+                        "subscription_status": "revoked",
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "comment_reply": True, "follow_review": True, "dm_review": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = check_reachops_activation_status(activation_path)
+
+            self.assertFalse(result["ready"])
+            self.assertEqual(result["license_state"]["state"], "revoked")
+            checks = {item["name"]: item for item in result["checks"]}
+            decisions = checks["authorization_allows_live_actions"]["evidence"]["decisions"]
+            self.assertTrue(all(item["error_code"] == "LIVE_SUBMIT_LICENSE_REVOKED" for item in decisions))
 
     def test_reachops_activation_status_check_blocks_device_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4664,6 +5995,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     if action_type == "comment_reply":
                         sidecar["submitted_text"] = rendered_text
                         sidecar["comment_visible_confirmed"] = True
+                    if action_type == "follow_review":
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
                     Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
                     return {"status": "success", "evidence_path": str(path)}
 
@@ -4737,6 +6073,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     if action_type == "comment_reply":
                         sidecar["submitted_text"] = rendered_text
                         sidecar["comment_visible_confirmed"] = True
+                    if action_type == "follow_review":
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
                     Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
                     return {"status": "success", "evidence_path": str(path)}
 
@@ -4771,6 +6112,11 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     if action_type == "comment_reply":
                         sidecar["submitted_text"] = rendered_text
                         sidecar["comment_visible_confirmed"] = True
+                    if action_type == "follow_review":
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
                     Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
                     return {"status": "success", "error_code": "", "error_message": "", "evidence_path": str(path)}
 
@@ -4852,6 +6198,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
                         sidecar["comment_visible_confirmed"] = True
                     if action_type == "follow_review":
                         sidecar["profile_id"] = "99999"
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
                     Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
                     return {"status": "success", "error_code": "", "error_message": "", "evidence_path": str(path)}
 
@@ -5059,6 +6409,36 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("comment_reply", result["missing_local_evidence_file_action_types"])
             self.assertEqual(result["evidence_file_details"]["comment_reply"], [])
 
+    def test_reachops_python_subprocess_capture_uses_utf8_for_windows_console_output(self):
+        root = Path(__file__).resolve().parents[1]
+        source_paths = [
+            "ReachOps/launcher.py",
+            "tools/reachops_delivery_audit.py",
+            "tools/reachops_execution_acceptance_audit.py",
+            "tools/reachops_goal_delivery_runner.py",
+            "tools/reachops_mac_self_check.py",
+            "tools/reachops_mvp_acceptance_summary.py",
+            "tools/reachops_web_ui.py",
+        ]
+        for source_path in source_paths:
+            with self.subTest(source_path=source_path):
+                source = (root / source_path).read_text(encoding="utf-8")
+                self.assertIn('encoding="utf-8"', source)
+                self.assertIn('errors="replace"', source)
+
+        runner = (root / "tools" / "reachops_goal_delivery_runner.py").read_text(encoding="utf-8")
+        mvp = (root / "tools" / "reachops_mvp_acceptance_summary.py").read_text(encoding="utf-8")
+        delivery_audit = (root / "tools" / "reachops_delivery_audit.py").read_text(encoding="utf-8")
+        launcher_source = (root / "ReachOps" / "launcher.py").read_text(encoding="utf-8")
+        execution_audit = (root / "tools" / "reachops_execution_acceptance_audit.py").read_text(encoding="utf-8")
+        web_ui = (root / "tools" / "reachops_web_ui.py").read_text(encoding="utf-8")
+        self.assertIn("capture_output=True,\n        text=True,\n        encoding=\"utf-8\",\n        errors=\"replace\"", runner)
+        self.assertIn("capture_output=True,\n        text=True,\n        encoding=\"utf-8\",\n        errors=\"replace\"", mvp)
+        self.assertIn("capture_output=True,\n                text=True,\n                encoding=\"utf-8\",\n                errors=\"replace\"", delivery_audit)
+        self.assertIn("text=True,\n        encoding=\"utf-8\",\n        errors=\"replace\",\n        capture_output=True", launcher_source)
+        self.assertIn("text=True,\n            encoding=\"utf-8\",\n            errors=\"replace\",\n            capture_output=True", execution_audit)
+        self.assertIn("text=True,\n            encoding=\"utf-8\",\n            errors=\"replace\"", web_ui)
+
     def test_reachops_packaging_files_define_standalone_windows_artifacts(self):
         root = Path(__file__).resolve().parents[1]
         spec = (root / "ReachOps" / "packaging" / "reachops.spec").read_text(encoding="utf-8")
@@ -5140,6 +6520,7 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("tools\\reachops_live_readiness.py", acceptance_script)
         self.assertIn("tools\\reachops_live_validation_manifest.py", acceptance_script)
         self.assertIn("tools\\reachops_repository_cleanliness_check.py", acceptance_script)
+        self.assertIn("tools\\reachops_windows_credential_manager_check.py", acceptance_script)
         self.assertIn("tools\\reachops_live_submit_acceptance.py", acceptance_script)
         self.assertIn("Assert-LastExitCode", acceptance_script)
         self.assertIn("Invoke-PythonCapture", acceptance_script)
@@ -5158,6 +6539,10 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("WINDOWS_PACKAGE_PREFLIGHT_JSON", acceptance_script)
         self.assertIn("windows_package_preflight.json", acceptance_script)
         self.assertIn("windows_package_preflight", acceptance_script)
+        self.assertIn("WINDOWS_CREDENTIAL_MANAGER_JSON", acceptance_script)
+        self.assertIn("windows_credential_manager_validation.json", acceptance_script)
+        self.assertIn("windows_credential_manager_validation", acceptance_script)
+        self.assertIn("-WindowsCredentialManagerJsonPath $windowsCredentialManagerJson", acceptance_script)
         self.assertIn("ReachOps client delivery gate", acceptance_script)
         self.assertIn("tools\\reachops_client_delivery_check.py", acceptance_script)
         self.assertIn("client_delivery.json", acceptance_script)
@@ -5166,6 +6551,8 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("Filter __pycache__", sync_script)
         self.assertIn("*.pyc,*.pyo", sync_script)
         self.assertIn("Remove-Item -Recurse -Force", sync_script)
+        self.assertIn("reachops_execution_acceptance_audit.py", sync_script)
+        self.assertIn("reachops_windows_credential_manager_check.py", sync_script)
         self.assertIn("live_acceptance_status_payload.json", acceptance_script)
         self.assertIn("live_acceptance_status", acceptance_script)
         self.assertIn("authorization_handoff_payload.json", acceptance_script)
@@ -5349,6 +6736,12 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertIn("-Wait -PassThru", installer_smoke_script)
         self.assertIn("data_in_install_dir", installer_smoke_script)
         self.assertIn("manifest_hash_mismatch", installer_smoke_script)
+        self.assertIn("preserve_config", installer_smoke_script)
+        self.assertIn("preserve_data", installer_smoke_script)
+        self.assertIn("preserve_activation_status", installer_smoke_script)
+        self.assertIn("manifest_preserve_config_missing", installer_smoke_script)
+        self.assertIn("manifest_preserve_data_missing", installer_smoke_script)
+        self.assertIn("manifest_preserve_activation_status_missing", installer_smoke_script)
         self.assertIn("UTF8Encoding]::new($false)", installer_smoke_script)
         self.assertIn("pythonw.exe", ui_start_script)
         self.assertIn("Start-Process -FilePath $Pythonw", ui_start_script)
@@ -6564,6 +7957,533 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(confidence, 0)
         self.assertIn("自促", evidence)
 
+    def test_public_reply_monitor_qualifies_lead_only_after_verified_contact_reply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "target_username": action["target_username"],
+                        "reply_author_username": action["target_username"],
+                        "reply_text": "Can you send me the link and price?",
+                        "reply_language": "en",
+                        "source_url": action["target_url"],
+                        "replied_at": "2026-07-20T10:00:00Z",
+                    }
+                ]
+            )
+
+            self.assertEqual(result["created"], 1)
+            self.assertEqual(result["qualified"], 1)
+            event = service.storage.list_public_reply_events(action["lead_id"])[0]
+            self.assertEqual(event["qualification_state"], "qualified")
+            self.assertEqual(event["verified_contact"], 1)
+            lead = next(row for row in service.storage.list_operation_leads(limit=20) if row["id"] == action["lead_id"])
+            self.assertEqual(lead["lifecycle_stage"], "qualified")
+            self.assertEqual(lead["qualified_reply_count"], 1)
+
+    def test_public_reply_monitor_records_reply_without_qualified_need(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "reply_text": "Thanks for the info.",
+                        "replied_at": "2026-07-20T10:01:00Z",
+                    }
+                ]
+            )
+
+            self.assertEqual(result["created"], 1)
+            self.assertEqual(result["qualified"], 0)
+            event = service.storage.list_public_reply_events(action["lead_id"])[0]
+            self.assertEqual(event["qualification_state"], "reply_received")
+            lead = next(row for row in service.storage.list_operation_leads(limit=20) if row["id"] == action["lead_id"])
+            self.assertEqual(lead["lifecycle_stage"], "reply_received")
+            self.assertEqual(lead["qualified_reply_count"], 0)
+
+    def test_public_reply_monitor_does_not_qualify_unverified_submission_reply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=False)
+            result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "reply_text": "I want to buy, send the link please.",
+                        "replied_at": "2026-07-20T10:02:00Z",
+                    }
+                ]
+            )
+
+            self.assertEqual(result["created"], 1)
+            self.assertEqual(result["qualified"], 0)
+            event = service.storage.list_public_reply_events(action["lead_id"])[0]
+            self.assertEqual(event["intent_confirmed"], 1)
+            self.assertEqual(event["verified_contact"], 0)
+            self.assertEqual(event["qualification_state"], "reply_received")
+            self.assertEqual(result["events"][0]["qualification_state"], "reply_received")
+            self.assertFalse(result["events"][0]["verified_contact"])
+            lead = next(row for row in service.storage.list_operation_leads(limit=20) if row["id"] == action["lead_id"])
+            self.assertNotEqual(lead["lifecycle_stage"], "qualified")
+            self.assertEqual(lead["qualified_reply_count"], 0)
+
+    def test_public_reply_monitor_replay_rows_are_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            row = {
+                "campaign_id": plan["campaign"]["id"],
+                "run_id": action["run_id"],
+                "batch_id": action["batch_id"],
+                "lead_id": action["lead_id"],
+                "action_id": action["id"],
+                "execution_id": execution_id,
+                "reply_text": "Precio? Can you send the link?",
+                "replied_at": "2026-07-20T10:03:00Z",
+            }
+
+            first = PublicReplyMonitor(service.storage).ingest_replay_rows([row])
+            second = PublicReplyMonitor(service.storage).ingest_replay_rows([row])
+
+            self.assertEqual(first["created"], 1)
+            self.assertEqual(second["created"], 0)
+            self.assertEqual(second["updated"], 1)
+            self.assertEqual(len(service.storage.list_public_reply_events(action["lead_id"])), 1)
+
+    def test_public_reply_events_schema_migrates_existing_local_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "legacy.db"
+            storage = GrowthStorage(str(db_path))
+            with storage.connect() as conn:
+                tables = {
+                    row["name"]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='public_reply_events'"
+                    ).fetchall()
+                }
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(public_reply_events)").fetchall()}
+
+            self.assertIn("public_reply_events", tables)
+            self.assertIn("run_id", columns)
+            self.assertIn("verified_contact", columns)
+
+    def test_public_reply_event_does_not_fabricate_active_run_for_legacy_lead(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "legacy.db"))
+            now = "2026-07-20T10:04:00Z"
+            with storage.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                     source_path, status, batch_id, run_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "legacy-lead-1",
+                        "legacy-candidate-1",
+                        "comment_intent",
+                        "normal",
+                        80,
+                        "legacy row before campaign run ledger",
+                        "new",
+                        "",
+                        "new",
+                        "",
+                        "",
+                        now,
+                        now,
+                    ),
+                )
+            storage.set_active_campaign_run("run_should_not_be_assigned")
+            storage.set_active_collection_batch("batch_should_not_be_assigned")
+
+            event_id, inserted = storage.record_public_reply_event(
+                lead_id="legacy-lead-1",
+                reply_text="Can you send the price?",
+                replied_at=now,
+                intent_confirmed=True,
+                confidence=80,
+                reason_codes=["price_request"],
+            )
+
+            self.assertTrue(inserted)
+            event = storage.get_public_reply_event(event_id)
+            self.assertIsNotNone(event)
+            self.assertEqual(event["run_id"], "")
+            self.assertEqual(event["batch_id"], "")
+            self.assertNotEqual(event["run_id"], "run_should_not_be_assigned")
+            self.assertNotEqual(event["batch_id"], "batch_should_not_be_assigned")
+
+    def test_conversion_events_record_manual_revenue_with_reply_traceability(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            reply_result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "reply_text": "Can you send me the link and price?",
+                        "replied_at": "2026-07-20T10:30:00Z",
+                    }
+                ]
+            )
+            reply_event = reply_result["events"][0]
+
+            event_id, inserted = service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                public_reply_event_id=reply_event["id"],
+                conversion_type="revenue",
+                amount_cents=12900,
+                currency="USD",
+                notes="redacted fixture order",
+                idempotency_key="order-1",
+                recorded_at="2026-07-20T10:35:00Z",
+            )
+
+            self.assertTrue(inserted)
+            event = service.storage.get_conversion_event(event_id)
+            self.assertIsNotNone(event)
+            self.assertEqual(event["campaign_id"], plan["campaign"]["id"])
+            self.assertEqual(event["run_id"], action["run_id"])
+            self.assertEqual(event["batch_id"], action["batch_id"])
+            self.assertEqual(event["lead_id"], action["lead_id"])
+            self.assertEqual(event["action_id"], action["id"])
+            self.assertEqual(event["public_reply_event_id"], reply_event["id"])
+            self.assertEqual(event["conversion_state"], "revenue_recorded")
+            self.assertEqual(event["amount_cents"], 12900)
+            self.assertEqual(event["currency"], "USD")
+            lead = next(row for row in service.storage.list_operation_leads(limit=20) if row["id"] == action["lead_id"])
+            self.assertEqual(lead["lifecycle_stage"], "converted")
+            self.assertEqual(lead["conversion_event_count"], 1)
+            self.assertEqual(lead["revenue_cents"], 12900)
+
+    def test_conversion_events_are_campaign_and_run_isolated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            first_plan = service.create_campaign_plan("https://www.tiktok.com/@beauty_creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(campaign_id=first_plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+            )
+            first_action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "comment_reply")
+            second_plan = service.create_campaign_plan("https://www.tiktok.com/@skincare_creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@skincare_creator"}],
+                [{"profile_id": "discovery-2", "group_name": "US"}],
+                GrowthTaskConfig(campaign_id=second_plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+            )
+            second_batch = service.storage.latest_collection_batch_for_campaign(second_plan["campaign"]["id"])
+            second_action = next(
+                row
+                for row in service.storage.list_action_queue(limit=50, batch_id=str(second_batch.get("id") or ""))
+                if row["action_type"] == "comment_reply"
+            )
+            service.storage.record_conversion_event(
+                lead_id=first_action["lead_id"],
+                action_id=first_action["id"],
+                conversion_type="conversion",
+                idempotency_key="first-conversion",
+            )
+            service.storage.record_conversion_event(
+                lead_id=second_action["lead_id"],
+                action_id=second_action["id"],
+                conversion_type="won",
+                amount_cents=9900,
+                currency="USD",
+                idempotency_key="second-won",
+            )
+
+            first_events = service.storage.list_conversion_events(
+                campaign_id=first_plan["campaign"]["id"],
+                run_id=first_action["run_id"],
+                batch_id=first_action["batch_id"],
+            )
+            second_events = service.storage.list_conversion_events(
+                campaign_id=second_plan["campaign"]["id"],
+                run_id=second_action["run_id"],
+                batch_id=second_action["batch_id"],
+            )
+
+            self.assertEqual(len(first_events), 1)
+            self.assertEqual(len(second_events), 1)
+            self.assertEqual(first_events[0]["run_id"], first_action["run_id"])
+            self.assertEqual(second_events[0]["run_id"], second_action["run_id"])
+            self.assertNotEqual(first_events[0]["campaign_id"], second_events[0]["campaign_id"])
+
+    def test_conversion_events_are_idempotent_by_operator_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, _plan, action, _execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            first_id, first_inserted = service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                conversion_type="conversion",
+                idempotency_key="same-manual-action",
+            )
+            second_id, second_inserted = service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                conversion_type="conversion",
+                idempotency_key="same-manual-action",
+            )
+
+            self.assertTrue(first_inserted)
+            self.assertFalse(second_inserted)
+            self.assertEqual(first_id, second_id)
+            self.assertEqual(len(service.storage.list_conversion_events(lead_id=action["lead_id"])), 1)
+
+    def test_conversion_event_does_not_fabricate_active_run_for_legacy_lead(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "legacy-conversion.db"))
+            now = "2026-07-20T10:40:00Z"
+            with storage.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                     source_path, status, batch_id, run_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "legacy-conversion-lead-1",
+                        "legacy-conversion-candidate-1",
+                        "comment_intent",
+                        "normal",
+                        80,
+                        "legacy row before campaign run ledger",
+                        "new",
+                        "",
+                        "new",
+                        "",
+                        "",
+                        now,
+                        now,
+                    ),
+                )
+            storage.set_active_campaign_run("run_should_not_be_assigned")
+            storage.set_active_collection_batch("batch_should_not_be_assigned")
+
+            event_id, inserted = storage.record_conversion_event(
+                lead_id="legacy-conversion-lead-1",
+                conversion_type="conversion",
+                idempotency_key="legacy-conversion",
+                recorded_at=now,
+            )
+
+            self.assertTrue(inserted)
+            event = storage.get_conversion_event(event_id)
+            self.assertIsNotNone(event)
+            self.assertEqual(event["run_id"], "")
+            self.assertEqual(event["batch_id"], "")
+            self.assertNotEqual(event["run_id"], "run_should_not_be_assigned")
+            self.assertNotEqual(event["batch_id"], "batch_should_not_be_assigned")
+
+    def test_conversion_events_schema_migrates_existing_local_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "conversion-schema.db"))
+            with storage.connect() as conn:
+                tables = {
+                    row["name"]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='conversion_events'"
+                    ).fetchall()
+                }
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversion_events)").fetchall()}
+
+            self.assertIn("conversion_events", tables)
+            self.assertIn("run_id", columns)
+            self.assertIn("amount_cents", columns)
+            self.assertIn("idempotency_key", columns)
+
+    def test_web_operations_payload_surfaces_public_reply_lifecycle(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            batch = service.storage.latest_collection_batch_for_campaign(plan["campaign"]["id"])
+            PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "target_username": action["target_username"],
+                        "reply_author_username": action["target_username"],
+                        "reply_text": "Can you send me the link and price?",
+                        "reply_language": "en",
+                        "source_url": action["target_url"],
+                        "replied_at": "2026-07-20T10:20:00Z",
+                    }
+                ]
+            )
+
+            payload = reachops_web_ui.build_operations_payload(Path(service.storage.db_path), batch, {}, [])
+
+            self.assertEqual(payload["counts"]["public_replies"], 1)
+            self.assertEqual(payload["counts"]["qualified_replies"], 1)
+            self.assertEqual(len(payload["public_reply_events"]), 1)
+            self.assertEqual(payload["public_reply_events"][0]["run_id"], action["run_id"])
+            self.assertEqual(payload["public_reply_events"][0]["action_id"], action["id"])
+            self.assertEqual(payload["public_reply_events"][0]["execution_id"], execution_id)
+            lead = next(row for row in payload["lead_view"] if row["id"] == action["lead_id"])
+            self.assertEqual(lead["public_reply_count"], 1)
+            self.assertEqual(lead["qualified_reply_count"], 1)
+            self.assertEqual(lead["current_status"], "qualified")
+            self.assertIn("合格回复", lead["reply_summary"])
+            self.assertIn("Can you send me", lead["reply_summary"])
+
+    def test_web_operations_payload_surfaces_conversion_lifecycle(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service, plan, action, execution_id = self._create_reply_monitor_fixture(tmp, evidence_verified=True)
+            batch = service.storage.latest_collection_batch_for_campaign(plan["campaign"]["id"])
+            reply_result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": plan["campaign"]["id"],
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": execution_id,
+                        "reply_text": "Can you send me the link and price?",
+                        "replied_at": "2026-07-20T10:45:00Z",
+                    }
+                ]
+            )
+            service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                public_reply_event_id=reply_result["events"][0]["id"],
+                conversion_type="revenue",
+                amount_cents=12900,
+                currency="USD",
+                idempotency_key="web-revenue",
+            )
+
+            payload = reachops_web_ui.build_operations_payload(Path(service.storage.db_path), batch, {}, [])
+
+            self.assertEqual(payload["counts"]["conversion_events"], 1)
+            self.assertEqual(payload["counts"]["converted_leads"], 1)
+            self.assertEqual(payload["counts"]["revenue_cents"], 12900)
+            self.assertEqual(len(payload["conversion_events"]), 1)
+            self.assertEqual(payload["conversion_events"][0]["run_id"], action["run_id"])
+            lead = next(row for row in payload["lead_view"] if row["id"] == action["lead_id"])
+            self.assertEqual(lead["current_status"], "converted")
+            self.assertIn("已记收入", lead["conversion_summary"])
+
+    def test_web_operations_payload_handles_legacy_db_without_public_reply_table(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "legacy-web.db"))
+            batch = storage.create_collection_batch(1, profile_group="US", initial_status="completed")
+            now = "2026-07-20T10:21:00Z"
+            with storage.connect() as conn:
+                conn.execute("DROP TABLE public_reply_events")
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                     source_path, status, batch_id, run_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "legacy-ui-lead-1",
+                        "legacy-ui-candidate-1",
+                        "purchase",
+                        "high",
+                        88,
+                        "legacy lead visible without public reply table",
+                        "new",
+                        "https://www.tiktok.com/@demo/video/1",
+                        "new",
+                        batch.id,
+                        "",
+                        now,
+                        now,
+                    ),
+                )
+
+            payload = reachops_web_ui.build_operations_payload(Path(storage.db_path), {"id": batch.id}, {}, [])
+
+            self.assertEqual(payload["counts"]["public_replies"], 0)
+            self.assertEqual(payload["counts"]["qualified_replies"], 0)
+            self.assertEqual(payload["public_reply_events"], [])
+            lead = next(row for row in payload["lead_view"] if row["id"] == "legacy-ui-lead-1")
+            self.assertEqual(lead["public_reply_count"], 0)
+            self.assertEqual(lead["qualified_reply_count"], 0)
+            self.assertEqual(lead["reply_summary"], "无公开回复")
+
+    def test_web_operations_payload_handles_legacy_db_without_conversion_table(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = GrowthStorage(str(Path(tmp) / "legacy-conversion-web.db"))
+            batch = storage.create_collection_batch(1, profile_group="US", initial_status="completed")
+            now = "2026-07-20T10:46:00Z"
+            with storage.connect() as conn:
+                conn.execute("DROP TABLE conversion_events")
+                conn.execute(
+                    """
+                    INSERT INTO operation_leads
+                    (id, candidate_user_id, lead_type, priority, score, reason, lifecycle_stage,
+                     source_path, status, batch_id, run_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "legacy-conversion-ui-lead-1",
+                        "legacy-conversion-ui-candidate-1",
+                        "purchase",
+                        "high",
+                        88,
+                        "legacy lead visible without conversion table",
+                        "new",
+                        "https://www.tiktok.com/@demo/video/1",
+                        "new",
+                        batch.id,
+                        "",
+                        now,
+                        now,
+                    ),
+                )
+
+            payload = reachops_web_ui.build_operations_payload(Path(storage.db_path), {"id": batch.id}, {}, [])
+
+            self.assertEqual(payload["counts"]["conversion_events"], 0)
+            self.assertEqual(payload["counts"]["converted_leads"], 0)
+            self.assertEqual(payload["counts"]["revenue_cents"], 0)
+            self.assertEqual(payload["conversion_events"], [])
+            lead = next(row for row in payload["lead_view"] if row["id"] == "legacy-conversion-ui-lead-1")
+            self.assertEqual(lead["conversion_event_count"], 0)
+            self.assertEqual(lead["conversion_summary"], "未记录转化")
+
     def test_collection_uses_injected_comment_intent_classifier_for_customer_pool(self):
         with tempfile.TemporaryDirectory() as tmp:
             classifier = FakeCommentIntentClassifier()
@@ -6582,7 +8502,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             candidates = service.storage.list_candidates_with_content()
 
@@ -6610,7 +8537,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             actions = service.storage.list_action_queue(limit=20)
 
@@ -6680,6 +8614,149 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual([row["action_type"] for row in actions], ["comment_reply", "comment_reply"])
             self.assertEqual({row["batch_id"] for row in actions}, {"gb_policy"})
             self.assertIn("product page", actions[0]["suggested_text"])
+
+    def test_action_queue_records_language_gate_and_localized_reply_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            manager = service.router.operation_leads
+
+            class Config:
+                enable_action_queue = True
+                enable_comment_queue = True
+                enable_follow_queue = False
+                enable_dm_queue = False
+                enable_standard_outreach_policy = True
+                min_lead_score_for_action = 50
+                active_batch_id = "gb_language_ready"
+                default_reply_language = "es"
+                group_default_reply_language = "es"
+
+            created = manager._create_actions(
+                "lead-language-ready",
+                {
+                    "username": "comprador_es",
+                    "profile_url": "https://www.tiktok.com/@comprador_es",
+                    "source_path": "https://www.tiktok.com/@creator/video/es",
+                    "qualify_score": 80,
+                    "comment_text": "donde comprar",
+                    "comment_language": "es",
+                },
+                "找链接/入口",
+                "high",
+                Config(),
+            )
+            actions = service.storage.list_action_queue(limit=20)
+
+            self.assertEqual(created, 1)
+            self.assertEqual(actions[0]["language_gate_status"], "ready")
+            self.assertEqual(actions[0]["comment_language"], "es")
+            self.assertEqual(actions[0]["group_default_language"], "es")
+            self.assertIn("language_gate=ready", actions[0]["reason"])
+            self.assertIn("pagina del producto", actions[0]["suggested_text"])
+
+    def test_action_queue_language_conflict_and_uncertain_language_require_operator_confirmation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            manager = service.router.operation_leads
+
+            class Config:
+                enable_action_queue = True
+                enable_comment_queue = True
+                enable_follow_queue = False
+                enable_dm_queue = False
+                enable_standard_outreach_policy = True
+                min_lead_score_for_action = 50
+                active_batch_id = "gb_language_gate"
+                default_reply_language = "en"
+                group_default_reply_language = "en"
+
+            manager._create_actions(
+                "lead-language-conflict",
+                {
+                    "username": "comprador_pt",
+                    "profile_url": "https://www.tiktok.com/@comprador_pt",
+                    "source_path": "https://www.tiktok.com/@creator/video/pt",
+                    "qualify_score": 80,
+                    "comment_text": "onde comprar",
+                    "comment_language": "pt",
+                },
+                "找链接/入口",
+                "high",
+                Config(),
+            )
+            manager._create_actions(
+                "lead-language-unknown",
+                {
+                    "username": "viewer_unknown",
+                    "profile_url": "https://www.tiktok.com/@viewer_unknown",
+                    "source_path": "https://www.tiktok.com/@creator/video/unknown",
+                    "qualify_score": 80,
+                    "comment_text": "???",
+                    "comment_language": "unknown",
+                },
+                "找链接/入口",
+                "high",
+                Config(),
+            )
+            by_user = {row["target_username"]: row for row in service.storage.list_action_queue(limit=20)}
+
+            conflict = by_user["comprador_pt"]
+            uncertain = by_user["viewer_unknown"]
+            self.assertEqual(conflict["language_gate_status"], "language_conflict_with_group_default")
+            self.assertEqual(conflict["risk_level"], "high")
+            self.assertIn("comment_language=pt", conflict["reason"])
+            self.assertIn("group_default_language=en", conflict["reason"])
+            self.assertEqual(uncertain["language_gate_status"], "requires_operator_confirmation")
+            self.assertIn("comment_language_uncertain", uncertain["language_gate_note"])
+
+            gate = RiskGate().evaluate(
+                {
+                    **conflict,
+                    "status": "approved",
+                    "execution_confirmed": 1,
+                    "review_note": "operator reviewed",
+                },
+                {"profile_id": "profile-language"},
+                live_submit=True,
+                require_action_review=True,
+            )
+            self.assertFalse(gate["allowed"])
+            self.assertEqual(gate["reason_code"], "LANGUAGE_CONFLICT_WITH_GROUP_DEFAULT")
+            self.assertTrue(gate["requires_human_review"])
+
+    def test_operator_outreach_rows_surface_language_gate_warning(self):
+        rows = build_operator_outreach_rows(
+            [
+                {
+                    "id": "aq_language_conflict",
+                    "action_type": "comment_reply",
+                    "target_username": "comprador_pt",
+                    "target_url": "https://www.tiktok.com/@creator/video/pt",
+                    "suggested_text": "Voce pode conferir primeiro a pagina do produto.",
+                    "status": "approved",
+                    "risk_level": "high",
+                    "comment_language": "pt",
+                    "group_default_language": "en",
+                    "language_gate_status": "language_conflict_with_group_default",
+                    "language_gate_note": "comment_language_conflicts_with_group_default",
+                    "created_at": "2026-07-24T00:00:00Z",
+                }
+            ],
+            [],
+            {"mode": "live_comment"},
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertIn("语言冲突阻断", rows[0]["language_gate_summary"])
+        self.assertEqual(rows[0]["language_gate_summary"], rows[0]["language_gate_summary_i18n"]["zh-CN"])
+        self.assertIn("Language conflict blocked", rows[0]["language_gate_summary_i18n"]["en-US"])
+        self.assertIn("comment=pt", rows[0]["language_gate_summary_i18n"]["en-US"])
+        self.assertIn("group=en", rows[0]["language_gate_summary_i18n"]["en-US"])
+        self.assertIn("评论=pt", rows[0]["language_gate_summary"])
+        self.assertIn("分组=en", rows[0]["language_gate_summary"])
+        self.assertIn("冲突解除前不能真实提交", rows[0]["next_step"])
+        self.assertEqual(rows[0]["next_step"], rows[0]["next_step_i18n"]["zh-CN"])
+        self.assertIn("do not live-submit", rows[0]["next_step_i18n"]["en-US"])
 
     def test_standalone_browser_adapter_acquires_reuses_and_releases_session(self):
         fake_adapter = FakeBrowserDriverAdapter()
@@ -6792,6 +8869,77 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(available, [])
             self.assertEqual(summary["errors"]["LOGIN_REQUIRED"], 1)
             self.assertEqual(group_manager.moves, [("12345", "LOGIN_REQUIRED")])
+
+    def test_profile_preflight_classifies_login_page_after_page_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = GrowthIntelligenceService(base_dir=tmp)
+            group_manager = FakeProfileGroupManager()
+            driver = FakeProfilePreflightDriver("Log in to TikTok", fail_open=True)
+            driver.current_url = "https://www.tiktok.com/login"
+            driver.title = "Log in | TikTok"
+            driver.script_results = [
+                {
+                    "url": "https://www.tiktok.com/login",
+                    "title": "Log in | TikTok",
+                    "loginGate": True,
+                    "loggedIn": False,
+                    "exactLoginButton": True,
+                    "dialogLoginGate": False,
+                    "forcedLoginText": True,
+                    "labels": ["use qr code", "use phone / email / username"],
+                    "dialogs": [],
+                    "sample": "Log in to TikTok",
+                }
+            ]
+            checker = ProfilePreflightChecker(
+                service.storage,
+                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0),
+                driver_factory=lambda _profile: (driver, (FakeReleaseManager(), "login-timeout"), ""),
+                group_manager=group_manager,
+            )
+            checker._executor._release = lambda _handle: None
+
+            available, summary = checker.available_profiles([{"profile_id": "login-timeout", "group_name": "US"}])
+
+            self.assertEqual(available, [])
+            self.assertEqual(summary["errors"], {"LOGIN_REQUIRED": 1})
+            self.assertEqual(group_manager.moves, [("login-timeout", "LOGIN_REQUIRED")])
+
+    def test_profile_preflight_accepts_logged_in_shell_after_page_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = GrowthIntelligenceService(base_dir=tmp)
+            group_manager = FakeProfileGroupManager()
+            driver = FakeProfilePreflightDriver("Messages Inbox Profile", fail_open=True)
+            driver.current_url = "https://www.tiktok.com/messages"
+            driver.title = "Messages | TikTok"
+            driver.script_results = [
+                {
+                    "url": "https://www.tiktok.com/messages",
+                    "title": "Messages | TikTok",
+                    "loginGate": False,
+                    "loggedIn": True,
+                    "exactLoginButton": False,
+                    "dialogLoginGate": False,
+                    "forcedLoginText": False,
+                    "labels": ["messages", "inbox"],
+                    "dialogs": [],
+                    "sample": "Messages",
+                }
+            ]
+            checker = ProfilePreflightChecker(
+                service.storage,
+                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0),
+                driver_factory=lambda _profile: (driver, (FakeReleaseManager(), "slow-ready"), ""),
+                group_manager=group_manager,
+            )
+            checker._executor._release = lambda _handle: None
+
+            available, summary = checker.available_profiles([{"profile_id": "slow-ready", "group_name": "US"}])
+
+            self.assertEqual([row["profile_id"] for row in available], ["slow-ready"])
+            self.assertEqual(summary["available"], 1)
+            self.assertEqual(summary["errors"], {})
+            self.assertEqual(group_manager.moves, [])
 
     def test_profile_preflight_quarantines_kernel_mismatch_profiles(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -7115,6 +9263,38 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(payload["screenshot_size"], 3)
             self.assertEqual(payload["screenshot_sha256"], hashlib.sha256(b"png").hexdigest())
 
+    def test_live_action_executor_writes_follow_and_dm_confirmation_metadata(self):
+        class ScreenshotDriver:
+            current_url = "https://www.tiktok.com/@buyer_one"
+            title = "TikTok test page"
+
+            def save_screenshot(self, path):
+                Path(path).write_bytes(b"png")
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = TikTokSeleniumActionExecutor(TikTokActionExecutorConfig(evidence_dir=tmp))
+            follow_path = executor._capture_evidence(
+                ScreenshotDriver(),
+                {"id": "follow-1", "action_type": "follow_review", "target_url": "https://www.tiktok.com/@buyer_one"},
+                "profile-1",
+                "",
+            )
+            dm_path = executor._capture_evidence(
+                ScreenshotDriver(),
+                {"id": "dm-1", "action_type": "dm_review", "target_url": "https://www.tiktok.com/@buyer_one"},
+                "profile-1",
+                "",
+                expected_text="authorized dm",
+            )
+
+            follow_payload = json.loads(Path(f"{follow_path}.json").read_text(encoding="utf-8"))
+            dm_payload = json.loads(Path(f"{dm_path}.json").read_text(encoding="utf-8"))
+            self.assertTrue(follow_payload["follow_state_confirmed"])
+            self.assertFalse(follow_payload["dm_entry_confirmed"])
+            self.assertTrue(dm_payload["dm_entry_confirmed"])
+            self.assertEqual(dm_payload["dm_submitted_text"], "authorized dm")
+
     def test_live_action_executor_preflight_sidecar_does_not_claim_comment_submission(self):
         class ScreenshotDriver:
             current_url = "https://www.tiktok.com/@creator/video/123"
@@ -7141,6 +9321,41 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertTrue(payload["preflight_only"])
             self.assertEqual(payload["submitted_text"], "")
             self.assertFalse(payload["comment_visible_confirmed"])
+
+    def test_live_action_executor_preflight_sidecar_does_not_claim_follow_or_dm_submission(self):
+        class ScreenshotDriver:
+            current_url = "https://www.tiktok.com/@buyer_one"
+            title = "TikTok test page"
+
+            def save_screenshot(self, path):
+                Path(path).write_bytes(b"png")
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = TikTokSeleniumActionExecutor(
+                TikTokActionExecutorConfig(evidence_dir=tmp, preflight_only=True)
+            )
+            follow_path = executor._capture_evidence(
+                ScreenshotDriver(),
+                {"id": "follow-1", "action_type": "follow_review", "target_url": "https://www.tiktok.com/@buyer_one"},
+                "profile-1",
+                "",
+            )
+            dm_path = executor._capture_evidence(
+                ScreenshotDriver(),
+                {"id": "dm-1", "action_type": "dm_review", "target_url": "https://www.tiktok.com/@buyer_one"},
+                "profile-1",
+                "",
+                expected_text="authorized dm",
+            )
+
+            follow_payload = json.loads(Path(f"{follow_path}.json").read_text(encoding="utf-8"))
+            dm_payload = json.loads(Path(f"{dm_path}.json").read_text(encoding="utf-8"))
+            self.assertTrue(follow_payload["preflight_only"])
+            self.assertFalse(follow_payload["follow_state_confirmed"])
+            self.assertTrue(dm_payload["preflight_only"])
+            self.assertFalse(dm_payload["dm_entry_confirmed"])
+            self.assertEqual(dm_payload["dm_submitted_text"], "")
 
     def test_live_action_executor_normalizes_rate_limit_by_action_type(self):
         class RateLimitedDriver:
@@ -7438,7 +9653,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     "account_switched": 3,
                 },
                 "installer_smoke": {"status": "ok", "exe_exists": True, "data_in_install_dir": False, "hash_ok": True},
-                "ui_startup": {"status": "ok", "process_running": True, "interactive_task": True},
+                "ui_startup": {
+                    "status": "ok",
+                    "process_running": True,
+                    "interactive_task": True,
+                    "client_surface": "local_client_console",
+                    "loopback_host": "127.0.0.1",
+                    "no_browser_started": True,
+                    "no_submit": True,
+                },
                 "live_validation": {"status": "ready", "no_browser_started": True, "no_submit": True},
                 "repository_cleanliness": {
                     "status": "passed",
@@ -7578,9 +9801,57 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 error_message="same rendered text already used",
                 risk_gate=duplicate_gate,
             )
+            verified_execution_id = service.storage.create_outreach_execution(
+                action["id"],
+                action["action_type"],
+                action["target_username"],
+                status="success",
+                profile_id="profile-export-reply",
+                evidence_path=str(Path(tmp) / "verified-export-reply.png"),
+                execution_mode="live",
+                submission_state="verified_success",
+                verification_state="verified",
+                evidence_verified=True,
+            )
+            service.storage.record_action_execution_result(action["id"], verified_execution_id, "completed")
+            reply_result = PublicReplyMonitor(service.storage).ingest_replay_rows(
+                [
+                    {
+                        "campaign_id": campaign_id,
+                        "run_id": action["run_id"],
+                        "batch_id": action["batch_id"],
+                        "lead_id": action["lead_id"],
+                        "action_id": action["id"],
+                        "execution_id": verified_execution_id,
+                        "target_username": action["target_username"],
+                        "reply_author_username": action["target_username"],
+                        "reply_text": "Can you send me the link and price?",
+                        "reply_language": "en",
+                        "source_url": action["target_url"],
+                        "replied_at": "2026-07-20T10:10:00Z",
+                    }
+                ]
+            )
+            service.storage.record_conversion_event(
+                lead_id=action["lead_id"],
+                action_id=action["id"],
+                public_reply_event_id=reply_result["events"][0]["id"],
+                conversion_type="revenue",
+                amount_cents=12900,
+                currency="USD",
+                idempotency_key="campaign-export-revenue",
+            )
 
             artifacts = workflow.export_campaign_artifacts(campaign_id=campaign_id)
-            for key in ["json_path", "sources_csv_path", "customers_csv_path", "actions_csv_path", "executions_csv_path"]:
+            for key in [
+                "json_path",
+                "sources_csv_path",
+                "customers_csv_path",
+                "actions_csv_path",
+                "executions_csv_path",
+                "public_replies_csv_path",
+                "conversions_csv_path",
+            ]:
                 self.assertTrue(os.path.exists(artifacts[key]), key)
 
             with open(artifacts["json_path"], "r", encoding="utf-8") as fh:
@@ -7594,6 +9865,29 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertIn("execution_summary", payload)
             self.assertEqual(payload["execution_summary"]["total"], len(payload["outreach_executions"]))
             self.assertIn("error_counts", payload["execution_summary"])
+            self.assertIn("public_reply_events", payload)
+            self.assertIn("public_reply_summary", payload)
+            self.assertIn("conversion_events", payload)
+            self.assertIn("conversion_summary", payload)
+            self.assertEqual(payload["public_reply_summary"]["total"], len(payload["public_reply_events"]))
+            self.assertEqual(payload["public_reply_summary"]["qualified"], 1)
+            self.assertEqual(payload["conversion_summary"]["total"], len(payload["conversion_events"]))
+            self.assertEqual(payload["conversion_summary"]["revenue_cents"], 12900)
+            self.assertEqual(payload["public_reply_events"][0]["campaign_id"], campaign_id)
+            self.assertEqual(payload["public_reply_events"][0]["run_id"], action["run_id"])
+            self.assertEqual(payload["public_reply_events"][0]["batch_id"], action["batch_id"])
+            self.assertEqual(payload["public_reply_events"][0]["lead_id"], action["lead_id"])
+            self.assertEqual(payload["public_reply_events"][0]["action_id"], action["id"])
+            self.assertEqual(payload["public_reply_events"][0]["execution_id"], verified_execution_id)
+            self.assertEqual(payload["public_reply_events"][0]["qualification_state"], "qualified")
+            self.assertEqual(payload["public_reply_events"][0]["verified_contact"], 1)
+            self.assertEqual(payload["conversion_events"][0]["campaign_id"], campaign_id)
+            self.assertEqual(payload["conversion_events"][0]["run_id"], action["run_id"])
+            self.assertEqual(payload["conversion_events"][0]["batch_id"], action["batch_id"])
+            self.assertEqual(payload["conversion_events"][0]["lead_id"], action["lead_id"])
+            self.assertEqual(payload["conversion_events"][0]["action_id"], action["id"])
+            self.assertEqual(payload["conversion_events"][0]["public_reply_event_id"], reply_result["events"][0]["id"])
+            self.assertEqual(payload["conversion_events"][0]["conversion_state"], "revenue_recorded")
             self.assertTrue(any("DUPLICATE_ACTION_TEXT" in row.get("risk_gate_summary", "") for row in payload["outreach_executions"]))
             self.assertTrue(any(row.get("risk_gate_next_step") == "改写或轮换话术后重试" for row in payload["outreach_executions"]))
             self.assertEqual(payload["strategy"]["campaign_id"], campaign_id)
@@ -7619,6 +9913,32 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 self.assertIn("risk_gate_next_step", execution_reader.fieldnames or [])
                 execution_rows = list(execution_reader)
             self.assertTrue(any("DUPLICATE_ACTION_TEXT" in row["risk_gate_summary"] for row in execution_rows))
+
+            with open(artifacts["public_replies_csv_path"], "r", encoding="utf-8") as fh:
+                reply_reader = csv.DictReader(fh)
+                self.assertIn("campaign_id", reply_reader.fieldnames or [])
+                self.assertIn("run_id", reply_reader.fieldnames or [])
+                self.assertIn("action_id", reply_reader.fieldnames or [])
+                self.assertIn("execution_id", reply_reader.fieldnames or [])
+                self.assertIn("qualification_state", reply_reader.fieldnames or [])
+                reply_rows = list(reply_reader)
+            self.assertEqual(len(reply_rows), 1)
+            self.assertEqual(reply_rows[0]["qualification_state"], "qualified")
+            self.assertEqual(reply_rows[0]["run_id"], action["run_id"])
+            self.assertEqual(reply_rows[0]["execution_id"], verified_execution_id)
+
+            with open(artifacts["conversions_csv_path"], "r", encoding="utf-8") as fh:
+                conversion_reader = csv.DictReader(fh)
+                self.assertIn("campaign_id", conversion_reader.fieldnames or [])
+                self.assertIn("run_id", conversion_reader.fieldnames or [])
+                self.assertIn("lead_id", conversion_reader.fieldnames or [])
+                self.assertIn("action_id", conversion_reader.fieldnames or [])
+                self.assertIn("public_reply_event_id", conversion_reader.fieldnames or [])
+                self.assertIn("conversion_state", conversion_reader.fieldnames or [])
+                conversion_rows = list(conversion_reader)
+            self.assertEqual(len(conversion_rows), 1)
+            self.assertEqual(conversion_rows[0]["conversion_state"], "revenue_recorded")
+            self.assertEqual(conversion_rows[0]["run_id"], action["run_id"])
 
     def test_campaign_report_export_paths_do_not_overwrite_same_second_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -8132,7 +10452,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -8304,7 +10631,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             batch = service.storage.latest_collection_batch_for_campaign(plan["campaign"]["id"])
 
@@ -8340,7 +10674,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             result = GrowthWorkflowService(service).run_action_router(
                 [{"profile_id": "exec-1", "group_name": "US"}],
@@ -8381,7 +10722,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             result = GrowthWorkflowService(service).run_action_router(
                 [{"profile_id": "exec-1", "group_name": "US"}],
@@ -8422,7 +10770,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -8462,7 +10817,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -8507,7 +10869,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -8553,7 +10922,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -8602,7 +10978,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             comment_action = next(row for row in service.storage.list_action_queue(limit=10) if row["action_type"] == "comment_reply")
             evidence_path = Path(tmp) / "comment-evidence.png"
@@ -8645,6 +11028,143 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(result["success"], 1)
             self.assertEqual(result["errors"], {})
 
+    def test_live_submit_accepts_confirmed_follow_and_dm_local_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            status_path = service.paths.activation_status_path
+            os.makedirs(os.path.dirname(status_path), exist_ok=True)
+            with open(status_path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "active": True,
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "follow_review": True, "dm_review": True},
+                    },
+                    fh,
+                )
+            plan = service.create_campaign_plan("https://www.tiktok.com/@beauty_creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
+            )
+            dm_action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "dm_review")
+            service.storage.update_action_status(dm_action["id"], "approved", "authorized dm review")
+
+            class ConfirmedExecutor:
+                def execute(self, action, _profile, rendered_text: str, dry_run: bool = True):
+                    action_type = str(action.get("action_type") or "")
+                    path = Path(tmp) / f"{action_type}-confirmed.png"
+                    path.write_bytes(b"png")
+                    sidecar = {
+                        "screenshot_sha256": hashlib.sha256(b"png").hexdigest(),
+                        "action_type": action_type,
+                    }
+                    if action_type == "follow_review":
+                        sidecar["follow_state_confirmed"] = True
+                    if action_type == "dm_review":
+                        sidecar["dm_entry_confirmed"] = True
+                        sidecar["dm_submitted_text"] = rendered_text
+                    Path(f"{path}.json").write_text(json.dumps(sidecar), encoding="utf-8")
+                    return {"status": "success", "error_code": "", "error_message": "", "evidence_path": str(path)}
+
+            result = GrowthWorkflowService(service).run_action_router(
+                [{"profile_id": "exec-1", "group_name": "US"}],
+                config=ActionRouterConfig(
+                    max_workers=1,
+                    per_profile_action_limit=10,
+                    action_types=["follow_review", "dm_review"],
+                    dry_run=False,
+                    live_preflight_only=False,
+                    allow_live_submit=True,
+                    require_execution_evidence=True,
+                    auto_approve=True,
+                    auto_confirm=True,
+                ),
+                platform_executor=ConfirmedExecutor(),
+                export_report=False,
+            )
+
+            self.assertEqual(result["selected_actions"], 2)
+            self.assertEqual(result["success"], 2)
+            self.assertEqual(result["errors"], {})
+
+    def test_live_submit_rejects_unconfirmed_follow_and_dm_local_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = make_reachops_service(tmp)
+            status_path = service.paths.activation_status_path
+            os.makedirs(os.path.dirname(status_path), exist_ok=True)
+            with open(status_path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "active": True,
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "license_tier": "enterprise",
+                        "capabilities": {"live_submit": True, "follow_review": True, "dm_review": True},
+                    },
+                    fh,
+                )
+            plan = service.create_campaign_plan("https://www.tiktok.com/@beauty_creator", max_sources=1)
+            service.run_collection(
+                [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
+                [{"profile_id": "discovery-1", "group_name": "US"}],
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
+            )
+            dm_action = next(row for row in service.storage.list_action_queue(limit=20) if row["action_type"] == "dm_review")
+            service.storage.update_action_status(dm_action["id"], "approved", "authorized dm review")
+
+            class UnconfirmedExecutor:
+                def execute(self, action, _profile, _rendered_text: str, dry_run: bool = True):
+                    action_type = str(action.get("action_type") or "")
+                    path = Path(tmp) / f"{action_type}-unconfirmed.png"
+                    path.write_bytes(b"png")
+                    Path(f"{path}.json").write_text(
+                        json.dumps(
+                            {
+                                "screenshot_sha256": hashlib.sha256(b"png").hexdigest(),
+                                "action_type": action_type,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return {"status": "success", "error_code": "", "error_message": "", "evidence_path": str(path)}
+
+            result = GrowthWorkflowService(service).run_action_router(
+                [{"profile_id": "exec-1", "group_name": "US"}],
+                config=ActionRouterConfig(
+                    max_workers=1,
+                    per_profile_action_limit=10,
+                    action_types=["follow_review", "dm_review"],
+                    dry_run=False,
+                    live_preflight_only=False,
+                    allow_live_submit=True,
+                    require_execution_evidence=True,
+                    auto_approve=True,
+                    auto_confirm=True,
+                ),
+                platform_executor=UnconfirmedExecutor(),
+                export_report=False,
+            )
+
+            self.assertEqual(result["selected_actions"], 2)
+            self.assertEqual(result["failed"], 2)
+            self.assertEqual(result["errors"]["LIVE_SUBMIT_EVIDENCE_MISSING"], 2)
+
     def test_live_submit_rejects_local_comment_evidence_when_text_mismatches(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = make_reachops_service(tmp)
@@ -8676,7 +11196,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -8726,7 +11253,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
 
             result = GrowthWorkflowService(service).run_action_router(
@@ -8767,7 +11301,14 @@ class ReachOpsCampaignTests(unittest.TestCase):
             service.run_collection(
                 [{"type": "creator_url", "value": "https://www.tiktok.com/@beauty_creator"}],
                 [{"profile_id": "discovery-1", "group_name": "US"}],
-                GrowthTaskConfig(campaign_id=plan["campaign"]["id"], max_videos_per_creator=1, max_comments_per_video=10, test_mode=True),
+                GrowthTaskConfig(
+                    campaign_id=plan["campaign"]["id"],
+                    max_videos_per_creator=1,
+                    max_comments_per_video=10,
+                    default_reply_language="en",
+                    group_default_reply_language="en",
+                    test_mode=True,
+                ),
             )
             comment_action = next(row for row in service.storage.list_action_queue(limit=10) if row["action_type"] == "comment_reply")
             evidence_path = Path(tmp) / "device-bound-comment-evidence.png"
@@ -9424,7 +11965,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 raise RuntimeError("event history unavailable")
 
             def list_profile_health(self, limit=10000):
-                return []
+                return [
+                    {
+                        "profile_id": "page-timeout",
+                        "status": "cooldown",
+                        "health_score": 80,
+                        "consecutive_failures": 2,
+                        "last_error_code": "PAGE_OPEN_FAILED",
+                        "last_error_message": "Timed out receiving message from renderer",
+                    }
+                ]
 
         with tempfile.TemporaryDirectory() as tmp:
             plan_dir = Path(tmp) / "reports" / "acceptance_remediation"
@@ -9452,13 +12002,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     [
                         {"profile_id": "bad-login", "group_name": "United States"},
                         {"profile_id": "new-account", "group_name": "United States"},
+                        {"profile_id": "page-timeout", "group_name": "United States"},
                     ],
-                    2,
+                    3,
                 )
 
-        self.assertEqual([row["profile_id"] for row in selected], ["new-account"])
+        self.assertEqual([row["profile_id"] for row in selected], ["new-account", "page-timeout"])
         self.assertTrue(any("force_account_recheck" in row for row in logs))
         self.assertTrue(any("recent_unusable_excluded count=1" in row for row in logs))
+        self.assertTrue(any("force_recheck_transient_backfill" in row for row in logs))
 
     def test_profile_group_display_keeps_operator_readable_group_name(self):
         display = group_display_name({"group_id": "281726", "group_name": "加拿大获客组", "count": 12})
@@ -9970,6 +12522,65 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(summary["checked"], 9)
         self.assertEqual([len(batch) for batch in batches], [3, 3, 3])
         self.assertTrue(any("continue_after_mixed_failures" in row for row in logs))
+        self.assertFalse(any("reason=browser_start_instability" in row for row in logs))
+
+    def test_standalone_profile_preflight_covers_small_group_before_instability_block(self):
+        class SmallGroupChecker:
+            def __init__(self, bucket):
+                self.bucket = bucket
+
+            def available_profiles(self, profiles):
+                rows = list(profiles or [])
+                self.bucket.append([str(row.get("profile_id") or "") for row in rows])
+                checked_so_far = sum(len(batch) for batch in self.bucket[:-1])
+                results = []
+                available = []
+                errors = {}
+                for index, row in enumerate(rows):
+                    profile_id = str(row.get("profile_id") or "")
+                    absolute_index = checked_so_far + index
+                    if absolute_index == 9:
+                        available.append(row)
+                        results.append({"profile_id": profile_id, "ok": True, "error_code": ""})
+                        continue
+                    code = "PROFILE_PREFLIGHT_TIMEOUT" if absolute_index % 2 else "PAGE_OPEN_FAILED"
+                    errors[code] = errors.get(code, 0) + 1
+                    results.append({"profile_id": profile_id, "ok": False, "error_code": code})
+                return available, {
+                    "checked": len(rows),
+                    "available": len(available),
+                    "unavailable": len(rows) - len(available),
+                    "errors": errors,
+                    "results": results,
+                }
+
+        logs = []
+        batches = []
+        app = GrowthIntelligenceStandaloneApp.__new__(GrowthIntelligenceStandaloneApp)
+        app._thread_log = logs.append
+        app._log_profile_preflight_details = lambda *_args, **_kwargs: None
+        app._format_error_counts = lambda errors: ",".join(f"{key}={value}" for key, value in sorted((errors or {}).items()))
+        app.profile_registry = type("Registry", (), {"select_profiles": lambda *_args, **_kwargs: []})()
+        app._rank_profile_candidates = lambda profiles, _limit: list(profiles)
+        app._profile_id = lambda profile: str(profile.get("profile_id") or profile.get("id") or "")
+
+        profiles = [{"profile_id": f"p{index}", "group_name": "获客分组测试"} for index in range(11)]
+        available, summary = app._preflight_profiles_with_backfill(
+            profiles,
+            "获客分组测试",
+            3,
+            lambda _batch_size: SmallGroupChecker(batches),
+            stage="collection",
+            min_required_profiles=1,
+            max_checked_profiles=11,
+            initial_check_limit=3,
+            backfill_to_requested=True,
+        )
+
+        self.assertEqual([row["profile_id"] for row in available], ["p9"])
+        self.assertEqual(summary["checked"], 11)
+        self.assertEqual([len(batch) for batch in batches], [3, 6, 2])
+        self.assertTrue(any("continue_small_group_coverage" in row for row in logs))
         self.assertFalse(any("reason=browser_start_instability" in row for row in logs))
 
     def test_standalone_profile_preflight_circuit_breaks_permanent_account_configuration_block(self):
@@ -10499,6 +13110,26 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(payload["error"], "ixBrowser Local API 未启动或端口不可连接")
         self.assertIn("ixbrowser_group_list_unavailable", payload["error_detail"])
 
+    def test_web_group_count_resolution_is_tunable_for_large_ixbrowser_libraries(self):
+        source = Path("tools/reachops_web_ui.py").read_text(encoding="utf-8")
+
+        self.assertIn("REACHOPS_GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS", source)
+        self.assertIn("REACHOPS_GROUP_COUNT_RESOLVE_WORKERS", source)
+        self.assertIn('or "45"', source)
+        self.assertIn('or "3"', source)
+        self.assertNotIn("GROUP_COUNT_RESOLVE_TIMEOUT_SECONDS = 20.0", source)
+        self.assertNotIn("GROUP_COUNT_RESOLVE_WORKERS = 1\n", source)
+
+    def test_web_account_repair_summary_treats_directory_path_as_not_available(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = reachops_web_ui.summarize_account_repair_plan(Path(tmp))
+
+        self.assertEqual(payload["status"], "not_available")
+        self.assertEqual(payload["reason"], "account_repair_plan_not_file")
+        self.assertNotIn("error", payload)
+
     def test_web_group_refresh_failure_keeps_last_successful_group_counts(self):
         from tools import reachops_web_ui
 
@@ -10545,6 +13176,53 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(payload["error"], "ixBrowser Local API 繁忙，请稍后重试")
             persisted = json.loads(latest_path.read_text(encoding="utf-8"))
             self.assertEqual(persisted["groups"][0]["count"], 717)
+
+    def test_web_group_payload_attaches_editable_local_group_mapping(self):
+        from tools import reachops_web_ui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_db_path = reachops_web_ui.GROUP_MAPPING_DB_PATH
+            try:
+                reachops_web_ui.GROUP_MAPPING_DB_PATH = Path(tmp) / "growth_intelligence.db"
+                payload = reachops_web_ui.attach_group_mappings(
+                    {
+                        "groups": [
+                            {
+                                "name": "United States",
+                                "group_id": "257999",
+                                "count": 3,
+                                "count_known": True,
+                            }
+                        ]
+                    }
+                )
+                group = payload["groups"][0]
+
+                self.assertEqual(payload["group_mapping"]["schema_version"], "reachops.ixbrowser_group_mapping.v1")
+                self.assertTrue(payload["group_mapping"]["group_name_is_not_country_authority"])
+                self.assertEqual(group["mapping"]["target_country"], "")
+                self.assertEqual(group["mapping_status"], "needs_operator_review")
+
+                saved = reachops_web_ui.save_group_mapping_from_payload(
+                    {
+                        "group_id": "257999",
+                        "group_name": "United States",
+                        "target_country": "US",
+                        "timezone": "America/New_York",
+                        "default_reply_language": "en",
+                        "allowed_action_types": ["comment_reply", "dm_review"],
+                        "per_day_limit": 10,
+                        "per_hour_limit": 2,
+                    }
+                )
+                self.assertEqual(saved["mapping"]["status"], "ready")
+                self.assertEqual(saved["mapping"]["allowed_action_types"], ["comment_reply", "dm_review"])
+
+                listed = reachops_web_ui.build_group_mappings_payload()
+                self.assertEqual(listed["configured_count"], 1)
+                self.assertEqual(listed["needs_operator_review_count"], 0)
+            finally:
+                reachops_web_ui.GROUP_MAPPING_DB_PATH = old_db_path
 
     def test_ixbrowser_adapter_closes_profile_when_driver_import_fails(self):
         import builtins

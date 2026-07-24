@@ -51,25 +51,27 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python tools/reachops_goal_delivery_runner.p
 
 ## 启动方式
 
-默认客户端入口为原生 UI；以下命令会启动本地原生客户端窗口：
+默认客户端入口已统一到本地客户端控制台；以下命令会启动 127.0.0.1 本地客户端控制台：
 
 ```bash
 python -m ReachOps
 python ReachOpsApp.py
 ```
 
-Mac 桌面入口 `启动ReachOps本地客户端.command` 和 `启动ReachOps原生MacUI.command` 会启动原生客户端 UI。
+Mac 桌面入口 `启动ReachOps本地客户端.command` 会启动本地客户端控制台。
 
-Web 控制台仅作为备用入口，需要时显式开启：
+旧 Tk 仅作为诊断入口保留，需要时显式开启：
 
 ```bash
-python ReachOpsApp.py --web
-./启动ReachOps统一WebUI.command
+python ReachOpsApp.py --legacy-tk
+./启动ReachOps原生MacUI.command
 ```
 
-Web 控制台也可用开发命令直接启动，用于调试本机后端执行链路：
+本地客户端控制台也可用开发命令直接启动，用于调试本机后端执行链路：
 
 ```bash
+./启动ReachOps本地客户端.command
+./启动ReachOps统一WebUI.command
 python tools/reachops_web_ui.py --web --host 127.0.0.1 --port 8769
 ```
 

@@ -144,7 +144,15 @@ def sqlite_count(db_path: Path, query: str, args: tuple[Any, ...] = ()) -> int:
 
 def pgrep(pattern: str) -> list[str]:
     try:
-        proc = subprocess.run(["pgrep", "-af", pattern], cwd=str(ROOT_DIR), text=True, capture_output=True, timeout=10)
+        proc = subprocess.run(
+            ["pgrep", "-af", pattern],
+            cwd=str(ROOT_DIR),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=10,
+        )
     except Exception:
         return []
     if proc.returncode not in {0, 1}:

@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from tools.reachops_authorization_handoff_bundle import verify_handoff_bundle
+
 
 STATUS_PASSED = "passed"
 STATUS_READY_FOR_EXTERNAL_VALIDATION = "ready_for_external_validation"
@@ -69,6 +71,18 @@ def report_path_status(summary_path: str | Path | None, raw_path: str) -> dict[s
     return detail
 
 
+def load_report_payload(detail: dict[str, Any]) -> dict[str, Any]:
+    if not bool(detail.get("exists")):
+        return {"loaded": False, "error": "missing", "payload": {}}
+    try:
+        payload = json.loads(Path(str(detail.get("path") or "")).read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"loaded": False, "error": exc.__class__.__name__, "payload": {}}
+    if not isinstance(payload, dict):
+        return {"loaded": False, "error": "not_object", "payload": {}}
+    return {"loaded": True, "error": "", "payload": payload}
+
+
 def verify_summary(
     summary: dict[str, Any],
     allow_external_pending: bool = False,
@@ -79,9 +93,11 @@ def verify_summary(
     operator_pressure = summary.get("operator_pressure") or {}
     installer_smoke = summary.get("installer_smoke") or {}
     ui_startup = summary.get("ui_startup") or {}
+    activation_status = summary.get("activation_status") or {}
     live_validation = summary.get("live_validation") or {}
     repository_cleanliness = summary.get("repository_cleanliness") or {}
     windows_package_preflight = summary.get("windows_package_preflight") or {}
+    windows_credential_manager_validation = summary.get("windows_credential_manager_validation") or {}
     client_delivery = summary.get("client_delivery") or {}
     live_readiness = summary.get("live_readiness") or {}
     live_acceptance_status = summary.get("live_acceptance_status") or {}
@@ -110,6 +126,11 @@ def verify_summary(
         else []
     )
     goal_summary = goal_status.get("summary") if isinstance(goal_status.get("summary"), dict) else {}
+    goal_status_json = report_path_status(
+        summary_path,
+        str(goal_status.get("json_path") or ""),
+    )
+    goal_status_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     if status not in {STATUS_PASSED, STATUS_READY_FOR_EXTERNAL_VALIDATION, STATUS_FAILED}:
         failures.append(f"unknown_status:{status or 'empty'}")
@@ -120,6 +141,46 @@ def verify_summary(
         failures.append("delivery_audit_failed")
     if str(delivery_audit.get("status") or "") != "ok":
         failures.append("delivery_audit_not_ok")
+    delivery_audit_json = report_path_status(
+        summary_path,
+        str(delivery_audit.get("json_path") or ""),
+    )
+    delivery_audit_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not str(delivery_audit.get("json_path") or "").strip():
+        failures.append("delivery_audit_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(delivery_audit.get("json_path") or "").strip():
+        if not delivery_audit_json["exists"]:
+            failures.append("delivery_audit_json_missing")
+        elif int(delivery_audit_json.get("size") or 0) <= 0:
+            failures.append("delivery_audit_json_empty")
+        elif not bool(delivery_audit_json.get("inside_summary_dir")):
+            failures.append("delivery_audit_json_outside_summary_dir")
+        else:
+            delivery_audit_payload_detail = load_report_payload(delivery_audit_json)
+            delivery_audit_payload = delivery_audit_payload_detail.get("payload") or {}
+            if not bool(delivery_audit_payload_detail.get("loaded")):
+                failures.append("delivery_audit_json_invalid")
+            else:
+                payload_summary = (
+                    delivery_audit_payload.get("summary")
+                    if isinstance(delivery_audit_payload.get("summary"), dict)
+                    else {}
+                )
+                expected_audit_fields = {
+                    "status": str(delivery_audit.get("status") or ""),
+                    "passed": int(delivery_audit.get("passed") or 0),
+                    "pending_external_validation": int(delivery_audit.get("pending_external_validation") or 0),
+                    "failed": int(delivery_audit.get("failed") or 0),
+                }
+                actual_audit_fields = {
+                    "status": str(delivery_audit_payload.get("status") or ""),
+                    "passed": int(payload_summary.get("passed") or 0),
+                    "pending_external_validation": int(payload_summary.get("pending_external_validation") or 0),
+                    "failed": int(payload_summary.get("failed") or 0),
+                }
+                for key, expected in expected_audit_fields.items():
+                    if actual_audit_fields.get(key) != expected:
+                        failures.append(f"delivery_audit_json_mismatch:{key}")
 
     operator_pressure_ok = (
         str(operator_pressure.get("status") or "") == "ok"
@@ -133,6 +194,54 @@ def verify_summary(
     )
     if not operator_pressure_ok:
         failures.append("operator_pressure_failed")
+    operator_pressure_json = report_path_status(
+        summary_path,
+        str(operator_pressure.get("json_path") or ""),
+    )
+    operator_pressure_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not str(operator_pressure.get("json_path") or "").strip():
+        failures.append("operator_pressure_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(operator_pressure.get("json_path") or "").strip():
+        if not operator_pressure_json["exists"]:
+            failures.append("operator_pressure_json_missing")
+        elif int(operator_pressure_json.get("size") or 0) <= 0:
+            failures.append("operator_pressure_json_empty")
+        elif not bool(operator_pressure_json.get("inside_summary_dir")):
+            failures.append("operator_pressure_json_outside_summary_dir")
+        else:
+            operator_pressure_payload_detail = load_report_payload(operator_pressure_json)
+            operator_pressure_payload = operator_pressure_payload_detail.get("payload") or {}
+            if not bool(operator_pressure_payload_detail.get("loaded")):
+                failures.append("operator_pressure_json_invalid")
+            else:
+                payload_summary = (
+                    operator_pressure_payload.get("summary")
+                    if isinstance(operator_pressure_payload.get("summary"), dict)
+                    else {}
+                )
+                expected_pressure_fields = {
+                    "status": str(operator_pressure.get("status") or ""),
+                    "campaign_count": int(operator_pressure.get("campaign_count") or 0),
+                    "content_found": int(operator_pressure.get("content_found") or 0),
+                    "comment_users": int(operator_pressure.get("comment_users") or 0),
+                    "customer_leads": int(operator_pressure.get("customer_leads") or 0),
+                    "outreach_actions": int(operator_pressure.get("outreach_actions") or 0),
+                    "execution_success": int(operator_pressure.get("execution_success") or 0),
+                    "account_switched": int(operator_pressure.get("account_switched") or 0),
+                }
+                actual_pressure_fields = {
+                    "status": str(operator_pressure_payload.get("status") or ""),
+                    "campaign_count": int(operator_pressure_payload.get("campaign_count") or 0),
+                    "content_found": int(payload_summary.get("content_found") or 0),
+                    "comment_users": int(payload_summary.get("comment_users") or 0),
+                    "customer_leads": int(payload_summary.get("customer_leads") or 0),
+                    "outreach_actions": int(payload_summary.get("outreach_actions") or 0),
+                    "execution_success": int(payload_summary.get("execution_success") or 0),
+                    "account_switched": int(payload_summary.get("account_switched") or 0),
+                }
+                for key, expected in expected_pressure_fields.items():
+                    if actual_pressure_fields.get(key) != expected:
+                        failures.append(f"operator_pressure_json_mismatch:{key}")
 
     pending_external = int(delivery_audit.get("pending_external_validation") or 0)
     resolved_external = int(delivery_audit.get("resolved_external_validation") or 0)
@@ -164,20 +273,220 @@ def verify_summary(
     )
     if not installer_ok:
         failures.append("installer_smoke_failed")
+    installer_smoke_json = report_path_status(
+        summary_path,
+        str(installer_smoke.get("json_path") or ""),
+    )
+    installer_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not str(installer_smoke.get("json_path") or "").strip():
+        failures.append("installer_smoke_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(installer_smoke.get("json_path") or "").strip():
+        if not installer_smoke_json["exists"]:
+            failures.append("installer_smoke_json_missing")
+        elif int(installer_smoke_json.get("size") or 0) <= 0:
+            failures.append("installer_smoke_json_empty")
+        elif not bool(installer_smoke_json.get("inside_summary_dir")):
+            failures.append("installer_smoke_json_outside_summary_dir")
+        else:
+            installer_payload_detail = load_report_payload(installer_smoke_json)
+            installer_payload = installer_payload_detail.get("payload") or {}
+            if not bool(installer_payload_detail.get("loaded")):
+                failures.append("installer_smoke_json_invalid")
+            else:
+                expected_installer_fields = {
+                    "status": installer_status,
+                    "exe_exists": bool(installer_smoke.get("exe_exists")),
+                    "data_in_install_dir": bool(installer_smoke.get("data_in_install_dir")),
+                    "hash_ok": bool(installer_smoke.get("hash_ok")),
+                    "optional": installer_optional,
+                }
+                for key, expected in expected_installer_fields.items():
+                    actual = installer_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"installer_smoke_json_mismatch:{key}")
 
+    ui_startup_json = report_path_status(
+        summary_path,
+        str(ui_startup.get("json_path") or ""),
+    )
     ui_startup_ok = (
         str(ui_startup.get("status") or "") == "ok"
         and bool(ui_startup.get("process_running"))
         and bool(ui_startup.get("interactive_task"))
+        and str(ui_startup.get("client_surface") or "") == "local_client_console"
+        and str(ui_startup.get("loopback_host") or "") in {"127.0.0.1", "localhost"}
+        and bool(ui_startup.get("no_browser_started", False))
+        and bool(ui_startup.get("no_submit", False))
     )
     if not ui_startup_ok:
         failures.append("ui_startup_failed")
+    if str(ui_startup.get("client_surface") or "") != "local_client_console":
+        failures.append("ui_startup_client_surface_not_local_console")
+    if str(ui_startup.get("loopback_host") or "") not in {"127.0.0.1", "localhost"}:
+        failures.append("ui_startup_loopback_not_local")
+    if not bool(ui_startup.get("no_browser_started", False)):
+        failures.append("ui_startup_started_browser")
+    if not bool(ui_startup.get("no_submit", False)):
+        failures.append("ui_startup_submitted_action")
+    if status == STATUS_PASSED and not str(ui_startup.get("json_path") or "").strip():
+        failures.append("ui_startup_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(ui_startup.get("json_path") or "").strip():
+        if not ui_startup_json["exists"]:
+            failures.append("ui_startup_json_missing")
+        elif int(ui_startup_json.get("size") or 0) <= 0:
+            failures.append("ui_startup_json_empty")
+        elif not bool(ui_startup_json.get("inside_summary_dir")):
+            failures.append("ui_startup_json_outside_summary_dir")
+    ui_startup_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if (
+        status == STATUS_PASSED
+        and summary_path
+        and bool(ui_startup_json.get("exists"))
+        and int(ui_startup_json.get("size") or 0) > 0
+        and bool(ui_startup_json.get("inside_summary_dir"))
+    ):
+        ui_startup_payload_detail = load_report_payload(ui_startup_json)
+        ui_startup_payload = ui_startup_payload_detail.get("payload") or {}
+        if not bool(ui_startup_payload_detail.get("loaded")):
+            failures.append("ui_startup_json_invalid")
+        else:
+            expected_ui_fields = {
+                "status": str(ui_startup.get("status") or ""),
+                "process_running": bool(ui_startup.get("process_running")),
+                "interactive_task": bool(ui_startup.get("interactive_task")),
+                "client_surface": str(ui_startup.get("client_surface") or ""),
+                "loopback_host": str(ui_startup.get("loopback_host") or ""),
+                "no_browser_started": bool(ui_startup.get("no_browser_started", False)),
+                "no_submit": bool(ui_startup.get("no_submit", False)),
+            }
+            for key, expected in expected_ui_fields.items():
+                actual = ui_startup_payload.get(key)
+                if isinstance(expected, bool):
+                    matches = bool(actual) == expected
+                else:
+                    matches = str(actual or "") == expected
+                if not matches:
+                    failures.append(f"ui_startup_json_mismatch:{key}")
 
     if live_validation:
         if not bool(live_validation.get("no_browser_started", True)):
             failures.append("live_validation_started_browser")
         if not bool(live_validation.get("no_submit", True)):
             failures.append("live_validation_submitted_action")
+    live_validation_missing_inputs = as_list(live_validation.get("missing_inputs"))
+    live_validation_selected_profile_ids = as_list(live_validation.get("selected_profile_ids"))
+    live_validation_json = report_path_status(
+        summary_path,
+        str(live_validation.get("json_path") or ""),
+    )
+    live_validation_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not live_validation:
+        failures.append("live_validation_missing")
+    if live_validation:
+        if status == STATUS_PASSED and str(live_validation.get("status") or "") != "ready":
+            failures.append("live_validation_not_ready")
+        if status == STATUS_PASSED and live_validation_missing_inputs:
+            failures.append("live_validation_missing_inputs")
+        if status == STATUS_PASSED and not live_validation_selected_profile_ids:
+            failures.append("live_validation_profile_ids_missing")
+        if status == STATUS_PASSED and not str(live_validation.get("json_path") or "").strip():
+            failures.append("live_validation_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(live_validation.get("json_path") or "").strip():
+            if not live_validation_json["exists"]:
+                failures.append("live_validation_json_missing")
+            elif int(live_validation_json.get("size") or 0) <= 0:
+                failures.append("live_validation_json_empty")
+            elif not bool(live_validation_json.get("inside_summary_dir")):
+                failures.append("live_validation_json_outside_summary_dir")
+            else:
+                live_validation_payload_detail = load_report_payload(live_validation_json)
+                live_validation_payload = live_validation_payload_detail.get("payload") or {}
+                if not bool(live_validation_payload_detail.get("loaded")):
+                    failures.append("live_validation_json_invalid")
+                else:
+                    expected_live_validation_fields = {
+                        "status": str(live_validation.get("status") or ""),
+                        "no_browser_started": bool(live_validation.get("no_browser_started", True)),
+                        "no_submit": bool(live_validation.get("no_submit", True)),
+                    }
+                    for key, expected in expected_live_validation_fields.items():
+                        actual = live_validation_payload.get(key)
+                        if isinstance(expected, bool):
+                            matches = bool(actual) == expected
+                        else:
+                            matches = str(actual or "") == expected
+                        if not matches:
+                            failures.append(f"live_validation_json_mismatch:{key}")
+                    payload_missing_inputs = [str(item) for item in as_list(live_validation_payload.get("missing_inputs"))]
+                    if payload_missing_inputs != [str(item) for item in live_validation_missing_inputs]:
+                        failures.append("live_validation_json_mismatch:missing_inputs")
+                    payload_profile_ids = [str(item) for item in as_list(live_validation_payload.get("selected_profile_ids"))]
+                    if payload_profile_ids != [str(item) for item in live_validation_selected_profile_ids]:
+                        failures.append("live_validation_json_mismatch:selected_profile_ids")
+    else:
+        live_validation_json = report_path_status(summary_path, "")
+
+    activation_status_value = str(activation_status.get("status") or "")
+    activation_status_ready = bool(activation_status.get("ready"))
+    activation_status_exists = bool(activation_status.get("activation_status_exists"))
+    activation_current_device_id = str(activation_status.get("current_device_id") or "").strip()
+    activation_status_json = report_path_status(
+        summary_path,
+        str(activation_status.get("json_path") or ""),
+    )
+    activation_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not activation_status:
+        failures.append("activation_status_missing")
+    if activation_status:
+        if status == STATUS_PASSED and activation_status_value != "ready":
+            failures.append("activation_status_not_ready")
+        if status == STATUS_PASSED and not activation_status_ready:
+            failures.append("activation_status_ready_false")
+        if status == STATUS_PASSED and not activation_status_exists:
+            failures.append("activation_status_file_missing")
+        if not bool(activation_status.get("no_browser_started", True)):
+            failures.append("activation_status_started_browser")
+        if not bool(activation_status.get("no_submit", True)):
+            failures.append("activation_status_submitted_action")
+        if status == STATUS_PASSED and not activation_current_device_id:
+            failures.append("activation_status_device_id_missing")
+        if status == STATUS_PASSED and not str(activation_status.get("json_path") or "").strip():
+            failures.append("activation_status_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(activation_status.get("json_path") or "").strip():
+            if not activation_status_json["exists"]:
+                failures.append("activation_status_json_missing")
+            elif int(activation_status_json.get("size") or 0) <= 0:
+                failures.append("activation_status_json_empty")
+            elif not bool(activation_status_json.get("inside_summary_dir")):
+                failures.append("activation_status_json_outside_summary_dir")
+            else:
+                activation_payload_detail = load_report_payload(activation_status_json)
+                activation_payload = activation_payload_detail.get("payload") or {}
+                if not bool(activation_payload_detail.get("loaded")):
+                    failures.append("activation_status_json_invalid")
+                else:
+                    expected_activation_fields = {
+                        "status": activation_status_value,
+                        "ready": activation_status_ready,
+                        "no_browser_started": bool(activation_status.get("no_browser_started", True)),
+                        "no_submit": bool(activation_status.get("no_submit", True)),
+                        "activation_status_exists": activation_status_exists,
+                        "current_device_id": activation_current_device_id,
+                    }
+                    for key, expected in expected_activation_fields.items():
+                        actual = activation_payload.get(key)
+                        if isinstance(expected, bool):
+                            matches = bool(actual) == expected
+                        else:
+                            matches = str(actual or "").strip() == expected
+                        if not matches:
+                            failures.append(f"activation_status_json_mismatch:{key}")
+    else:
+        activation_status_json = report_path_status(summary_path, "")
 
     repository_cleanliness_status = str(repository_cleanliness.get("status") or "")
     repository_cleanliness_passed = bool(repository_cleanliness.get("passed"))
@@ -189,6 +498,7 @@ def verify_summary(
     if status == STATUS_PASSED and not repository_cleanliness:
         failures.append("repository_cleanliness_missing")
     if repository_cleanliness:
+        repository_cleanliness_payload_detail = {"loaded": False, "error": "", "payload": {}}
         if repository_cleanliness_status != STATUS_PASSED:
             failures.append("repository_cleanliness_not_passed")
         if not repository_cleanliness_passed:
@@ -204,6 +514,17 @@ def verify_summary(
                 failures.append("repository_cleanliness_json_empty")
             elif not bool(repository_cleanliness_json.get("inside_summary_dir")):
                 failures.append("repository_cleanliness_json_outside_summary_dir")
+            else:
+                repository_cleanliness_payload_detail = load_report_payload(repository_cleanliness_json)
+                repository_cleanliness_payload = repository_cleanliness_payload_detail["payload"]
+                if not bool(repository_cleanliness_payload_detail.get("loaded")):
+                    failures.append("repository_cleanliness_json_invalid")
+                else:
+                    for key in ("status", "passed", "forbidden_count"):
+                        if repository_cleanliness_payload.get(key) != repository_cleanliness.get(key):
+                            failures.append(f"repository_cleanliness_json_mismatch:{key}")
+    else:
+        repository_cleanliness_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     windows_preflight_status = str(windows_package_preflight.get("status") or "")
     windows_preflight_ready = bool(windows_package_preflight.get("ready_for_windows_build"))
@@ -219,6 +540,7 @@ def verify_summary(
     if status == STATUS_PASSED and not windows_package_preflight:
         failures.append("windows_package_preflight_missing")
     if windows_package_preflight:
+        windows_preflight_payload_detail = {"loaded": False, "error": "", "payload": {}}
         if windows_preflight_status != "ready_for_windows_build":
             failures.append("windows_package_preflight_not_ready")
         if not windows_preflight_ready:
@@ -236,6 +558,108 @@ def verify_summary(
                 failures.append("windows_package_preflight_json_empty")
             elif not bool(windows_preflight_json.get("inside_summary_dir")):
                 failures.append("windows_package_preflight_json_outside_summary_dir")
+            else:
+                windows_preflight_payload_detail = load_report_payload(windows_preflight_json)
+                windows_preflight_payload = windows_preflight_payload_detail["payload"]
+                if not bool(windows_preflight_payload_detail.get("loaded")):
+                    failures.append("windows_package_preflight_json_invalid")
+                else:
+                    for key in ("status", "ready_for_windows_build", "final_delivery_ready"):
+                        if windows_preflight_payload.get(key) != windows_package_preflight.get(key):
+                            failures.append(f"windows_package_preflight_json_mismatch:{key}")
+                    payload_contract = (
+                        windows_preflight_payload.get("build_contract")
+                        if isinstance(windows_preflight_payload.get("build_contract"), dict)
+                        else {}
+                    )
+                    for key in ("default_build_requires_installer", "skip_installer_is_non_final"):
+                        if payload_contract.get(key) != windows_preflight_contract.get(key):
+                            failures.append(f"windows_package_preflight_json_mismatch:build_contract.{key}")
+    else:
+        windows_preflight_payload_detail = {"loaded": False, "error": "", "payload": {}}
+
+    credential_validation_status = str(windows_credential_manager_validation.get("status") or "")
+    credential_validation_checks = (
+        windows_credential_manager_validation.get("checks")
+        if isinstance(windows_credential_manager_validation.get("checks"), dict)
+        else {}
+    )
+    credential_validation_json = report_path_status(
+        summary_path,
+        str(windows_credential_manager_validation.get("json_path") or ""),
+    )
+    if status == STATUS_PASSED and not windows_credential_manager_validation:
+        failures.append("windows_credential_manager_validation_missing")
+    if windows_credential_manager_validation:
+        if credential_validation_status != STATUS_PASSED:
+            failures.append("windows_credential_manager_validation_not_passed")
+        if not bool(windows_credential_manager_validation.get("passed")):
+            failures.append("windows_credential_manager_validation_failed")
+        if str(windows_credential_manager_validation.get("backend") or "") != "windows_credential_manager":
+            failures.append("windows_credential_manager_validation_backend_invalid")
+        if not bool(credential_validation_checks.get("windows_credential_manager_available")):
+            failures.append("windows_credential_manager_validation_unavailable")
+        if not bool(credential_validation_checks.get("secret_write_succeeded")):
+            failures.append("windows_credential_manager_validation_write_failed")
+        if not bool(credential_validation_checks.get("secret_readback_matched")):
+            failures.append("windows_credential_manager_validation_readback_failed")
+        if not bool(credential_validation_checks.get("secret_delete_succeeded")):
+            failures.append("windows_credential_manager_validation_delete_failed")
+        if not bool(credential_validation_checks.get("output_excludes_secret_value")):
+            failures.append("windows_credential_manager_validation_output_leaked_secret")
+        if not bool(windows_credential_manager_validation.get("no_browser_started", True)):
+            failures.append("windows_credential_manager_validation_opened_browser")
+        if not bool(windows_credential_manager_validation.get("no_submit", True)):
+            failures.append("windows_credential_manager_validation_submitted_action")
+        if bool(windows_credential_manager_validation.get("customer_data_uploaded")):
+            failures.append("windows_credential_manager_validation_uploaded_customer_data")
+        if bool(windows_credential_manager_validation.get("secret_value_included")):
+            failures.append("windows_credential_manager_validation_included_secret_value")
+        if status == STATUS_PASSED and not str(windows_credential_manager_validation.get("json_path") or "").strip():
+            failures.append("windows_credential_manager_validation_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(windows_credential_manager_validation.get("json_path") or "").strip():
+            if not credential_validation_json["exists"]:
+                failures.append("windows_credential_manager_validation_json_missing")
+            elif int(credential_validation_json.get("size") or 0) <= 0:
+                failures.append("windows_credential_manager_validation_json_empty")
+            elif not bool(credential_validation_json.get("inside_summary_dir")):
+                failures.append("windows_credential_manager_validation_json_outside_summary_dir")
+        credential_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        if (
+            status == STATUS_PASSED
+            and summary_path
+            and bool(credential_validation_json.get("exists"))
+            and int(credential_validation_json.get("size") or 0) > 0
+            and bool(credential_validation_json.get("inside_summary_dir"))
+        ):
+            credential_payload_detail = load_report_payload(credential_validation_json)
+            credential_payload = credential_payload_detail.get("payload") or {}
+            if not bool(credential_payload_detail.get("loaded")):
+                failures.append("windows_credential_manager_validation_json_invalid")
+            else:
+                expected_credential_fields = {
+                    "status": credential_validation_status,
+                    "passed": bool(windows_credential_manager_validation.get("passed")),
+                    "backend": str(windows_credential_manager_validation.get("backend") or ""),
+                    "no_browser_started": bool(windows_credential_manager_validation.get("no_browser_started", True)),
+                    "no_submit": bool(windows_credential_manager_validation.get("no_submit", True)),
+                    "customer_data_uploaded": bool(windows_credential_manager_validation.get("customer_data_uploaded")),
+                    "secret_value_included": bool(windows_credential_manager_validation.get("secret_value_included")),
+                }
+                for key, expected in expected_credential_fields.items():
+                    actual = credential_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"windows_credential_manager_validation_json_mismatch:{key}")
+                payload_checks = credential_payload.get("checks") if isinstance(credential_payload.get("checks"), dict) else {}
+                for key, expected in credential_validation_checks.items():
+                    if bool(payload_checks.get(key)) != bool(expected):
+                        failures.append(f"windows_credential_manager_validation_json_mismatch:checks.{key}")
+    else:
+        credential_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     client_delivery_status = str(client_delivery.get("status") or "")
     client_delivery_readiness = str(client_delivery.get("readiness") or "")
@@ -268,20 +692,129 @@ def verify_summary(
                 failures.append("client_delivery_json_empty")
             elif not bool(client_delivery_json.get("inside_summary_dir")):
                 failures.append("client_delivery_json_outside_summary_dir")
+        client_delivery_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        if (
+            status == STATUS_PASSED
+            and summary_path
+            and bool(client_delivery_json.get("exists"))
+            and int(client_delivery_json.get("size") or 0) > 0
+            and bool(client_delivery_json.get("inside_summary_dir"))
+        ):
+            client_delivery_payload_detail = load_report_payload(client_delivery_json)
+            client_delivery_payload = client_delivery_payload_detail.get("payload") or {}
+            if not bool(client_delivery_payload_detail.get("loaded")):
+                failures.append("client_delivery_json_invalid")
+            else:
+                expected_client_delivery_fields = {
+                    "status": client_delivery_status,
+                    "readiness": client_delivery_readiness,
+                    "contract_ok": bool(client_delivery.get("contract_ok")),
+                    "acceptance_ready": bool(client_delivery.get("acceptance_ready")),
+                    "final_delivery_ready": bool(client_delivery.get("final_delivery_ready")),
+                }
+                for key, expected in expected_client_delivery_fields.items():
+                    actual = client_delivery_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"client_delivery_json_mismatch:{key}")
+                payload_failed_checks = as_list(client_delivery_payload.get("failed_checks"))
+                if [str(item) for item in payload_failed_checks] != [str(item) for item in client_delivery_failed_checks]:
+                    failures.append("client_delivery_json_mismatch:failed_checks")
+    else:
+        client_delivery_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
+    live_readiness_json = report_path_status(
+        summary_path,
+        str(live_readiness.get("json_path") or ""),
+    )
+    live_readiness_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    live_preflight_json = report_path_status(
+        summary_path,
+        str(live_preflight.get("json_path") or ""),
+    )
+    live_preflight_payload_detail = {"loaded": False, "error": "", "payload": {}}
     if final_external_resolved:
         readiness_status = str(live_readiness.get("status") or "")
         if readiness_status not in {"ready", "completed"} or not bool(live_readiness.get("ready")):
             failures.append("live_readiness_not_ready")
+        if not bool(live_readiness.get("no_browser_started", True)):
+            failures.append("live_readiness_started_browser")
         if not bool(live_readiness.get("no_submit", True)):
             failures.append("live_readiness_submitted_action")
+        if status == STATUS_PASSED and not str(live_readiness.get("json_path") or "").strip():
+            failures.append("live_readiness_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(live_readiness.get("json_path") or "").strip():
+            if not live_readiness_json["exists"]:
+                failures.append("live_readiness_json_missing")
+            elif int(live_readiness_json.get("size") or 0) <= 0:
+                failures.append("live_readiness_json_empty")
+            elif not bool(live_readiness_json.get("inside_summary_dir")):
+                failures.append("live_readiness_json_outside_summary_dir")
+            else:
+                live_readiness_payload_detail = load_report_payload(live_readiness_json)
+                live_readiness_payload = live_readiness_payload_detail.get("payload") or {}
+                if not bool(live_readiness_payload_detail.get("loaded")):
+                    failures.append("live_readiness_json_invalid")
+                else:
+                    expected_live_readiness_fields = {
+                        "status": readiness_status,
+                        "ready": bool(live_readiness.get("ready")),
+                        "no_browser_started": bool(live_readiness.get("no_browser_started", True)),
+                        "no_submit": bool(live_readiness.get("no_submit", True)),
+                    }
+                    for key, expected in expected_live_readiness_fields.items():
+                        actual = live_readiness_payload.get(key)
+                        if isinstance(expected, bool):
+                            matches = bool(actual) == expected
+                        else:
+                            matches = str(actual or "") == expected
+                        if not matches:
+                            failures.append(f"live_readiness_json_mismatch:{key}")
         if str(live_preflight.get("status") or "") != "completed":
             failures.append("live_preflight_not_completed")
+        if status == STATUS_PASSED and not str(live_preflight.get("json_path") or "").strip():
+            failures.append("live_preflight_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(live_preflight.get("json_path") or "").strip():
+            if not live_preflight_json["exists"]:
+                failures.append("live_preflight_json_missing")
+            elif int(live_preflight_json.get("size") or 0) <= 0:
+                failures.append("live_preflight_json_empty")
+            elif not bool(live_preflight_json.get("inside_summary_dir")):
+                failures.append("live_preflight_json_outside_summary_dir")
+            else:
+                live_preflight_payload_detail = load_report_payload(live_preflight_json)
+                live_preflight_payload = live_preflight_payload_detail.get("payload") or {}
+                if not bool(live_preflight_payload_detail.get("loaded")):
+                    failures.append("live_preflight_json_invalid")
+                else:
+                    expected_preflight_fields = {
+                        "status": str(live_preflight.get("status") or ""),
+                        "no_submit": bool(live_preflight.get("no_submit", True)),
+                    }
+                    for key, expected in expected_preflight_fields.items():
+                        actual = live_preflight_payload.get(key)
+                        if isinstance(expected, bool):
+                            matches = bool(actual) == expected
+                        else:
+                            matches = str(actual or "") == expected
+                        if not matches:
+                            failures.append(f"live_preflight_json_mismatch:{key}")
+                    payload_missing_preflight = as_list(live_preflight_payload.get("missing_preflight_action_types"))
+                    expected_missing_preflight = as_list(live_preflight.get("missing_preflight_action_types"))
+                    if [str(item) for item in payload_missing_preflight] != [str(item) for item in expected_missing_preflight]:
+                        failures.append("live_preflight_json_mismatch:missing_preflight_action_types")
 
     if status == STATUS_PASSED and not live_acceptance_status:
         failures.append("live_acceptance_status_missing")
     if live_acceptance_status:
         live_acceptance_status_value = str(live_acceptance_status.get("status") or "")
+        live_acceptance_status_json = report_path_status(
+            summary_path,
+            str(live_acceptance_status.get("json_path") or ""),
+        )
         live_acceptance_local_inputs = (
             live_acceptance_status.get("local_inputs")
             if isinstance(live_acceptance_status.get("local_inputs"), dict)
@@ -316,8 +849,73 @@ def verify_summary(
             failures.append("live_acceptance_status_missing_inputs")
         if status == STATUS_PASSED and live_acceptance_failed_checks:
             failures.append("live_acceptance_status_failed_checks")
+        if status == STATUS_PASSED and not str(live_acceptance_status.get("json_path") or "").strip():
+            failures.append("live_acceptance_status_json_path_missing")
+        if status == STATUS_PASSED and summary_path and str(live_acceptance_status.get("json_path") or "").strip():
+            if not live_acceptance_status_json["exists"]:
+                failures.append("live_acceptance_status_json_missing")
+            elif int(live_acceptance_status_json.get("size") or 0) <= 0:
+                failures.append("live_acceptance_status_json_empty")
+            elif not bool(live_acceptance_status_json.get("inside_summary_dir")):
+                failures.append("live_acceptance_status_json_outside_summary_dir")
+        live_acceptance_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        if (
+            status == STATUS_PASSED
+            and summary_path
+            and bool(live_acceptance_status_json.get("exists"))
+            and int(live_acceptance_status_json.get("size") or 0) > 0
+            and bool(live_acceptance_status_json.get("inside_summary_dir"))
+        ):
+            live_acceptance_payload_detail = load_report_payload(live_acceptance_status_json)
+            live_acceptance_payload = live_acceptance_payload_detail.get("payload") or {}
+            if not bool(live_acceptance_payload_detail.get("loaded")):
+                failures.append("live_acceptance_status_json_invalid")
+            else:
+                expected_live_acceptance_fields = {
+                    "status": live_acceptance_status_value,
+                    "final_delivery_ready": bool(live_acceptance_status.get("final_delivery_ready")),
+                    "ready_for_live_submit": bool(live_acceptance_status.get("ready_for_live_submit")),
+                    "no_browser_started": bool(live_acceptance_status.get("no_browser_started", True)),
+                    "no_submit": bool(live_acceptance_status.get("no_submit", True)),
+                }
+                for key, expected in expected_live_acceptance_fields.items():
+                    actual = live_acceptance_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"live_acceptance_status_json_mismatch:{key}")
+                payload_failed_checks = as_list(live_acceptance_payload.get("failed_checks"))
+                if [str(item) for item in payload_failed_checks] != [str(item) for item in live_acceptance_failed_checks]:
+                    failures.append("live_acceptance_status_json_mismatch:failed_checks")
+                payload_local_inputs = (
+                    live_acceptance_payload.get("local_inputs")
+                    if isinstance(live_acceptance_payload.get("local_inputs"), dict)
+                    else {}
+                )
+                payload_activation = (
+                    live_acceptance_payload.get("activation")
+                    if isinstance(live_acceptance_payload.get("activation"), dict)
+                    else {}
+                )
+                payload_validation = (
+                    live_acceptance_payload.get("live_validation")
+                    if isinstance(live_acceptance_payload.get("live_validation"), dict)
+                    else {}
+                )
+                if bool(payload_local_inputs.get("usable")) != bool(live_acceptance_local_inputs.get("usable")):
+                    failures.append("live_acceptance_status_json_mismatch:local_inputs.usable")
+                if bool(payload_activation.get("ready")) != bool(live_acceptance_activation.get("ready")):
+                    failures.append("live_acceptance_status_json_mismatch:activation.ready")
+                if [str(item) for item in as_list(payload_validation.get("missing_inputs"))] != [str(item) for item in live_acceptance_missing_inputs]:
+                    failures.append("live_acceptance_status_json_mismatch:live_validation.missing_inputs")
+                if [str(item) for item in as_list(payload_validation.get("selected_profile_ids"))] != [str(item) for item in live_acceptance_selected_profiles]:
+                    failures.append("live_acceptance_status_json_mismatch:live_validation.selected_profile_ids")
     else:
         live_acceptance_status_value = ""
+        live_acceptance_status_json = report_path_status(summary_path, "")
+        live_acceptance_payload_detail = {"loaded": False, "error": "", "payload": {}}
         live_acceptance_local_inputs = {}
         live_acceptance_activation = {}
         live_acceptance_validation = {}
@@ -329,10 +927,22 @@ def verify_summary(
         summary_path,
         authorization_handoff.get("json_path") if isinstance(authorization_handoff, dict) else "",
     )
+    authorization_handoff_bundle = report_path_status(
+        summary_path,
+        authorization_handoff.get("bundle_path") if isinstance(authorization_handoff, dict) else "",
+    )
+    authorization_handoff_bundle_verification: dict[str, Any] = {
+        "status": "",
+        "passed": False,
+        "failures": [],
+        "forbidden_files": [],
+        "missing_files": [],
+    }
     if status == STATUS_PASSED and not authorization_handoff:
         failures.append("authorization_handoff_missing")
     if authorization_handoff:
         authorization_handoff_status = str(authorization_handoff.get("status") or "")
+        authorization_handoff_payload_detail = {"loaded": False, "error": "", "payload": {}}
         if status == STATUS_PASSED and authorization_handoff_status not in {"created", "passed"}:
             failures.append("authorization_handoff_not_created")
         if status == STATUS_PASSED and not bool(authorization_handoff.get("exists")):
@@ -343,6 +953,19 @@ def verify_summary(
             failures.append("authorization_handoff_submitted_action")
         if status == STATUS_PASSED and not str(authorization_handoff.get("bundle_path") or "").strip():
             failures.append("authorization_handoff_bundle_path_missing")
+        if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("bundle_path") or "").strip():
+            if not authorization_handoff_bundle["exists"]:
+                failures.append("authorization_handoff_bundle_file_missing")
+            elif int(authorization_handoff_bundle.get("size") or 0) <= 0:
+                failures.append("authorization_handoff_bundle_file_empty")
+            elif not bool(authorization_handoff_bundle.get("inside_summary_dir")):
+                failures.append("authorization_handoff_bundle_outside_summary_dir")
+            else:
+                authorization_handoff_bundle_verification = verify_handoff_bundle(
+                    authorization_handoff_bundle.get("path") or ""
+                )
+                if not bool(authorization_handoff_bundle_verification.get("passed")):
+                    failures.append("authorization_handoff_bundle_verification_failed")
         if status == STATUS_PASSED and not str(authorization_handoff.get("json_path") or "").strip():
             failures.append("authorization_handoff_json_path_missing")
         if status == STATUS_PASSED and summary_path and str(authorization_handoff.get("json_path") or "").strip():
@@ -352,8 +975,34 @@ def verify_summary(
                 failures.append("authorization_handoff_json_empty")
             elif not bool(authorization_handoff_json.get("inside_summary_dir")):
                 failures.append("authorization_handoff_json_outside_summary_dir")
+            else:
+                authorization_handoff_payload_detail = load_report_payload(authorization_handoff_json)
+                authorization_handoff_payload = authorization_handoff_payload_detail["payload"]
+                if not bool(authorization_handoff_payload_detail.get("loaded")):
+                    failures.append("authorization_handoff_json_invalid")
+                else:
+                    for key in (
+                        "status",
+                        "exists",
+                        "final_delivery_ready",
+                        "no_browser_started",
+                        "no_submit",
+                        "bundle_path",
+                        "readiness_status",
+                    ):
+                        if authorization_handoff_payload.get(key) != authorization_handoff.get(key):
+                            failures.append(f"authorization_handoff_json_mismatch:{key}")
     else:
         authorization_handoff_status = ""
+        authorization_handoff_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        authorization_handoff_bundle = report_path_status(summary_path, "")
+        authorization_handoff_bundle_verification = {
+            "status": "",
+            "passed": False,
+            "failures": [],
+            "forbidden_files": [],
+            "missing_files": [],
+        }
 
     if str(live_preflight.get("status") or "") == "completed":
         missing_preflight = (
@@ -418,6 +1067,57 @@ def verify_summary(
         if isinstance(live_submit.get("missing_local_evidence_file_action_types"), list)
         else []
     )
+    live_submit_json = report_path_status(
+        summary_path,
+        str(live_submit.get("json_path") or ""),
+    )
+    live_submit_payload_detail = {"loaded": False, "error": "", "payload": {}}
+    if status == STATUS_PASSED and not str(live_submit.get("json_path") or "").strip():
+        failures.append("live_submit_json_path_missing")
+    if status == STATUS_PASSED and summary_path and str(live_submit.get("json_path") or "").strip():
+        if not live_submit_json["exists"]:
+            failures.append("live_submit_json_missing")
+        elif int(live_submit_json.get("size") or 0) <= 0:
+            failures.append("live_submit_json_empty")
+        elif not bool(live_submit_json.get("inside_summary_dir")):
+            failures.append("live_submit_json_outside_summary_dir")
+        else:
+            live_submit_payload_detail = load_report_payload(live_submit_json)
+            live_submit_payload = live_submit_payload_detail.get("payload") or {}
+            if not bool(live_submit_payload_detail.get("loaded")):
+                failures.append("live_submit_json_invalid")
+            else:
+                expected_live_submit_fields = {
+                    "status": str(live_submit.get("status") or ""),
+                    "executor_mode": str(live_submit.get("executor_mode") or ""),
+                    "platform_validation": bool(live_submit.get("platform_validation")),
+                    "passed": bool(live_submit.get("passed")),
+                    "live_submit": bool(live_submit.get("live_submit")),
+                    "activation_status_loaded": bool(live_submit.get("activation_status_loaded")),
+                }
+                for key, expected in expected_live_submit_fields.items():
+                    actual = live_submit_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"live_submit_json_mismatch:{key}")
+                live_submit_summary = live_submit.get("summary") if isinstance(live_submit.get("summary"), dict) else {}
+                payload_summary = (
+                    live_submit_payload.get("summary")
+                    if isinstance(live_submit_payload.get("summary"), dict)
+                    else {}
+                )
+                for key in ("selected_actions", "success", "failed", "skipped"):
+                    if int(payload_summary.get(key) or 0) != int(live_submit_summary.get(key) or 0):
+                        failures.append(f"live_submit_json_mismatch:summary.{key}")
+                payload_missing_evidence = as_list(live_submit_payload.get("missing_evidence_action_types"))
+                if [str(item) for item in payload_missing_evidence] != [str(item) for item in missing_evidence_action_types]:
+                    failures.append("live_submit_json_mismatch:missing_evidence_action_types")
+                payload_missing_local = as_list(live_submit_payload.get("missing_local_evidence_file_action_types"))
+                if [str(item) for item in payload_missing_local] != [str(item) for item in missing_local_evidence_file_action_types]:
+                    failures.append("live_submit_json_mismatch:missing_local_evidence_file_action_types")
     if str(live_submit.get("status") or "") == "completed" and bool(live_submit.get("platform_validation")):
         live_submit_summary = live_submit.get("summary") if isinstance(live_submit.get("summary"), dict) else {}
         live_submit_required_types = {"comment_reply", "follow_review", "dm_review"}
@@ -469,6 +1169,19 @@ def verify_summary(
                     sidecar_sha = str(sidecar.get("screenshot_sha256") or "")
                     sidecar_action_id = str(sidecar.get("action_id") or "")
                     sidecar_profile_id = str(sidecar.get("profile_id") or "")
+                    action_evidence_ok = True
+                    if action_type == "comment_reply":
+                        action_evidence_ok = (
+                            bool(str(sidecar.get("submitted_text") or "").strip())
+                            and sidecar.get("comment_visible_confirmed") is True
+                        )
+                    elif action_type == "follow_review":
+                        action_evidence_ok = sidecar.get("follow_state_confirmed") is True
+                    elif action_type == "dm_review":
+                        action_evidence_ok = (
+                            sidecar.get("dm_entry_confirmed") is True
+                            and bool(str(sidecar.get("dm_submitted_text") or "").strip())
+                        )
                     if (
                         int(detail.get("size") or 0) > 0
                         and len(sha) == 64
@@ -478,6 +1191,7 @@ def verify_summary(
                         and sidecar_profile_id
                         and sidecar_action_id
                         and str(sidecar.get("current_url") or "")
+                        and action_evidence_ok
                         and (action_type, sidecar_action_id, sidecar_profile_id) in successful_result_keys
                     ):
                         valid_detail = True
@@ -518,6 +1232,44 @@ def verify_summary(
         if effective_pending_external == 0 and goal_pending:
             failures.append("goal_status_has_stale_pending")
             passed = False
+        if status == STATUS_PASSED and not str(goal_status.get("json_path") or "").strip():
+            failures.append("goal_status_json_path_missing")
+            passed = False
+        if status == STATUS_PASSED and summary_path and str(goal_status.get("json_path") or "").strip():
+            if not goal_status_json["exists"]:
+                failures.append("goal_status_json_missing")
+                passed = False
+            elif int(goal_status_json.get("size") or 0) <= 0:
+                failures.append("goal_status_json_empty")
+                passed = False
+            elif not bool(goal_status_json.get("inside_summary_dir")):
+                failures.append("goal_status_json_outside_summary_dir")
+                passed = False
+            else:
+                goal_status_payload_detail = load_report_payload(goal_status_json)
+                goal_status_payload = goal_status_payload_detail.get("payload") or {}
+                if not bool(goal_status_payload_detail.get("loaded")):
+                    failures.append("goal_status_json_invalid")
+                    passed = False
+                else:
+                    if str(goal_status_payload.get("status") or "") != goal_status_value:
+                        failures.append("goal_status_json_mismatch:status")
+                        passed = False
+                    payload_pending = as_list(goal_status_payload.get("pending_external_validation"))
+                    if [str(item) for item in payload_pending] != [str(item) for item in goal_pending]:
+                        failures.append("goal_status_json_mismatch:pending_external_validation")
+                        passed = False
+                    payload_summary = (
+                        goal_status_payload.get("summary")
+                        if isinstance(goal_status_payload.get("summary"), dict)
+                        else {}
+                    )
+                    for key in ("stages_passed", "stages_pending_external_validation", "stages_failed"):
+                        if int(payload_summary.get(key) or 0) != int(goal_summary.get(key) or 0):
+                            failures.append(f"goal_status_json_mismatch:summary.{key}")
+                            passed = False
+    else:
+        goal_status_payload_detail = {"loaded": False, "error": "", "payload": {}}
 
     if status == STATUS_PASSED and not final_acceptance_gate:
         failures.append("final_acceptance_gate_missing")
@@ -526,6 +1278,7 @@ def verify_summary(
     if final_acceptance_gate:
         final_gate_status = str(final_acceptance_gate.get("status") or "")
         final_gate_failed_checks = as_list(final_acceptance_gate.get("failed_checks"))
+        final_gate_checks = final_acceptance_gate.get("checks") if isinstance(final_acceptance_gate.get("checks"), list) else []
         final_gate_json = report_path_status(
             summary_path,
             str(final_acceptance_gate.get("json_path") or ""),
@@ -555,7 +1308,72 @@ def verify_summary(
             elif not bool(final_gate_json.get("inside_summary_dir")):
                 failures.append("final_acceptance_gate_json_outside_summary_dir")
                 passed = False
+        final_gate_payload_detail = {"loaded": False, "error": "", "payload": {}}
+        if (
+            status == STATUS_PASSED
+            and summary_path
+            and bool(final_gate_json.get("exists"))
+            and int(final_gate_json.get("size") or 0) > 0
+            and bool(final_gate_json.get("inside_summary_dir"))
+        ):
+            final_gate_payload_detail = load_report_payload(final_gate_json)
+            final_gate_payload = final_gate_payload_detail.get("payload") or {}
+            if not bool(final_gate_payload_detail.get("loaded")):
+                failures.append("final_acceptance_gate_json_invalid")
+                passed = False
+            else:
+                expected_final_gate_fields = {
+                    "status": final_gate_status,
+                    "final_delivery_ready": bool(final_acceptance_gate.get("final_delivery_ready")),
+                }
+                for key, expected in expected_final_gate_fields.items():
+                    actual = final_gate_payload.get(key)
+                    if isinstance(expected, bool):
+                        matches = bool(actual) == expected
+                    else:
+                        matches = str(actual or "") == expected
+                    if not matches:
+                        failures.append(f"final_acceptance_gate_json_mismatch:{key}")
+                        passed = False
+                payload_failed_checks = as_list(final_gate_payload.get("failed_checks"))
+                if [str(item) for item in payload_failed_checks] != [str(item) for item in final_gate_failed_checks]:
+                    failures.append("final_acceptance_gate_json_mismatch:failed_checks")
+                    passed = False
+                payload_checks = final_gate_payload.get("checks") if isinstance(final_gate_payload.get("checks"), list) else []
+                required_final_gate_checks = {
+                    "goal_status:passed",
+                    "client_delivery:final_ready",
+                    "delivery_package:passed",
+                    "delivery_audit:no_failed_checks",
+                    "operator_pressure:leads_and_actions",
+                }
+                payload_checks_by_name = {
+                    str(row.get("name") or ""): row
+                    for row in payload_checks
+                    if isinstance(row, dict) and str(row.get("name") or "")
+                }
+                missing_required_checks = sorted(required_final_gate_checks - set(payload_checks_by_name))
+                if missing_required_checks:
+                    failures.append("final_acceptance_gate_json_checks_missing")
+                    passed = False
+                failed_required_checks = sorted(
+                    name for name in required_final_gate_checks if name in payload_checks_by_name and not bool(payload_checks_by_name[name].get("ok"))
+                )
+                if failed_required_checks:
+                    failures.append("final_acceptance_gate_json_checks_failed")
+                    passed = False
+                if final_gate_checks:
+                    summary_checks_by_name = {
+                        str(row.get("name") or ""): bool(row.get("ok"))
+                        for row in final_gate_checks
+                        if isinstance(row, dict) and str(row.get("name") or "")
+                    }
+                    for name, expected_ok in summary_checks_by_name.items():
+                        if name in payload_checks_by_name and bool(payload_checks_by_name[name].get("ok")) != expected_ok:
+                            failures.append(f"final_acceptance_gate_json_mismatch:checks.{name}")
+                            passed = False
     else:
+        final_gate_payload_detail = {"loaded": False, "error": "", "payload": {}}
         final_gate_json = report_path_status(summary_path, "")
 
     return {
@@ -565,11 +1383,18 @@ def verify_summary(
         "failures": failures,
         "pending": pending,
         "delivery_audit": {
+            "status": str(delivery_audit.get("status") or ""),
             "passed": int(delivery_audit.get("passed") or 0),
             "pending_external_validation": pending_external,
             "resolved_external_validation": resolved_external,
             "effective_pending_external_validation": effective_pending_external,
             "failed": int(delivery_audit.get("failed") or 0),
+            "json_path": str(delivery_audit.get("json_path") or ""),
+            "json_exists": bool(delivery_audit_json.get("exists")),
+            "json_size": int(delivery_audit_json.get("size") or 0),
+            "json_inside_summary_dir": bool(delivery_audit_json.get("inside_summary_dir")),
+            "json_loaded": bool(delivery_audit_payload_detail.get("loaded")),
+            "json_error": str(delivery_audit_payload_detail.get("error") or ""),
         },
         "operator_pressure": {
             "status": str(operator_pressure.get("status") or ""),
@@ -580,6 +1405,12 @@ def verify_summary(
             "outreach_actions": int(operator_pressure.get("outreach_actions") or 0),
             "execution_success": int(operator_pressure.get("execution_success") or 0),
             "account_switched": int(operator_pressure.get("account_switched") or 0),
+            "json_path": str(operator_pressure.get("json_path") or ""),
+            "json_exists": bool(operator_pressure_json.get("exists")),
+            "json_size": int(operator_pressure_json.get("size") or 0),
+            "json_inside_summary_dir": bool(operator_pressure_json.get("inside_summary_dir")),
+            "json_loaded": bool(operator_pressure_payload_detail.get("loaded")),
+            "json_error": str(operator_pressure_payload_detail.get("error") or ""),
         },
         "installer_smoke": {
             "status": installer_status,
@@ -587,16 +1418,37 @@ def verify_summary(
             "exe_exists": bool(installer_smoke.get("exe_exists")),
             "data_in_install_dir": bool(installer_smoke.get("data_in_install_dir")),
             "hash_ok": bool(installer_smoke.get("hash_ok")),
+            "json_path": str(installer_smoke.get("json_path") or ""),
+            "json_exists": bool(installer_smoke_json.get("exists")),
+            "json_size": int(installer_smoke_json.get("size") or 0),
+            "json_inside_summary_dir": bool(installer_smoke_json.get("inside_summary_dir")),
+            "json_loaded": bool(installer_payload_detail.get("loaded")),
+            "json_error": str(installer_payload_detail.get("error") or ""),
         },
         "ui_startup": {
             "status": str(ui_startup.get("status") or ""),
             "process_running": bool(ui_startup.get("process_running")),
             "interactive_task": bool(ui_startup.get("interactive_task")),
+            "client_surface": str(ui_startup.get("client_surface") or ""),
+            "loopback_host": str(ui_startup.get("loopback_host") or ""),
+            "no_browser_started": bool(ui_startup.get("no_browser_started", False)),
+            "no_submit": bool(ui_startup.get("no_submit", False)),
+            "json_path": str(ui_startup.get("json_path") or ""),
+            "json_exists": bool(ui_startup_json.get("exists")),
+            "json_inside_summary_dir": bool(ui_startup_json.get("inside_summary_dir")),
+            "json_loaded": bool(ui_startup_payload_detail.get("loaded")),
+            "json_error": str(ui_startup_payload_detail.get("error") or ""),
         },
         "live_preflight": {
             "status": str(live_preflight.get("status") or ""),
             "missing_preflight_action_types": list(live_preflight.get("missing_preflight_action_types") or []),
             "no_submit": bool(live_preflight.get("no_submit", True)),
+            "json_path": str(live_preflight.get("json_path") or ""),
+            "json_exists": bool(live_preflight_json.get("exists")),
+            "json_size": int(live_preflight_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_preflight_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_preflight_payload_detail.get("loaded")),
+            "json_error": str(live_preflight_payload_detail.get("error") or ""),
             "evidence_file_detail_action_types": sorted(
                 key
                 for key, value in (
@@ -625,8 +1477,28 @@ def verify_summary(
             "status": str(live_validation.get("status") or ""),
             "no_browser_started": bool(live_validation.get("no_browser_started", True)),
             "no_submit": bool(live_validation.get("no_submit", True)),
-            "missing_inputs": as_list(live_validation.get("missing_inputs")),
-            "selected_profile_ids": as_list(live_validation.get("selected_profile_ids")),
+            "missing_inputs": live_validation_missing_inputs,
+            "selected_profile_ids": live_validation_selected_profile_ids,
+            "json_path": str(live_validation.get("json_path") or ""),
+            "json_exists": bool(live_validation_json.get("exists")),
+            "json_size": int(live_validation_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_validation_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_validation_payload_detail.get("loaded")),
+            "json_error": str(live_validation_payload_detail.get("error") or ""),
+        },
+        "activation_status": {
+            "status": activation_status_value,
+            "ready": activation_status_ready,
+            "activation_status_exists": activation_status_exists,
+            "current_device_id": activation_current_device_id,
+            "no_browser_started": bool(activation_status.get("no_browser_started", True)),
+            "no_submit": bool(activation_status.get("no_submit", True)),
+            "json_path": str(activation_status.get("json_path") or ""),
+            "json_exists": bool(activation_status_json.get("exists")),
+            "json_size": int(activation_status_json.get("size") or 0),
+            "json_inside_summary_dir": bool(activation_status_json.get("inside_summary_dir")),
+            "json_loaded": bool(activation_payload_detail.get("loaded")),
+            "json_error": str(activation_payload_detail.get("error") or ""),
         },
         "repository_cleanliness": {
             "status": repository_cleanliness_status,
@@ -636,6 +1508,8 @@ def verify_summary(
             "json_exists": bool(repository_cleanliness_json.get("exists")),
             "json_size": int(repository_cleanliness_json.get("size") or 0),
             "json_inside_summary_dir": bool(repository_cleanliness_json.get("inside_summary_dir")),
+            "json_loaded": bool(repository_cleanliness_payload_detail.get("loaded")),
+            "json_error": str(repository_cleanliness_payload_detail.get("error") or ""),
         },
         "windows_package_preflight": {
             "status": windows_preflight_status,
@@ -646,6 +1520,24 @@ def verify_summary(
             "json_exists": bool(windows_preflight_json.get("exists")),
             "json_size": int(windows_preflight_json.get("size") or 0),
             "json_inside_summary_dir": bool(windows_preflight_json.get("inside_summary_dir")),
+            "json_loaded": bool(windows_preflight_payload_detail.get("loaded")),
+            "json_error": str(windows_preflight_payload_detail.get("error") or ""),
+        },
+        "windows_credential_manager_validation": {
+            "status": credential_validation_status,
+            "passed": bool(windows_credential_manager_validation.get("passed")),
+            "backend": str(windows_credential_manager_validation.get("backend") or ""),
+            "no_browser_started": bool(windows_credential_manager_validation.get("no_browser_started", True)),
+            "no_submit": bool(windows_credential_manager_validation.get("no_submit", True)),
+            "customer_data_uploaded": bool(windows_credential_manager_validation.get("customer_data_uploaded")),
+            "secret_value_included": bool(windows_credential_manager_validation.get("secret_value_included")),
+            "checks": credential_validation_checks,
+            "json_path": str(windows_credential_manager_validation.get("json_path") or ""),
+            "json_exists": bool(credential_validation_json.get("exists")),
+            "json_size": int(credential_validation_json.get("size") or 0),
+            "json_inside_summary_dir": bool(credential_validation_json.get("inside_summary_dir")),
+            "json_loaded": bool(credential_payload_detail.get("loaded")),
+            "json_error": str(credential_payload_detail.get("error") or ""),
         },
         "client_delivery": {
             "status": client_delivery_status,
@@ -658,12 +1550,20 @@ def verify_summary(
             "json_exists": bool(client_delivery_json.get("exists")),
             "json_size": int(client_delivery_json.get("size") or 0),
             "json_inside_summary_dir": bool(client_delivery_json.get("inside_summary_dir")),
+            "json_loaded": bool(client_delivery_payload_detail.get("loaded")),
+            "json_error": str(client_delivery_payload_detail.get("error") or ""),
         },
         "live_readiness": {
             "status": str(live_readiness.get("status") or ""),
             "ready": bool(live_readiness.get("ready")),
             "no_browser_started": bool(live_readiness.get("no_browser_started", True)),
             "no_submit": bool(live_readiness.get("no_submit", True)),
+            "json_path": str(live_readiness.get("json_path") or ""),
+            "json_exists": bool(live_readiness_json.get("exists")),
+            "json_size": int(live_readiness_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_readiness_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_readiness_payload_detail.get("loaded")),
+            "json_error": str(live_readiness_payload_detail.get("error") or ""),
         },
         "live_acceptance_status": {
             "status": live_acceptance_status_value,
@@ -674,6 +1574,12 @@ def verify_summary(
             "activation_ready": bool(live_acceptance_activation.get("ready")),
             "selected_profile_ids": live_acceptance_selected_profiles,
             "missing_inputs": live_acceptance_missing_inputs,
+            "json_path": str(live_acceptance_status.get("json_path") or ""),
+            "json_exists": bool(live_acceptance_status_json.get("exists")),
+            "json_size": int(live_acceptance_status_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_acceptance_status_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_acceptance_payload_detail.get("loaded")),
+            "json_error": str(live_acceptance_payload_detail.get("error") or ""),
         },
         "authorization_handoff": {
             "status": authorization_handoff_status,
@@ -681,11 +1587,27 @@ def verify_summary(
             "no_browser_started": bool(authorization_handoff.get("no_browser_started", True)),
             "no_submit": bool(authorization_handoff.get("no_submit", True)),
             "bundle_path": str(authorization_handoff.get("bundle_path") or ""),
+            "bundle_exists": bool(authorization_handoff_bundle.get("exists")),
+            "bundle_size": int(authorization_handoff_bundle.get("size") or 0),
+            "bundle_inside_summary_dir": bool(authorization_handoff_bundle.get("inside_summary_dir")),
+            "bundle_verification_status": str(authorization_handoff_bundle_verification.get("status") or ""),
+            "bundle_verification_passed": bool(authorization_handoff_bundle_verification.get("passed")),
+            "bundle_verification_failures": [
+                str(item) for item in as_list(authorization_handoff_bundle_verification.get("failures"))
+            ],
+            "bundle_forbidden_files": [
+                str(item) for item in as_list(authorization_handoff_bundle_verification.get("forbidden_files"))
+            ],
+            "bundle_missing_files": [
+                str(item) for item in as_list(authorization_handoff_bundle_verification.get("missing_files"))
+            ],
             "readiness_status": str(authorization_handoff.get("readiness_status") or ""),
             "json_path": str(authorization_handoff.get("json_path") or ""),
             "json_exists": bool(authorization_handoff_json.get("exists")),
             "json_size": int(authorization_handoff_json.get("size") or 0),
             "json_inside_summary_dir": bool(authorization_handoff_json.get("inside_summary_dir")),
+            "json_loaded": bool(authorization_handoff_payload_detail.get("loaded")),
+            "json_error": str(authorization_handoff_payload_detail.get("error") or ""),
         },
         "live_submit": {
             "status": str(live_submit.get("status") or ""),
@@ -701,6 +1623,12 @@ def verify_summary(
             "missing_evidence_action_types": as_list(missing_evidence_action_types),
             "missing_local_evidence_file_action_types": as_list(missing_local_evidence_file_action_types),
             "evidence_file_detail_action_types": sorted(evidence_file_details.keys()),
+            "json_path": str(live_submit.get("json_path") or ""),
+            "json_exists": bool(live_submit_json.get("exists")),
+            "json_size": int(live_submit_json.get("size") or 0),
+            "json_inside_summary_dir": bool(live_submit_json.get("inside_summary_dir")),
+            "json_loaded": bool(live_submit_payload_detail.get("loaded")),
+            "json_error": str(live_submit_payload_detail.get("error") or ""),
         },
         "goal_status": {
             "status": goal_status_value,
@@ -708,6 +1636,12 @@ def verify_summary(
             "stages_pending_external_validation": int(goal_summary.get("stages_pending_external_validation") or 0),
             "stages_failed": int(goal_summary.get("stages_failed") or 0),
             "pending_external_validation": as_list(goal_pending),
+            "json_path": str(goal_status.get("json_path") or ""),
+            "json_exists": bool(goal_status_json.get("exists")),
+            "json_size": int(goal_status_json.get("size") or 0),
+            "json_inside_summary_dir": bool(goal_status_json.get("inside_summary_dir")),
+            "json_loaded": bool(goal_status_payload_detail.get("loaded")),
+            "json_error": str(goal_status_payload_detail.get("error") or ""),
         },
         "final_acceptance_gate": {
             "status": str(final_acceptance_gate.get("status") or ""),
@@ -717,6 +1651,8 @@ def verify_summary(
             "json_exists": bool(final_gate_json.get("exists")),
             "json_size": int(final_gate_json.get("size") or 0),
             "json_inside_summary_dir": bool(final_gate_json.get("inside_summary_dir")),
+            "json_loaded": bool(final_gate_payload_detail.get("loaded")),
+            "json_error": str(final_gate_payload_detail.get("error") or ""),
         },
     }
 

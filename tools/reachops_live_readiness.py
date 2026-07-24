@@ -114,14 +114,14 @@ def run_readiness(args) -> dict[str, Any]:
     status_file = Path(status_path)
     activation_required = LiveSubmitAuthorizationGate.activation_required()
     add(
-        "activation_status_file_exists_or_not_required",
-        (status_file.exists() and status_file.is_file()) or not activation_required,
+        "activation_status_file_exists",
+        status_file.exists() and status_file.is_file(),
         activation_status_path=str(status_file),
         activation_required=activation_required,
         runtime_mode=LiveSubmitAuthorizationGate.runtime_mode(),
     )
 
-    authorization_decisions = check_authorization(args, str(status_file)) if status_file.exists() or not activation_required else []
+    authorization_decisions = check_authorization(args, str(status_file)) if status_file.exists() else []
     if authorization_decisions:
         add("activation_allows_live_submit_actions", all(item["allowed"] for item in authorization_decisions), decisions=authorization_decisions)
     else:
