@@ -2190,6 +2190,50 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Next action:
   - Repair or provide at least one usable `United States` profile, then rerun the same customer-visible no-submit client path. Only after five consecutive real client no-submit runs pass can the minimum-MVP readiness gate be considered for `minimum_mvp_ready=true`.
 
+## Latest acquisition-test-group client calibration snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Product owner directed the Mac client calibration to continue with ixBrowser group `获客分组测试` instead of the prior `United States` group. This was executed only from the customer-visible local Web client at `http://127.0.0.1:8769/` in `preflight` / no-submit mode.
+- Real client execution evidence:
+  - `/api/groups?refresh=1` read `获客分组测试` from ixBrowser Local API with `group_id=308389`, `count=11`, `count_known=true`, and `count_source=cached_known_count_after_live_group_list`; output `/tmp/reachops-groups-refresh-acq-test.json`.
+  - The browser UI was changed to `group=获客分组测试`, `target=APRILSKIN Pore Care Long lasting Duo`, and `mode=preflight`; the start preview showed `可启动`.
+  - First real client start created ExecutionPlan `plan_bfd0df71e4834cfe` and RunSession `run_fdd747b548c73b9b`, but watchdog blocked it as `HEARTBEAT_STALE` after reading a stale heartbeat from old RunSession `run_f8d67ae37aac456a`. This was classified as a software defect, not an account blocker.
+  - After fixing watchdog heartbeat ownership, the same client-visible path started RunSession `run_7a4f809975441992` and batch `gb_498320c756f54b92` for `获客分组测试`.
+  - The fixed run reached `PROFILE_PREFLIGHT`, selected 3 initial profiles from 11 candidates, then backfilled. Heartbeat stayed fresh for the current run and watchdog did not mis-block.
+  - The run checked 9 profiles and ended with `BLOCK campaign failed reason=无可用账号 required=1 available=0 checked=9 auto_limit=24 error=INSUFFICIENT_LOGGED_IN_PROFILES`.
+  - Current `获客分组测试` profile errors are `PAGE_OPEN_FAILED=4` and `PROFILE_PREFLIGHT_TIMEOUT=5`; no READY profile was found.
+  - The client then correctly marked the selected group account gate blocked: a repeat page start showed `accountGateState="获客分组测试 账号阻断"`, `previewGate="账号修复后启动"`, and `startDisabled=true`, so the system did not keep reopening the same failed profile pool.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now ignores runtime heartbeat files whose `run_session_path`/session id does not match the current RunSession, and cleans stale heartbeat/progress files before starting a new runner.
+  - `tools/run_reachops_headless_macos.py` now treats `BLOCK campaign failed` / `BLOCK campaign not_started` terminal logs as `status=blocked`, final RunSession `BLOCKED`, and non-zero exit instead of `completed`.
+  - `tools/run_reachops_headless_macos.py` now marks `PROFILE_PREFLIGHT` before launching the collection flow, avoiding the observed backward `COLLECTING->PROFILE_PREFLIGHT` RunSession transition.
+  - `ReachOps/run_session.py` now infers `BLOCKED` from blocked campaign terminal logs.
+  - Tests cover stale heartbeat ownership, blocked campaign terminal classification, and RunSession blocked-state inference.
+- Tests and checks:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m py_compile tools/reachops_web_ui.py tools/run_reachops_headless_macos.py ReachOps/run_session.py tests/test_reachops_client_acceptance_status.py tests/test_run_recovery.py`: passed.
+  - Targeted tests for stale heartbeat, blocked terminal classification, and blocked RunSession inference: passed, 3 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 125 tests; log `/tmp/reachops-acq-test-client-acceptance.log`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_run_recovery`: passed, 9 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`, `submitted_unverified=0`; output `/tmp/reachops-acq-test-operator-pressure.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-acq-test-delivery-audit.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-acq-test-goal-status-report.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 259 tests; log `/tmp/reachops-acq-test-campaign.log`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-acq-test-cleanliness.json`.
+  - `git diff --check`: passed.
+- Expected blockers:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_client_delivery_check.py --json` failed as expected with `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `profile_available=0`, `failed_checks=["acceptance:ready"]`, selected group `获客分组测试`, `selected_group_id=308389`, and `selected_profile_count=11`; output `/tmp/reachops-acq-test-client-delivery.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json` failed as expected with `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, and failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-acq-test-goal-delivery-runner.json`.
+- Safety:
+  - No TikTok live-submit, follow, DM, or comment was authorized or attempted.
+  - The only real browser/profile work was bounded no-submit profile preflight from the customer-visible client.
+  - The run stopped after circuit breaker `browser_start_instability` with 9 failed profiles, leaving 2 untried profiles instead of repeatedly reopening failed profiles.
+  - No `run_reachops_headless_macos.py` process remained after terminal state.
+  - Runtime evidence and screenshots remain in git-ignored local reports; no customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or local acceptance input files were committed.
+- Next action:
+  - Fix `获客分组测试` account environment: at least one profile must be logged in, kernel-compatible, proxy/page-open stable, and able to open TikTok manually. Then rerun the same Web client no-submit flow. Until then, `minimum_mvp_ready` must remain false.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.

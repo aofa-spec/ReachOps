@@ -311,14 +311,29 @@ def runtime_heartbeat_age_seconds(payload: dict | None = None) -> int | None:
     return max(0, int((datetime.now(timezone.utc) - heartbeat_at).total_seconds()))
 
 
+def runtime_heartbeat_matches_run_session(heartbeat: dict, session: dict) -> bool:
+    if not heartbeat or not session:
+        return False
+    session_id = str(session.get("session_id") or "")
+    heartbeat_session_id = str(heartbeat.get("session_id") or heartbeat.get("run_session_id") or "")
+    if heartbeat_session_id and session_id:
+        return heartbeat_session_id == session_id
+    heartbeat_run_session_path = str(heartbeat.get("run_session_path") or "").strip()
+    if heartbeat_run_session_path:
+        return heartbeat_run_session_path == str(run_session_path_for(session))
+    return False
+
+
 def build_runtime_heartbeat_payload() -> dict:
     heartbeat = read_runtime_heartbeat_payload()
-    age = runtime_heartbeat_age_seconds(heartbeat)
     running = run_is_active()
     run_age = int(time.time() - RUN_STARTED_AT) if RUN_STARTED_AT and running else 0
     session = read_current_run_session()
     terminal = str((session or {}).get("state") or "") in TERMINAL_RUN_SESSION_STATES
-    missing_stale = bool(running and not heartbeat and run_age > HEARTBEAT_STALE_SECONDS and not terminal)
+    heartbeat_matches_current_run = runtime_heartbeat_matches_run_session(heartbeat, session)
+    heartbeat_for_current_run = heartbeat if heartbeat_matches_current_run else {}
+    age = runtime_heartbeat_age_seconds(heartbeat_for_current_run)
+    missing_stale = bool(running and not heartbeat_for_current_run and run_age > HEARTBEAT_STALE_SECONDS and not terminal)
     stale = bool(
         running
         and not terminal
@@ -327,15 +342,25 @@ def build_runtime_heartbeat_payload() -> dict:
             or (age is not None and age > HEARTBEAT_STALE_SECONDS)
         )
     )
+    status = "healthy"
+    if missing_stale:
+        status = "missing_stale"
+    elif not heartbeat:
+        status = "missing"
+    elif not heartbeat_matches_current_run:
+        status = "mismatched"
+    elif stale:
+        status = "stale"
     return {
         "schema_version": "reachops.web_runtime_heartbeat.v1",
-        "status": "missing_stale" if missing_stale else ("missing" if not heartbeat else ("stale" if stale else "healthy")),
+        "status": status,
         "running": running,
         "stale": stale,
         "stale_after_seconds": HEARTBEAT_STALE_SECONDS,
         "age_seconds": age,
         "run_age_seconds": run_age,
         "heartbeat": heartbeat,
+        "heartbeat_matches_current_run": heartbeat_matches_current_run,
         "run_session_state": str((session or {}).get("state") or ""),
         "run_session_id": str((session or {}).get("session_id") or ""),
         "path": str(HEARTBEAT_PATH),
@@ -8042,6 +8067,13 @@ class Handler(BaseHTTPRequestHandler):
                 env["REACHOPS_FORCE_ACCOUNT_RECHECK"] = "1"
             try:
                 clear_cooperative_control()
+                for runtime_path in (HEARTBEAT_PATH, PROGRESS_PATH):
+                    try:
+                        runtime_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    except Exception:
+                        append_web_log(f"WARN   web_ui_runtime_state_cleanup_failed path={runtime_path}")
                 process = subprocess.Popen(
                     cmd,
                     cwd=str(ROOT_DIR),

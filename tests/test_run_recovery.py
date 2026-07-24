@@ -64,6 +64,18 @@ class RunRecoveryTests(unittest.TestCase):
         self.assertFalse(recovery["recovered"])
         self.assertEqual(updated["state"], "COMPLETED")
 
+    def test_infer_run_state_treats_blocked_campaign_log_as_blocked(self) -> None:
+        state = infer_run_state(
+            [
+                "CHECK  profile_preflight checked=9 available=0",
+                "BLOCK  campaign failed reason=无可用账号 error=INSUFFICIENT_LOGGED_IN_PROFILES",
+            ],
+            running=False,
+            run_result={},
+        )
+
+        self.assertEqual(state, "BLOCKED")
+
     def test_checkpoint_update_records_runtime_evidence(self) -> None:
         plan = build_execution_plan(target="anti aging serum", mode="collect")
         session = create_run_session(plan)

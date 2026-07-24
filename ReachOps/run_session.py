@@ -565,6 +565,8 @@ def infer_run_state(lines: list[str], running: bool, run_result: dict[str, Any] 
     if result_status in {"blocked", "launch_failed", "headless_exited_immediately", "timeout_finalized"}:
         return "BLOCKED"
     joined = "\n".join(lines[-80:])
+    if "BLOCK  campaign failed" in joined or "BLOCK  campaign not_started" in joined:
+        return "BLOCKED"
     if "action_submit" in joined or "action_preflight" in joined or "TOUCH  run_completed" in joined:
         return "EXECUTING"
     if "action_queue_created" in joined or "ACTION " in joined or "outreach_execution" in joined:

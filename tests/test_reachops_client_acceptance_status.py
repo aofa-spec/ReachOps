@@ -47,7 +47,7 @@ from tools.reachops_client_delivery_check import (
 from tools.reachops_apply_account_repair_plan import apply_account_repair_plan
 from tools.reachops_web_panel_dom_smoke import run_dom_smoke
 from tools.reachops_web_panel_runtime_smoke import run_runtime_smoke
-from tools.run_reachops_headless_macos import DummyRoot
+from tools.run_reachops_headless_macos import DummyRoot, blocked_terminal_seen
 from tools.reachops_web_ui import (
     DEFAULT_TARGET,
     MAX_JSON_PAYLOAD_BYTES,
@@ -69,6 +69,14 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         DummyRoot().after(10, lambda: calls.append("refresh"))
 
         self.assertEqual(calls, ["refresh"])
+
+    def test_headless_blocked_campaign_terminal_is_not_completed_success(self):
+        lines = [
+            "2026-07-24 16:03:45  CHECK  profile_preflight checked=9 available=0",
+            "2026-07-24 16:03:45  BLOCK  campaign failed reason=无可用账号 error=INSUFFICIENT_LOGGED_IN_PROFILES",
+        ]
+
+        self.assertTrue(blocked_terminal_seen(lines))
 
     def test_native_mac_ui_uses_full_operator_tabs_not_blank_fallback(self):
         root = Path(__file__).resolve().parents[1]
@@ -3075,6 +3083,71 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(captured["cmd"][base_dir_index], tmpdir)
         self.assertEqual(captured["cmd"][profile_limit_index], str(MAX_START_PROFILE_LIMIT))
         self.assertTrue(captured["stdout"].closed)
+
+    def test_watchdog_ignores_stale_heartbeat_from_different_run_session(self):
+        class FakeProcess:
+            pid = 43217
+
+            def poll(self):
+                return None
+
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_heartbeat_path = reachops_web_ui.HEARTBEAT_PATH
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            old_started_at = reachops_web_ui.RUN_STARTED_AT
+            try:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.HEARTBEAT_PATH = Path(tmpdir) / "reachops_web_ui_heartbeat.json"
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = Path(tmpdir) / "runs" / "latest_run_session.json"
+                current_session_path = Path(tmpdir) / "runs" / "run_current.json"
+                current_session_path.parent.mkdir(parents=True, exist_ok=True)
+                current_session = {
+                    "schema_version": "reachops.run_session.v1",
+                    "session_id": "run_current",
+                    "state": "RUNNING",
+                    "started_at": "2026-07-24T08:00:00Z",
+                    "updated_at": "2026-07-24T08:00:00Z",
+                }
+                current_session_path.write_text(json.dumps(current_session), encoding="utf-8")
+                reachops_web_ui.LATEST_RUN_SESSION_PATH.write_text(json.dumps(current_session), encoding="utf-8")
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = str(current_session_path)
+                reachops_web_ui.HEARTBEAT_PATH.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "reachops.runtime_heartbeat.v1",
+                            "heartbeat_at": "2026-07-19T21:19:04Z",
+                            "run_session_path": str(Path(tmpdir) / "runs" / "run_old.json"),
+                            "running": False,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                reachops_web_ui.RUN_PROCESS = FakeProcess()
+                reachops_web_ui.RUN_STARTED_AT = time.time()
+
+                heartbeat = reachops_web_ui.build_runtime_heartbeat_payload()
+                with patch("tools.reachops_web_ui.signal_run_process") as signal_process:
+                    with patch("tools.reachops_web_ui.mark_run_session_blocked_by_watchdog") as mark_blocked:
+                        tick = reachops_web_ui.watchdog_tick()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.HEARTBEAT_PATH = old_heartbeat_path
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RUN_PROCESS = old_process
+                reachops_web_ui.RUN_STARTED_AT = old_started_at
+
+        self.assertEqual(heartbeat["status"], "mismatched")
+        self.assertFalse(heartbeat["heartbeat_matches_current_run"])
+        self.assertFalse(heartbeat["stale"])
+        self.assertIsNone(heartbeat["age_seconds"])
+        self.assertTrue(tick["running"])
+        self.assertFalse(tick["heartbeat"]["stale"])
+        signal_process.assert_not_called()
+        mark_blocked.assert_not_called()
 
     def test_control_http_endpoint_rejects_invalid_json_without_crashing(self):
         with TemporaryDirectory() as tmpdir:
