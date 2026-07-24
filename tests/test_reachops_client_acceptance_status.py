@@ -1559,7 +1559,7 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(payload["status"], "rejected")
         self.assertEqual(payload["error"], "unknown_api")
 
-    def test_activation_http_endpoint_reports_no_browser_no_submit_state(self):
+    def test_activation_http_endpoint_reports_development_bypass_no_browser_no_submit_state(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
             old_log_path = reachops_web_ui.LOG_PATH
@@ -1574,8 +1574,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
 
                 host, port = server.server_address
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                with opener.open(f"http://{host}:{port}/api/activation", timeout=5) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
+                with patch.dict(os.environ, {"REACHOPS_REQUIRE_ACTIVATION": "0"}, clear=False):
+                    with opener.open(f"http://{host}:{port}/api/activation", timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
             finally:
                 if server is not None:
                     server.shutdown()
@@ -1585,8 +1586,12 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                 reachops_web_ui.DATA_DIR = old_data_dir
                 reachops_web_ui.LOG_PATH = old_log_path
 
-        self.assertEqual(payload["status"], "blocked")
-        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["status"], "ready")
+        self.assertTrue(payload["ready"])
+        self.assertFalse(payload["activation_status_exists"])
+        self.assertFalse(payload["activation_required"])
+        self.assertTrue(payload["development_bypass"])
+        self.assertFalse(payload["web_live_activation_requires_status_file"])
         self.assertTrue(payload["no_browser_started"])
         self.assertTrue(payload["no_submit"])
         self.assertIn("activation_status_path", payload)
@@ -1816,10 +1821,11 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
-                    with patch("tools.reachops_web_ui.append_web_log", side_effect=log_messages.append):
-                        with self.assertRaises(urllib.error.HTTPError) as raised:
-                            opener.open(request, timeout=5)
+                with patch.dict(os.environ, {"REACHOPS_REQUIRE_ACTIVATION": "1"}, clear=False):
+                    with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
+                        with patch("tools.reachops_web_ui.append_web_log", side_effect=log_messages.append):
+                            with self.assertRaises(urllib.error.HTTPError) as raised:
+                                opener.open(request, timeout=5)
                 payload = json.loads(raised.exception.read().decode("utf-8"))
             finally:
                 if server is not None:
@@ -1846,6 +1852,81 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertIn("error=LIVE_SUBMIT_NOT_AUTHORIZED", log_text)
         self.assertIn("mode=live_comment", log_text)
         self.assertIn("group=United States", log_text)
+
+    def test_start_handler_allows_live_comment_activation_bypass_in_development(self):
+        class StartedProcess:
+            pid = 24680
+
+            def poll(self):
+                return None
+
+        with TemporaryDirectory() as tmpdir:
+            body = json.dumps(
+                {
+                    "target": "anti aging serum",
+                    "mode": "live_comment",
+                    "liveConfirm": True,
+                    "group": "United States",
+                    "profiles": 1,
+                }
+            ).encode("utf-8")
+            headers = Message()
+            headers["Host"] = "127.0.0.1:8769"
+            headers["Content-Type"] = "application/json"
+            headers["Content-Length"] = str(len(body))
+            handler = object.__new__(reachops_web_ui.Handler)
+            handler.path = "/api/start"
+            handler.headers = headers
+            handler.rfile = BytesIO(body)
+            captured = {}
+
+            def capture_json(payload, status=200):
+                captured["payload"] = payload
+                captured["status"] = status
+
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_log_path = reachops_web_ui.LOG_PATH
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_latest_plan_path = reachops_web_ui.LATEST_EXECUTION_PLAN_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            try:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RESULT_PATH = Path(tmpdir) / "reachops_web_ui_last_run.json"
+                reachops_web_ui.LATEST_EXECUTION_PLAN_PATH = Path(tmpdir) / "plans" / "latest_execution_plan.json"
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = Path(tmpdir) / "run_sessions" / "current_run_session.json"
+                reachops_web_ui.RUN_PROCESS = None
+                handler._send_json = capture_json
+                with patch.dict(os.environ, {"REACHOPS_REQUIRE_ACTIVATION": "0"}, clear=False):
+                    with patch("tools.reachops_web_ui.validate_profile_group_for_start", return_value=(True, {"group": {"name": "United States"}})):
+                        with patch(
+                            "tools.reachops_web_ui.validate_account_repair_for_start",
+                            return_value=(True, {"status": "ready", "same_group": True, "profile_available": 1}),
+                        ):
+                            with patch("tools.reachops_web_ui.subprocess.Popen", return_value=StartedProcess()) as popen:
+                                with patch("tools.reachops_web_ui.STARTUP_HEALTHCHECK_SECONDS", 0):
+                                    reachops_web_ui.Handler.do_POST(handler)
+                                    latest_plan_exists = Path(tmpdir, "plans", "latest_execution_plan.json").is_file()
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.LOG_PATH = old_log_path
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.LATEST_EXECUTION_PLAN_PATH = old_latest_plan_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "started")
+        self.assertEqual(captured["payload"]["pid"], 24680)
+        self.assertEqual(captured["payload"]["profile_limit"], 1)
+        popen.assert_called_once()
+        command = popen.call_args.args[0]
+        self.assertIn("--mode", command)
+        self.assertIn("live_comment", command)
+        env = popen.call_args.kwargs["env"]
+        self.assertEqual(env["REACHOPS_REQUIRE_ACTIVATION"], "0")
+        self.assertTrue(latest_plan_exists)
 
     def test_start_handler_rejects_account_gate_without_launching_process(self):
         body = json.dumps(

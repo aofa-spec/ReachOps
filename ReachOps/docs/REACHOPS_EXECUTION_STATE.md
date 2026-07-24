@@ -2581,6 +2581,47 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Next action:
   - Keep the Web client open on `获客分组测试`. Once at least one profile in that group is manually verified as logged-in, kernel-compatible, proxy/page-open stable, and able to open TikTok, rerun the same customer-visible no-submit flow.
 
+## Latest development activation bypass snapshot
+
+- Date: `2026-07-25`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Align the local Web client activation gate with the runtime authorization contract: development runtime may auto-authorize activation, while packaged/build runtime must still enforce the activation status gate.
+- Client/API issue found:
+  - Lower-level activation checks already returned `runtime_mode=development`, `activation_required=false`, `development_bypass=true`, and `ready=true` when no activation status file existed.
+  - The Web layer still overrode missing activation status into `status=blocked`, `ready=false`, which made development testing behave like a packaged build.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now requires `activation_status_exists` only when `activation_required=true`.
+  - `/api/activation` preserves `web_live_activation_requires_status_file=false` and `development_bypass=true` for development runtime without an activation status file.
+  - The live-comment Web start gate now accepts activation readiness from development bypass, while `REACHOPS_REQUIRE_ACTIVATION=1` keeps packaged/build behavior blocked until an activation status file is present.
+  - `tests/test_reachops_client_acceptance_status.py` covers development bypass, packaged/build forced activation rejection, and a mocked live-comment start path that verifies the Web gate passes without launching a real browser process.
+- Client/API verification:
+  - Local client restarted and shown at `http://127.0.0.1:8769/`.
+  - `/api/activation` returned `status=ready`, `ready=true`, `activation_status_exists=false`, `runtime_mode=development`, `activation_required=false`, `development_bypass=true`, `web_live_activation_requires_status_file=false`, `no_browser_started=true`, and `no_submit=true`.
+- Tests and checks:
+  - `python3 -m py_compile tools/reachops_web_ui.py tools/reachops_web_panel_runtime_smoke.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Focused activation Web tests: passed, 4 tests.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 137 tests.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed, 262 tests.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed, `status=ready_for_external_validation`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `status=passed`.
+  - `git diff --check`: passed.
+- Expected blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `profile_available=0`, failed check `acceptance:ready`; latest selected group evidence is `获客分组测试`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `local_mvp_ready=false`, `windows_build_ready=true`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`.
+- Classification:
+  - New failures/errors against the intended branch scope: none after updating the runtime smoke expectation.
+  - Remaining blockers are pre-existing delivery/environment gates: `获客分组测试` has no currently usable preflight account evidence, real authorized platform execution is still external-pending, and Windows final artifacts are not produced in this Mac environment.
+- Safety:
+  - No Windows build, EXE, installer, Windows VM action, new ixBrowser profile launch, TikTok live-submit, follow, DM, or comment was attempted.
+  - Real live-comment `/api/start` was not invoked in the local runtime; the start-path coverage used a mocked process in unit tests only.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or local acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Next action:
+  - Keep PR #26 in Draft with the development activation bypass fix for review. Continue customer-visible no-submit retest only after at least one `获客分组测试` profile is manually verified as logged in, kernel-compatible, and able to open TikTok.
+
 ## Non-blocking engineering work available
 
 ## Latest minimum-MVP browser-started evidence snapshot

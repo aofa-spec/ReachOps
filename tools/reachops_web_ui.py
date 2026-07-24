@@ -1506,8 +1506,9 @@ def live_comment_activation_status() -> dict:
             feature="live_submit",
         )
         activation_payload = build_web_activation_payload()
-        activation_ready = bool(activation_payload.get("ready")) and bool(
-            activation_payload.get("activation_status_exists")
+        activation_required = bool(activation_payload.get("activation_required"))
+        activation_ready = bool(activation_payload.get("ready")) and (
+            bool(activation_payload.get("activation_status_exists")) or not activation_required
         )
         return {
             "allowed": bool(decision.allowed) and activation_ready,
@@ -1535,7 +1536,8 @@ def build_web_activation_payload() -> dict:
     payload = dict(build_activation_payload())
     failed_checks = list(payload.get("failed_checks") or [])
     next_actions = list(payload.get("next_actions") or [])
-    if not bool(payload.get("activation_status_exists")):
+    activation_required = bool(payload.get("activation_required"))
+    if activation_required and not bool(payload.get("activation_status_exists")):
         if "activation_status_file_exists" not in failed_checks:
             failed_checks.append("activation_status_file_exists")
         if not next_actions:
@@ -1544,6 +1546,9 @@ def build_web_activation_payload() -> dict:
         payload["ready"] = False
         payload["development_bypass"] = False
         payload["web_live_activation_requires_status_file"] = True
+    elif not activation_required and not bool(payload.get("activation_status_exists")):
+        payload["web_live_activation_requires_status_file"] = False
+        payload["development_bypass"] = True
     payload["failed_checks"] = failed_checks
     payload["next_actions"] = next_actions
     payload["no_browser_started"] = True

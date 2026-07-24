@@ -1049,11 +1049,19 @@ def run_runtime_smoke() -> dict:
                 status == 400 and unconfirmed_live.get("error") == "live_comment_confirmation_required" and not captured.get("cmd")
             )
 
-            status, unauthorized_live = _json_request(
-                base + "/api/start",
-                {"target": "anti aging serum", "mode": "live_comment", "liveConfirm": True},
-                expect_error=403,
-            )
+            old_activation_required = reachops_web_ui.os.environ.get("REACHOPS_REQUIRE_ACTIVATION")
+            reachops_web_ui.os.environ["REACHOPS_REQUIRE_ACTIVATION"] = "1"
+            try:
+                status, unauthorized_live = _json_request(
+                    base + "/api/start",
+                    {"target": "anti aging serum", "mode": "live_comment", "liveConfirm": True},
+                    expect_error=403,
+                )
+            finally:
+                if old_activation_required is None:
+                    reachops_web_ui.os.environ.pop("REACHOPS_REQUIRE_ACTIVATION", None)
+                else:
+                    reachops_web_ui.os.environ["REACHOPS_REQUIRE_ACTIVATION"] = old_activation_required
             checks["start_rejects_live_comment_without_activation"] = (
                 status == 403 and unauthorized_live.get("error") == "LIVE_SUBMIT_NOT_AUTHORIZED" and not captured.get("cmd")
             )
