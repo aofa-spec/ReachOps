@@ -1333,6 +1333,57 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(payload["run_result"]["timeout_finalization"]["reason"], "HEADLESS_TIMEOUT")
         self.assertIn("HEADLESS_TIMEOUT", payload["last_stage"])
 
+    def test_logs_http_endpoint_surfaces_latest_web_start_rejection(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_log_path = reachops_web_ui.LOG_PATH
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            old_started_at = reachops_web_ui.RUN_STARTED_AT
+            old_offset = reachops_web_ui.RUN_LOG_OFFSET
+            server = None
+            thread = None
+            try:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RESULT_PATH = Path(tmpdir) / "reachops_web_ui_last_run.json"
+                reachops_web_ui.RUN_PROCESS = None
+                reachops_web_ui.RUN_STARTED_AT = 0.0
+                reachops_web_ui.RUN_LOG_OFFSET = 0
+                reachops_web_ui.LOG_PATH.parent.mkdir(parents=True)
+                reachops_web_ui.LOG_PATH.write_text(
+                    "\n".join(
+                        [
+                            "2026-07-24 23:29:33  START  campaign id=acq_old batch=gb_old status=pending stage=profile_preflight",
+                            "2026-07-25 01:44:12  WARN   web_ui_start_rejected error=LIVE_SUBMIT_NOT_AUTHORIZED mode=live_comment group=获客分组测试 target_present=true",
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                server = reachops_web_ui.ThreadingHTTPServer(("127.0.0.1", 0), reachops_web_ui.Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+
+                host, port = server.server_address
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open(f"http://{host}:{port}/api/logs", timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                if server is not None:
+                    server.shutdown()
+                    server.server_close()
+                if thread is not None:
+                    thread.join(timeout=2)
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.LOG_PATH = old_log_path
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.RUN_PROCESS = old_process
+                reachops_web_ui.RUN_STARTED_AT = old_started_at
+                reachops_web_ui.RUN_LOG_OFFSET = old_offset
+
+        self.assertIn("LIVE_SUBMIT_NOT_AUTHORIZED", payload["last_stage"])
+        self.assertIn("group=获客分组测试", payload["last_stage"])
+
     def test_logs_http_endpoint_extracts_json_result_from_mixed_headless_output(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
@@ -1610,6 +1661,7 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             old_process = reachops_web_ui.RUN_PROCESS
             server = None
             thread = None
+            log_messages = []
             try:
                 reachops_web_ui.DATA_DIR = Path(tmpdir)
                 reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
@@ -1746,6 +1798,7 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             old_process = reachops_web_ui.RUN_PROCESS
             server = None
             thread = None
+            log_messages = []
             try:
                 reachops_web_ui.DATA_DIR = Path(tmpdir)
                 reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
@@ -1764,8 +1817,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                     method="POST",
                 )
                 with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
-                    with self.assertRaises(urllib.error.HTTPError) as raised:
-                        opener.open(request, timeout=5)
+                    with patch("tools.reachops_web_ui.append_web_log", side_effect=log_messages.append):
+                        with self.assertRaises(urllib.error.HTTPError) as raised:
+                            opener.open(request, timeout=5)
                 payload = json.loads(raised.exception.read().decode("utf-8"))
             finally:
                 if server is not None:
@@ -1788,6 +1842,10 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertTrue(any("激活状态文件" in item for item in payload["next_actions"]))
         popen.assert_not_called()
         self.assertFalse(Path(tmpdir, "reachops_web_ui_last_run.json").exists())
+        log_text = "\n".join(log_messages)
+        self.assertIn("error=LIVE_SUBMIT_NOT_AUTHORIZED", log_text)
+        self.assertIn("mode=live_comment", log_text)
+        self.assertIn("group=United States", log_text)
 
     def test_start_handler_rejects_account_gate_without_launching_process(self):
         body = json.dumps(
@@ -1911,6 +1969,15 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertIn("$('startFromPlan').disabled = blockedByAccountGate", html)
         self.assertIn("计划重放被门禁拦截", html)
         self.assertIn("账号阻断；预检只会解释阻断原因，不会启动浏览器。", html)
+
+    def test_web_ui_blocks_live_comment_start_when_activation_is_not_ready(self):
+        html = html_page().decode("utf-8")
+
+        self.assertIn("let liveActivationReady = false", html)
+        self.assertIn("const blockedByLiveActivation = $('mode') && $('mode').value === 'live_comment' && !liveActivationReady", html)
+        self.assertIn("$('start').disabled = !groupListReady || blockedByAccountGate || blockedByLiveActivation", html)
+        self.assertIn("真实评论授权未就绪", html)
+        self.assertIn("LIVE_SUBMIT_NOT_AUTHORIZED", html)
 
     def test_account_repair_gate_blocks_only_matching_group(self):
         delivery = {

@@ -120,6 +120,40 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Remaining blocker:
   - Current no-submit execution remains truthfully blocked by accounts: no checked profile reached READY. One profile also returned ixBrowser `code=111003` because it was already open; close already-open ixBrowser profile windows or restart ixBrowser before the next queue run.
 
+## Latest P4 live-comment start gate visibility snapshot
+
+- Date: `2026-07-25`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Inspect the operator's attempted real execution from the local Web client and fix the customer-visible diagnosis without weakening live-submit safety.
+- Runtime evidence:
+  - Local Web client stayed at `http://127.0.0.1:8769/`.
+  - Runtime log showed four real-comment start attempts at `2026-07-25 01:12` and `2026-07-25 01:14`, all rejected before browser launch with `LIVE_SUBMIT_NOT_AUTHORIZED mode=live_comment`.
+  - `/api/activation` reported `status=blocked`, `ready=false`, `activation_status_exists=false`, and failed check `activation_status_file_exists`.
+  - `/api/final-status` reported `ready_for_live_submit=false`, `final_delivery_ready=false`, missing local acceptance inputs, missing activation status, and missing authorization confirmation.
+  - A post-fix live-comment start probe returned HTTP `403`, `status=rejected`, `error=LIVE_SUBMIT_NOT_AUTHORIZED`, `no_browser_started=true`, and `no_submit=true`.
+  - `/api/logs` now surfaces the latest rejected start as `last_stage`, including `mode=live_comment` and the selected group, instead of leaving the operator on the older account-preflight batch stage.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now caches `/api/activation` readiness in the page and disables the start button when `mode=live_comment` but activation is not ready.
+  - The Web client now intercepts live-comment clicks client-side after refreshing activation status and shows `真实评论授权未就绪` with failed checks and next actions.
+  - Backend live-comment rejection logs now include selected group and target presence while still returning `no_browser_started=true` and `no_submit=true`.
+  - `/api/logs` stage detection now treats Web start rejections as operator-visible stages.
+- Tests and checks:
+  - `python3 -m py_compile tools/reachops_web_ui.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Focused live-gate UI/backend/log tests: passed, 4 tests.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 136 tests; log `/tmp/reachops-live-auth-ui-client.log`.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-live-auth-ui-truthful.log`.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed, 262 tests; log `/tmp/reachops-live-auth-ui-campaign.log`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-live-auth-ui-operator-pressure.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-live-auth-ui-delivery-audit.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed, `status=ready_for_external_validation`; output `/tmp/reachops-live-auth-ui-goal-status.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-live-auth-ui-cleanliness.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-live-auth-ui-diff-check.log`.
+- Expected final-delivery blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, failed check `acceptance:ready`; output `/tmp/reachops-live-auth-ui-client-delivery.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-live-auth-ui-goal-delivery.json`.
+- Safety:
+  - No TikTok live-submit, Windows build, EXE, installer, credential export, cookie export, or raw customer evidence commit was performed.
+
 ## Latest P4 selected-group client continuation snapshot
 
 - Date: `2026-07-24`

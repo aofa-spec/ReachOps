@@ -3725,6 +3725,8 @@ def html_page() -> bytes:
 	    let accountRepairConfirmedGroup = '';
 	    let accountRepairSummary = null;
 		    let accountRepairApplyState = {{}};
+	    let liveActivationReady = false;
+	    let liveActivationPayload = {{}};
 	    let loadedGroups = [];
 	    let groupRefreshInFlight = false;
 	    let groupRefreshPollCount = 0;
@@ -3844,6 +3846,7 @@ def html_page() -> bytes:
     }}
     function updateStartAvailability() {{
       const blockedByAccountGate = accountGateAppliesToCurrentGroup() && !isAccountRepairConfirmed();
+      const blockedByLiveActivation = $('mode') && $('mode').value === 'live_comment' && !liveActivationReady;
       const pendingAccountRecheck = accountGatePendingRecheckAppliesToCurrentGroup();
       const blockedGroupLabel = String(accountGateBlockedGroup || ($('group') ? $('group').value : '') || '当前分组').trim();
       const pendingGroupLabel = String(accountGatePendingRecheckGroup || blockedGroupLabel || '当前分组').trim();
@@ -3851,9 +3854,11 @@ def html_page() -> bytes:
         ? '请先刷新 ixBrowser 配置分组，并等待分组数量实时读取完成。'
         : blockedByAccountGate
           ? `${{blockedGroupLabel}} 最近一次账号预检没有可用账号；点击后会重新读取分组并自动预检筛选有效账号。`
-          : t('action.start');
+          : blockedByLiveActivation
+            ? '真实评论授权未就绪；请先完成本地激活状态和授权输入。'
+            : t('action.start');
       if ($('start')) {{
-        $('start').disabled = !groupListReady || blockedByAccountGate;
+        $('start').disabled = !groupListReady || blockedByAccountGate || blockedByLiveActivation;
         $('start').title = startBlockedReason;
       }}
       if ($('startFromPlan')) {{
@@ -5398,11 +5403,13 @@ def html_page() -> bytes:
 	        await postJson('/api/client-event', {{event, ...payload}});
 	      }} catch (_err) {{}}
 	    }}
-	    async function refreshActivation() {{
+    async function refreshActivation() {{
       try {{
         const res = await fetch('/api/activation');
         const data = await res.json();
         const ready = data.ready === true;
+        liveActivationReady = ready;
+        liveActivationPayload = data || {{}};
         const exists = data.activation_status_exists === true;
         const status = data.status || (ready ? 'ready' : 'blocked');
         const path = data.activation_status_path || '-';
@@ -5413,12 +5420,16 @@ def html_page() -> bytes:
         $('activationState').title = (data.failed_checks || []).join(', ') || path;
         $('activationNotice').className = ready ? 'notice ready' : 'notice blocked';
         $('activationActions').innerHTML = listItems((data.next_actions || []).length ? data.next_actions : [ready ? '激活状态已就绪。' : '生成或放置真实激活状态文件，并设置 ActivationStatusPath。']);
+        updateStartAvailability();
       }} catch (err) {{
+        liveActivationReady = false;
+        liveActivationPayload = {{status:'failed', error:'activation_status_read_failed', message:String(err), next_actions:['激活状态读取失败：' + String(err)]}};
         $('activationState').textContent = '读取失败';
         $('activationState').className = 'bad';
         $('activationState').title = String(err);
         $('activationNotice').className = 'notice blocked';
         $('activationActions').innerHTML = listItems(['激活状态读取失败：' + String(err)]);
+        updateStartAvailability();
       }}
     }}
     async function refreshIxBrowserStatus() {{
@@ -5710,6 +5721,29 @@ def html_page() -> bytes:
 	        logClientEvent('start_blocked', {{reason:'live_comment_confirmation_required', target:$('target').value, group:$('group').value}});
 	        return;
 		      }}
+	      if ($('mode').value === 'live_comment' && !liveActivationReady) {{
+	        await refreshActivation();
+	        if (!liveActivationReady) {{
+	          const payload = liveActivationPayload || {{}};
+	          showApiNotice(
+	            '真实评论授权未就绪',
+	            {{
+	              status:'rejected',
+	              error:'LIVE_SUBMIT_NOT_AUTHORIZED',
+	              message:payload.message || payload.error_message || '真实评论需要本地激活状态文件且 activation ready。',
+	              activation_status_path:payload.activation_status_path,
+	              failed_checks:payload.failed_checks || ['activation_status_file_exists'],
+	              next_actions:payload.next_actions || ['生成或放置真实激活状态文件，并设置 ActivationStatusPath。'],
+	              no_browser_started:true,
+	              no_submit:true
+	            }},
+	            'blocked',
+	            30000
+	          );
+	          logClientEvent('start_blocked', {{reason:'LIVE_SUBMIT_NOT_AUTHORIZED', target:$('target').value, group:$('group').value, mode:'live_comment'}});
+	          return;
+	        }}
+	      }}
 	      $('start').disabled = true;
 	      updateSelectedGroupQuantity();
 	      $('currentMode').textContent = $('mode').selectedOptions[0].textContent;
@@ -7745,7 +7779,17 @@ class Handler(BaseHTTPRequestHandler):
             last_stage = ""
             for line in reversed(lines):
                 if line.startswith(("CHECK ", "START ", "PLAN ", "BLOCK ", "DONE ", "FAST ")) or any(
-                    marker in line for marker in (" CHECK ", " START ", " PLAN ", " BLOCK ", " DONE ", " FAST ")
+                    marker in line
+                    for marker in (
+                        " CHECK ",
+                        " START ",
+                        " PLAN ",
+                        " BLOCK ",
+                        " DONE ",
+                        " FAST ",
+                        " WARN   web_ui_start_rejected",
+                        " WARN   web_ui_start_rejected_account_gate",
+                    )
                 ):
                     last_stage = line[:240]
                     break
@@ -8299,8 +8343,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         volume = normalize_volume(str(payload.get("volume") or "quick"))
         mode = normalize_mode(str(payload.get("mode") or "preflight"))
+        source_type = str(payload.get("source_type") or payload.get("sourceType") or "auto")
+        profile_group = str(payload.get("group") or "United States")
+        comment_text = str(payload.get("comment_text") or payload.get("commentText") or "")
+        account_repair_confirmed = truthy(
+            payload.get("account_repair_confirmed", payload.get("accountRepairConfirmed"))
+        )
         if mode == "live_comment" and not truthy(payload.get("live_confirm", payload.get("liveConfirm"))):
-            append_web_log("WARN   web_ui_start_rejected error=live_comment_confirmation_required mode=live_comment")
+            append_web_log(
+                f"WARN   web_ui_start_rejected error=live_comment_confirmation_required mode=live_comment "
+                f"group={profile_group} target_present=true"
+            )
             self._send_json(
                 {
                     "status": "rejected",
@@ -8314,7 +8367,8 @@ class Handler(BaseHTTPRequestHandler):
             activation = live_comment_activation_status()
             if not activation.get("allowed"):
                 append_web_log(
-                    f"WARN   web_ui_start_rejected error={activation.get('error_code') or 'LIVE_SUBMIT_NOT_AUTHORIZED'} mode=live_comment"
+                    f"WARN   web_ui_start_rejected error={activation.get('error_code') or 'LIVE_SUBMIT_NOT_AUTHORIZED'} "
+                    f"mode=live_comment group={profile_group} target_present=true"
                 )
                 self._send_json(
                     {
@@ -8333,12 +8387,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
         profile_limit = normalize_profile_limit(payload.get("profiles"))
         max_videos, max_comments = volume_limits(volume)
-        source_type = str(payload.get("source_type") or payload.get("sourceType") or "auto")
-        profile_group = str(payload.get("group") or "United States")
-        comment_text = str(payload.get("comment_text") or payload.get("commentText") or "")
-        account_repair_confirmed = truthy(
-            payload.get("account_repair_confirmed", payload.get("accountRepairConfirmed"))
-        )
         append_web_log(
             f"START  web_ui_start_request target_present=true source_type={source_type} group={profile_group} "
             f"mode={mode} volume={volume} profiles={profile_limit} "
