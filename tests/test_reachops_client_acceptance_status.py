@@ -3149,6 +3149,91 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         signal_process.assert_not_called()
         mark_blocked.assert_not_called()
 
+    def test_run_session_payload_prefers_result_session_and_corrects_blocked_terminal(self):
+        with TemporaryDirectory() as tmpdir:
+            old_data_dir = reachops_web_ui.DATA_DIR
+            old_result_path = reachops_web_ui.RESULT_PATH
+            old_latest_run_session_path = reachops_web_ui.LATEST_RUN_SESSION_PATH
+            old_current_run_session_path = reachops_web_ui.CURRENT_RUN_SESSION_PATH
+            old_process = reachops_web_ui.RUN_PROCESS
+            try:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.RESULT_PATH = Path(tmpdir) / "reachops_web_ui_last_run.json"
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = Path(tmpdir) / "runs" / "latest_run_session.json"
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = str(Path(tmpdir) / "runs" / "run_noise.json")
+                Path(tmpdir, "runs").mkdir(parents=True, exist_ok=True)
+                reachops_web_ui.RUN_PROCESS = None
+
+                blocked_tail = [
+                    "CHECK  profile_preflight checked=9 available=0",
+                    "BLOCK  campaign failed reason=无可用账号 error=INSUFFICIENT_LOGGED_IN_PROFILES",
+                ]
+                target_session = {
+                    "schema_version": "reachops.run_session.v1",
+                    "session_id": "run_target",
+                    "plan_id": "plan_target",
+                    "state": "COMPLETED",
+                    "status": "completed",
+                    "created_at": "2026-07-24T08:00:00Z",
+                    "updated_at": "2026-07-24T08:01:00Z",
+                    "completed_at": "2026-07-24T08:01:00Z",
+                    "checkpoint": {
+                        "state": "COMPLETED",
+                        "last_stage": blocked_tail[-1],
+                        "log_line_count": 2,
+                    },
+                    "state_history": [
+                        {
+                            "at": "2026-07-24T08:01:00Z",
+                            "state": "COMPLETED",
+                            "status": "completed",
+                            "source": "test",
+                        }
+                    ],
+                    "result": {"status": "completed", "tail": blocked_tail},
+                }
+                target_path = Path(tmpdir) / "runs" / "run_target.json"
+                target_path.write_text(json.dumps(target_session, ensure_ascii=False), encoding="utf-8")
+                noise_session = dict(target_session)
+                noise_session["session_id"] = "run_noise"
+                noise_session["plan_id"] = "plan_noise"
+                noise_session["result"] = {"status": "completed", "tail": ["DONE  action_preflight"]}
+                Path(reachops_web_ui.CURRENT_RUN_SESSION_PATH).write_text(
+                    json.dumps(noise_session, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                reachops_web_ui.LATEST_RUN_SESSION_PATH.write_text(
+                    json.dumps(noise_session, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                reachops_web_ui.RESULT_PATH.write_text(
+                    json.dumps(
+                        {
+                            "status": "completed",
+                            "run_session": {"path": str(target_path)},
+                            "tail": blocked_tail,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+
+                payload = reachops_web_ui.build_current_run_session_payload()
+                corrected = json.loads(target_path.read_text(encoding="utf-8"))
+            finally:
+                reachops_web_ui.DATA_DIR = old_data_dir
+                reachops_web_ui.RESULT_PATH = old_result_path
+                reachops_web_ui.LATEST_RUN_SESSION_PATH = old_latest_run_session_path
+                reachops_web_ui.CURRENT_RUN_SESSION_PATH = old_current_run_session_path
+                reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(payload["path"], str(target_path))
+        self.assertEqual(payload["summary"]["state"], "BLOCKED")
+        self.assertEqual(payload["summary"]["status"], "blocked")
+        self.assertEqual(payload["run_session"]["result"]["status"], "blocked")
+        self.assertEqual(corrected["state"], "BLOCKED")
+        self.assertEqual(corrected["result"]["truth_correction"]["reason"], "blocked_terminal_log_overrides_completed_result")
+
     def test_control_http_endpoint_rejects_invalid_json_without_crashing(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR

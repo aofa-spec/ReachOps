@@ -37,10 +37,13 @@ from ReachOps.intelligence.storage import GrowthStorage
 from ReachOps.run_session import (
     RUN_SESSION_STATE_RANK,
     TERMINAL_RUN_SESSION_STATES,
+    build_session_health,
     create_run_session,
     infer_run_state,
     read_run_session,
+    state_to_status,
     transition_run_session,
+    utc_now_iso,
     write_run_session,
 )
 from ReachOps.run_recovery import recover_interrupted_run_session
@@ -673,12 +676,152 @@ def run_session_path_for(session: dict) -> Path:
     return DATA_DIR / "runs" / f"{session_id}.json"
 
 
-def read_current_run_session() -> dict:
+def run_result_has_blocked_terminal(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    status = str(payload.get("status") or "").strip()
+    if status in {"blocked", "launch_failed", "headless_exited_immediately", "timeout_finalized"}:
+        return True
+    tail = payload.get("tail") if isinstance(payload.get("tail"), list) else []
+    joined = "\n".join(str(line) for line in tail[-120:])
+    return "BLOCK  campaign failed" in joined or "BLOCK  campaign not_started" in joined
+
+
+def correct_run_result_with_blocked_terminal(payload: dict | None) -> tuple[dict, bool]:
+    if not isinstance(payload, dict) or not payload:
+        return {}, False
+    if str(payload.get("status") or "").strip() != "completed":
+        return payload, False
+    if not run_result_has_blocked_terminal(payload):
+        return payload, False
+    corrected = dict(payload)
+    corrected["status"] = "blocked"
+    corrected["truth_correction"] = {
+        "schema_version": "reachops.run_result_truth_correction.v1",
+        "corrected_at": utc_now_iso(),
+        "reason": "blocked_terminal_log_overrides_completed_result",
+        "no_ai_token_used": True,
+    }
+    return corrected, True
+
+
+def run_session_path_from_result(payload: dict | None) -> Path | None:
+    if not isinstance(payload, dict):
+        return None
+    run_session = payload.get("run_session") if isinstance(payload.get("run_session"), dict) else {}
+    raw = str(run_session.get("path") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.is_file() else None
+
+
+def blocked_terminal_in_session(session: dict, result_payload: dict | None = None) -> bool:
+    if run_result_has_blocked_terminal(result_payload):
+        return True
+    if run_result_has_blocked_terminal(session.get("result") if isinstance(session.get("result"), dict) else {}):
+        return True
+    checkpoint = session.get("checkpoint") if isinstance(session.get("checkpoint"), dict) else {}
+    last_stage = str(checkpoint.get("last_stage") or "")
+    return "BLOCK  campaign failed" in last_stage or "BLOCK  campaign not_started" in last_stage
+
+
+def correct_completed_session_with_blocked_terminal(session: dict, result_payload: dict | None = None) -> tuple[dict, bool]:
+    if not session:
+        return {}, False
+    if str(session.get("state") or "") != "COMPLETED" and str(session.get("status") or "") != "completed":
+        return session, False
+    if not blocked_terminal_in_session(session, result_payload):
+        return session, False
+    payload = dict(session)
+    corrected_at = utc_now_iso()
+    payload["state"] = "BLOCKED"
+    payload["status"] = state_to_status("BLOCKED")
+    payload["updated_at"] = corrected_at
+    payload.setdefault("completed_at", corrected_at)
+    checkpoint = dict(payload.get("checkpoint") or {})
+    checkpoint["state"] = "BLOCKED"
+    checkpoint["terminal_seen"] = True
+    payload["checkpoint"] = checkpoint
+    result = dict(payload.get("result") or {})
+    if result:
+        result["status"] = "blocked"
+        result["truth_correction"] = {
+            "schema_version": "reachops.run_session_truth_correction.v1",
+            "corrected_at": corrected_at,
+            "reason": "blocked_terminal_log_overrides_completed_result",
+            "no_ai_token_used": True,
+        }
+        payload["result"] = result
+    history = [row for row in list(payload.get("state_history") or []) if isinstance(row, dict)]
+    history.append(
+        {
+            "at": corrected_at,
+            "state": "BLOCKED",
+            "from_state": "COMPLETED",
+            "to_state": "BLOCKED",
+            "valid_transition": True,
+            "status": "blocked",
+            "last_stage": str(checkpoint.get("last_stage") or "")[:500],
+            "runtime_state_inferred": str(checkpoint.get("runtime_state_inferred") or "BLOCKED"),
+            "log_line_count": int(checkpoint.get("log_line_count") or 0),
+            "terminal_seen": True,
+            "source": "run_session.truth_correction",
+            "reason": "blocked_terminal_log_overrides_completed_result",
+            "no_ai_token_used": True,
+        }
+    )
+    payload["state_history"] = history[-160:]
+    payload["state_transition_violations"] = [
+        row for row in list(payload.get("state_transition_violations") or []) if isinstance(row, dict)
+    ][-40:]
+    payload["state_machine_contract"] = {
+        "schema_version": "reachops.run_session_state_machine_contract.v1",
+        "from_state": "COMPLETED",
+        "to_state": "BLOCKED",
+        "valid_transition": True,
+        "violation_count": len(payload["state_transition_violations"]),
+        "terminal_states": sorted(TERMINAL_RUN_SESSION_STATES),
+        "truth_correction": "blocked_terminal_log_overrides_completed_result",
+        "no_ai_token_used": True,
+    }
+    payload["session_health"] = build_session_health(payload)
+    return payload, True
+
+
+def _current_run_session_candidate_paths() -> list[Path]:
+    result_payload = read_run_result_payload()
+    candidates: list[Path] = []
+    if run_is_active() and CURRENT_RUN_SESSION_PATH:
+        candidates.append(Path(CURRENT_RUN_SESSION_PATH))
+    result_path = run_session_path_from_result(result_payload)
+    if result_path is not None:
+        candidates.append(result_path)
     if CURRENT_RUN_SESSION_PATH:
-        payload = read_run_session(CURRENT_RUN_SESSION_PATH)
-        if payload:
-            return payload
-    return read_run_session(LATEST_RUN_SESSION_PATH)
+        candidates.append(Path(CURRENT_RUN_SESSION_PATH))
+    candidates.append(LATEST_RUN_SESSION_PATH)
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in candidates:
+        key = str(path)
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def read_current_run_session() -> dict:
+    result_payload, _changed = correct_run_result_with_blocked_terminal(read_run_result_payload())
+    for path in _current_run_session_candidate_paths():
+        payload = read_run_session(path)
+        if not payload:
+            continue
+        corrected, changed = correct_completed_session_with_blocked_terminal(payload, result_payload)
+        if changed:
+            write_run_session(corrected, path, LATEST_RUN_SESSION_PATH)
+        return corrected
+    return {}
 
 
 def persist_run_session(session: dict) -> dict:
@@ -2258,9 +2401,8 @@ def payload_from_execution_plan(plan: dict) -> dict:
 
 
 def build_current_run_session_payload() -> dict:
-    path = Path(CURRENT_RUN_SESSION_PATH) if CURRENT_RUN_SESSION_PATH else LATEST_RUN_SESSION_PATH
-    if not path.is_file() and LATEST_RUN_SESSION_PATH.is_file():
-        path = LATEST_RUN_SESSION_PATH
+    candidates = _current_run_session_candidate_paths()
+    path = candidates[0] if candidates else (Path(CURRENT_RUN_SESSION_PATH) if CURRENT_RUN_SESSION_PATH else LATEST_RUN_SESSION_PATH)
     if not path.is_file():
         return {
             "status": "missing",
@@ -2272,6 +2414,10 @@ def build_current_run_session_payload() -> dict:
         }
     try:
         session = read_run_session(path)
+        result_payload, _result_changed = correct_run_result_with_blocked_terminal(read_run_result_payload())
+        session, changed = correct_completed_session_with_blocked_terminal(session, result_payload)
+        if changed:
+            write_run_session(session, path, LATEST_RUN_SESSION_PATH)
         return {
             "status": "ok",
             "schema_version": session.get("schema_version", "reachops.run_session.v1"),
@@ -7309,6 +7455,9 @@ class Handler(BaseHTTPRequestHandler):
                     last_stage = line[:240]
                     break
             run_result = read_run_result_payload()
+            run_result, result_truth_corrected = correct_run_result_with_blocked_terminal(run_result)
+            if result_truth_corrected:
+                write_run_result_payload(run_result)
             run_result_status = str(run_result.get("status") or "")
             exit_code = None if RUN_PROCESS is None else RUN_PROCESS.poll()
             run_session = read_current_run_session()

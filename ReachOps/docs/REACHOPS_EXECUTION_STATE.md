@@ -2234,6 +2234,48 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Next action:
   - Fix `获客分组测试` account environment: at least one profile must be logged in, kernel-compatible, proxy/page-open stable, and able to open TikTok manually. Then rerun the same Web client no-submit flow. Until then, `minimum_mvp_ready` must remain false.
 
+## Latest client terminal-truth correction snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Continue the same customer-visible Web client calibration for `获客分组测试` without starting a new ixBrowser profile or TikTok action. This slice fixes a UI/API truthfulness defect discovered after the prior no-submit run.
+- Customer-visible defect found:
+  - The selected `获客分组测试` run was truly blocked by accounts, but `/api/run-session` could still surface a stale `COMPLETED` RunSession/result created before the blocked-terminal fix.
+  - Browser verification showed the page could display a misleading `COMPLETED` pill while the same page reported `blocked_by_accounts`.
+  - Root cause: the Web UI selected the in-memory/current RunSession path before the current run result's authoritative `run_session.path`, and historical `status=completed` results were not corrected when their tail contained `BLOCK  campaign failed`.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now prioritizes the current `reachops_web_ui_last_run.json` `run_session.path` when no runner is active, so `/api/run-session` follows the real terminal result instead of stale current/latest pointers.
+  - `tools/reachops_web_ui.py` now corrects historical `completed` run results and RunSessions to `blocked` / `BLOCKED` when the result tail or checkpoint contains `BLOCK  campaign failed` or `BLOCK  campaign not_started`; the correction records `truth_correction` metadata and uses no AI/browser/submit action.
+  - `ReachOps/run_session.py` now permits the narrow terminal truth correction `COMPLETED -> BLOCKED` to avoid recording the correction itself as a state-machine violation.
+  - `tests/test_reachops_client_acceptance_status.py` covers the mixed stale-pointer case: result points to one RunSession, stale current/latest points to another, and the authoritative result has a blocked terminal tail.
+- Client-visible verification after restarting `http://127.0.0.1:8769/`:
+  - `/api/logs` summary: `run_result_status=blocked`, `run_failed=true`, `run_session_state=BLOCKED`, `run_session_status=blocked`; output `/tmp/reachops-continue-logs-summary-after-result-fix.json`.
+  - `/api/run-session` summary: path `reports/reachops/mac_gui/runtime/runs/run_7a4f809975441992.json`, `state=BLOCKED`, `status=blocked`, `result_status=blocked`; output `/tmp/reachops-continue-run-session-summary-after-result-fix.json`.
+  - `/api/acceptance` summary: `readiness=blocked_by_accounts`, batch `gb_498320c756f54b92`, group `获客分组测试`, `checked=9`, `available=0`, errors `PAGE_OPEN_FAILED=4` and `PROFILE_PREFLIGHT_TIMEOUT=5`; output `/tmp/reachops-continue-acceptance-summary-after-result-fix.json`.
+  - Browser DOM after selecting `获客分组测试` and target `APRILSKIN Pore Care Long lasting Duo`: header `获客分组测试 账号阻断 / 客户端 v20 / FAILED / BLOCKED`, `accountGateState="获客分组测试 账号阻断"`, `previewGate="账号修复后启动"`, `startDisabled=true`, and `startFromPlanDisabled=true`.
+- Tests and checks:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m py_compile tools/reachops_web_ui.py ReachOps/run_session.py tests/test_reachops_client_acceptance_status.py tests/test_run_recovery.py`: passed.
+  - Targeted stale-pointer/blocked-terminal, watchdog stale-heartbeat, and run-state inference tests: passed, 3 tests.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 126 tests; log `/tmp/reachops-continue-client-acceptance.log`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_run_recovery`: passed, 9 tests; log `/tmp/reachops-continue-run-recovery.log`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-continue-truthful.log`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v tests.test_reachops_campaign`: passed, 259 tests; log `/tmp/reachops-continue-campaign.log`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-continue-operator-pressure.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-continue-delivery-audit.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_status_report.py --json`: passed as `ready_for_external_validation`, summary `final_passed=30,final_pending_external_validation=3,final_failed=0`; output `/tmp/reachops-continue-goal-status-report.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-continue-cleanliness.json`.
+  - `git diff --check`: passed.
+- Expected blockers:
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `profile_available=0`, `failed_checks=["acceptance:ready"]`, group `获客分组测试`; output `/tmp/reachops-continue-client-delivery.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-continue-goal-delivery-runner.json`.
+- Safety:
+  - No new ixBrowser profile was started in this slice.
+  - No TikTok live-submit, follow, DM, or comment was authorized or attempted.
+  - The Web client remains available at `http://127.0.0.1:8769/`.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Next action:
+  - The highest-priority remaining blocker for the customer-visible real loop is still external account readiness in `获客分组测试`: provide at least one logged-in, kernel-compatible, proxy/page-open stable TikTok profile, then rerun the same no-submit client flow. Until that passes five consecutive times from the client entrypoint, `minimum_mvp_ready` remains false.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.

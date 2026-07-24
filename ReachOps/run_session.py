@@ -75,7 +75,9 @@ RUN_SESSION_ALLOWED_TRANSITIONS = {
     },
     "DEGRADED": {"DEGRADED", "COLLECTING", "BLOCKED", "COMPLETED"},
     "BLOCKED": {"BLOCKED"},
-    "COMPLETED": {"COMPLETED"},
+    # Historical terminal truth can be corrected when an older runner wrote
+    # completed despite blocked campaign evidence.
+    "COMPLETED": {"COMPLETED", "BLOCKED"},
 }
 
 
