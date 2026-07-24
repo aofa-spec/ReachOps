@@ -1166,6 +1166,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             "blocked_terminal_log_overrides_completed_result",
         )
         self.assertIn("missing_collection_done", payload["latest_client_run"]["failed_reasons"])
+        self.assertTrue(payload["latest_client_run"]["browser_started"])
+        self.assertFalse(payload["latest_client_run"]["no_browser_started"])
 
     def test_minimum_mvp_gate_requires_five_consecutive_client_no_submit_runs(self):
         with TemporaryDirectory() as tmpdir:
@@ -1180,6 +1182,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(payload["consecutive_client_real_no_submit_passes"], 5)
         self.assertEqual(payload["failed_checks"], [])
         self.assertTrue(all(row["passed"] for row in payload["recent_client_runs"]))
+        self.assertTrue(all(row["browser_started"] for row in payload["recent_client_runs"]))
+        self.assertTrue(all(not row["no_browser_started"] for row in payload["recent_client_runs"]))
 
     def test_minimum_mvp_gate_rejects_mixed_targets_or_profile_groups(self):
         with TemporaryDirectory() as tmpdir:

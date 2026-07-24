@@ -2475,6 +2475,49 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 
 ## Non-blocking engineering work available
 
+## Latest minimum-MVP browser-started evidence snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Continue real client calibration on selected group `获客分组测试` and correct minimum-MVP run evidence semantics without launching new profiles or changing account execution policy.
+- Client/API issue found:
+  - `/api/minimum-mvp` latest run had real customer-client evidence for `RUN web_headless_start`, `START campaign`, and `CHECK profile_preflight`.
+  - The same run also had profile preflight failures from `获客分组测试`, including `PAGE_OPEN_FAILED` and `PROFILE_PREFLIGHT_TIMEOUT`.
+  - Despite that browser/profile preflight evidence, the latest run summary still reported `no_browser_started=true`, which made the minimum-MVP evidence misleading.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now derives `browser_started` for each classified minimum-MVP client run from `CHECK  profile_preflight` log evidence.
+  - Run summaries now report `browser_started=true` and `no_browser_started=false` when profile preflight evidence exists, including blocked runs that reached account/browser preflight before failing.
+  - `tests/test_reachops_client_acceptance_status.py` verifies both blocked and passing minimum-MVP client runs carry the corrected browser-started semantics.
+- Client/API verification:
+  - Local Web client restarted at `http://127.0.0.1:8769/`.
+  - `/api/settings` remained `selected_profile_group="获客分组测试"`, `no_browser_started=true`, `no_submit=true` for settings reads.
+  - `/api/minimum-mvp` remained `status=blocked`, `minimum_mvp_ready=false`, `consecutive_client_real_no_submit_passes=0`.
+  - `/api/minimum-mvp.latest_client_run` now reports `target="APRILSKIN Pore Care Long lasting Duo"`, `profile_group="获客分组测试"`, `state=BLOCKED`, `status=blocked`, `browser_started=true`, and `no_browser_started=false`.
+- Tests and checks:
+  - `python3 -m py_compile tools/reachops_web_ui.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Focused minimum-MVP browser-started tests: passed, 2 tests.
+  - `python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-minimum-mvp-browser-started-dom.json`.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed; log `/tmp/reachops-minimum-mvp-browser-started-client.log`.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed; log `/tmp/reachops-minimum-mvp-browser-started-truthful.log`.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed; log `/tmp/reachops-minimum-mvp-browser-started-campaign.log`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed; output `/tmp/reachops-minimum-mvp-browser-started-operator-pressure.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed; output `/tmp/reachops-minimum-mvp-browser-started-delivery-audit.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed, `status=ready_for_external_validation`; output `/tmp/reachops-minimum-mvp-browser-started-goal-status.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-minimum-mvp-browser-started-cleanliness.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-minimum-mvp-browser-started-diff-check.log`.
+- Expected blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `final_delivery_ready=false`, failed check `acceptance:ready`; output `/tmp/reachops-minimum-mvp-browser-started-client-delivery.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `local_mvp_ready=false`, `windows_build_ready=true`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-minimum-mvp-browser-started-goal-delivery.json`.
+- Classification:
+  - Current execution blocker remains account/page-open readiness in `获客分组测试`.
+  - The software-owned issue fixed in this slice was evidence truthfulness: a run that reached browser/profile preflight is no longer summarized as if no browser/profile work happened.
+- Safety:
+  - No Windows build, EXE, installer, Windows VM action, new ixBrowser profile launch, TikTok live-submit, follow, DM, or comment was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or local acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Next action:
+  - Keep selected group `获客分组测试`. Manually repair or remove failing profiles until at least one profile is logged in, kernel-compatible, proxy/page-open stable, and able to open TikTok; then rerun the same customer-visible no-submit flow toward five consecutive passing client runs.
+
 ## Latest account diagnostics customer-action snapshot
 
 - Date: `2026-07-24`

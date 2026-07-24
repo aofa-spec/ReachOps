@@ -443,6 +443,7 @@ def classify_minimum_mvp_client_run(payload: dict, path: Path) -> dict:
         failed_reasons.append("evidence_bundle_incomplete")
     if "live_comment" in mode or _contains_log_marker(tail, "live_submit"):
         failed_reasons.append("live_submit_not_allowed_for_minimum_mvp")
+    browser_started = _contains_log_marker(tail, "CHECK  profile_preflight")
     return {
         "path": str(path),
         "run_session_id": str(payload.get("session_id") or path.stem),
@@ -461,7 +462,8 @@ def classify_minimum_mvp_client_run(payload: dict, path: Path) -> dict:
         "evidence_bundle_markdown_path": str(bundle_markdown_path) if evidence_bundle.get("markdown_path") else "",
         "passed": not failed_reasons,
         "failed_reasons": failed_reasons,
-        "no_browser_started": True,
+        "browser_started": browser_started,
+        "no_browser_started": not browser_started,
         "no_submit": True,
     }
 
