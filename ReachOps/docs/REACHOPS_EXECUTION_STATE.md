@@ -25,7 +25,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 1. Review the P1 immutable Campaign Run / Observation model slice now that storage, collection/content/comment pipeline wiring, and report/export traceability are implemented; keep unrelated LeadDecision lifecycle expansion split unless required for traceability.
 2. Review Draft PR from branch `codex/p4-web-runtime-smoke`; keep Windows/installer/live-submit validation out of scope.
 3. Continue P2 convergence only where non-external work remains; minimal external license refresh client contract is complete, and the remaining P2 exit gate is Windows Credential Manager validation on Windows.
-4. Repair the current `United States` ixBrowser account pool: fix `IXBROWSER_KERNEL_MISMATCH`, complete TikTok login for `LOGIN_REQUIRED`, and keep at least one logged-in, kernel-compatible, page-openable profile in the execution group; then rerun the no-submit client acceptance loop.
+4. Repair the current `获客分组测试` ixBrowser account pool: keep at least one logged-in, kernel-compatible, page-openable profile in that execution group; then rerun the no-submit client acceptance loop.
 5. Keep live-submit external validation separate; do not mark final delivery until package check and final acceptance gate both return `final_delivery_ready=true`.
 
 ## Known external blockers
@@ -45,6 +45,44 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - Windows minimum package acceptance: `ReachOps.exe`, installer, update manifest, hash verification, clean VM install, first launch, basic activation, default no-submit, uninstall, and `acceptance_summary.json`.
 - Frozen / POST_MVP for minimum readiness: real comments, Follow, DM, public reply monitoring, qualified lead, conversion, revenue, CRM, Workspace, RBAC, multi-device seats, telemetry, encrypted backup, and formal multilingual acceptance.
 - Important boundary: `minimum_mvp_ready=true` will represent only the minimum MVP; it must not be equated with `final_delivery_ready=true`, which remains false until full commercial and external platform acceptance is complete.
+
+## Latest P4 selected-group client continuation snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Continue the Mac Web client acceptance path with the operator-selected ixBrowser group `获客分组测试` instead of reverting the UI to the historical `United States` default after refresh.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now persists the selected profile group in the existing `reachops_web_settings.json` runtime settings file through `/api/settings`.
+  - The Web client loads `/api/settings` before refreshing ixBrowser groups and selects the saved group first, then falls back to local browser storage, current selection, account gate group, pending recheck group, and finally `United States`.
+  - Validated start requests also persist the selected group server-side after group validation, keeping the customer-visible client aligned with the configured execution group.
+  - `tools/reachops_web_panel_dom_smoke.py` keeps account-repair pending-recheck validation group-isolated.
+- Browser/client evidence:
+  - Local client restarted at `http://127.0.0.1:8769/`.
+  - `/api/settings` returned `selected_profile_group="获客分组测试"`, `no_browser_started=true`, `no_submit=true`.
+  - Browser DOM showed selected group `获客分组测试`, `selectedGroupCount=11账号`, `selectedGroupId=308389`, `accountGateState="获客分组测试 账号阻断"`, `runState="FAILED / BLOCKED"`, and both start buttons disabled.
+- Tests and checks:
+  - `python` is not available in this Mac shell (`command not found`); reran validation with `python3`.
+  - `python3 -m py_compile tools/reachops_web_ui.py tools/reachops_web_panel_dom_smoke.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Focused selected-group settings tests: passed, 2 tests.
+  - `python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-group-dom-smoke.json`.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 128 tests; log `/tmp/reachops-group-client-acceptance.log`.
+  - `python3 -m unittest -v tests.test_run_recovery`: passed, 9 tests; log `/tmp/reachops-group-run-recovery.log`.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-group-truthful.log`.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed, 259 tests; log `/tmp/reachops-group-campaign.log`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-group-operator-pressure.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`; output `/tmp/reachops-group-delivery-audit.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed, `status=ready_for_external_validation`; output `/tmp/reachops-group-goal-status-report.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-group-cleanliness.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-group-diff-check.log`.
+- Expected final-delivery blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: failed as expected, exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, failed check `acceptance:ready`; output `/tmp/reachops-group-client-delivery.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`; output `/tmp/reachops-group-goal-delivery-runner.json`.
+- Safety:
+  - No Windows build, EXE, installer, Windows VM action, ixBrowser profile launch from this change, or TikTok live-submit was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - Existing untracked `ReachOps-1/` remains outside this work and was not modified.
+- Remaining blocker:
+  - `获客分组测试` is readable but has no currently usable preflight account in the latest real run evidence. At least one logged-in, kernel-compatible, page-openable profile is required before the no-submit client acceptance loop can pass.
 
 ## Latest Windows VM client-gate convergence snapshot
 

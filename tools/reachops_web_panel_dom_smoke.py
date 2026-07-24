@@ -392,6 +392,8 @@ vm.createContext(context);
   const accountRepairConfirmClearedOnGroupSwitch = elements.accountRepairConfirmed.checked === false;
   elements.group.value = 'Canada';
   await elements.group.onchange();
+  elements.group.value = 'United States';
+  await elements.group.onchange();
   responses['/api/acceptance'].acceptance = {{
     readiness:'blocked_by_accounts',
     checks:{{profile_available_count:0}},

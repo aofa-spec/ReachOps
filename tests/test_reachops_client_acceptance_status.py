@@ -1027,6 +1027,59 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(payload["client_delivery"]["failed_checks"], ["acceptance:ready"])
         self.assertTrue(delivery_check_exists)
 
+    def test_web_settings_http_endpoint_persists_selected_profile_group_without_browser_or_submit(self):
+        with TemporaryDirectory() as tmpdir:
+            old_settings_path = reachops_web_ui.WEB_SETTINGS_PATH
+            old_log_path = reachops_web_ui.LOG_PATH
+            server = None
+            thread = None
+            try:
+                reachops_web_ui.WEB_SETTINGS_PATH = Path(tmpdir) / "config" / "reachops_web_settings.json"
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.write_web_settings({"ixbrowser_api_port": 53201})
+                server = reachops_web_ui.ThreadingHTTPServer(("127.0.0.1", 0), reachops_web_ui.Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+
+                host, port = server.server_address
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                request = urllib.request.Request(
+                    f"http://{host}:{port}/api/settings",
+                    data=json.dumps({"selectedProfileGroup": "获客分组测试"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with opener.open(request, timeout=5) as response:
+                    saved = json.loads(response.read().decode("utf-8"))
+                with opener.open(f"http://{host}:{port}/api/settings", timeout=5) as response:
+                    loaded = json.loads(response.read().decode("utf-8"))
+                persisted = json.loads(reachops_web_ui.WEB_SETTINGS_PATH.read_text(encoding="utf-8"))
+            finally:
+                if server is not None:
+                    server.shutdown()
+                    server.server_close()
+                if thread is not None:
+                    thread.join(timeout=2)
+                reachops_web_ui.WEB_SETTINGS_PATH = old_settings_path
+                reachops_web_ui.LOG_PATH = old_log_path
+
+        self.assertEqual(saved["status"], "saved")
+        self.assertEqual(saved["selected_profile_group"], "获客分组测试")
+        self.assertTrue(saved["no_browser_started"])
+        self.assertTrue(saved["no_submit"])
+        self.assertEqual(loaded["selected_profile_group"], "获客分组测试")
+        self.assertTrue(loaded["no_browser_started"])
+        self.assertTrue(loaded["no_submit"])
+        self.assertEqual(persisted["selected_profile_group"], "获客分组测试")
+        self.assertEqual(persisted["ixbrowser_api_port"], 53201)
+
+    def test_web_ui_prefers_saved_profile_group_before_united_states_default(self):
+        body = html_page().decode("utf-8")
+
+        self.assertIn("loadWebSettings().finally(() => refreshGroups())", body)
+        self.assertIn("const candidates = [selectedProfileGroupSetting, localSaved, current, accountGateBlockedGroup", body)
+        self.assertIn("rememberSelectedProfileGroup($('group').value)", body)
+
     def test_logs_http_endpoint_exposes_structured_headless_failure_result(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR

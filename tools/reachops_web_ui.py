@@ -1491,6 +1491,46 @@ def write_web_settings(settings: dict):
     WEB_SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_selected_profile_group_setting() -> str:
+    settings = load_web_settings()
+    return str(settings.get("selected_profile_group") or "").strip()
+
+
+def persist_selected_profile_group_setting(group: str) -> dict:
+    group_name = str(group or "").strip()
+    if not group_name:
+        return {
+            "status": "rejected",
+            "error": "missing_profile_group",
+            "message": "账号分组不能为空。",
+            "no_browser_started": True,
+            "no_submit": True,
+        }
+    settings = load_web_settings()
+    settings["selected_profile_group"] = group_name
+    settings["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    write_web_settings(settings)
+    return {
+        "status": "saved",
+        "selected_profile_group": group_name,
+        "no_browser_started": True,
+        "no_submit": True,
+    }
+
+
+def build_web_settings_payload() -> dict:
+    settings = load_web_settings()
+    return {
+        "status": "ok",
+        "selected_profile_group": str(settings.get("selected_profile_group") or "").strip(),
+        "ixbrowser_api_port": str(settings.get("ixbrowser_api_port") or "").strip(),
+        "updated_at": str(settings.get("updated_at") or ""),
+        "path": str(WEB_SETTINGS_PATH),
+        "no_browser_started": True,
+        "no_submit": True,
+    }
+
+
 def write_latest_groups_payload(payload: dict):
     try:
         payload = dict(payload or {})
@@ -3522,6 +3562,8 @@ def html_page() -> bytes:
 	    let groupRefreshPollCount = 0;
 	    let hourglassData = {{}};
 	    let currentOfflinePolicyCandidate = null;
+	    let selectedProfileGroupSetting = '';
+	    const SELECTED_GROUP_STORAGE_KEY = 'reachops.selectedProfileGroup.v1';
     const DEFAULT_UI_LOCALE = {json.dumps(DEFAULT_UI_LOCALE, ensure_ascii=False)};
     const SUPPORTED_UI_LOCALES = {json.dumps(list(SUPPORTED_UI_LOCALES), ensure_ascii=False)};
     const FALLBACK_UI_TEXT_RESOURCES = {json.dumps(UI_TEXT_RESOURCES, ensure_ascii=False)};
@@ -3582,6 +3624,45 @@ def html_page() -> bytes:
     }}
     function normGroupName(value) {{
       return String(value || '').trim().toLowerCase();
+    }}
+    function rememberSelectedProfileGroup(groupName) {{
+      const value = String(groupName || '').trim();
+      if (!value) return;
+      selectedProfileGroupSetting = value;
+      try {{
+        localStorage.setItem(SELECTED_GROUP_STORAGE_KEY, value);
+      }} catch (_err) {{}}
+      postJson('/api/settings', {{selectedProfileGroup:value}}).catch(() => {{}});
+    }}
+    async function loadWebSettings() {{
+      try {{
+        const res = await fetch('/api/settings');
+        const data = await res.json();
+        selectedProfileGroupSetting = String((data && data.selected_profile_group) || '').trim();
+      }} catch (_err) {{
+        selectedProfileGroupSetting = '';
+      }}
+      if (!selectedProfileGroupSetting) {{
+        try {{
+          selectedProfileGroupSetting = String(localStorage.getItem(SELECTED_GROUP_STORAGE_KEY) || '').trim();
+        }} catch (_err) {{}}
+      }}
+      return selectedProfileGroupSetting;
+    }}
+    function preferredProfileGroupName(groups, currentValue) {{
+      const current = String(currentValue || '').trim();
+      let localSaved = '';
+      try {{
+        localSaved = String(localStorage.getItem(SELECTED_GROUP_STORAGE_KEY) || '').trim();
+      }} catch (_err) {{}}
+      const candidates = [selectedProfileGroupSetting, localSaved, current, accountGateBlockedGroup, accountGatePendingRecheckGroup, 'United States'];
+      for (const candidate of candidates) {{
+        const normalized = normGroupName(candidate);
+        if (!normalized) continue;
+        const matched = groups.find(g => normGroupName(g.name) === normalized);
+        if (matched) return matched.name;
+      }}
+      return groups[0] ? groups[0].name : '';
     }}
     function accountGateAppliesToCurrentGroup() {{
       const blockedGroup = normGroupName(accountGateBlockedGroup);
@@ -5087,11 +5168,12 @@ def html_page() -> bytes:
 	      loadedGroups = groups;
 		      const completeGroupCounts = data.all_group_counts_known === true || data.live_all_group_counts_known === true || data.counts_resolved === true;
 		      groupListReady = groups.length > 0 && !data.error && data.stale_cache !== true && (data.background_refresh !== true || completeGroupCounts);
+	      const previousGroupValue = $('group') ? $('group').value : '';
 	      $('group').innerHTML = groups.length
 	        ? groups.map(g => `<option value="${{esc(g.name)}}">${{esc(groupOptionLabel(g))}}</option>`).join('')
 	        : '<option value="">请先刷新账号分组</option>';
-	      const selected = groups.find(g => String(g.name).toLowerCase() === 'united states') || groups[0];
-	      if (selected) $('group').value = selected.name;
+	      const preferredGroup = preferredProfileGroupName(groups, previousGroupValue);
+	      if (preferredGroup) $('group').value = preferredGroup;
 	      if (data.error && !groups.length) {{
 	        renderGroupError(data);
 	      }} else if (!groups.length) {{
@@ -5621,6 +5703,7 @@ def html_page() -> bytes:
 	      refreshStartPreview();
 	    }};
 	    $('group').onchange = () => {{
+	      rememberSelectedProfileGroup($('group').value);
 	      if ($('accountRepairConfirmed') && $('accountRepairConfirmed').checked && normGroupName(accountRepairConfirmedGroup) !== normGroupName($('group').value)) {{
 	        $('accountRepairConfirmed').checked = false;
 	        accountRepairConfirmedGroup = '';
@@ -5650,7 +5733,7 @@ def html_page() -> bytes:
 	    }});
 	    $('sourceType').onchange = () => {{ $('targetType').textContent = $('sourceType').selectedOptions[0].textContent; refreshStartPreview(); }};
     setInterval(refreshLogs, 2000); setInterval(refreshSnapshot, 5000); setInterval(refreshAcceptance, 5000); setInterval(refreshProductCapability, 10000); setInterval(refreshIxBrowserStatus, 10000); setInterval(refreshActivation, 10000); setInterval(refreshFinalStatus, 10000);
-	    loadLocales(); updateCopyModeNotice(); refreshStartPreview(); refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshProductCapability(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus(); refreshGroups();
+	    loadLocales(); loadWebSettings().finally(() => refreshGroups()); updateCopyModeNotice(); refreshStartPreview(); refreshLogs(); refreshSnapshot(); refreshAcceptance(); refreshProductCapability(); refreshIxBrowserStatus(); refreshActivation(); refreshFinalStatus();
   </script>
 </body>
 </html>""".encode("utf-8")
@@ -7436,6 +7519,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/locales":
             self._send_json(build_locales_payload())
             return
+        if parsed.path == "/api/settings":
+            self._send_json(build_web_settings_payload())
+            return
         if parsed.path == "/api/heartbeat":
             self._send_json(build_runtime_heartbeat_payload())
             return
@@ -7698,6 +7784,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"status": "rejected", "error": error}, 400)
                 return
             result = apply_ixbrowser_api_port((payload or {}).get("port"))
+            self._send_json(result, 200 if result.get("status") == "saved" else 400)
+            return
+        if parsed.path == "/api/settings":
+            payload, error = self._read_json_payload()
+            if error:
+                self._send_json({"status": "rejected", "error": error}, 400)
+                return
+            selected_group = (payload or {}).get("selected_profile_group", (payload or {}).get("selectedProfileGroup"))
+            result = persist_selected_profile_group_setting(str(selected_group or ""))
+            append_web_log(
+                f"CONFIG selected_profile_group status={result.get('status')} "
+                f"group={result.get('selected_profile_group') or '-'} no_browser_started=true no_submit=true"
+            )
             self._send_json(result, 200 if result.get("status") == "saved" else 400)
             return
         if parsed.path == "/api/group-mapping":
@@ -8064,6 +8163,7 @@ class Handler(BaseHTTPRequestHandler):
                 blocked_payload = {**group_check, "archive_error": str(exc), "no_browser_started": True, "no_submit": True}
             self._send_json(blocked_payload, 409 if group_check.get("error") == "profile_group_list_unavailable" else 400)
             return
+        persist_selected_profile_group_setting(profile_group)
         account_ok, account_check = validate_account_repair_for_start(profile_group, account_repair_confirmed)
         if not account_ok:
             append_web_log(
