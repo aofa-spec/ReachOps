@@ -733,6 +733,13 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertIn('id="finalStatusCommands"', html)
         self.assertIn("最终交付下一步", html)
         self.assertIn("最终复核命令", html)
+        self.assertLess(html.index('id="task"'), html.index('id="reports"'))
+        self.assertGreater(html.index('id="finalStatusActions"'), html.index('id="reports"'))
+        self.assertGreater(html.index('id="finalStatusCommands"'), html.index('id="reports"'))
+        self.assertIn(
+            "$('acceptanceBlockers').innerHTML = listItems([...(a.blockers || []), ...accountRepairActions, ...mvpFailures, ...(a.next_actions || []).map(x => '下一步：' + x)]);",
+            html,
+        )
         self.assertIn("async function refreshActivation()", html)
         self.assertIn("async function refreshFinalStatus()", html)
         self.assertIn("fetch('/api/activation')", html)

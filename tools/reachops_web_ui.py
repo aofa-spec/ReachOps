@@ -3648,14 +3648,6 @@ def html_page() -> bytes:
               </div>
               <div class="row"><span>最小MVP门禁</span><b id="minimumMvpState">未检查</b></div>
               <div class="row"><span>最终交付门禁</span><b id="finalStatusState">未检查</b></div>
-	              <div class="notice" id="finalStatusNotice">
-	                <strong>最终交付下一步</strong>
-	                <ul id="finalStatusActions"><li>等待最终验收状态。</li></ul>
-	              </div>
-	              <div class="notice" id="finalCommandNotice">
-	                <strong>最终复核命令</strong>
-	                <ul id="finalStatusCommands"><li>等待最终验收状态。</li></ul>
-	              </div>
 	              <div class="row"><span>评论文案</span><b id="currentCopyMode">自动识别生成</b></div>
               <div class="row"><span>目标数量</span><b id="currentVolume">快速</b></div>
               <div class="row"><span>最近批次</span><b id="batchId">-</b></div>
@@ -3700,7 +3692,17 @@ def html_page() -> bytes:
         <div class="panel"><h2>账号诊断</h2><div class="body"><table id="healthTable"></table></div></div>
       </div>
       <div id="reports" class="page">
-        <div class="panel"><h2>报告中心 <button id="refreshGoalDelivery">刷新目标报告</button> <button id="refreshMvpAcceptance">刷新MVP验收</button> <button id="initAcceptanceInputs">生成验收输入</button></h2><div class="body"><table id="reportTable"></table></div></div>
+        <div class="panel"><h2>报告中心 <button id="refreshGoalDelivery">刷新目标报告</button> <button id="refreshMvpAcceptance">刷新MVP验收</button> <button id="initAcceptanceInputs">生成验收输入</button></h2><div class="body">
+          <div class="notice" id="finalStatusNotice">
+            <strong>最终交付下一步</strong>
+            <ul id="finalStatusActions"><li>等待最终验收状态。</li></ul>
+          </div>
+          <div class="notice" id="finalCommandNotice">
+            <strong>最终复核命令</strong>
+            <ul id="finalStatusCommands"><li>等待最终验收状态。</li></ul>
+          </div>
+          <table id="reportTable"></table>
+        </div></div>
       </div>
     </section>
   </main>
@@ -5195,14 +5197,9 @@ def html_page() -> bytes:
       $('acceptanceState').textContent = `验收状态：${{label}} / ${{mvpLabel}} / ${{goalLabel}} / 客户端门禁：${{gate.status || '-'}}`;
       $('acceptanceState').className = (a.readiness === 'pass' && gateReady) ? 'ok' : (['blocked_by_accounts','blocked_by_environment','failed'].includes(a.readiness) || gate.status === 'failed' ? 'bad' : 'warn');
       $('acceptanceMeta').textContent = `批次：${{batch.id || '-'}} / 状态：${{batch.status || '-'}} / 账号：checked=${{p.checked || 0}} available=${{p.available || 0}} / local_mvp_ready=${{goal.local_mvp_ready === true ? 'true' : 'false'}} / windows_build_ready=${{goal.windows_build_ready === true ? 'true' : 'false'}} / windows_preflight=${{winPreflight.status || '-'}} / final_delivery_ready=${{gateReady ? 'true' : 'false'}}`;
-      const gateFailures = (gate.failed_checks || []).map(x => '客户端门禁失败：' + x);
       const mvpFailures = (mvp.failed_checks || []).map(x => 'MVP验收失败：' + x);
-      const goalFailures = (goal.failed_checks || []).map(x => '目标门禁失败：' + x);
-      const goalBlockers = (goal.blockers || []).map(x => '目标阻断：' + x);
-      const winMissing = (winPreflight.missing_final_artifacts || []).length ? ['Windows缺失最终产物：' + winPreflight.missing_final_artifacts.join(', ')] : [];
-      const winContract = winPreflight.skip_installer_is_non_final ? ['Windows构建合同：-SkipInstaller 仅为非最终 EXE-only 构建。'] : [];
       const accountRepairActions = accountGateBlocked ? [...accountRepairApplyItems(repairApply), ...accountRepairActionItems(accountRepairSummary)] : [];
-      $('acceptanceBlockers').innerHTML = listItems([...(a.blockers || []), ...accountRepairActions, ...goalBlockers, ...winMissing, ...winContract, ...mvpFailures, ...goalFailures, ...gateFailures, ...(a.next_actions || []).map(x => '下一步：' + x)]);
+      $('acceptanceBlockers').innerHTML = listItems([...(a.blockers || []), ...accountRepairActions, ...mvpFailures, ...(a.next_actions || []).map(x => '下一步：' + x)]);
       renderDecision(data);
       renderFunnelFromAcceptance(data);
       renderProfileLaunchList(data);

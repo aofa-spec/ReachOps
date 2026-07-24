@@ -2429,6 +2429,50 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Next action:
   - Keep the client on `获客分组测试`. Repair at least one profile so it is logged in, kernel-compatible, proxy/page-open stable, and able to open TikTok manually; then rerun the same customer-visible no-submit flow from the Web client.
 
+## Latest client-visible action-scope cleanup snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Keep the customer-visible `获客任务` first screen focused on the Mac minimum-MVP client loop, so the operator is not told to run internal tools or Windows package commands while the real blocker is account readiness.
+- Client-visible issue found:
+  - The active `获客任务` page correctly showed `获客分组测试` account blocking, `PAGE_OPEN_FAILED`, and `PROFILE_PREFLIGHT_TIMEOUT`, but it also rendered final-delivery details such as `最终交付下一步`, `最终复核命令`, Windows package actions, and internal `tools\\...` validation commands on the same first screen.
+  - This conflicted with the minimum-MVP rule that the customer should operate from the client by entering a target, not by using terminal commands.
+- Code evidence:
+  - `tools/reachops_web_ui.py` moved `finalStatusActions` and `finalStatusCommands` from the active `获客任务` page to `报告中心`.
+  - The first-page acceptance blocker list now includes current acceptance blockers, account-repair actions, minimum-MVP failures, and customer-actionable next steps only. Windows package and goal-delivery details remain available through the report center/API.
+  - `tests/test_reachops_client_acceptance_status.py` verifies the final-delivery action/command containers live under `id="reports"` and that first-page acceptance blockers do not concatenate final gate/Windows variables.
+- Client verification:
+  - Local client restarted at `http://127.0.0.1:8769/`.
+  - Visible `获客任务` page still showed the account blocker and `最小MVP门禁 blocked / 0/5`.
+  - Visible `获客任务` page no longer showed `最终交付下一步`, `最终复核命令`, `tools\\...`, `reachops_client_delivery_check.py`, or Windows package instructions.
+  - `/api/settings` remained `selected_profile_group="获客分组测试"`.
+  - `/api/groups?refresh=0` returned `获客分组测试`, `group_id=308389`, `count=11`.
+  - `/api/acceptance` remained `readiness=blocked_by_accounts` with customer-actionable next actions only: manually confirm at least one usable TikTok profile in `获客分组测试`, optionally adjust target, and check account/page-open stability.
+- Tests and checks:
+  - `python3 -m py_compile tools/reachops_web_ui.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Focused Web UI action-scope/settings tests: passed, 2 tests; log `/tmp/reachops-client-visible-ui-scope-focused.log`.
+  - `python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-client-visible-ui-scope-dom.json`.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed; log `/tmp/reachops-client-visible-ui-scope-client.log`.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed; log `/tmp/reachops-client-visible-ui-scope-truthful.log`.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed; log `/tmp/reachops-client-visible-ui-scope-campaign.log`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed; output `/tmp/reachops-client-visible-ui-scope-operator-pressure.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed; output `/tmp/reachops-client-visible-ui-scope-delivery-audit.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed; output `/tmp/reachops-client-visible-ui-scope-goal-status.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-client-visible-ui-scope-cleanliness.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-client-visible-ui-scope-diff-check.log`.
+- Expected blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `profile_available=0`, failed check `acceptance:ready`; output `/tmp/reachops-client-visible-ui-scope-client-delivery.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-client-visible-ui-scope-goal-delivery.json`.
+- Classification:
+  - Current execution blocker remains external account/page-open environment in `获客分组测试`.
+  - The software-owned issue fixed in this slice was customer-visible action scope: the first screen no longer asks the customer to use internal validation tools while the immediate client blocker is account repair.
+- Safety:
+  - No Windows build, EXE, installer, Windows VM action, new ixBrowser profile launch, TikTok live-submit, follow, DM, or comment was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or local acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Next action:
+  - Keep the Web client open on `获客分组测试`. Once at least one profile in that group is manually verified as logged-in, kernel-compatible, proxy/page-open stable, and able to open TikTok, rerun the same customer-visible no-submit flow.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.
