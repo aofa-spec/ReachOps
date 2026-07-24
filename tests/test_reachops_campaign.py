@@ -11894,7 +11894,16 @@ class ReachOpsCampaignTests(unittest.TestCase):
                 raise RuntimeError("event history unavailable")
 
             def list_profile_health(self, limit=10000):
-                return []
+                return [
+                    {
+                        "profile_id": "page-timeout",
+                        "status": "cooldown",
+                        "health_score": 80,
+                        "consecutive_failures": 2,
+                        "last_error_code": "PAGE_OPEN_FAILED",
+                        "last_error_message": "Timed out receiving message from renderer",
+                    }
+                ]
 
         with tempfile.TemporaryDirectory() as tmp:
             plan_dir = Path(tmp) / "reports" / "acceptance_remediation"
@@ -11922,13 +11931,15 @@ class ReachOpsCampaignTests(unittest.TestCase):
                     [
                         {"profile_id": "bad-login", "group_name": "United States"},
                         {"profile_id": "new-account", "group_name": "United States"},
+                        {"profile_id": "page-timeout", "group_name": "United States"},
                     ],
-                    2,
+                    3,
                 )
 
-        self.assertEqual([row["profile_id"] for row in selected], ["new-account"])
+        self.assertEqual([row["profile_id"] for row in selected], ["new-account", "page-timeout"])
         self.assertTrue(any("force_account_recheck" in row for row in logs))
         self.assertTrue(any("recent_unusable_excluded count=1" in row for row in logs))
+        self.assertTrue(any("force_recheck_transient_backfill" in row for row in logs))
 
     def test_profile_group_display_keeps_operator_readable_group_name(self):
         display = group_display_name({"group_id": "281726", "group_name": "加拿大获客组", "count": 12})
@@ -12440,6 +12451,65 @@ class ReachOpsCampaignTests(unittest.TestCase):
         self.assertEqual(summary["checked"], 9)
         self.assertEqual([len(batch) for batch in batches], [3, 3, 3])
         self.assertTrue(any("continue_after_mixed_failures" in row for row in logs))
+        self.assertFalse(any("reason=browser_start_instability" in row for row in logs))
+
+    def test_standalone_profile_preflight_covers_small_group_before_instability_block(self):
+        class SmallGroupChecker:
+            def __init__(self, bucket):
+                self.bucket = bucket
+
+            def available_profiles(self, profiles):
+                rows = list(profiles or [])
+                self.bucket.append([str(row.get("profile_id") or "") for row in rows])
+                checked_so_far = sum(len(batch) for batch in self.bucket[:-1])
+                results = []
+                available = []
+                errors = {}
+                for index, row in enumerate(rows):
+                    profile_id = str(row.get("profile_id") or "")
+                    absolute_index = checked_so_far + index
+                    if absolute_index == 9:
+                        available.append(row)
+                        results.append({"profile_id": profile_id, "ok": True, "error_code": ""})
+                        continue
+                    code = "PROFILE_PREFLIGHT_TIMEOUT" if absolute_index % 2 else "PAGE_OPEN_FAILED"
+                    errors[code] = errors.get(code, 0) + 1
+                    results.append({"profile_id": profile_id, "ok": False, "error_code": code})
+                return available, {
+                    "checked": len(rows),
+                    "available": len(available),
+                    "unavailable": len(rows) - len(available),
+                    "errors": errors,
+                    "results": results,
+                }
+
+        logs = []
+        batches = []
+        app = GrowthIntelligenceStandaloneApp.__new__(GrowthIntelligenceStandaloneApp)
+        app._thread_log = logs.append
+        app._log_profile_preflight_details = lambda *_args, **_kwargs: None
+        app._format_error_counts = lambda errors: ",".join(f"{key}={value}" for key, value in sorted((errors or {}).items()))
+        app.profile_registry = type("Registry", (), {"select_profiles": lambda *_args, **_kwargs: []})()
+        app._rank_profile_candidates = lambda profiles, _limit: list(profiles)
+        app._profile_id = lambda profile: str(profile.get("profile_id") or profile.get("id") or "")
+
+        profiles = [{"profile_id": f"p{index}", "group_name": "获客分组测试"} for index in range(11)]
+        available, summary = app._preflight_profiles_with_backfill(
+            profiles,
+            "获客分组测试",
+            3,
+            lambda _batch_size: SmallGroupChecker(batches),
+            stage="collection",
+            min_required_profiles=1,
+            max_checked_profiles=11,
+            initial_check_limit=3,
+            backfill_to_requested=True,
+        )
+
+        self.assertEqual([row["profile_id"] for row in available], ["p9"])
+        self.assertEqual(summary["checked"], 11)
+        self.assertEqual([len(batch) for batch in batches], [3, 6, 2])
+        self.assertTrue(any("continue_small_group_coverage" in row for row in logs))
         self.assertFalse(any("reason=browser_start_instability" in row for row in logs))
 
     def test_standalone_profile_preflight_circuit_breaks_permanent_account_configuration_block(self):

@@ -1330,16 +1330,20 @@ class GrowthIntelligenceStandaloneApp:
         return str((profile or {}).get("profile_id") or (profile or {}).get("id") or "").strip()
 
     def _rank_profile_candidates(self, candidate_profiles: list[dict], limit: int) -> list[dict]:
-        if os.environ.get("REACHOPS_FORCE_ACCOUNT_RECHECK") == "1":
+        force_account_recheck = os.environ.get("REACHOPS_FORCE_ACCOUNT_RECHECK") == "1"
+        if force_account_recheck:
             self._log(
                 "CONFIG selected_profiles force_account_recheck "
                 "policy=live_recheck_keep_hard_failure_exclusion"
             )
-        filtered_profiles, excluded = self._exclude_recent_hard_failed_profiles(candidate_profiles)
+        filtered_profiles, excluded = self._exclude_recent_hard_failed_profiles(
+            candidate_profiles,
+            exclude_repeated_transient=not force_account_recheck,
+        )
         if excluded:
             self._log(
                 f"CONFIG selected_profiles recent_unusable_excluded count={excluded} "
-                "policy=hard_failed_or_repeated_transient"
+                f"policy={'hard_failed_only' if force_account_recheck else 'hard_failed_or_repeated_transient'}"
             )
         rank_source = filtered_profiles
         if not rank_source and candidate_profiles:
@@ -1353,8 +1357,29 @@ class GrowthIntelligenceStandaloneApp:
 
             ranked = AccountHealthManager(self.service.storage).rank_profiles(rank_source, max_count=limit)
             if ranked:
+                if force_account_recheck and len(ranked) < max(1, int(limit or 1)):
+                    ranked_ids = {self._profile_id(profile) for profile in ranked}
+                    retryable_fill = [
+                        profile
+                        for profile in self._recoverable_profile_candidates(rank_source)
+                        if self._profile_id(profile) and self._profile_id(profile) not in ranked_ids
+                    ]
+                    if retryable_fill:
+                        self._log(
+                            f"CONFIG selected_profiles force_recheck_transient_backfill "
+                            f"ranked={len(ranked)} added={len(retryable_fill[: max(0, int(limit or 1) - len(ranked))])} "
+                            "policy=fill_requested_profiles_with_transient_recheck"
+                        )
+                        ranked = [*ranked, *retryable_fill][: max(1, int(limit or 1))]
                 return ranked
             if rank_source:
+                if force_account_recheck:
+                    retryable = self._recoverable_profile_candidates(rank_source)
+                    self._log(
+                        f"WARN   selected_profiles force_recheck_transient_health_bypass selected={len(retryable[:limit])} "
+                        "policy=recheck_transient_failures_keep_hard_failure_exclusion"
+                    )
+                    return retryable[: max(1, int(limit or 1))]
                 self._log(
                     "WARN   selected_profiles health_rank_empty selected=0 "
                     "policy=avoid_restarting_known_unusable_profiles"
@@ -1384,7 +1409,12 @@ class GrowthIntelligenceStandaloneApp:
             recoverable.append(profile)
         return recoverable
 
-    def _exclude_recent_hard_failed_profiles(self, candidate_profiles: list[dict]) -> tuple[list[dict], int]:
+    def _exclude_recent_hard_failed_profiles(
+        self,
+        candidate_profiles: list[dict],
+        *,
+        exclude_repeated_transient: bool = True,
+    ) -> tuple[list[dict], int]:
         hard_error_codes = {
             "LOGIN_REQUIRED",
             "IXBROWSER_KERNEL_MISMATCH",
@@ -1426,6 +1456,8 @@ class GrowthIntelligenceStandaloneApp:
                     recent_errors[profile_id] = code
                     continue
                 if code in transient_error_codes:
+                    if not exclude_repeated_transient:
+                        continue
                     transient_counts[profile_id] = transient_counts.get(profile_id, 0) + 1
                     if transient_counts[profile_id] >= 2:
                         recent_errors[profile_id] = code
@@ -1626,7 +1658,16 @@ class GrowthIntelligenceStandaloneApp:
                         f"phase={phase} checked={checked} unstable={unstable_count} "
                         f"threshold={instability_threshold} errors={self._format_error_counts(errors) or '无'} "
                         "action=continue_backfill_to_find_logged_in_profile"
-                    )
+                )
+                return False
+            total_candidates = len(initial_profiles or [])
+            if total_candidates and total_candidates <= max_checked_profiles and checked < total_candidates:
+                self._thread_log(
+                    f"CHECK  profile_preflight continue_small_group_coverage stage={stage} "
+                    f"phase={phase} checked={checked} candidates={total_candidates} "
+                    f"unstable={unstable_count} threshold={instability_threshold} "
+                    "action=continue_backfill_to_cover_remaining_profiles"
+                )
                 return False
             self._thread_log(
                 f"BLOCK  profile_preflight circuit_breaker stage={stage} reason=browser_start_instability "

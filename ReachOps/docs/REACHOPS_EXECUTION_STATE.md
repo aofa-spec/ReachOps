@@ -46,6 +46,46 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Frozen / POST_MVP for minimum readiness: real comments, Follow, DM, public reply monitoring, qualified lead, conversion, revenue, CRM, Workspace, RBAC, multi-device seats, telemetry, encrypted backup, and formal multilingual acceptance.
 - Important boundary: `minimum_mvp_ready=true` will represent only the minimum MVP; it must not be equated with `final_delivery_ready=true`, which remains false until full commercial and external platform acceptance is complete.
 
+## Latest P4 selected-group force-recheck coverage snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Respond to operator feedback that `获客分组测试` has 11 accounts and the client should self-determine whether any account is actually usable, then continue through the group instead of stopping after historical/transient account health filtering.
+- Pre-fix reproduction:
+  - Local client at `http://127.0.0.1:8769/` started a no-submit Web run for `获客分组测试`.
+  - The run entered profile preflight but selected only 2 profiles, then reported `health_rank_empty` and `checked=2, available=0` even though the selected group had 11 candidates.
+  - Root cause: `REACHOPS_FORCE_ACCOUNT_RECHECK=1` logged the force-recheck policy but still allowed repeated transient history and AccountHealthManager empty-rank results to remove retryable profiles before the current real preflight round.
+- Code evidence:
+  - `ReachOps/workbench/standalone_app.py` now keeps hard failures excluded during force recheck, but no longer excludes repeated transient browser/page-open failures before the current preflight attempt.
+  - Force recheck now backfills short ranked results with recoverable transient candidates, and can bypass an empty AccountHealthManager rank result for retryable candidates while still preserving hard-failure exclusion.
+  - The profile-preflight browser-start instability breaker now continues small selected groups until all candidates inside the configured check budget are covered.
+  - `tools/reachops_delivery_audit.py` now audits the new force-recheck and small-group coverage contract.
+- Post-fix client evidence:
+  - A fresh no-submit Web run completed selected-group coverage for `获客分组测试`: `checked=11`, `available=0`, `unavailable=11`.
+  - Error summary: `LOGIN_REQUIRED=3`, `PAGE_OPEN_FAILED=1`, `PROFILE_PREFLIGHT_TIMEOUT=7`.
+  - Runtime logs include `force_recheck_transient_health_bypass` and `continue_small_group_coverage`, proving the client self-checked the remaining group accounts before blocking.
+  - Result remains truthful: `readiness=blocked_by_accounts`, `acceptance_ready=false`, `final_delivery_ready=false`; no collection or touch action was claimed.
+- Tests and checks:
+  - `python3 -m py_compile ReachOps/workbench/standalone_app.py tools/reachops_delivery_audit.py tests/test_reachops_campaign.py`: passed.
+  - Focused regression for force recheck, small-group coverage, existing timeout exclusion, and same-round page-timeout retry behavior: passed, 4 tests.
+  - Focused delivery audit / goal status regressions: passed, 3 tests; log `/tmp/reachops-force-recheck-small-group-focused-failing.log`.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-force-recheck-small-group-truthful-2.log`.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 130 tests; log `/tmp/reachops-force-recheck-small-group-client-2.log`.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed, 260 tests; log `/tmp/reachops-force-recheck-small-group-campaign-2.log`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-force-recheck-small-group-operator-pressure-2.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-force-recheck-small-group-delivery-audit-2.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed, `status=ready_for_external_validation`; output `/tmp/reachops-force-recheck-small-group-goal-status-2.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-force-recheck-small-group-cleanliness-2.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-force-recheck-small-group-diff-check-2.log`.
+- Expected final-delivery blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, failed check `acceptance:ready`; output `/tmp/reachops-force-recheck-small-group-client-delivery.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-force-recheck-small-group-goal-delivery.json`.
+- Safety:
+  - No Windows build, EXE, installer, Windows VM action, TikTok live-submit, credential export, cookie export, or raw customer evidence commit was performed.
+  - The existing untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Remaining blocker:
+  - The code now correctly self-checks all 11 selected-group candidates within budget. The current runtime blocker is account/environment state: none of the 11 profiles reached READY in TikTok session/page-open preflight. At least one logged-in, kernel-compatible, page-openable profile is still required before no-submit acquisition can proceed.
+
 ## Latest P4 selected-group client continuation snapshot
 
 - Date: `2026-07-24`
