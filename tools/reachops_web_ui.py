@@ -7515,7 +7515,18 @@ def validate_account_repair_for_start(profile_group: str, account_repair_confirm
             f"WARN   web_ui_account_recheck_confirmed group={profile_group} "
             "policy=operator_confirmed_account_repair"
         )
-    return True, {"status": status, "profile_available": profile_available, "same_group": same_group}
+    force_account_recheck = bool(account_repair_confirmed and same_group)
+    if force_account_recheck and not blocked:
+        append_web_log(
+            f"WARN   web_ui_account_recheck_confirmed group={profile_group} "
+            "policy=operator_confirmed_same_group_recheck"
+        )
+    return True, {
+        "status": status,
+        "profile_available": profile_available,
+        "same_group": same_group,
+        "force_account_recheck": force_account_recheck,
+    }
 
 
 def run_is_active() -> bool:

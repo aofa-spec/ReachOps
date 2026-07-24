@@ -19,6 +19,7 @@ from tools.reachops_client_acceptance_status import (
     build_acceptance_manifest,
     build_account_repair_plan,
     derive_acceptance,
+    extract_profile_preflight_summary,
     extract_profile_preflight_details,
     dedupe_profile_remediation_details,
     recommended_profile_action,
@@ -222,6 +223,56 @@ class ReachOpsClientAcceptanceStatusTest(unittest.TestCase):
         self.assertEqual(result["profile_error_summary"]["PROFILE_START_FAILED"]["profile_ids"], ["45"])
         self.assertTrue(any("Canada" in item for item in result["next_actions"]))
         self.assertTrue(any("45" in item for item in result["next_actions"]))
+
+    def test_current_batch_log_preflight_overrides_unscoped_database_summary(self):
+        batch = {
+            "id": "gb_current",
+            "campaign_id": "acq_current",
+            "status": "failed",
+            "profile_group": "获客分组测试",
+            "config_json": (
+                '{"planned_sources":[{"source_type":"keyword","source_value":"skin care"}],'
+                '"quick_send":{"detected_type":"keyword","mode_label":"采集 + 触达预检","volume":"快速"}}'
+            ),
+        }
+        stale_db_preflight = {
+            "checked": 7,
+            "available": 0,
+            "unavailable": 7,
+            "errors": {"PAGE_OPEN_FAILED": 1, "PROFILE_PREFLIGHT_TIMEOUT": 6},
+            "created_at": "2026-07-24T15:30:36Z",
+        }
+        logs = [
+            "PLAN   campaign id=acq_current input_type=keyword product=skin care",
+            "START  campaign id=acq_current batch=gb_current status=pending stage=profile_preflight",
+            "CONFIG selected_profiles group=获客分组测试 requested=11 candidates=5 selected=5 excluded=0",
+            "CHECK  profile_preflight stage=collection reason=initial profiles=5 profile_ids=18981,13742,13737,13712,13685",
+            "CHECK  profile_preflight checked=5 available=0 unavailable=5 errors=LOGIN_REQUIRED=1, PROFILE_PREFLIGHT_TIMEOUT=3, PROFILE_START_FAILED=1",
+            "CHECK  profile_preflight_detail stage=collection profile=13742 status=不可用 error=LOGIN_REQUIRED evidence=/tmp/login.png message=TikTok login popup/page visible",
+        ]
+
+        result = derive_acceptance(batch, stale_db_preflight, logs)
+
+        self.assertEqual(result["profile_preflight_summary"]["checked"], 5)
+        self.assertEqual(
+            result["profile_preflight_summary"]["errors"],
+            {"LOGIN_REQUIRED": 1, "PROFILE_PREFLIGHT_TIMEOUT": 3, "PROFILE_START_FAILED": 1},
+        )
+        self.assertEqual(result["selected_profile_summary"]["selected"], 5)
+
+    def test_profile_preflight_summary_uses_last_terminal_log_line(self):
+        logs = [
+            "CHECK  profile_preflight checked=7 available=0 unavailable=7 errors=PAGE_OPEN_FAILED=1, PROFILE_PREFLIGHT_TIMEOUT=6",
+            "CHECK  profile_preflight checked=5 available=0 unavailable=5 errors=LOGIN_REQUIRED=1, PROFILE_PREFLIGHT_TIMEOUT=3, PROFILE_START_FAILED=1",
+        ]
+
+        result = extract_profile_preflight_summary(logs)
+
+        self.assertEqual(result["checked"], 5)
+        self.assertEqual(
+            result["errors"],
+            {"LOGIN_REQUIRED": 1, "PROFILE_PREFLIGHT_TIMEOUT": 3, "PROFILE_START_FAILED": 1},
+        )
 
     def test_not_started_next_actions_start_client_not_account_repair(self):
         batch = {"id": "", "campaign_id": "", "status": "", "profile_group": "United States", "config_json": "{}"}
@@ -2055,6 +2106,84 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         load_selected_group.assert_called_once()
         persist_group.assert_not_called()
         self.assertNotIn("REACHOPS_FORCE_ACCOUNT_RECHECK", popen_kwargs["env"])
+
+    def test_start_handler_forces_account_recheck_for_matching_group_confirmation(self):
+        body = json.dumps(
+            {
+                "target": "anti aging serum",
+                "mode": "preflight",
+                "group": "获客分组测试",
+                "profiles": 11,
+                "accountRepairConfirmed": True,
+            }
+        ).encode("utf-8")
+        headers = Message()
+        headers["Host"] = "127.0.0.1:8769"
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(body))
+        handler = object.__new__(reachops_web_ui.Handler)
+        handler.path = "/api/start"
+        handler.headers = headers
+        handler.rfile = BytesIO(body)
+        captured = {}
+
+        def capture_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        class FakeProcess:
+            pid = 43211
+
+            def poll(self):
+                return None
+
+        popen_kwargs = {}
+
+        def fake_popen(_cmd, **kwargs):
+            popen_kwargs.update(kwargs)
+            return FakeProcess()
+
+        handler._send_json = capture_json
+        old_data_dir = reachops_web_ui.DATA_DIR
+        old_log_path = reachops_web_ui.LOG_PATH
+        old_result_path = reachops_web_ui.RESULT_PATH
+        old_process = reachops_web_ui.RUN_PROCESS
+        try:
+            with TemporaryDirectory() as tmpdir:
+                reachops_web_ui.DATA_DIR = Path(tmpdir)
+                reachops_web_ui.LOG_PATH = Path(tmpdir) / "logs" / "growth_ops_runtime.log"
+                reachops_web_ui.RESULT_PATH = Path(tmpdir) / "reachops_web_ui_last_run.json"
+                reachops_web_ui.RUN_PROCESS = None
+                with patch(
+                    "tools.reachops_web_ui.validate_profile_group_for_start",
+                    return_value=(True, {"group": {"name": "获客分组测试"}}),
+                ):
+                    with patch(
+                        "tools.reachops_web_ui.validate_account_repair_for_start",
+                        return_value=(
+                            True,
+                            {
+                                "status": "blocked_by_accounts",
+                                "profile_available": 0,
+                                "same_group": True,
+                                "force_account_recheck": True,
+                            },
+                        ),
+                    ) as account_gate:
+                        with patch("tools.reachops_web_ui.load_selected_profile_group_setting", return_value="获客分组测试"):
+                            with patch("tools.reachops_web_ui.persist_selected_profile_group_setting"):
+                                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                                    reachops_web_ui.Handler.do_POST(handler)
+        finally:
+            reachops_web_ui.DATA_DIR = old_data_dir
+            reachops_web_ui.LOG_PATH = old_log_path
+            reachops_web_ui.RESULT_PATH = old_result_path
+            reachops_web_ui.RUN_PROCESS = old_process
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "started")
+        account_gate.assert_called_once_with("获客分组测试", True)
+        self.assertEqual(popen_kwargs["env"]["REACHOPS_FORCE_ACCOUNT_RECHECK"], "1")
 
     def test_start_http_endpoint_rejects_invalid_json_without_crashing(self):
         with TemporaryDirectory() as tmpdir:

@@ -138,6 +138,32 @@ class ProfilePreflightChecker:
                 time.sleep(max(0.0, float(self.config.wait_after_open_seconds or 0)))
             except Exception as exc:
                 code = self._executor._classify_exception(exc)
+                login_state = self._detect_login_state(driver)
+                detected_state = login_state.get("state") if isinstance(login_state.get("state"), dict) else {}
+                if login_state.get("login_required") and detected_state.get("loginGate"):
+                    code = "LOGIN_REQUIRED"
+                    evidence = self._capture(driver, profile_id, code)
+                    return self._record(
+                        profile,
+                        False,
+                        code,
+                        login_state.get("reason") or str(exc),
+                        evidence,
+                        started_at,
+                    )
+                if login_state.get("logged_in"):
+                    evidence = self._capture(driver, profile_id, "ok_page_open_slow")
+                    keep_successful_browser = bool(self.config.retain_successful_browser_after_check)
+                    if keep_successful_browser:
+                        self._retain_successful_session(profile_id, release_handle, driver)
+                    return self._record(
+                        profile,
+                        True,
+                        "",
+                        "TikTok session usable after slow page load",
+                        evidence,
+                        started_at,
+                    )
                 evidence = self._capture(driver, profile_id, code)
                 return self._record(profile, False, code, str(exc), evidence, started_at)
             try:
@@ -266,10 +292,10 @@ class ProfilePreflightChecker:
         if not isinstance(state, dict):
             state = {}
         if state.get("loginGate") and not state.get("loggedIn"):
-            return {"login_required": True, "reason": "TikTok login popup/page visible", "state": state}
+            return {"login_required": True, "logged_in": False, "reason": "TikTok login popup/page visible", "state": state}
         if not state.get("loggedIn"):
-            return {"login_required": True, "reason": "TikTok session not verified", "state": state}
-        return {"login_required": False, "reason": "TikTok session usable", "state": state}
+            return {"login_required": True, "logged_in": False, "reason": "TikTok session not verified", "state": state}
+        return {"login_required": False, "logged_in": True, "reason": "TikTok session usable", "state": state}
 
     def _record(self, profile: dict, ok: bool, error_code: str, message: str, evidence_path: str, started_at: float) -> dict:
         profile_id = str(profile.get("profile_id") or profile.get("id") or "")

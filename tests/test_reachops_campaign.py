@@ -8870,6 +8870,77 @@ class ReachOpsCampaignTests(unittest.TestCase):
             self.assertEqual(summary["errors"]["LOGIN_REQUIRED"], 1)
             self.assertEqual(group_manager.moves, [("12345", "LOGIN_REQUIRED")])
 
+    def test_profile_preflight_classifies_login_page_after_page_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = GrowthIntelligenceService(base_dir=tmp)
+            group_manager = FakeProfileGroupManager()
+            driver = FakeProfilePreflightDriver("Log in to TikTok", fail_open=True)
+            driver.current_url = "https://www.tiktok.com/login"
+            driver.title = "Log in | TikTok"
+            driver.script_results = [
+                {
+                    "url": "https://www.tiktok.com/login",
+                    "title": "Log in | TikTok",
+                    "loginGate": True,
+                    "loggedIn": False,
+                    "exactLoginButton": True,
+                    "dialogLoginGate": False,
+                    "forcedLoginText": True,
+                    "labels": ["use qr code", "use phone / email / username"],
+                    "dialogs": [],
+                    "sample": "Log in to TikTok",
+                }
+            ]
+            checker = ProfilePreflightChecker(
+                service.storage,
+                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0),
+                driver_factory=lambda _profile: (driver, (FakeReleaseManager(), "login-timeout"), ""),
+                group_manager=group_manager,
+            )
+            checker._executor._release = lambda _handle: None
+
+            available, summary = checker.available_profiles([{"profile_id": "login-timeout", "group_name": "US"}])
+
+            self.assertEqual(available, [])
+            self.assertEqual(summary["errors"], {"LOGIN_REQUIRED": 1})
+            self.assertEqual(group_manager.moves, [("login-timeout", "LOGIN_REQUIRED")])
+
+    def test_profile_preflight_accepts_logged_in_shell_after_page_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = GrowthIntelligenceService(base_dir=tmp)
+            group_manager = FakeProfileGroupManager()
+            driver = FakeProfilePreflightDriver("Messages Inbox Profile", fail_open=True)
+            driver.current_url = "https://www.tiktok.com/messages"
+            driver.title = "Messages | TikTok"
+            driver.script_results = [
+                {
+                    "url": "https://www.tiktok.com/messages",
+                    "title": "Messages | TikTok",
+                    "loginGate": False,
+                    "loggedIn": True,
+                    "exactLoginButton": False,
+                    "dialogLoginGate": False,
+                    "forcedLoginText": False,
+                    "labels": ["messages", "inbox"],
+                    "dialogs": [],
+                    "sample": "Messages",
+                }
+            ]
+            checker = ProfilePreflightChecker(
+                service.storage,
+                ProfilePreflightConfig(max_workers=1, page_load_timeout_seconds=1, wait_after_open_seconds=0),
+                driver_factory=lambda _profile: (driver, (FakeReleaseManager(), "slow-ready"), ""),
+                group_manager=group_manager,
+            )
+            checker._executor._release = lambda _handle: None
+
+            available, summary = checker.available_profiles([{"profile_id": "slow-ready", "group_name": "US"}])
+
+            self.assertEqual([row["profile_id"] for row in available], ["slow-ready"])
+            self.assertEqual(summary["available"], 1)
+            self.assertEqual(summary["errors"], {})
+            self.assertEqual(group_manager.moves, [])
+
     def test_profile_preflight_quarantines_kernel_mismatch_profiles(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = GrowthIntelligenceService(base_dir=tmp)

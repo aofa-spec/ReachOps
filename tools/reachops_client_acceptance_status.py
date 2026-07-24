@@ -86,7 +86,7 @@ def derive_acceptance(batch: dict, preflight: dict, log_lines: list[str]) -> dic
     preflight_stale = profile_preflight_is_stale(batch, preflight)
     effective_preflight = {} if preflight_stale else preflight
     log_preflight = extract_profile_preflight_summary(scoped_lines)
-    if log_preflight and int(log_preflight.get("checked") or 0) >= int(effective_preflight.get("checked") or 0):
+    if log_preflight:
         effective_preflight = log_preflight
         preflight_stale = False
     plan_ok = any("PLAN   campaign" in line for line in scoped_lines)
@@ -340,8 +340,6 @@ def extract_profile_preflight_summary(log_lines: list[str]) -> dict:
         if not match:
             continue
         checked = int(match.group("checked") or 0)
-        if latest and checked < int(latest.get("checked") or 0):
-            continue
         latest = {
             "checked": checked,
             "available": int(match.group("available") or 0),

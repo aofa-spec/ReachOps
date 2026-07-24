@@ -86,6 +86,40 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Remaining blocker:
   - The code now correctly self-checks all 11 selected-group candidates within budget. The current runtime blocker is account/environment state: none of the 11 profiles reached READY in TikTok session/page-open preflight. At least one logged-in, kernel-compatible, page-openable profile is still required before no-submit acquisition can proceed.
 
+## Latest P4 selected-group account judgment calibration snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Queue the operator-selected `获客分组测试` account group again, inspect whether the client correctly determines TikTok login usability, and fix judgment/reporting issues without entering Windows, EXE, installer, or live-submit scope.
+- Runtime evidence:
+  - Local Web client was restarted at `http://127.0.0.1:8769/`; ixBrowser Local API was reachable in no-submit/no-browser-started status mode.
+  - A first no-submit 11-account start reproduced a client-side gating bug: `accountRepairConfirmed=true` for the same group did not force live account recheck unless the acceptance gate was already exactly `blocked_by_accounts`.
+  - After fixing the Web start contract, a no-submit run for `获客分组测试` set `REACHOPS_FORCE_ACCOUNT_RECHECK=1`, queued the selected group, and entered profile preflight.
+  - Live page inspection found one TikTok login page that had previously been classified as a generic page-open failure; the verdict was unavailable, but the classification needed to be `LOGIN_REQUIRED`.
+  - Another profile reached a TikTok logged-in shell after page-load timeout; the previous path could over-classify it as page-open failed. The preflight checker now re-reads DOM login state after navigation exceptions and accepts a logged-in shell as usable.
+  - The final no-submit run showed current selected-group candidates `5`, selected `5`, checked `5`, available `0`, unavailable `5`, errors `LOGIN_REQUIRED=1, PROFILE_PREFLIGHT_TIMEOUT=3, PROFILE_START_FAILED=1`.
+  - The customer-visible page still shows the ixBrowser configuration group count as `11账号`, while the current run evidence correctly shows only `5` retryable candidates after prior hard login-required accounts were moved/excluded.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now treats same-group `accountRepairConfirmed=true` as an explicit operator instruction to force account recheck, while still rejecting non-matching group confirmations.
+  - `ReachOps/workbench/profile_preflight.py` now detects explicit `LOGIN_REQUIRED` after page navigation exceptions and accepts a logged-in TikTok shell after slow/failed page-load completion; empty/unknown DOM after an exception preserves the original browser/proxy/page error instead of being mislabeled as login required.
+  - `tools/reachops_client_acceptance_status.py` now prefers the current scoped log preflight summary over the unscoped database summary and uses the last terminal preflight log line, preventing stale `checked=7` summaries from mixing with current `details=5`.
+- Tests and checks:
+  - `python3 -m py_compile ReachOps/workbench/profile_preflight.py tools/reachops_web_ui.py tools/reachops_client_acceptance_status.py tests/test_reachops_campaign.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Focused account judgment regressions for same-group force recheck, non-matching group rejection, login-page-after-timeout classification, logged-in-shell-after-timeout acceptance, and current-batch summary scoping: passed.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 134 tests.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed, 262 tests; log `/tmp/reachops-account-judgment-campaign.log`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-account-judgment-operator-pressure.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`, summary `passed=53,pending_external_validation=3,failed=0`; output `/tmp/reachops-account-judgment-delivery-audit.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed, `status=ready_for_external_validation`; output `/tmp/reachops-account-judgment-goal-status.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed, `forbidden_count=0`; output `/tmp/reachops-account-judgment-cleanliness.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-account-judgment-diff-check.log`.
+- Expected final-delivery blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, failed check `acceptance:ready`; output `/tmp/reachops-account-judgment-client-delivery.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-account-judgment-goal-delivery.json`.
+- Remaining blocker:
+  - Current no-submit execution remains truthfully blocked by accounts: no checked profile reached READY. One profile also returned ixBrowser `code=111003` because it was already open; close already-open ixBrowser profile windows or restart ixBrowser before the next queue run.
+
 ## Latest P4 selected-group client continuation snapshot
 
 - Date: `2026-07-24`
