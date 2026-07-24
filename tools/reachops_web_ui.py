@@ -399,6 +399,7 @@ def _contains_log_marker(lines: list[str], marker: str) -> bool:
 
 
 def classify_minimum_mvp_client_run(payload: dict, path: Path) -> dict:
+    payload, truth_corrected = correct_completed_session_with_blocked_terminal(payload)
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     tail = [str(line or "") for line in (result.get("tail") or [])]
     contract = result.get("execution_plan_contract") if isinstance(result.get("execution_plan_contract"), dict) else {}
@@ -450,6 +451,8 @@ def classify_minimum_mvp_client_run(payload: dict, path: Path) -> dict:
         "state": str(payload.get("state") or ""),
         "status": str(payload.get("status") or ""),
         "result_status": str(result.get("status") or ""),
+        "truth_corrected": bool(truth_corrected),
+        "truth_correction": result.get("truth_correction") if isinstance(result.get("truth_correction"), dict) else {},
         "target_present": bool(target),
         "target": target,
         "profile_group": profile_group,

@@ -1145,6 +1145,14 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertFalse(payload["minimum_mvp_ready"])
         self.assertEqual(payload["consecutive_client_real_no_submit_passes"], 0)
         self.assertIn("minimum_mvp:latest_client_run_not_passed", payload["failed_checks"])
+        self.assertEqual(payload["latest_client_run"]["state"], "BLOCKED")
+        self.assertEqual(payload["latest_client_run"]["status"], "blocked")
+        self.assertEqual(payload["latest_client_run"]["result_status"], "blocked")
+        self.assertTrue(payload["latest_client_run"]["truth_corrected"])
+        self.assertEqual(
+            payload["latest_client_run"]["truth_correction"]["reason"],
+            "blocked_terminal_log_overrides_completed_result",
+        )
         self.assertIn("missing_collection_done", payload["latest_client_run"]["failed_reasons"])
 
     def test_minimum_mvp_gate_requires_five_consecutive_client_no_submit_runs(self):

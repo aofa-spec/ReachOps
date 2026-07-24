@@ -2388,6 +2388,47 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Next action:
   - Keep using `获客分组测试`; repair at least one logged-in, kernel-compatible, proxy/page-open stable TikTok profile in that group, then rerun the customer-visible no-submit client path until five consecutive same-target/same-group/same-mode runs pass.
 
+## Latest minimum-MVP run truth-correction snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Continue real client calibration from the customer-visible Web console and fix a truthfulness mismatch in minimum-MVP evidence reporting.
+- Client reproduction:
+  - In-app browser at `http://127.0.0.1:8769/` showed selected group `获客分组测试`, visible account blocker `获客分组测试 账号阻断`, readable group count `11账号`, Group ID `308389`, `开始获客` disabled, and launch gate `账号修复后启动`.
+  - Entering target `APRILSKIN Pore Care Long lasting Duo` from the customer-visible target box did not bypass the account gate; `开始获客` stayed disabled and no live-submit/follow/DM/comment was attempted.
+  - `/api/acceptance` confirmed real selected-group profile preflight evidence: batch `gb_498320c756f54b92`, group `获客分组测试`, checked `9`, available `0`, errors `PAGE_OPEN_FAILED=4` and `PROFILE_PREFLIGHT_TIMEOUT=5`.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now applies the existing blocked-terminal truth correction inside `classify_minimum_mvp_client_run`.
+  - A historical run that was stored as `COMPLETED/completed` but whose result tail contains `BLOCK  campaign failed` is now reported by `/api/minimum-mvp` as `BLOCKED/blocked` with `truth_correction.reason=blocked_terminal_log_overrides_completed_result`.
+  - `tests/test_reachops_client_acceptance_status.py` covers the minimum-MVP gate behavior for blocked-tail completed runs.
+- Client/API evidence after restart:
+  - `/api/settings` remained `selected_profile_group="获客分组测试"`.
+  - `/api/minimum-mvp` returned `status=blocked`, `minimum_mvp_ready=false`, `consecutive_client_real_no_submit_passes=0`, latest run `state=BLOCKED`, `status=blocked`, `result_status=blocked`, `truth_corrected=true`.
+- Tests and checks:
+  - `python3 -m py_compile tools/reachops_web_ui.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Focused minimum-MVP truth-correction tests: passed, 2 tests.
+  - `python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-minimum-mvp-truth-correction-dom.json`.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed; log `/tmp/reachops-minimum-mvp-truth-correction-client.log`.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed; log `/tmp/reachops-minimum-mvp-truth-correction-truthful.log`.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed; log `/tmp/reachops-minimum-mvp-truth-correction-campaign.log`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed; output `/tmp/reachops-minimum-mvp-truth-correction-operator-pressure.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed; output `/tmp/reachops-minimum-mvp-truth-correction-delivery-audit.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed; output `/tmp/reachops-minimum-mvp-truth-correction-goal-status.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-minimum-mvp-truth-correction-cleanliness.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-minimum-mvp-truth-correction-diff-check.log`.
+- Expected blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `profile_available=0`, failed check `acceptance:ready`; output `/tmp/reachops-minimum-mvp-truth-correction-client-delivery.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-minimum-mvp-truth-correction-goal-delivery.json`.
+- Classification:
+  - Current blocker is external account/page-open environment, not a newly found software collection defect: all checked profiles in `获客分组测试` failed preflight before content/comment collection could begin.
+  - The software-owned defect found in this round was only evidence truthfulness in the minimum-MVP gate, and it has been corrected.
+- Safety:
+  - No Windows build, EXE, installer, Windows VM action, new ixBrowser profile launch, TikTok live-submit, follow, DM, or comment was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or local acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Next action:
+  - Keep the client on `获客分组测试`. Repair at least one profile so it is logged in, kernel-compatible, proxy/page-open stable, and able to open TikTok manually; then rerun the same customer-visible no-submit flow from the Web client.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.
