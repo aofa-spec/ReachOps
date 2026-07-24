@@ -451,6 +451,7 @@ def classify_minimum_mvp_client_run(payload: dict, path: Path) -> dict:
         "status": str(payload.get("status") or ""),
         "result_status": str(result.get("status") or ""),
         "target_present": bool(target),
+        "target": target,
         "profile_group": profile_group,
         "mode": mode,
         "evidence_bundle_path": str(bundle_path) if evidence_bundle.get("path") else "",
@@ -462,10 +463,10 @@ def classify_minimum_mvp_client_run(payload: dict, path: Path) -> dict:
     }
 
 
-def build_minimum_mvp_gate_payload(data_dir: Path | None = None) -> dict:
+def build_minimum_mvp_gate_payload(data_dir: Path | None = None, selected_profile_group: str | None = None) -> dict:
     data_dir = data_dir or DATA_DIR
     runs_dir = data_dir / "runs"
-    selected_group = load_selected_profile_group_setting()
+    selected_group = str(selected_profile_group or load_selected_profile_group_setting()).strip()
     records = []
     if runs_dir.is_dir():
         for path in runs_dir.glob("run_*.json"):
@@ -475,11 +476,31 @@ def build_minimum_mvp_gate_payload(data_dir: Path | None = None) -> dict:
             records.append(classify_minimum_mvp_client_run(payload, path))
     records.sort(key=lambda row: (str(row.get("created_at") or ""), str(row.get("path") or "")), reverse=True)
     consecutive = 0
+    reference_target = ""
+    reference_group = ""
+    reference_mode = ""
+    counted_runs = []
+    consistency_failure = ""
     for row in records:
-        if row.get("passed") is True:
-            consecutive += 1
-            continue
-        break
+        if row.get("passed") is not True:
+            break
+        row_target = str(row.get("target") or "").strip()
+        row_group = str(row.get("profile_group") or "").strip()
+        row_mode = str(row.get("mode") or "").strip()
+        if selected_group and row_group != selected_group:
+            consistency_failure = "selected_profile_group_mismatch"
+            break
+        if not reference_target:
+            reference_target = row_target
+            reference_group = row_group
+            reference_mode = row_mode
+        elif row_target != reference_target or row_group != reference_group or row_mode != reference_mode:
+            consistency_failure = "mixed_target_group_or_mode"
+            break
+        consecutive += 1
+        counted_runs.append(row)
+        if consecutive >= MINIMUM_MVP_REQUIRED_CLIENT_RUNS:
+            break
     latest = records[0] if records else {}
     ready = consecutive >= MINIMUM_MVP_REQUIRED_CLIENT_RUNS
     failed_checks = []
@@ -489,6 +510,8 @@ def build_minimum_mvp_gate_payload(data_dir: Path | None = None) -> dict:
         failed_checks.append("minimum_mvp:latest_client_run_not_passed")
     if not records:
         failed_checks.append("minimum_mvp:no_client_run_sessions")
+    if consistency_failure:
+        failed_checks.append(f"minimum_mvp:{consistency_failure}")
     blockers = []
     if not ready:
         blockers.append(
@@ -496,6 +519,10 @@ def build_minimum_mvp_gate_payload(data_dir: Path | None = None) -> dict:
         )
     if latest and latest.get("failed_reasons"):
         blockers.append("最近客户端运行未通过：" + ", ".join(latest.get("failed_reasons") or []))
+    if consistency_failure == "selected_profile_group_mismatch":
+        blockers.append(f"最近通过运行不属于当前验收分组 `{selected_group}`，不能累计最小 MVP。")
+    elif consistency_failure == "mixed_target_group_or_mode":
+        blockers.append("连续通过运行必须使用同一推广目标、同一账号分组和同一 no-submit 模式。")
     if selected_group:
         blockers.append(f"当前验收分组：{selected_group}。")
     next_actions = []
@@ -509,7 +536,11 @@ def build_minimum_mvp_gate_payload(data_dir: Path | None = None) -> dict:
         "required_consecutive_client_runs": MINIMUM_MVP_REQUIRED_CLIENT_RUNS,
         "consecutive_client_real_no_submit_passes": consecutive,
         "selected_profile_group": selected_group,
+        "reference_target": reference_target,
+        "reference_profile_group": reference_group,
+        "reference_mode": reference_mode,
         "latest_client_run": latest,
+        "counted_client_runs": counted_runs,
         "recent_client_runs": records[:MINIMUM_MVP_REQUIRED_CLIENT_RUNS],
         "failed_checks": failed_checks,
         "blockers": blockers,
@@ -8322,7 +8353,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             self._send_json(account_check, 409)
             return
-        persist_selected_profile_group_setting(profile_group)
+        if not load_selected_profile_group_setting():
+            persist_selected_profile_group_setting(profile_group)
         force_account_recheck = truthy(account_check.get("force_account_recheck")) or (
             account_repair_confirmed
             and account_check.get("same_group") is True

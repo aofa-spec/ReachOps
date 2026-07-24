@@ -1080,7 +1080,15 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertIn("const candidates = [selectedProfileGroupSetting, localSaved, current, accountGateBlockedGroup", body)
         self.assertIn("rememberSelectedProfileGroup($('group').value)", body)
 
-    def _write_minimum_mvp_run(self, root: Path, index: int, *, passed: bool = True):
+    def _write_minimum_mvp_run(
+        self,
+        root: Path,
+        index: int,
+        *,
+        passed: bool = True,
+        target: str = "demo",
+        profile_group: str = "获客分组测试",
+    ):
         runs_dir = root / "runs"
         bundles_dir = root / "evidence_bundles"
         runs_dir.mkdir(parents=True, exist_ok=True)
@@ -1092,8 +1100,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             bundle_json.write_text(json.dumps({"schema_version": "reachops.evidence_bundle.v1"}), encoding="utf-8")
             bundle_md.write_text("# evidence\n", encoding="utf-8")
         tail = [
-            "RUN    web_headless_start target=demo source_type=keyword group=获客分组测试 mode=preflight volume=quick",
-            "START  campaign id=acq_demo batch=gb_demo status=pending stage=profile_preflight target=demo group=获客分组测试",
+            f"RUN    web_headless_start target={target} source_type=keyword group={profile_group} mode=preflight volume=quick",
+            f"START  campaign id=acq_demo batch=gb_demo status=pending stage=profile_preflight target={target} group={profile_group}",
             "CHECK  profile_preflight checked=1 available=1 unavailable=0 errors=",
         ]
         if passed:
@@ -1108,12 +1116,12 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             "status": "completed",
             "result": {
                 "status": "completed",
-                "target": "demo",
-                "profile_group": "获客分组测试",
+                "target": target,
+                "profile_group": profile_group,
                 "execution_plan": {"source": "execution_plan"},
                 "execution_plan_contract": {
                     "cli_args_ignored_for_plan_fields": True,
-                    "after": {"mode": "preflight", "profile_group": "获客分组测试", "target": "demo"},
+                    "after": {"mode": "preflight", "profile_group": profile_group, "target": target},
                 },
                 "tail": tail,
                 "evidence_bundle": {
@@ -1131,7 +1139,7 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             self._write_minimum_mvp_run(root, 1, passed=True)
             self._write_minimum_mvp_run(root, 2, passed=False)
 
-            payload = reachops_web_ui.build_minimum_mvp_gate_payload(root)
+            payload = reachops_web_ui.build_minimum_mvp_gate_payload(root, selected_profile_group="获客分组测试")
 
         self.assertEqual(payload["status"], "blocked")
         self.assertFalse(payload["minimum_mvp_ready"])
@@ -1145,13 +1153,45 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
             for index in range(1, 6):
                 self._write_minimum_mvp_run(root, index, passed=True)
 
-            payload = reachops_web_ui.build_minimum_mvp_gate_payload(root)
+            payload = reachops_web_ui.build_minimum_mvp_gate_payload(root, selected_profile_group="获客分组测试")
 
         self.assertEqual(payload["status"], "passed")
         self.assertTrue(payload["minimum_mvp_ready"])
         self.assertEqual(payload["consecutive_client_real_no_submit_passes"], 5)
         self.assertEqual(payload["failed_checks"], [])
         self.assertTrue(all(row["passed"] for row in payload["recent_client_runs"]))
+
+    def test_minimum_mvp_gate_rejects_mixed_targets_or_profile_groups(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for index in range(1, 5):
+                self._write_minimum_mvp_run(root, index, passed=True, target="demo-a")
+            self._write_minimum_mvp_run(root, 5, passed=True, target="demo-b")
+
+            mixed_target = reachops_web_ui.build_minimum_mvp_gate_payload(
+                root,
+                selected_profile_group="获客分组测试",
+            )
+
+        self.assertEqual(mixed_target["status"], "blocked")
+        self.assertFalse(mixed_target["minimum_mvp_ready"])
+        self.assertEqual(mixed_target["consecutive_client_real_no_submit_passes"], 1)
+        self.assertIn("minimum_mvp:mixed_target_group_or_mode", mixed_target["failed_checks"])
+
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for index in range(1, 6):
+                self._write_minimum_mvp_run(root, index, passed=True, profile_group="United States")
+
+            mixed_group = reachops_web_ui.build_minimum_mvp_gate_payload(
+                root,
+                selected_profile_group="获客分组测试",
+            )
+
+        self.assertEqual(mixed_group["status"], "blocked")
+        self.assertFalse(mixed_group["minimum_mvp_ready"])
+        self.assertEqual(mixed_group["consecutive_client_real_no_submit_passes"], 0)
+        self.assertIn("minimum_mvp:selected_profile_group_mismatch", mixed_group["failed_checks"])
 
     def test_logs_http_endpoint_exposes_structured_headless_failure_result(self):
         with TemporaryDirectory() as tmpdir:
@@ -1972,8 +2012,13 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                             {"status": "blocked_by_accounts", "profile_available": 0, "same_group": False},
                         ),
                     ) as account_gate:
-                        with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
-                            reachops_web_ui.Handler.do_POST(handler)
+                        with patch(
+                            "tools.reachops_web_ui.load_selected_profile_group_setting",
+                            return_value="获客分组测试",
+                        ) as load_selected_group:
+                            with patch("tools.reachops_web_ui.persist_selected_profile_group_setting") as persist_group:
+                                with patch("tools.reachops_web_ui.subprocess.Popen", side_effect=fake_popen):
+                                    reachops_web_ui.Handler.do_POST(handler)
         finally:
             reachops_web_ui.DATA_DIR = old_data_dir
             reachops_web_ui.LOG_PATH = old_log_path
@@ -1983,6 +2028,8 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertEqual(captured["status"], 200)
         self.assertEqual(captured["payload"]["status"], "started")
         account_gate.assert_called_once_with("Canada", True)
+        load_selected_group.assert_called_once()
+        persist_group.assert_not_called()
         self.assertNotIn("REACHOPS_FORCE_ACCOUNT_RECHECK", popen_kwargs["env"])
 
     def test_start_http_endpoint_rejects_invalid_json_without_crashing(self):

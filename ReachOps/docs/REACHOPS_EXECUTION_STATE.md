@@ -2352,6 +2352,42 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Next action:
   - The highest-priority remaining blocker for the customer-visible real loop is still external account readiness in `获客分组测试`: provide at least one logged-in, kernel-compatible, proxy/page-open stable TikTok profile, then rerun the same no-submit client flow. Until that passes five consecutive times from the client entrypoint, `minimum_mvp_ready` remains false.
 
+## Latest selected-group MVP consistency snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Continue the customer-visible client flow with the operator-selected ixBrowser group `获客分组测试` and prevent internal validation/replay requests for another group from overwriting the saved client selection.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now includes each run target in `classify_minimum_mvp_client_run`.
+  - `build_minimum_mvp_gate_payload` now requires the counted five consecutive client `real_no_submit` passes to use the same target, same profile group, and same mode, and to match the currently selected saved group when present.
+  - The minimum-MVP gate now reports `reference_target`, `reference_profile_group`, `reference_mode`, `counted_client_runs`, and failed checks for `minimum_mvp:selected_profile_group_mismatch` and `minimum_mvp:mixed_target_group_or_mode`.
+  - `/api/start` now only backfills `reachops_web_settings.json` when no selected group has been saved yet. Explicit `/api/settings` remains the authority for changing the operator-selected group.
+- Client evidence:
+  - Local client restarted at `http://127.0.0.1:8769/`.
+  - `/api/settings` was restored to `selected_profile_group="获客分组测试"` and remained there after the validation tools ran.
+  - `/api/minimum-mvp` returned `status=blocked`, `minimum_mvp_ready=false`, `consecutive_client_real_no_submit_passes=0`, `selected_profile_group="获客分组测试"`, latest run group `获客分组测试`, and latest failed reasons `missing_collection_done` and `missing_no_submit_action_terminal`.
+- Tests and checks:
+  - `python3 -m py_compile tools/reachops_web_ui.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Focused selected-group/MVP consistency tests: passed, 4 tests.
+  - `python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-selected-group-target-consistency-dom.json`.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed; log `/tmp/reachops-selected-group-target-consistency-client.log`.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed; log `/tmp/reachops-selected-group-target-consistency-truthful.log`.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed; log `/tmp/reachops-selected-group-target-consistency-campaign.log`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed; output `/tmp/reachops-selected-group-target-consistency-operator-pressure.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed; output `/tmp/reachops-selected-group-target-consistency-delivery-audit.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed; output `/tmp/reachops-selected-group-target-consistency-goal-status.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-selected-group-target-consistency-cleanliness.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-selected-group-target-consistency-diff-check.log`.
+- Expected blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: expected exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, `profile_available=0`, failed check `acceptance:ready`; output `/tmp/reachops-selected-group-target-consistency-client-delivery.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: expected exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, and `delivery_package:passed`; output `/tmp/reachops-selected-group-target-consistency-goal-delivery.json`.
+- Safety:
+  - No Windows build, EXE, installer, Windows VM action, new ixBrowser profile launch, or TikTok live-submit was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or local acceptance input files were committed.
+  - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
+- Next action:
+  - Keep using `获客分组测试`; repair at least one logged-in, kernel-compatible, proxy/page-open stable TikTok profile in that group, then rerun the customer-visible no-submit client path until five consecutive same-target/same-group/same-mode runs pass.
+
 ## Non-blocking engineering work available
 
 - LeadDecision versioning and unified scoring contract.
