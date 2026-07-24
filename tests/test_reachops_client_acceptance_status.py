@@ -1080,6 +1080,79 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertIn("const candidates = [selectedProfileGroupSetting, localSaved, current, accountGateBlockedGroup", body)
         self.assertIn("rememberSelectedProfileGroup($('group').value)", body)
 
+    def _write_minimum_mvp_run(self, root: Path, index: int, *, passed: bool = True):
+        runs_dir = root / "runs"
+        bundles_dir = root / "evidence_bundles"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        bundles_dir.mkdir(parents=True, exist_ok=True)
+        run_id = f"run_minimum_mvp_{index:02d}"
+        bundle_json = bundles_dir / f"{run_id}.json"
+        bundle_md = bundles_dir / f"{run_id}.md"
+        if passed:
+            bundle_json.write_text(json.dumps({"schema_version": "reachops.evidence_bundle.v1"}), encoding="utf-8")
+            bundle_md.write_text("# evidence\n", encoding="utf-8")
+        tail = [
+            "RUN    web_headless_start target=demo source_type=keyword group=获客分组测试 mode=preflight volume=quick",
+            "START  campaign id=acq_demo batch=gb_demo status=pending stage=profile_preflight target=demo group=获客分组测试",
+            "CHECK  profile_preflight checked=1 available=1 unavailable=0 errors=",
+        ]
+        if passed:
+            tail.extend(["DONE   collection batch=gb_demo candidates=2", "DONE   action_preflight batch=gb_demo no_submit=true"])
+        else:
+            tail.append("BLOCK  campaign failed reason=无可用账号 error=INSUFFICIENT_LOGGED_IN_PROFILES")
+        payload = {
+            "session_id": run_id,
+            "created_at": f"2026-07-24T08:{index:02d}:00Z",
+            "updated_at": f"2026-07-24T08:{index:02d}:01Z",
+            "state": "COMPLETED",
+            "status": "completed",
+            "result": {
+                "status": "completed",
+                "target": "demo",
+                "profile_group": "获客分组测试",
+                "execution_plan": {"source": "execution_plan"},
+                "execution_plan_contract": {
+                    "cli_args_ignored_for_plan_fields": True,
+                    "after": {"mode": "preflight", "profile_group": "获客分组测试", "target": "demo"},
+                },
+                "tail": tail,
+                "evidence_bundle": {
+                    "schema_version": "reachops.evidence_bundle.v1",
+                    "path": str(bundle_json),
+                    "markdown_path": str(bundle_md),
+                },
+            },
+        }
+        (runs_dir / f"{run_id}.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    def test_minimum_mvp_gate_rejects_latest_blocked_client_run(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_minimum_mvp_run(root, 1, passed=True)
+            self._write_minimum_mvp_run(root, 2, passed=False)
+
+            payload = reachops_web_ui.build_minimum_mvp_gate_payload(root)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertFalse(payload["minimum_mvp_ready"])
+        self.assertEqual(payload["consecutive_client_real_no_submit_passes"], 0)
+        self.assertIn("minimum_mvp:latest_client_run_not_passed", payload["failed_checks"])
+        self.assertIn("missing_collection_done", payload["latest_client_run"]["failed_reasons"])
+
+    def test_minimum_mvp_gate_requires_five_consecutive_client_no_submit_runs(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for index in range(1, 6):
+                self._write_minimum_mvp_run(root, index, passed=True)
+
+            payload = reachops_web_ui.build_minimum_mvp_gate_payload(root)
+
+        self.assertEqual(payload["status"], "passed")
+        self.assertTrue(payload["minimum_mvp_ready"])
+        self.assertEqual(payload["consecutive_client_real_no_submit_passes"], 5)
+        self.assertEqual(payload["failed_checks"], [])
+        self.assertTrue(all(row["passed"] for row in payload["recent_client_runs"]))
+
     def test_logs_http_endpoint_exposes_structured_headless_failure_result(self):
         with TemporaryDirectory() as tmpdir:
             old_data_dir = reachops_web_ui.DATA_DIR
@@ -1642,8 +1715,9 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
                         },
                     ),
                 ) as account_gate:
-                    with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
-                        reachops_web_ui.Handler.do_POST(handler)
+                    with patch("tools.reachops_web_ui.persist_selected_profile_group_setting") as persist_group:
+                        with patch("tools.reachops_web_ui.subprocess.Popen") as popen:
+                            reachops_web_ui.Handler.do_POST(handler)
         finally:
             reachops_web_ui.RUN_PROCESS = old_process
 
@@ -1653,6 +1727,7 @@ class ReachOpsWebUiContractTest(unittest.TestCase):
         self.assertTrue(captured["payload"]["no_browser_started"])
         self.assertTrue(captured["payload"]["no_submit"])
         account_gate.assert_called_once_with("United States", False)
+        persist_group.assert_not_called()
         popen.assert_not_called()
 
     def test_start_from_plan_handler_rejects_account_gate_without_launching_process(self):

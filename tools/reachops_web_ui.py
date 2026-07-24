@@ -179,6 +179,7 @@ UI_TEXT_RESOURCES = {
 }
 MAX_JSON_PAYLOAD_BYTES = 64 * 1024
 MAX_START_PROFILE_LIMIT = 20
+MINIMUM_MVP_REQUIRED_CLIENT_RUNS = 5
 STARTUP_HEALTHCHECK_SECONDS = 0.2
 LOCAL_API_HOSTS = {"127.0.0.1", "localhost", "::1"}
 ALLOWED_MODES = {"preflight", "collect", "live_comment"}
@@ -390,6 +391,133 @@ def summarize_mvp_acceptance(path: Path | None = None) -> dict:
         "final_delivery_ready": bool(payload.get("final_delivery_ready")),
         "failed_checks": payload.get("failed_checks") or [],
         "path": str(path) if path.is_file() else "",
+    }
+
+
+def _contains_log_marker(lines: list[str], marker: str) -> bool:
+    return any(marker in str(line or "") for line in lines)
+
+
+def classify_minimum_mvp_client_run(payload: dict, path: Path) -> dict:
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    tail = [str(line or "") for line in (result.get("tail") or [])]
+    contract = result.get("execution_plan_contract") if isinstance(result.get("execution_plan_contract"), dict) else {}
+    after = contract.get("after") if isinstance(contract.get("after"), dict) else {}
+    evidence_bundle = result.get("evidence_bundle") if isinstance(result.get("evidence_bundle"), dict) else {}
+    bundle_path = Path(str(evidence_bundle.get("path") or ""))
+    bundle_markdown_path = Path(str(evidence_bundle.get("markdown_path") or ""))
+    mode = str(after.get("mode") or result.get("mode") or "").strip()
+    profile_group = str(result.get("profile_group") or after.get("profile_group") or "").strip()
+    target = str(result.get("target") or after.get("target") or "").strip()
+    failed_reasons = []
+    if str(payload.get("state") or "") != "COMPLETED" or str(payload.get("status") or "") != "completed":
+        failed_reasons.append("run_session_not_completed")
+    if str(result.get("status") or "") != "completed":
+        failed_reasons.append("run_result_not_completed")
+    if mode not in {"preflight", "collect"}:
+        failed_reasons.append("not_real_no_submit_mode")
+    if not profile_group:
+        failed_reasons.append("missing_profile_group")
+    if not target:
+        failed_reasons.append("missing_target")
+    if str((result.get("execution_plan") or {}).get("source") or "") != "execution_plan":
+        failed_reasons.append("missing_execution_plan_source")
+    if not contract or contract.get("cli_args_ignored_for_plan_fields") is not True:
+        failed_reasons.append("missing_execution_plan_runtime_contract")
+    if not _contains_log_marker(tail, "RUN    web_headless_start"):
+        failed_reasons.append("missing_customer_client_runner_start")
+    if not _contains_log_marker(tail, "START  campaign"):
+        failed_reasons.append("missing_campaign_start")
+    if not _contains_log_marker(tail, "CHECK  profile_preflight"):
+        failed_reasons.append("missing_profile_preflight")
+    if not _contains_log_marker(tail, "DONE   collection"):
+        failed_reasons.append("missing_collection_done")
+    if not (
+        _contains_log_marker(tail, "DONE   action_preflight")
+        or _contains_log_marker(tail, "DONE   action_submit")
+        or isinstance(result.get("no_action_reason"), dict)
+    ):
+        failed_reasons.append("missing_no_submit_action_terminal")
+    if not evidence_bundle.get("schema_version") or not bundle_path.is_file() or not bundle_markdown_path.is_file():
+        failed_reasons.append("evidence_bundle_incomplete")
+    if "live_comment" in mode or _contains_log_marker(tail, "live_submit"):
+        failed_reasons.append("live_submit_not_allowed_for_minimum_mvp")
+    return {
+        "path": str(path),
+        "run_session_id": str(payload.get("session_id") or path.stem),
+        "created_at": str(payload.get("created_at") or ""),
+        "updated_at": str(payload.get("updated_at") or ""),
+        "state": str(payload.get("state") or ""),
+        "status": str(payload.get("status") or ""),
+        "result_status": str(result.get("status") or ""),
+        "target_present": bool(target),
+        "profile_group": profile_group,
+        "mode": mode,
+        "evidence_bundle_path": str(bundle_path) if evidence_bundle.get("path") else "",
+        "evidence_bundle_markdown_path": str(bundle_markdown_path) if evidence_bundle.get("markdown_path") else "",
+        "passed": not failed_reasons,
+        "failed_reasons": failed_reasons,
+        "no_browser_started": True,
+        "no_submit": True,
+    }
+
+
+def build_minimum_mvp_gate_payload(data_dir: Path | None = None) -> dict:
+    data_dir = data_dir or DATA_DIR
+    runs_dir = data_dir / "runs"
+    selected_group = load_selected_profile_group_setting()
+    records = []
+    if runs_dir.is_dir():
+        for path in runs_dir.glob("run_*.json"):
+            payload = read_json_file(path)
+            if not payload:
+                continue
+            records.append(classify_minimum_mvp_client_run(payload, path))
+    records.sort(key=lambda row: (str(row.get("created_at") or ""), str(row.get("path") or "")), reverse=True)
+    consecutive = 0
+    for row in records:
+        if row.get("passed") is True:
+            consecutive += 1
+            continue
+        break
+    latest = records[0] if records else {}
+    ready = consecutive >= MINIMUM_MVP_REQUIRED_CLIENT_RUNS
+    failed_checks = []
+    if not ready:
+        failed_checks.append("minimum_mvp:five_consecutive_client_real_no_submit_runs")
+    if latest and latest.get("passed") is not True:
+        failed_checks.append("minimum_mvp:latest_client_run_not_passed")
+    if not records:
+        failed_checks.append("minimum_mvp:no_client_run_sessions")
+    blockers = []
+    if not ready:
+        blockers.append(
+            f"最小 MVP 需要连续 {MINIMUM_MVP_REQUIRED_CLIENT_RUNS} 次客户客户端 real_no_submit 通过；当前连续通过 {consecutive} 次。"
+        )
+    if latest and latest.get("failed_reasons"):
+        blockers.append("最近客户端运行未通过：" + ", ".join(latest.get("failed_reasons") or []))
+    if selected_group:
+        blockers.append(f"当前验收分组：{selected_group}。")
+    next_actions = []
+    if not ready:
+        next_actions.append("从客户可见 Web 客户端输入同一推广目标并启动 no-submit 运行。")
+        next_actions.append("先修复账号环境，确保至少 1 个 READY profile 后再累计 5 次真实客户端通过证据。")
+    return {
+        "schema_version": "reachops.minimum_mvp_gate.v1",
+        "status": "passed" if ready else "blocked",
+        "minimum_mvp_ready": ready,
+        "required_consecutive_client_runs": MINIMUM_MVP_REQUIRED_CLIENT_RUNS,
+        "consecutive_client_real_no_submit_passes": consecutive,
+        "selected_profile_group": selected_group,
+        "latest_client_run": latest,
+        "recent_client_runs": records[:MINIMUM_MVP_REQUIRED_CLIENT_RUNS],
+        "failed_checks": failed_checks,
+        "blockers": blockers,
+        "next_actions": next_actions,
+        "truth_boundary": "Only customer-visible client real_no_submit runs count; tests, fixtures, audits, and standalone CLI commands are auxiliary evidence only.",
+        "no_ai_token_used": True,
+        "no_browser_started": True,
+        "no_submit": True,
     }
 
 
@@ -1836,6 +1964,7 @@ def build_final_status_payload() -> dict:
         payload["handoff_bundle_size"] = int(handoff.get("size") or 0)
         payload["handoff_bundle_verification"] = verify_handoff_bundle(payload["handoff_bundle_path"])
         payload["mvp_acceptance"] = summarize_mvp_acceptance()
+        payload["minimum_mvp"] = build_minimum_mvp_gate_payload()
         payload["goal_delivery"] = summarize_goal_delivery()
         payload["two_phase_acceptance"] = summarize_two_phase_acceptance()
         goal_delivery = payload["goal_delivery"] if isinstance(payload.get("goal_delivery"), dict) else {}
@@ -3483,6 +3612,7 @@ def html_page() -> bytes:
                 <strong>真实评论授权下一步</strong>
                 <ul id="activationActions"><li>等待激活状态检查。</li></ul>
               </div>
+              <div class="row"><span>最小MVP门禁</span><b id="minimumMvpState">未检查</b></div>
               <div class="row"><span>最终交付门禁</span><b id="finalStatusState">未检查</b></div>
 	              <div class="notice" id="finalStatusNotice">
 	                <strong>最终交付下一步</strong>
@@ -5283,6 +5413,7 @@ def html_page() -> bytes:
         const data = await res.json();
         const ready = data.final_delivery_ready === true;
         const mvp = data.mvp_acceptance || {{}};
+        const minimumMvp = data.minimum_mvp || {{}};
         const goal = data.goal_delivery || {{}};
         const twoPhase = data.two_phase_acceptance || {{}};
         const winPreflight = goal.windows_package_preflight || {{}};
@@ -5324,7 +5455,12 @@ def html_page() -> bytes:
 		          (stage.blockers || []).forEach(item => planRows.push(`  阻断：${{item}}`));
 		          (stage.actions || []).forEach(item => planRows.push(`  动作：${{item}}`));
 		        }});
-		        const mvpRows = mvp.mvp_local_ready ? ['本地MVP已验收：' + (mvp.status || 'passed')] : [];
+		        const mvpRows = [];
+	        if (minimumMvp.schema_version) {{
+	          mvpRows.push(`最小MVP门禁：${{minimumMvp.status || '-'}} / minimum_mvp_ready=${{minimumMvp.minimum_mvp_ready === true ? 'true' : 'false'}} / 连续客户端no-submit=${{minimumMvp.consecutive_client_real_no_submit_passes || 0}}/${{minimumMvp.required_consecutive_client_runs || 5}}`);
+	          (minimumMvp.blockers || []).slice(0, 4).forEach(item => mvpRows.push('最小MVP阻断：' + item));
+	        }}
+	        if (mvp.mvp_local_ready) mvpRows.push('本地MVP已验收：' + (mvp.status || 'passed'));
 	        const goalRows = goal.status ? [`目标模式：${{goal.status}} / 本地MVP=${{goal.local_mvp_ready === true ? 'true' : 'false'}} / Windows构建输入=${{goal.windows_build_ready === true ? 'true' : 'false'}} / 最终交付=${{goal.final_delivery_ready === true ? 'true' : 'false'}}`] : [];
 	        const boundary = goal.delivery_boundary || {{}};
 	        const localProductBoundary = data.delivery_boundary || {{}};
@@ -5373,6 +5509,14 @@ def html_page() -> bytes:
 	        const operatorCommandRows = (data.operator_commands || []).map(item => '操作命令：' + item);
 	        const failedSummary = failedChecks.length ? [`失败检查摘要：${{failedChecks.length}} 项，见最终复核命令输出。`] : [];
 	        const commands = data.verification_commands || [];
+	        if ($('minimumMvpState')) {{
+	          const minReady = minimumMvp.minimum_mvp_ready === true;
+	          const minCount = minimumMvp.consecutive_client_real_no_submit_passes || 0;
+	          const minRequired = minimumMvp.required_consecutive_client_runs || 5;
+	          $('minimumMvpState').textContent = minReady ? `passed / ${{minCount}}/${{minRequired}}` : `blocked / ${{minCount}}/${{minRequired}}`;
+	          $('minimumMvpState').className = minReady ? 'ok' : 'bad';
+	          $('minimumMvpState').title = (minimumMvp.failed_checks || []).join(', ') || (minimumMvp.blockers || []).join(' / ') || '等待客户客户端真实 no-submit 验收。';
+	        }}
 	        $('finalStatusState').textContent = ready ? 'passed / 可最终交付' : `${{status}} / 不可最终交付`;
 	        $('finalStatusState').className = ready ? 'ok' : 'bad';
 	        $('finalStatusState').title = failed || blocked || '等待最终验收证据';
@@ -5383,6 +5527,10 @@ def html_page() -> bytes:
 	      }} catch (err) {{
 	        $('finalStatusState').textContent = '读取失败';
 	        $('finalStatusState').className = 'bad';
+	        if ($('minimumMvpState')) {{
+	          $('minimumMvpState').textContent = '读取失败';
+	          $('minimumMvpState').className = 'bad';
+	        }}
 	        $('finalStatusState').title = String(err);
 	        $('finalStatusNotice').className = 'notice blocked';
 	        $('finalStatusActions').innerHTML = listItems(['最终验收状态读取失败：' + String(err)]);
@@ -6040,6 +6188,7 @@ def build_acceptance_payload() -> dict:
                 } if ix_metadata else {},
             },
             "mvp_acceptance": summarize_mvp_acceptance(),
+            "minimum_mvp": build_minimum_mvp_gate_payload(),
             "goal_delivery": summarize_goal_delivery(),
             "two_phase_acceptance": summarize_two_phase_acceptance(),
             "operations": operations,
@@ -7651,6 +7800,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/acceptance":
             self._send_json(build_acceptance_payload())
             return
+        if parsed.path == "/api/minimum-mvp":
+            self._send_json(build_minimum_mvp_gate_payload())
+            return
         if parsed.path == "/api/activation":
             self._send_json(build_web_activation_payload())
             return
@@ -8163,7 +8315,6 @@ class Handler(BaseHTTPRequestHandler):
                 blocked_payload = {**group_check, "archive_error": str(exc), "no_browser_started": True, "no_submit": True}
             self._send_json(blocked_payload, 409 if group_check.get("error") == "profile_group_list_unavailable" else 400)
             return
-        persist_selected_profile_group_setting(profile_group)
         account_ok, account_check = validate_account_repair_for_start(profile_group, account_repair_confirmed)
         if not account_ok:
             append_web_log(
@@ -8171,6 +8322,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             self._send_json(account_check, 409)
             return
+        persist_selected_profile_group_setting(profile_group)
         force_account_recheck = truthy(account_check.get("force_account_recheck")) or (
             account_repair_confirmed
             and account_check.get("same_group") is True

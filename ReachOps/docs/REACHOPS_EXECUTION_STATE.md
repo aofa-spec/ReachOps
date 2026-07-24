@@ -84,6 +84,44 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
 - Remaining blocker:
   - `获客分组测试` is readable but has no currently usable preflight account in the latest real run evidence. At least one logged-in, kernel-compatible, page-openable profile is required before the no-submit client acceptance loop can pass.
 
+## Latest P4 minimum-MVP client gate snapshot
+
+- Date: `2026-07-24`
+- Branch: `codex/p4-web-runtime-smoke`
+- Scope: Make the customer-visible client explicitly report the minimum MVP gate instead of relying on internal scripts, fixtures, DOM smoke, delivery audit, or CLI-only evidence.
+- Code evidence:
+  - `tools/reachops_web_ui.py` now exposes `reachops.minimum_mvp_gate.v1` through `/api/minimum-mvp`, `/api/acceptance`, and `/api/final-status`.
+  - The gate only counts customer-visible Web client `real_no_submit` runs that have completed RunSession/RunResult state, ExecutionPlan runtime contract evidence, Web headless runner start evidence, campaign start, profile preflight, `DONE collection`, no-submit action terminal or structured no-action evidence, and complete EvidenceBundle JSON/Markdown files.
+  - `minimum_mvp_ready=true` requires `5` consecutive passing customer-client runs. Current internal tests, fixtures, DOM smoke, delivery audit, and standalone CLI tools cannot set this gate true.
+  - The Web first screen now shows `最小MVP门禁`, and final status details list the consecutive client no-submit progress.
+  - Rejected account-gate starts no longer persist their requested group, preventing a blocked `United States` request from overwriting the operator-selected `获客分组测试`.
+- Browser/client evidence:
+  - Local client restarted at `http://127.0.0.1:8769/` with the new code.
+  - `/api/settings` restored `selected_profile_group="获客分组测试"`, `no_browser_started=true`, `no_submit=true`.
+  - `/api/minimum-mvp` returned `status=blocked`, `minimum_mvp_ready=false`, `consecutive_client_real_no_submit_passes=0`, `required_consecutive_client_runs=5`, `selected_profile_group="获客分组测试"`.
+  - Browser DOM showed `minimumMvpState="blocked / 0/5"`, selected group `获客分组测试`, `selectedGroupCount=11账号`, `selectedGroupId=308389`, `accountGateState="获客分组测试 账号阻断"`, and start disabled.
+- Tests and checks:
+  - `python3 -m py_compile tools/reachops_web_ui.py tests/test_reachops_client_acceptance_status.py`: passed.
+  - Focused tests for minimum MVP gate and account-gate rejected start persistence: passed, 3 tests.
+  - `python3 tools/reachops_web_panel_dom_smoke.py --json`: passed; output `/tmp/reachops-minimum-mvp-dom-smoke-2.json`.
+  - `python3 -m unittest -v tests.test_reachops_client_acceptance_status`: passed, 130 tests; log `/tmp/reachops-minimum-mvp-client-acceptance-2.log`.
+  - `python3 -m unittest -v tests.test_truthful_execution_semantics`: passed, 7 tests; log `/tmp/reachops-minimum-mvp-truthful-2.log`.
+  - `python3 -m unittest -v tests.test_reachops_campaign`: passed, 259 tests; log `/tmp/reachops-minimum-mvp-campaign-2.log`.
+  - `python3 tools/reachops_operator_pressure.py --json`: passed, `status=ok`; output `/tmp/reachops-minimum-mvp-operator-pressure-2.json`.
+  - `python3 tools/reachops_delivery_audit.py --json`: passed, `status=ok`; output `/tmp/reachops-minimum-mvp-delivery-audit-2.json`.
+  - `python3 tools/reachops_goal_status_report.py --json`: passed, `status=ready_for_external_validation`; output `/tmp/reachops-minimum-mvp-goal-status-report-2.json`.
+  - `python3 tools/reachops_repository_cleanliness_check.py --json`: passed; output `/tmp/reachops-minimum-mvp-cleanliness-2.json`.
+  - `git diff --check`: passed; output `/tmp/reachops-minimum-mvp-diff-check-2.log`.
+- Expected final-delivery blockers:
+  - `python3 tools/reachops_client_delivery_check.py --json`: failed as expected, exit `1`, `status=blocked_by_accounts`, `readiness=blocked_by_accounts`, failed check `acceptance:ready`; output `/tmp/reachops-minimum-mvp-client-delivery-2.json`.
+  - `python3 tools/reachops_goal_delivery_runner.py --json`: failed as expected, exit `1`, `status=not_ready`, `local_mvp_ready=false`, `final_delivery_ready=false`, failed checks `goal_status:passed`, `client_delivery:final_ready`, `delivery_package:passed`; output `/tmp/reachops-minimum-mvp-goal-delivery-runner-2.json`.
+- Safety:
+  - No Windows build, EXE, installer, Windows VM action, ixBrowser profile launch from this change, or TikTok live-submit was attempted.
+  - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
+  - Existing untracked `ReachOps-1/` remains outside this work and was not modified.
+- Remaining blocker:
+  - Minimum MVP is now explicitly represented but remains `blocked / 0/5`. `获客分组测试` needs at least one READY logged-in/kernel-compatible/page-openable profile before real no-submit client runs can accumulate toward `minimum_mvp_ready=true`.
+
 ## Latest Windows VM client-gate convergence snapshot
 
 - Date: `2026-07-24`
@@ -150,7 +188,7 @@ ReachOps is an independent Windows 10/11 local client project. Product direction
   - No Windows build, EXE, installer, update manifest, Windows VM access, ixBrowser profile launch, real TikTok page open, or TikTok live-submit was attempted in this safe-landing slice.
   - No customer SQLite database, cookies, credentials, raw DOM evidence, screenshots, or acceptance input files were committed.
   - The untracked `ReachOps-1/` directory remains outside this work and was not modified.
-  - `minimum_mvp_ready` is not implemented or claimed in this slice; next work must add/report that minimum-MVP-specific gate instead of continuing full-scope feature expansion.
+  - `minimum_mvp_ready` was not implemented or claimed in this slice; it is now covered by the later P4 minimum-MVP client gate snapshot below.
 
 ## Latest P4 final-gate required report alignment snapshot
 
